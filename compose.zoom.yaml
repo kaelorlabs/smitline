@@ -13,4 +13,5 @@ services:
     volumes:
       - ./zoom-live:/zoom-live:ro
       - ./zoom-live/jobs:/zoom-live/jobs
+      - ./zoom-live/recordings:/zoom-live/recordings
     stop_grace_period: 25s

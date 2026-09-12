@@ -48,11 +48,22 @@ bash start-zoom-live.sh
 
 The launcher checks the host Codex login, starts the Zoom participant, and then keeps a Codex tool worker in the foreground. Codex credentials stay on the host. Tool jobs and results are exchanged through ignored local files and removed after each call. The first Codex call creates a persistent thread; later calls in the same Zoom meeting resume that thread, including after a worker restart. Different Zoom meetings use separate threads. Available model selections are `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra` (the balanced default), `gpt-5.6-luna`, and `gpt-5.5`. The chosen model is applied to each turn. Codex runs in a read-only sandbox inside `zoom-live/codex-workspace`.
 
-The participant is named **Colleague AI**. It joins with its Zoom microphone muted and keeps listening. Unmute its microphone in the agent browser viewer to allow replies; muting it again discards pending speech. As host, open Participants, hover over Colleague AI, and select Ask to Unmute. The agent accepts the host-request dialog automatically; it does not click its toolbar Unmute button on its own. Even while unmuted, the voice prompt instructs the agent to stay silent until directly addressed with **“Hey colleague”**. It answers that request (including necessary clarifications and search results), then returns to quiet listening. This is model-prompt behavior, not a deterministic wake-word detector. The status endpoint reports `muted` and `listening`. Admit it if the host uses a waiting room. The [local browser viewer](http://127.0.0.1:6082/vnc.html?autoconnect=true) shows its Zoom browser. Human verification, sign-in, or terms acceptance can require user interaction.
+The participant is named **Colleague AI**. It joins muted and keeps listening. As host, open Participants, hover over Colleague AI, and select Ask to Unmute; the agent accepts the request automatically. While unmuted it participates in normal conversation and answers follow-up questions without requiring a wake phrase. Muting again stops outgoing speech and discards queued audio while listening continues. The status endpoint reports `muted` and `listening`. The [local browser viewer](http://127.0.0.1:6082/vnc.html?autoconnect=true) shows its Zoom browser.
 
 After unmuting, try saying: “Hey colleague, ask Codex using GPT-5.6 Terra to design a Python retry helper,” or “Hey colleague, search the web for OpenAI's GPT-Live documentation.” The [local status endpoint](http://127.0.0.1:8094/health) reports tool starts/completions, the selected Codex model, backend status, source links, and recent captions held in memory. These captions and Codex tasks may contain meeting content; the endpoint is bound to localhost. Meeting audio is sent to OpenAI; voice, backend, and Codex usage are billed by OpenAI; local search calls use your Tavily account. Only the function query is sent to Tavily.
 
 Stop the agent and leave the meeting:
+
+The Codex worker automatically seeds `zoom-live/codex-workspace/company.sqlite`
+with fictional Northstar Analytics data: 180 customers, 926 invoices and monthly
+subscription records from January through August 2026. `DATABASE.md` in that
+workspace documents SQL schema and metric definitions. The seed is deterministic
+and preserves an existing database. Company metric questions are routed to Codex,
+which must execute SQL. Try “Hey colleague, what were our August sales?”
+(USD 78,567) or “What was July-to-August retention?” (122 / 132 = 92.42%).
+The database stays in the ignored workspace; the generator is tracked so a fresh
+checkout can reproduce it. Codex remembers tool calls, but does not automatically
+receive all background meeting speech.
 
 ```bash
 docker compose -f compose.zoom.yaml stop zoom-live
@@ -61,6 +72,15 @@ docker compose -f compose.zoom.yaml stop zoom-live
 Configuration is loaded at startup. After editing code or environment values, use `docker compose -f compose.zoom.yaml up -d --force-recreate zoom-live` for another run. The supplied meeting invite and API key remain in ignored local files.
 
 ## Earlier local-model checkpoint
+
+Zoom calls are saved incrementally under `zoom-live/recordings/<UTC-time>-<id>/`.
+`transcript.txt` is readable conversation text; `events.jsonl` contains timestamped
+transcript fragments, mute transitions, tool arguments/results, session instructions,
+and lifecycle events. Generated agent text is labeled because it may have been
+muted or interrupted. Files are flushed to disk during the call, survive container
+recreation, and are ignored by Git. They contain private meeting content. Raw audio
+and the model's internal context are not recorded. Each restart creates a new folder;
+these recordings do not automatically restore GPT-Live context.
 
 - Browser microphone capture with automatic end-of-speech detection.
 - Local Whisper transcription and Kokoro speech synthesis, reusing Joinly's speech stack.

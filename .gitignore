@@ -20,3 +20,4 @@ live/verification.json
 live/__pycache__/
 zoom-live/jobs/
 zoom-live/codex-workspace/
+zoom-live/recordings/

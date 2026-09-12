@@ -19,6 +19,7 @@ if ! "$CODEX_BIN" login status >/dev/null 2>&1; then
 fi
 export CODEX_BIN
 mkdir -p zoom-live/jobs zoom-live/codex-workspace
+mkdir -p zoom-live/recordings
 docker compose build joinly
 docker compose -f compose.zoom.yaml up -d --build zoom-live
 echo 'Agent browser: http://127.0.0.1:6082/vnc.html?autoconnect=true'
