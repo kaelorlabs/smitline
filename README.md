@@ -1,4 +1,4 @@
-# Roommate Live
+# Colleague AI
 
 **An AI teammate you can talk to while the work happens.**
 
@@ -19,8 +19,8 @@ The single-participant microphone-to-spoken-reply loop has been observed working
 Prerequisites: Docker with Compose, Python 3.10+, and an authenticated Codex CLI. On macOS the launcher also recognizes the CLI bundled inside `/Applications/ChatGPT.app`. Set `CODEX_BIN` if yours lives elsewhere.
 
 ```bash
-git clone https://github.com/ankitluthra/roommate-live.git
-cd roommate-live
+git clone https://github.com/ankitluthra/colleague-ai.git
+cd colleague-ai
 codex login
 bash start-live.sh
 ```

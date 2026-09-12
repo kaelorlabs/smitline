@@ -1,4 +1,4 @@
-# Roommate Live — hackathon checkpoint
+# Colleague AI — hackathon checkpoint
 
 ## Idea
 
