@@ -16,6 +16,8 @@ The single-participant microphone-to-spoken-reply loop has been observed working
 
 ## Run the live room
 
+For agent-assisted setup, use the repository's [setup-colleague-ai skill](.agents/skills/setup-colleague-ai/SKILL.md). Invoke `$setup-colleague-ai` in an agent that discovers this repository's skills, or ask it to read that file. It covers a fresh clone, Docker build, Codex login, live voice verification, and troubleshooting.
+
 Prerequisites: Docker with Compose, Python 3.10+, and an authenticated Codex CLI. On macOS the launcher also recognizes the CLI bundled inside `/Applications/ChatGPT.app`. Set `CODEX_BIN` if yours lives elsewhere.
 
 ```bash
