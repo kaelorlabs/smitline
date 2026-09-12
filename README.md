@@ -33,9 +33,9 @@ Run gateway checks without using an API key or making paid calls:
 node --test gpt-live/server.test.mjs
 ```
 
-## Join a Zoom meeting with web search
+## Join a Zoom meeting with web search and Codex
 
-The Zoom bridge streams meeting audio to GPT-Live 1 and sends speech back through a virtual microphone. The user confirmed the Zoom voice call and local Tavily search working. Its GPT-5.6 Terra backend has a local `search_web(query)` function backed by Tavily for current facts and explicit lookup requests. There are no local transcription or speech-generation models in this audio path.
+The Zoom bridge streams meeting audio to GPT-Live 1 and sends speech back through a virtual microphone. The user confirmed the Zoom voice call and local Tavily search working. Its GPT-5.6 Terra backend has two local functions: `search_web(query)` for current facts, and `run_codex(task, model)` for read-only technical work through the signed-in host Codex CLI. There are no local transcription or speech-generation models in this audio path.
 
 With Docker running, set `OPENAI_API_KEY` and `TAVILY_API_KEY` in the ignored `.env` file:
 
@@ -46,9 +46,11 @@ chmod 600 .env.zoom
 bash start-zoom-live.sh
 ```
 
+The launcher checks the host Codex login, starts the Zoom participant, and then keeps a Codex tool worker in the foreground. Codex credentials stay on the host. Tool jobs and results are exchanged through ignored local files and removed after each call. The first Codex call creates a persistent thread; later calls in the same Zoom meeting resume that thread, including after a worker restart. Different Zoom meetings use separate threads. Available model selections are `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra` (the balanced default), `gpt-5.6-luna`, and `gpt-5.5`. The chosen model is applied to each turn. Codex runs in a read-only sandbox inside `zoom-live/codex-workspace`.
+
 The participant is named **Colleague AI**. It joins with its Zoom microphone muted and keeps listening. Unmute its microphone in the agent browser viewer to allow replies; muting it again discards pending speech. As host, open Participants, hover over Colleague AI, and select Ask to Unmute. The agent accepts the host-request dialog automatically; it does not click its toolbar Unmute button on its own. Even while unmuted, the voice prompt instructs the agent to stay silent until directly addressed with **“Hey colleague”**. It answers that request (including necessary clarifications and search results), then returns to quiet listening. This is model-prompt behavior, not a deterministic wake-word detector. The status endpoint reports `muted` and `listening`. Admit it if the host uses a waiting room. The [local browser viewer](http://127.0.0.1:6082/vnc.html?autoconnect=true) shows its Zoom browser. Human verification, sign-in, or terms acceptance can require user interaction.
 
-After unmuting, try saying: “Hey colleague, search the web for OpenAI's GPT-Live documentation and tell me what it supports.” The [local status endpoint](http://127.0.0.1:8094/health) reports search starts/completions, backend status, source links, and recent captions held in memory. These captions may contain meeting content; the endpoint is bound to localhost. Meeting audio is sent to OpenAI; voice and backend usage are billed by OpenAI; local search calls use your Tavily account. Only the function query is sent to Tavily.
+After unmuting, try saying: “Hey colleague, ask Codex using GPT-5.6 Terra to design a Python retry helper,” or “Hey colleague, search the web for OpenAI's GPT-Live documentation.” The [local status endpoint](http://127.0.0.1:8094/health) reports tool starts/completions, the selected Codex model, backend status, source links, and recent captions held in memory. These captions and Codex tasks may contain meeting content; the endpoint is bound to localhost. Meeting audio is sent to OpenAI; voice, backend, and Codex usage are billed by OpenAI; local search calls use your Tavily account. Only the function query is sent to Tavily.
 
 Stop the agent and leave the meeting:
 

@@ -18,3 +18,5 @@ live/*.log
 live/*.wav
 live/verification.json
 live/__pycache__/
+zoom-live/jobs/
+zoom-live/codex-workspace/

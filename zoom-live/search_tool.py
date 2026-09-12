@@ -6,6 +6,7 @@ import os
 import re
 from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, ClientError
+from codex_tool import CodexJobClient
 
 SEARCH_TOOL = {
     'type': 'function', 'name': 'search_web',
@@ -43,8 +44,9 @@ async def search_web(query):
 
 class LocalToolDispatcher:
     """Collect completed function items and continue only after all outputs exist."""
-    def __init__(self, send, state, search=search_web):
+    def __init__(self, send, state, search=search_web, codex=None):
         self.send, self.state, self.search = send, state, search
+        self.codex = codex or CodexJobClient().run
         self.responses = {}
         self.active = {}
         self.seen = set()
@@ -80,25 +82,41 @@ class LocalToolDispatcher:
                 if call_id in self.seen:
                     continue
                 self.seen.add(call_id)
-                self.state['web_search']['started'] += 1
-                self.state['backend_status'] = 'local_function_running'
                 try:
                     args = json.loads(call['arguments'])
-                    if call['name'] != 'search_web' or not isinstance(args, dict) or set(args) != {'query'}:
-                        result = {'error': 'Unknown tool or invalid arguments', 'results': []}
-                    else:
+                except (KeyError, TypeError, ValueError):
+                    args = None
+                if call.get('name') == 'search_web' and isinstance(args, dict) and set(args) == {'query'}:
+                    self.state['web_search']['started'] += 1
+                    self.state['backend_status'] = 'web_search_running'
+                    try:
                         result = await self.search(args['query'])
-                except Exception:
-                    result = {'error': 'Local search function failed', 'results': []}
-                self.state['web_search']['completed'] += 1
-                self.state['web_search']['last_error'] = result.get('error')
-                self.state['sources'] = [{'title': r['title'], 'url': r['url']} for r in result.get('results', [])]
+                    except Exception:
+                        result = {'error': 'Local search function failed', 'results': []}
+                    self.state['web_search']['completed'] += 1
+                    self.state['web_search']['last_error'] = result.get('error')
+                    self.state['sources'] = [{'title': r['title'], 'url': r['url']} for r in result.get('results', [])]
+                elif call.get('name') == 'run_codex' and isinstance(args, dict) and set(args) == {'task', 'model'}:
+                    codex_state = self.state.setdefault('codex', {'started': 0, 'completed': 0})
+                    codex_state['started'] += 1
+                    codex_state['last_model'] = args['model']
+                    self.state['backend_status'] = 'codex_running'
+                    try:
+                        result = await self.codex(args['task'], args['model'])
+                    except Exception:
+                        result = {'error': 'Local Codex function failed'}
+                    codex_state['completed'] += 1
+                    codex_state['last_error'] = result.get('error')
+                    codex_state['session_active'] = not bool(result.get('error'))
+                    codex_state['last_session_reused'] = result.get('session_reused')
+                else:
+                    result = {'error': 'Unknown tool or invalid arguments'}
                 if self.closed:
                     return
                 await self.send({'type': 'response.item.create', 'item': {'type': 'function_call_output', 'call_id': call_id, 'output': json.dumps(result)}})
                 submitted = True
             if submitted and not self.closed:
-                self.state['backend_status'] = 'reading_local_results'
+                self.state['backend_status'] = 'reading_tool_results'
                 await self.send({'type': 'response.create'})
         except Exception:
             self.state['backend_status'] = 'local_tool_delivery_failed'

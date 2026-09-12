@@ -36,4 +36,21 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[1]['type'], 'response.create')
         await tool.close()
 
+    async def test_codex_dispatches_task_with_selected_model(self):
+        sent, calls = [], []
+        async def send(event): sent.append(event)
+        async def codex(task, model):
+            calls.append((task, model))
+            return {'model': model, 'text': 'Use a bounded queue.'}
+        state = {'web_search': {'started': 0, 'completed': 0}}
+        tool = LocalToolDispatcher(send, state, codex=codex)
+        await tool.execute([{'name': 'run_codex', 'call_id': 'codex-1',
+                             'arguments': json.dumps({'task': 'Review the worker', 'model': 'gpt-6-astra'})}])
+        self.assertEqual(calls, [('Review the worker', 'gpt-6-astra')])
+        self.assertEqual(state['codex']['last_model'], 'gpt-6-astra')
+        self.assertEqual(state['codex']['completed'], 1)
+        self.assertEqual(json.loads(sent[0]['item']['output'])['text'], 'Use a bounded queue.')
+        self.assertEqual(sent[1]['type'], 'response.create')
+        await tool.close()
+
 if __name__ == '__main__': unittest.main()
