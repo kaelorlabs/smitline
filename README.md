@@ -6,6 +6,35 @@ A hackathon prototype for bringing an agent into a live conversation. Join a loc
 
 ## Current checkpoint
 
+The GPT-Live 1 API call is working: a user joined, spoke, and heard the agent respond. The browser streams microphone audio directly to OpenAI over WebRTC and displays live captions. A small local Node.js server creates the session while keeping the API key out of browser code.
+
+### Run GPT-Live 1
+
+Requires Node.js 22.6+ and an OpenAI project API key with GPT-Live access. No npm dependencies, Docker models, or Codex worker are needed for this call.
+
+```bash
+git clone https://github.com/ankitluthra/colleague-ai.git
+cd colleague-ai
+cp .env.example .env
+chmod 600 .env
+# Set OPENAI_API_KEY in .env using your editor.
+bash start-gpt-live.sh
+```
+
+Open **http://127.0.0.1:8093/** and click **Join GPT-Live call**. Allow microphone access and use headphones. Mute and End call controls are available once connected. End the call before stopping the server with Ctrl-C. The `.env` file is ignored by Git; never commit an actual API key.
+
+Audio is sent to OpenAI and API charges apply while connected. The session uses `gpt-live-1` for voice and configures `gpt-5.6-terra` for delegated reasoning, with no external tools. Session recording storage is disabled. The confirmed demo is a one-person browser call; integration into the earlier shared meeting is still future work. End-to-end interruption behavior and delegated reasoning have not yet been separately verified.
+
+Implementation: [server](gpt-live/server.mjs), [browser client](gpt-live/client.js), and [call page](gpt-live/index.html). Protocol reference: [OpenAI GPT-Live WebRTC guide](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live).
+
+Run gateway checks without using an API key or making paid calls:
+
+```bash
+node --test gpt-live/server.test.mjs
+```
+
+## Earlier local-model checkpoint
+
 - Browser microphone capture with automatic end-of-speech detection.
 - Local Whisper transcription and Kokoro speech synthesis, reusing Joinly's speech stack.
 - Replies from the signed-in Codex CLI with recent conversation context.
@@ -14,7 +43,7 @@ A hackathon prototype for bringing an agent into a live conversation. Join a loc
 
 The single-participant microphone-to-spoken-reply loop has been observed working. **Response latency is currently too high for natural conversation.** This commit preserves the working baseline before optimizing it.
 
-## Run the live room
+## Run the earlier local-model room
 
 For agent-assisted setup, use the repository's [setup-colleague-ai skill](.agents/skills/setup-colleague-ai/SKILL.md). Invoke `$setup-colleague-ai` in an agent that discovers this repository's skills, or ask it to read that file. It covers a fresh clone, Docker build, Codex login, live voice verification, and troubleshooting.
 
@@ -66,13 +95,11 @@ The MCP endpoint is http://127.0.0.1:8000/mcp/. The smoke test checks tool disco
 
 Google Meet integration is experimental. Guest admission was rejected in the test meeting, and signed-in attempts encountered participant-selector issues. The optional `login` Docker profile provides a local browser viewer, but external-call support is not a verified part of this checkpoint. No Google profile or credentials are included.
 
-## Next: natural conversation
+## Next: meeting integration
 
-1. Measure end-of-speech, transcription, agent startup, first response, and first audio latency separately.
-2. Keep a backend agent session warm instead of launching a CLI process for every utterance.
-3. Stream replies into speech synthesis and playback as they arrive.
-4. Add interruption handling and improve voice-activity detection.
-5. Verify a three-person call, then add the research and sales-chart demo.
+1. Measure GPT-Live response latency and verify interruptions during real conversation.
+2. Connect GPT-Live audio to the shared meeting and verify multiple participants.
+3. Add backend research and sales-chart tools, with visible task progress.
 
 ## Source and attribution
 
