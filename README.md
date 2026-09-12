@@ -1,153 +1,248 @@
+<div align="center">
+
 # Colleague AI
 
-**An AI teammate you can talk to while the work happens.**
+### Bring your coding agent into the conversation.
 
-A hackathon prototype for bringing an agent into a live conversation. Join a local voice room, speak, and hear a contextual reply. Built for the Agents, Everywhere hackathon.
+A voice teammate for Zoom that connects your team to Codex, company data, and web search.
 
-## Current checkpoint
+[Get started](#get-started) · [Try a conversation](#try-a-conversation) · [How it works](#how-it-works) · [Roadmap](#roadmap)
 
-The GPT-Live 1 API call is working: a user joined, spoke, and heard the agent respond. The browser streams microphone audio directly to OpenAI over WebRTC and displays live captions. A small local Node.js server creates the session while keeping the API key out of browser code.
+**Built for the Agents, Everywhere hackathon · Local-first orchestration · Cloud voice and reasoning**
 
-### Run GPT-Live 1
+</div>
 
-Requires Node.js 22.6+ and an OpenAI project API key with GPT-Live access. No npm dependencies, Docker models, or Codex worker are needed for this call.
+---
+
+## From a meeting question to a useful answer
+
+Your team is already talking. Someone needs a sales number, a technical explanation, or current information for a client visit. Colleague AI brings those answers into the call through a voice interface connected to tools.
+
+Give it a Zoom invite from your coding-agent workflow, start the local bridge, and admit **Colleague AI** to the meeting. It listens while muted. When you allow it to speak, it can answer questions, consult a persistent Codex session, and research the web without requiring a wake phrase.
+
+The prototype has been demonstrated in live Zoom calls. It is designed for local development and demos; conversational timing and meeting compatibility are still being improved.
+
+## What you can do
+
+| Capability | Experience |
+| --- | --- |
+| **Talk with an agent in Zoom** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone. |
+| **Bring Codex into the discussion** | Delegate technical analysis and database queries to a read-only Codex session. Select a model for each task. |
+| **Keep a technical session going** | Later tool calls resume the Codex session associated with the same meeting URL, including after a worker restart. |
+| **Ask about company metrics** | Query a reproducible fictional SQLite dataset covering sales, retention, and churn. |
+| **Research current information** | Use a local `search_web` function backed by Tavily and return source-backed answers. |
+| **Control participation** | Join muted, continue listening, and accept the host’s Ask to Unmute request automatically. Muting stops outgoing speech. |
+| **Review what happened** | Save incremental transcripts, tool events, and generated charts locally. |
+
+Chart rendering works locally. Sending chart attachments to Zoom chat is experimental and has **not** passed an end-to-end delivery test. Automatic screen sharing and post-meeting chat delivery are not implemented.
+
+## Get started
+
+### Prerequisites
+
+- macOS or Linux, with Python 3.10+ and Git. The host worker uses Unix file locking.
+- Docker with Docker Compose, running locally.
+- An authenticated Codex CLI: run `codex login` and verify with `codex login status`.
+- An OpenAI project API key with access to the configured `gpt-live-1` voice model and `gpt-5.6-terra` backend. This prototype depends on those APIs being available to your account.
+- A Tavily API key for web search.
+- A Zoom meeting that permits the agent to join through the web client.
+
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/ankitluthra/colleague-ai.git
 cd colleague-ai
 cp .env.example .env
-chmod 600 .env
-# Set OPENAI_API_KEY in .env using your editor.
-bash start-gpt-live.sh
-```
-
-Open **http://127.0.0.1:8093/** and click **Join GPT-Live call**. Allow microphone access and use headphones. Mute and End call controls are available once connected. End the call before stopping the server with Ctrl-C. The `.env` file is ignored by Git; never commit an actual API key.
-
-Audio is sent to OpenAI and API charges apply while connected. The session uses `gpt-live-1` for voice and configures `gpt-5.6-terra` for delegated reasoning, with no external tools. Session recording storage is disabled. The standalone browser call and the Zoom meeting agent have both been confirmed working by the user. End-to-end interruption behavior and delegated reasoning have not yet been separately verified.
-
-Implementation: [server](gpt-live/server.mjs), [browser client](gpt-live/client.js), and [call page](gpt-live/index.html). Protocol reference: [OpenAI GPT-Live WebRTC guide](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live).
-
-Run gateway checks without using an API key or making paid calls:
-
-```bash
-node --test gpt-live/server.test.mjs
-```
-
-## Join a Zoom meeting with web search and Codex
-
-The Zoom bridge streams meeting audio to GPT-Live 1 and sends speech back through a virtual microphone. The user confirmed the Zoom voice call and local Tavily search working. Its GPT-5.6 Terra backend has two local functions: `search_web(query)` for current facts, and `run_codex(task, model)` for read-only technical work through the signed-in host Codex CLI. There are no local transcription or speech-generation models in this audio path.
-
-With Docker running, set `OPENAI_API_KEY` and `TAVILY_API_KEY` in the ignored `.env` file:
-
-```bash
 cp zoom-live/meeting.env.example .env.zoom
-chmod 600 .env.zoom
-# Edit .env.zoom with the meeting URL and passcode.
+chmod 600 .env .env.zoom
+```
+
+Edit `.env` with your own keys:
+
+```dotenv
+OPENAI_API_KEY=your_openai_project_key
+TAVILY_API_KEY=your_tavily_key
+```
+
+Edit `.env.zoom` with your meeting details:
+
+```dotenv
+ZOOM_MEETING_URL=https://us05web.zoom.us/j/YOUR_MEETING_ID
+ZOOM_PASSCODE=your_meeting_passcode
+```
+
+You can use the full Zoom invite URL, including its `pwd` query parameter. Supply the passcode separately if the web client asks for it. Keep these files private; they are ignored by Git.
+
+### 2. Start the agent
+
+```bash
 bash start-zoom-live.sh
 ```
 
-The launcher checks the host Codex login, starts the Zoom participant, and then keeps a Codex tool worker in the foreground. Codex credentials stay on the host. Tool jobs and results are exchanged through ignored local files and removed after each call. The first Codex call creates a persistent thread; later calls in the same Zoom meeting resume that thread, including after a worker restart. Different Zoom meetings use separate threads. Available model selections are `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra` (the balanced default), `gpt-5.6-luna`, and `gpt-5.5`. The chosen model is applied to each turn. Codex runs in a read-only sandbox inside `zoom-live/codex-workspace`.
+The launcher verifies Codex authentication, builds the Docker images, starts the Zoom browser participant, and runs the Codex worker on the host. The worker creates the demo database automatically. Keep this terminal open for Codex tool calls.
 
-The participant is named **Colleague AI**. It joins muted and keeps listening. As host, open Participants, hover over Colleague AI, and select Ask to Unmute; the agent accepts the request automatically. While unmuted, its prompt directs it to listen by default, answer direct questions and follow-ups without a wake phrase, and use tools to verify material claims. It also proactively searches unresolved public factual questions, including Montreal event details. Unsolicited speech is limited to brief, evidence-backed corrections or useful answers at a natural pause; the supplied demo sales reference of 800,000 is an explicit exception to tool verification. This selective participation policy still needs live-call verification. While muted, it is instructed not to start new tool work. Muting again stops outgoing speech and discards queued audio while listening continues. The status endpoint reports `muted` and `listening`. The [local browser viewer](http://127.0.0.1:6082/vnc.html?autoconnect=true) shows its Zoom browser.
+The first build can take several minutes. The shared Joinly base image includes local speech-model dependencies, although the Zoom audio path uses GPT-Live rather than those models.
 
-After unmuting, try saying: “Hey colleague, ask Codex using GPT-5.6 Terra to design a Python retry helper,” or “Hey colleague, search the web for OpenAI's GPT-Live documentation.” The [local status endpoint](http://127.0.0.1:8094/health) reports tool starts/completions, the selected Codex model, backend status, source links, and recent captions held in memory. These captions and Codex tasks may contain meeting content; the endpoint is bound to localhost. Meeting audio is sent to OpenAI; voice, backend, and Codex usage are billed by OpenAI; local search calls use your Tavily account. Only the function query is sent to Tavily.
+If the launcher cannot locate Codex, set its executable explicitly:
 
-Stop the agent and leave the meeting:
+```bash
+CODEX_BIN=/path/to/codex bash start-zoom-live.sh
+```
 
-The Codex worker automatically seeds `zoom-live/codex-workspace/company.sqlite`
-with fictional Northstar Analytics data: 180 customers, 926 invoices and monthly
-subscription records from January through August 2026. `DATABASE.md` in that
-workspace documents SQL schema and metric definitions. The seed is deterministic
-and preserves an existing database. Company metric questions are routed to Codex,
-which must execute SQL. Try “Hey colleague, what were our August sales?”
-(USD 78,567) or “What was July-to-August retention?” (122 / 132 = 92.42%).
-The database stays in the ignored workspace; the generator is tracked so a fresh
-checkout can reproduce it. Codex remembers tool calls, but does not automatically
-receive all background meeting speech.
+### 3. Admit and unmute
+
+Admit **Colleague AI** if it enters the waiting room. In Zoom’s Participants panel, select **Ask to Unmute** for the agent. It accepts the request automatically and can then respond.
+
+| Local interface | Address |
+| --- | --- |
+| Agent browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
+| Status, transcripts, and tool activity | http://127.0.0.1:8094/health |
+
+A `live_in_zoom` status indicates the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
+
+### Stop or switch meetings
+
+Stop the host worker with **Ctrl-C**, then stop the meeting participant:
 
 ```bash
 docker compose -f compose.zoom.yaml stop zoom-live
 ```
 
-Configuration is loaded at startup. After editing code or environment values, use `docker compose -f compose.zoom.yaml up -d --force-recreate zoom-live` for another run. The supplied meeting invite and API key remain in ignored local files.
-
-## Earlier local-model checkpoint
-
-Zoom calls are saved incrementally under `zoom-live/recordings/<UTC-time>-<id>/`.
-`transcript.txt` is readable conversation text; `events.jsonl` contains timestamped
-transcript fragments, mute transitions, tool arguments/results, session instructions,
-and lifecycle events. Generated agent text is labeled because it may have been
-muted or interrupted. Files are flushed to disk during the call, survive container
-recreation, and are ignored by Git. They contain private meeting content. Raw audio
-and the model's internal context are not recorded. Each restart creates a new folder;
-these recordings do not automatically restore GPT-Live context.
-
-- Browser microphone capture with automatic end-of-speech detection.
-- Local Whisper transcription and Kokoro speech synthesis, reusing Joinly's speech stack.
-- Replies from the signed-in Codex CLI with recent conversation context.
-- Live transcript, microphone mute, stop playback, and leave-call controls.
-- WebRTC signaling and peer audio for additional local tabs; multi-person audio is implemented but not yet verified end to end.
-
-The single-participant microphone-to-spoken-reply loop has been observed working. **Response latency is currently too high for natural conversation.** This commit preserves the working baseline before optimizing it.
-
-## Run the earlier local-model room
-
-For agent-assisted setup, use the repository's [setup-colleague-ai skill](.agents/skills/setup-colleague-ai/SKILL.md). Invoke `$setup-colleague-ai` in an agent that discovers this repository's skills, or ask it to read that file. It covers a fresh clone, Docker build, Codex login, live voice verification, and troubleshooting.
-
-Prerequisites: Docker with Compose, Python 3.10+, and an authenticated Codex CLI. On macOS the launcher also recognizes the CLI bundled inside `/Applications/ChatGPT.app`. Set `CODEX_BIN` if yours lives elsewhere.
+For another meeting, update `.env.zoom` and run the launcher again. Configuration and voice-session instructions are loaded at startup. After changing them on a running instance:
 
 ```bash
-git clone https://github.com/ankitluthra/colleague-ai.git
-cd colleague-ai
-codex login
-bash start-live.sh
+docker compose -f compose.zoom.yaml up -d --force-recreate zoom-live
 ```
 
-Open **http://127.0.0.1:8092/**, click **Join live call**, and allow microphone access. Keep the terminal running for agent replies. Use headphones and pause after a sentence. Initial Docker setup downloads Chromium and the local speech models and can take several minutes.
+Recreation interrupts the current call and creates a new voice session.
 
-The agent uses your Codex account and its usage allowance. Audio processing stays local; microphone transcripts and recent room conversation are sent to OpenAI through Codex for replies. The reply worker uses a read-only sandbox. It currently produces conversational answers; research, database actions, and chart generation are future work.
+## Try a conversation
 
-Only localhost ports are published. This is a local demo on one computer, not a hosted conferencing product. Stop the worker with Ctrl-C, then stop the web service with:
+Unmute the agent, then try:
+
+> “Ask Codex to query our August 2026 paid sales and tell us the SQL you used.”
+
+> “What was our customer retention from July to August?”
+
+> “Our clients will be in Montreal from September 14 to 21, 2026. Find two events and include the dates and sources.”
+
+> “Ask Codex using GPT-5.6 Terra to review a retry strategy for a Python service.”
+
+> “Plot monthly paid sales from March through August.”
+
+The technical worker has access to `zoom-live/codex-workspace`, not your entire development environment. Put intended project material there for analysis. Codex runs read-only: it can query, explain, and plan, but does not modify files through this tool.
+
+### The demo company
+
+**Northstar Analytics** is fictional. Its database contains 180 customers, 926 invoices, and monthly subscription records from January through August 2026.
+
+| Metric | Expected result |
+| --- | --- |
+| August 2026 paid sales | **USD $800,000** |
+| July → August customer retention | **122 / 132 = 92.42%** |
+
+Sales exclude refunded invoices. Retention excludes newly acquired customers from the retained-customer count. The generated `DATABASE.md` describes the schema and metric definitions.
+
+The generator calibrates August paid invoices to $800,000 for the demo, including an upgrade of the original $78,567 seed. It leaves other months and retention records unchanged.
+
+**Correction demo versus tool demo:** the default meeting prompt includes a supplied 800,000 sales reference, so correcting that specific figure does not establish that Codex ran a query. Ask explicitly for a Codex query and inspect the tool trace to demonstrate database access.
+
+An optional `COLLEAGUE_FACT_CHECK=1` setting in `.env.zoom` replaces the general voice instructions with a sales-only fact-check policy. It loads monthly totals from SQLite at voice-session startup and directs the agent to correct inaccurate sales claims. Leave it unset for the broader conversational demo, including event research. If enabling it before a first run, initialize the database first:
 
 ```bash
-docker compose --profile live stop live
+python3 zoom-live/company_database.py
 ```
 
-## Architecture
+## How it works
 
-Browser microphone → utterance recording → Whisper → local job queue → Codex CLI → Kokoro → browser audio.
+```mermaid
+flowchart LR
+    Team[Zoom meeting] <-->|Meeting audio| Bridge[Browser and audio bridge]
+    Bridge <-->|Streaming voice| Voice[OpenAI GPT-Live]
+    Voice <--> Backend[Delegated reasoning]
+    Backend --> Search[search_web]
+    Search <--> Tavily[Tavily Search API]
+    Backend --> Tool[run_codex]
+    Tool <-->|Local job files| Worker[Host Codex worker]
+    Worker <--> Session[Persistent Codex session]
+    Session --> DB[(SQLite demo database)]
+    Bridge --> Records[Local transcripts and traces]
+```
 
-The room server runs in Docker. The Codex worker runs on the host so it can use the user's existing CLI login. A mounted job directory connects them. Additional browser tabs exchange peer audio through WebRTC using the room's WebSocket signaling.
+The Zoom browser, virtual display, and audio bridge run in Docker. The Codex worker runs on the host to reuse your existing CLI login; Codex credentials are not copied into the container.
 
-## Other demos
+The backend exposes two local functions:
 
-### Recorded mock meeting
+| Function | Purpose |
+| --- | --- |
+| `search_web(query)` | Research public information through Tavily. |
+| `run_codex(task, model)` | Run read-only technical analysis or SQL queries using a resumable Codex session. |
+
+The model allowlist is defined in [`zoom-live/codex_tool.py`](zoom-live/codex_tool.py). The default is `gpt-5.6-terra`; the implementation also allows `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, and `gpt-5.5`, subject to account access.
+
+Codex receives the context included in each delegated task. It does **not** automatically receive all background meeting speech. Session identity is derived from the full meeting URL; changing that URL creates a separate Codex session.
+
+## Data and privacy
+
+- **OpenAI:** meeting audio is sent to the voice API. Delegated reasoning and Codex receive the relevant text and tool context. These services use your account’s billing or allowance.
+- **Tavily:** search queries are sent to Tavily using your API key.
+- **Local storage:** each call creates `zoom-live/recordings/<timestamp>-<id>/` with `transcript.txt` and `events.jsonl`. Charts and chart data are stored alongside them when generated.
+- **Credentials and runtime files:** keys, meeting invites, job files, Codex session mappings, databases, and recordings are excluded from Git. Local status and viewer ports bind to localhost.
+
+Transcripts and traces contain meeting content and are retained until you remove them. Generated agent text may represent speech that was muted or interrupted. The recorder does not save raw audio or a complete restorable copy of the voice model’s internal context. Restarting starts a fresh voice context even when the Codex tool session is resumed.
+
+## Development
+
+| Path | Responsibility |
+| --- | --- |
+| [`zoom-live/`](zoom-live/) | Zoom bridge, local tools, Codex worker, database, transcripts, and tests |
+| [`gpt-live/`](gpt-live/) | Standalone browser voice demo and Node.js session gateway |
+| [`live/`](live/) | Earlier Whisper → Codex → Kokoro voice room |
+| [`joinly/`](joinly/) | Vendored meeting/browser/audio infrastructure |
+| [`agents-everywhere-starter-kit/`](agents-everywhere-starter-kit/) | CopilotKit starter reference; not integrated into the active voice path |
+
+Run the Zoom unit suite using the built image:
 
 ```bash
-docker compose build joinly
-docker compose --profile mock up -d --build mock
+docker run --rm \
+  --entrypoint /app/.venv/bin/python \
+  -v "$PWD/zoom-live:/zoom-live:ro" \
+  meeting-agent-joinly-login:local \
+  -m unittest discover -s /zoom-live -p 'test_*.py'
 ```
 
-Open http://127.0.0.1:8090/result for status and measured transcription results. The fixture plays Joinly's bundled 36-second recording through Chromium and PulseAudio. The observed run achieved a 15.1% word error rate against the reference, within the upstream 20% threshold. This is not a live call. Replay with `docker compose --profile mock restart mock`.
-
-### Joinly MCP server
+Run the standalone voice gateway tests with Node.js 22.6+:
 
 ```bash
-docker compose up -d --build joinly
-curl http://127.0.0.1:8000/health
-docker compose exec -T joinly /app/.venv/bin/python /demo/smoke.py
+node --test gpt-live/server.test.mjs
 ```
 
-The MCP endpoint is http://127.0.0.1:8000/mcp/. The smoke test checks tool discovery and local speech generation/transcription.
+Unit tests do not establish live Zoom admission, audio quality, or successful file delivery. Test those in a meeting after changing browser or audio behavior.
 
-Google Meet integration is experimental. Guest admission was rejected in the test meeting, and signed-in attempts encountered participant-selector issues. The optional `login` Docker profile provides a local browser viewer, but external-call support is not a verified part of this checkpoint. No Google profile or credentials are included.
+Want to try voice without Zoom, or reproduce an earlier prototype? See [alternative demos](docs/alternative-demos.md).
 
-## Next: meeting integration
+## Troubleshooting
 
-1. Measure GPT-Live response latency and verify interruptions during real conversation.
-2. Broaden Zoom testing across multiple speakers, waiting rooms, and meeting interruptions.
-3. Add backend research and sales-chart tools, with visible task progress.
+| Symptom | Check |
+| --- | --- |
+| Agent is silent | Admit it, use Ask to Unmute, and inspect `muted`, `stage`, and errors at `/health`. |
+| It only corrects sales claims | Remove `COLLEAGUE_FACT_CHECK=1` and recreate the service. |
+| Codex tool fails | Keep the launcher terminal open and verify the host CLI login. A worker lock means another worker is already running. |
+| Updated sales are not reflected | Run the database generator and restart the voice session; fact-check mode caches totals at startup. |
+| Chat attachment is unavailable | The host must allow file transfer and the web client must expose a File control. Delivery remains experimental. |
+| Agent cannot enter the meeting | Inspect the local browser viewer for waiting-room, sign-in, passcode, or host-removal messages. |
+| Voice API rejects the session | Check account access to the configured voice and backend models, keys, and service errors. |
 
-## Source and attribution
+## Roadmap
 
-See [THIRD_PARTY.md](THIRD_PARTY.md) for pinned upstream snapshots and [SUBMISSION.md](SUBMISSION.md) for the division between inherited infrastructure and hackathon work. Runtime recordings, transcripts, logs, queues, and browser sessions are excluded from Git.
+- Reduce voice and tool-response latency.
+- Improve interruption handling and turn-taking across multiple speakers.
+- Make chart attachment delivery reliable and visibly confirmed.
+- Add meeting summaries and actionable follow-ups.
+- Broaden meeting-platform support. Google Meet experiments are included, but a working integration is not verified; Teams support is not implemented.
+
+## Credits and upstream work
+
+Built by Taylor Luthra, Jiayi Shen, Lourd Robin Hale, Nomanina Ravaloson, and Casey Palumbo for the Agents, Everywhere hackathon.
+
+Colleague AI builds on Joinly’s browser and audio infrastructure. The repository also retains the CopilotKit Agents Everywhere starter as a reference. See [THIRD_PARTY.md](THIRD_PARTY.md) for pinned upstream revisions and retained licenses. Upstream license terms apply to those components; they do not imply a repository-wide license for our additions.
