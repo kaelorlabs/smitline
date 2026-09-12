@@ -1,0 +1,68 @@
+from joinly.core import MeetingProvider
+from joinly.types import (
+    ActionAnimation,
+    MeetingChatHistory,
+    MeetingParticipant,
+    ProviderNotSupportedError,
+    UIUpdate,
+)
+
+
+class BaseMeetingProvider(MeetingProvider):
+    """Base class for meeting providers."""
+
+    async def join(
+        self,
+        url: str | None = None,  # noqa: ARG002
+        name: str | None = None,  # noqa: ARG002
+        passcode: str | None = None,  # noqa: ARG002
+    ) -> None:
+        """Join a meeting at the specified URL."""
+        msg = "Provider does not support joining meetings."
+        raise ProviderNotSupportedError(msg)
+
+    async def leave(self) -> None:
+        """Leave the current meeting."""
+        msg = "Provider does not support leaving meetings."
+        raise ProviderNotSupportedError(msg)
+
+    async def send_chat_message(self, message: str) -> None:  # noqa: ARG002
+        """Send a chat message in the meeting."""
+        msg = "Provider does not support sending chat messages."
+        raise ProviderNotSupportedError(msg)
+
+    async def get_chat_history(self) -> MeetingChatHistory:
+        """Get the chat message history from the meeting."""
+        msg = "Provider does not support retrieving chat history."
+        raise ProviderNotSupportedError(msg)
+
+    async def get_participants(self) -> list[MeetingParticipant]:
+        """Get the list of participants in the meeting."""
+        msg = "Provider does not support retrieving participants."
+        raise ProviderNotSupportedError(msg)
+
+    async def mute(self) -> None:
+        """Mute yourself in the meeting."""
+        msg = "Provider does not support muting."
+        raise ProviderNotSupportedError(msg)
+
+    async def unmute(self) -> None:
+        """Unmute yourself in the meeting."""
+        msg = "Provider does not support unmuting."
+        raise ProviderNotSupportedError(msg)
+
+    async def share_screen(self, url: str) -> None:  # noqa: ARG002
+        """Start sharing screen in the meeting."""
+        msg = "Provider does not support screen sharing."
+        raise ProviderNotSupportedError(msg)
+
+    async def stop_sharing(self) -> None:
+        """Stop sharing screen in the meeting."""
+        msg = "Provider does not support stopping screen share."
+        raise ProviderNotSupportedError(msg)
+
+    async def set_animation(self, animation: ActionAnimation | None) -> None:
+        """Set an action animation on the camera feed."""
+
+    async def update_ui(self, update: UIUpdate) -> None:
+        """Update the UI on the meeting provider."""

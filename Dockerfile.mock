@@ -1,0 +1,5 @@
+FROM meeting-agent-joinly:local
+USER root
+RUN /usr/local/bin/python -m pip install --no-cache-dir --target=/opt/mock-deps aiofiles==24.1.0 jiwer==3.1.0
+USER app
+ENV PYTHONPATH=/opt/mock-deps:/source
