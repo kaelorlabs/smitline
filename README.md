@@ -23,7 +23,7 @@ bash start-gpt-live.sh
 
 Open **http://127.0.0.1:8093/** and click **Join GPT-Live call**. Allow microphone access and use headphones. Mute and End call controls are available once connected. End the call before stopping the server with Ctrl-C. The `.env` file is ignored by Git; never commit an actual API key.
 
-Audio is sent to OpenAI and API charges apply while connected. The session uses `gpt-live-1` for voice and configures `gpt-5.6-terra` for delegated reasoning, with no external tools. Session recording storage is disabled. The confirmed demo is a one-person browser call; integration into the earlier shared meeting is still future work. End-to-end interruption behavior and delegated reasoning have not yet been separately verified.
+Audio is sent to OpenAI and API charges apply while connected. The session uses `gpt-live-1` for voice and configures `gpt-5.6-terra` for delegated reasoning, with no external tools. Session recording storage is disabled. The standalone browser call and the Zoom meeting agent have both been confirmed working by the user. End-to-end interruption behavior and delegated reasoning have not yet been separately verified.
 
 Implementation: [server](gpt-live/server.mjs), [browser client](gpt-live/client.js), and [call page](gpt-live/index.html). Protocol reference: [OpenAI GPT-Live WebRTC guide](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live).
 
@@ -32,6 +32,31 @@ Run gateway checks without using an API key or making paid calls:
 ```bash
 node --test gpt-live/server.test.mjs
 ```
+
+## Join a Zoom meeting with web search
+
+The Zoom bridge streams meeting audio to GPT-Live 1 and sends speech back through a virtual microphone. The user confirmed the Zoom voice call and local Tavily search working. Its GPT-5.6 Terra backend has a local `search_web(query)` function backed by Tavily for current facts and explicit lookup requests. There are no local transcription or speech-generation models in this audio path.
+
+With Docker running, set `OPENAI_API_KEY` and `TAVILY_API_KEY` in the ignored `.env` file:
+
+```bash
+cp zoom-live/meeting.env.example .env.zoom
+chmod 600 .env.zoom
+# Edit .env.zoom with the meeting URL and passcode.
+bash start-zoom-live.sh
+```
+
+The participant is named **Colleague AI**. Admit it if the host uses a waiting room. The [local browser viewer](http://127.0.0.1:6082/vnc.html?autoconnect=true) shows its Zoom browser. Human verification, sign-in, or terms acceptance can require user interaction.
+
+Try saying: “Search the web for OpenAI's GPT-Live documentation and tell me what it supports.” The [local status endpoint](http://127.0.0.1:8094/health) reports search starts/completions, backend status, source links, and recent captions held in memory. These captions may contain meeting content; the endpoint is bound to localhost. Meeting audio is sent to OpenAI; voice and backend usage are billed by OpenAI; local search calls use your Tavily account. Only the function query is sent to Tavily.
+
+Stop the agent and leave the meeting:
+
+```bash
+docker compose -f compose.zoom.yaml stop zoom-live
+```
+
+Configuration is loaded at startup. After editing code or environment values, use `docker compose -f compose.zoom.yaml up -d --force-recreate zoom-live` for another run. The supplied meeting invite and API key remain in ignored local files.
 
 ## Earlier local-model checkpoint
 
@@ -98,7 +123,7 @@ Google Meet integration is experimental. Guest admission was rejected in the tes
 ## Next: meeting integration
 
 1. Measure GPT-Live response latency and verify interruptions during real conversation.
-2. Connect GPT-Live audio to the shared meeting and verify multiple participants.
+2. Broaden Zoom testing across multiple speakers, waiting rooms, and meeting interruptions.
 3. Add backend research and sales-chart tools, with visible task progress.
 
 ## Source and attribution

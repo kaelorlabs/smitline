@@ -1,0 +1,15 @@
+services:
+  zoom-live:
+    image: meeting-agent-joinly-login:local
+    build:
+      context: .
+      dockerfile: Dockerfile.login
+    entrypoint: ["/app/.venv/bin/python", "-u", "/zoom-live/bridge.py"]
+    env_file: [.env, .env.zoom]
+    shm_size: "2gb"
+    ports:
+      - "127.0.0.1:6082:6080"
+      - "127.0.0.1:8094:8094"
+    volumes:
+      - ./zoom-live:/zoom-live:ro
+    stop_grace_period: 25s
