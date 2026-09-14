@@ -53,4 +53,20 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[1]['type'], 'response.create')
         await tool.close()
 
+    async def test_context_search_returns_private_source_passages(self):
+        sent, queries = [], []
+        async def send(event): sent.append(event)
+        async def context_search(query):
+            queries.append(query)
+            return {'results': [{'source': 'Plan.md', 'passage': 'Launch is October 4.'}]}
+        state = {'web_search': {'started': 0, 'completed': 0}}
+        tool = LocalToolDispatcher(send, state, context_search=context_search)
+        await tool.execute([{'name': 'search_context', 'call_id': 'context-1',
+                             'arguments': json.dumps({'query': 'launch date'})}])
+        self.assertEqual(queries, ['launch date'])
+        self.assertEqual(state['context']['last_sources'], ['Plan.md'])
+        self.assertIn('October 4', sent[0]['item']['output'])
+        self.assertEqual(sent[1]['type'], 'response.create')
+        await tool.close()
+
 if __name__ == '__main__': unittest.main()

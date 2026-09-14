@@ -1,7 +1,3 @@
-demo/*.log
-demo/*verification*.json
-demo/*.wav
-demo/__pycache__/
 .env
 .env.*
 !.env.example
@@ -9,9 +5,6 @@ demo/__pycache__/
 *.log
 **/__pycache__/
 *.py[cod]
-demo/mock-output/
-demo/*.jpg
-demo/*.png
 live/workspace/
 live/jobs/
 live/*.log
@@ -21,3 +14,6 @@ live/__pycache__/
 zoom-live/jobs/
 zoom-live/codex-workspace/
 zoom-live/recordings/
+.playwright-cli/
+node_modules/
+zoom-live/context/

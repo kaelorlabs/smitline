@@ -1,0 +1,261 @@
+const $ = selector => document.querySelector(selector);
+const form = $('#meeting-form');
+let csrf = '';
+let savedPasscode = false;
+let selectedSession = null;
+
+function payload() {
+  const data = new FormData(form);
+  return {
+    meetingUrl: data.get('meetingUrl')?.trim(),
+    passcode: data.get('passcode') || '',
+    keepPasscode: savedPasscode && !data.get('passcode'),
+    participantName: data.get('participantName')?.trim(),
+    model: data.get('model'),
+    workspace: data.get('workspace')?.trim(),
+    meetingInstructions: data.get('meetingInstructions')?.trim(),
+    tools: {
+      webSearch: data.has('webSearch'), codex: data.has('codex'),
+      charts: data.has('charts'),
+    },
+  };
+}
+
+async function request(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', 'X-Colleague-Token': csrf, ...(options.headers || {}) },
+  });
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error || 'Request failed.'), { result });
+  return result;
+}
+
+function showErrors(errors = {}) {
+  document.querySelectorAll('[data-error]').forEach(node => { node.textContent = errors[node.dataset.error] || ''; });
+}
+
+function setBusy(busy, label) {
+  $('#check-button').disabled = busy;
+  $('#start-button').disabled = busy;
+  if (label) $('#start-button').firstChild.textContent = `${label} `;
+  else $('#start-button').firstChild.textContent = 'Start colleague ';
+}
+
+function describePhase(phase, health) {
+  const states = {
+    stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
+    starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
+    loading_zoom: ['Opening Zoom…', 'Preparing the web meeting client.'],
+    joining_zoom: ['Joining the meeting…', 'Zoom is processing the invitation.'],
+    waiting_for_host: ['Waiting to be admitted.', 'The host will see Colleague AI in the waiting room.'],
+    admitted: ['Admitted. Connecting audio…', 'The colleague will enter muted.'],
+    live_in_zoom: [health?.muted ? 'Listening quietly.' : 'Present in the conversation.', health?.muted ? 'Ask Colleague AI to unmute when you want it to speak.' : 'The agent can answer and use its enabled tools.'],
+    meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
+    needs_attention: ['The agent needs attention.', health?.error || 'Open the runtime log for details.'],
+    api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
+  };
+  return states[phase] || ['Working…', 'The current stage is shown above.'];
+}
+
+function renderStatus(status) {
+  const health = status.health || {};
+  const live = Boolean(status.running);
+  const phase = status.phase || 'stopped';
+  const [message, detail] = describePhase(phase, health);
+  $('#connection-label').textContent = live ? 'Local agent connected' : (phase === 'starting' ? 'Agent starting' : 'Local console ready');
+  $('.connection').classList.toggle('live', live);
+  $('#phase-label').textContent = phase.replaceAll('_', ' ');
+  $('#signal-message').textContent = message;
+  $('#signal-detail').textContent = detail;
+  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
+  $('#mic-state').textContent = health.muted === undefined ? '—' : (health.muted ? 'Muted' : 'Open');
+  $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
+  $('#tool-state').textContent = health.backend_status || '—';
+  const seconds = Number(health.usage_seconds || 0);
+  $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  $('#stop-button').disabled = !live && phase !== 'starting';
+  $('#start-button').disabled = live || phase === 'starting';
+  const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
+  $('#runtime-log').textContent = log || 'No activity yet.';
+  renderSessions(status.sessions || []);
+}
+
+function renderSessions(sessions) {
+  const list = $('#session-list');
+  if (!sessions.length) { list.innerHTML = '<p class="empty">Completed meeting transcripts will appear here.</p>'; return; }
+  list.replaceChildren(...sessions.map(session => {
+    const button = document.createElement('button');
+    button.className = `session-card ${selectedSession === session.id ? 'selected' : ''}`;
+    button.type = 'button';
+    const title = document.createElement('b'); title.textContent = session.hasTranscript ? 'Meeting transcript' : 'Meeting session';
+    const time = document.createElement('span'); time.textContent = new Date(session.updatedAt).toLocaleString();
+    button.append(title, time);
+    button.addEventListener('click', () => openTranscript(session.id, button));
+    return button;
+  }));
+}
+
+function formatSize(value) {
+  return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderPendingFiles() {
+  const files = [...$('#context-files').files];
+  $('#pending-files').replaceChildren(...files.map(file => {
+    const pill = document.createElement('span');
+    pill.className = 'file-pill';
+    pill.textContent = `${file.name} · ${formatSize(file.size)}`;
+    return pill;
+  }));
+}
+
+function renderContext(context) {
+  const count = context.sources.length;
+  $('#context-count').textContent = count ? `${count} source${count === 1 ? '' : 's'} · ${context.totalCharacters.toLocaleString()} characters` : 'No sources';
+  $('#clear-context-button').disabled = count === 0;
+  const container = $('#context-sources');
+  if (!count) {
+    container.innerHTML = '<p class="empty">No private sources are available to the agent.</p>';
+    return;
+  }
+  container.replaceChildren(...context.sources.map(source => {
+    const row = document.createElement('div'); row.className = 'source-row';
+    const name = document.createElement('b'); name.textContent = source.name;
+    const detail = document.createElement('span'); detail.textContent = `${source.kind} · ${source.characters.toLocaleString()} chars`;
+    row.append(name, detail);
+    return row;
+  }));
+}
+
+async function filePayload(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return { name: file.name, type: file.type, data: btoa(binary) };
+}
+
+async function addPendingContext(showSuccess = true) {
+  const text = $('#context-text').value.trim();
+  const files = [...$('#context-files').files];
+  if (!text && !files.length) return true;
+  if (files.some(file => file.size > 8 * 1024 * 1024)) throw new Error('Each context document must be 8 MB or smaller.');
+  if (files.reduce((total, file) => total + file.size, 0) > 12 * 1024 * 1024) throw new Error('Add no more than 12 MB of documents at once.');
+  $('#add-context-button').disabled = true;
+  $('#add-context-button').textContent = 'Extracting…';
+  try {
+    const result = await request('/api/context/add', {
+      method: 'POST',
+      body: JSON.stringify({ text, files: await Promise.all(files.map(filePayload)) }),
+    });
+    renderContext(result);
+    $('#context-text').value = '';
+    $('#context-files').value = '';
+    renderPendingFiles();
+    if (showSuccess) announce('Private meeting context saved locally.');
+    return true;
+  } finally {
+    $('#add-context-button').disabled = false;
+    $('#add-context-button').textContent = 'Add context';
+  }
+}
+
+async function openTranscript(id, button) {
+  try {
+    const result = await request(`/api/sessions/${encodeURIComponent(id)}`);
+    selectedSession = id;
+    document.querySelectorAll('.session-card').forEach(node => node.classList.remove('selected'));
+    button.classList.add('selected');
+    $('#transcript-view h3').textContent = new Date(id.slice(0, 15).replace(/(\d{8})T(\d{6})Z/, '$1T$2Z')).toString() === 'Invalid Date' ? id : id;
+    $('#transcript-view pre').textContent = result.transcript.trim() || 'This meeting has no transcript content.';
+  } catch (error) { announce(error.message, true); }
+}
+
+function announce(text, failure = false) {
+  const notice = $('#notice');
+  notice.hidden = !text;
+  notice.textContent = text;
+  notice.classList.toggle('failure', failure);
+}
+
+async function runChecks() {
+  showErrors(); setBusy(true, 'Checking…');
+  const box = $('#preflight-results'); box.className = 'preflight';
+  box.querySelector('p').textContent = 'Checking local services and meeting configuration…';
+  try {
+    await addPendingContext(false);
+    const result = await request('/api/preflight', { method: 'POST', body: JSON.stringify(payload()) });
+    showErrors(result.errors);
+    box.className = `preflight ${result.ready ? 'ready' : 'failed'}`;
+    box.querySelector('p').textContent = result.ready ? 'Ready to join. Credentials, Docker, Codex, and meeting settings passed.' : Object.values(result.errors).join(' ');
+    return result.ready;
+  } catch (error) { box.className = 'preflight failed'; box.querySelector('p').textContent = error.message; return false; }
+  finally { setBusy(false); }
+}
+
+form.addEventListener('submit', async event => {
+  event.preventDefault(); announce('');
+  if (!await runChecks()) return;
+  setBusy(true, 'Starting…');
+  try {
+    await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
+    savedPasscode = savedPasscode || Boolean($('#passcode').value);
+    $('#passcode').value = '';
+    announce('Colleague AI is starting. Admit it from Zoom when it reaches the waiting room.');
+    await refresh();
+  } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
+  finally { setBusy(false); }
+});
+
+$('#check-button').addEventListener('click', runChecks);
+$('#context-files').addEventListener('change', renderPendingFiles);
+$('#add-context-button').addEventListener('click', async () => {
+  try { await addPendingContext(); } catch (error) { announce(error.message, true); }
+});
+$('#clear-context-button').addEventListener('click', async () => {
+  if (!window.confirm('Clear all saved meeting context from this computer?')) return;
+  try {
+    renderContext(await request('/api/context/clear', { method: 'POST', body: '{}' }));
+    announce('Saved meeting context cleared.');
+  } catch (error) { announce(error.message, true); }
+});
+$('#stop-button').addEventListener('click', async () => {
+  $('#stop-button').disabled = true; announce('Stopping Colleague AI…');
+  try { await request('/api/stop', { method: 'POST', body: '{}' }); announce('Colleague AI stopped.'); await refresh(); }
+  catch (error) { announce(error.message, true); }
+});
+
+form.elements.codex.addEventListener('change', () => {
+  const enabled = form.elements.codex.checked;
+  $('#workspace-field').hidden = !enabled;
+  if (!enabled) form.elements.charts.checked = false;
+});
+async function refresh() {
+  try { renderStatus(await request('/api/status')); } catch { $('.connection').classList.remove('live'); $('#connection-label').textContent = 'Console disconnected'; }
+}
+
+async function init() {
+  try {
+    const data = await request('/api/bootstrap'); csrf = data.token;
+    const settings = data.settings;
+    renderContext(data.context);
+    $('#meeting-url').value = settings.meetingUrl;
+    $('#participant-name').value = settings.participantName;
+    $('#workspace').value = settings.workspace;
+    $('#meeting-instructions').value = settings.meetingInstructions;
+    $('#model').replaceChildren(...data.models.map(model => Object.assign(document.createElement('option'), { value: model, textContent: model })));
+    $('#model').value = settings.model;
+    form.elements.webSearch.checked = settings.tools.webSearch;
+    form.elements.codex.checked = settings.tools.codex;
+    form.elements.charts.checked = settings.tools.charts;
+    savedPasscode = settings.hasPasscode;
+    $('#passcode-hint').textContent = savedPasscode ? 'A passcode is saved. Leave blank to keep it.' : 'Optional when the invitation URL includes access credentials.';
+    $('#workspace-field').hidden = !settings.tools.codex;
+    renderStatus(data.status);
+    setInterval(refresh, 2000);
+  } catch (error) { announce(`Control panel failed to initialize: ${error.message}`, true); }
+}
+
+init();

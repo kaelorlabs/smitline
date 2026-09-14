@@ -9,9 +9,8 @@ services:
     shm_size: "2gb"
     environment:
       JOINLY_BROWSER_PROFILE_DIR: /browser-data/profile
-    command: ["--name", "Meeting Demo", "-v"]
+    command: ["--name", "Colleague AI", "-v"]
     volumes:
-      - ./demo:/demo
       - browser-data:/browser-data
       - ./joinly/joinly/providers/browser/browser_session.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/browser_session.py:ro
       - ./joinly/joinly/providers/browser/platforms/google_meet.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/google_meet.py:ro
@@ -21,45 +20,5 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 4
-  login:
-    image: meeting-agent-joinly-login:local
-    build:
-      context: .
-      dockerfile: Dockerfile.login
-    profiles: ["login"]
-    entrypoint: ["/app/.venv/bin/python", "/demo/login.py"]
-    environment:
-      JOINLY_BROWSER_PROFILE_DIR: /browser-data/profile
-    ports:
-      - "127.0.0.1:6081:6080"
-    shm_size: "2gb"
-    volumes:
-      - ./demo:/demo:ro
-      - browser-data:/browser-data
-      - ./joinly/joinly/providers/browser/browser_session.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/browser_session.py:ro
-
-  mock:
-    image: meeting-agent-joinly-mock:local
-    build:
-      context: .
-      dockerfile: Dockerfile.mock
-    profiles: ["mock"]
-    entrypoint: ["/app/.venv/bin/python", "/demo/mock.py"]
-    ports:
-      - "127.0.0.1:8090:8090"
-    shm_size: "2gb"
-    volumes:
-      - ./demo:/demo
-      - ./joinly:/source:ro
-
-  live:
-    image: meeting-agent-joinly:local
-    profiles: ["live"]
-    entrypoint: ["/app/.venv/bin/python", "/live/server.py"]
-    ports:
-      - "127.0.0.1:8092:8092"
-    volumes:
-      - ./live:/live
-
 volumes:
   browser-data:
