@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { launcherActive } from './lifecycle.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -92,7 +93,7 @@ function sessions() {
 async function status() {
   const health = await bridgeHealth();
   return {
-    phase: health?.stage || (launcher && launcher.exitCode === null ? 'starting' : 'stopped'),
+    phase: health?.stage || (launcherActive(launcher) ? 'starting' : 'stopped'),
     running: Boolean(health), health, lastExit, logs: logs.slice(-40), sessions: sessions(),
   };
 }
@@ -147,7 +148,7 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
   const body = await readBody(request);
   if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));
   if (request.method === 'POST' && pathname === '/api/start') {
-    if ((launcher && launcher.exitCode === null) || await bridgeHealth()) {
+    if ((launcherActive(launcher)) || await bridgeHealth()) {
       return json(response, 409, { error: 'An agent is already connected or starting.' });
     }
     const check = await preflight(body);
@@ -162,12 +163,12 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
     launcher = spawn('/bin/bash', ['start-zoom-live.sh'], { cwd: ROOT, env: process.env });
     launcher.stdout.on('data', chunk => addLog('agent', chunk));
     launcher.stderr.on('data', chunk => addLog('agent', chunk));
-    launcher.on('exit', code => { lastExit = code; addLog('system', `Launcher exited with code ${code}`); });
+    launcher.on('exit', (code, signal) => { lastExit = code ?? signal; addLog('system', signal ? `Launcher stopped (${signal})` : `Launcher exited with code ${code}`); });
     launcher.on('error', error => { lastExit = -1; addLog('system', error.message); });
     return json(response, 202, { started: true });
   }
   if (request.method === 'POST' && pathname === '/api/stop') {
-    if (launcher && launcher.exitCode === null) launcher.kill('SIGTERM');
+    if (launcherActive(launcher)) launcher.kill('SIGTERM');
     const stopped = await run('docker', ['compose', '-f', 'compose.zoom.yaml', 'stop', 'zoom-live']);
     if (stopped.stdout) addLog('system', stopped.stdout);
     if (stopped.stderr) addLog('system', stopped.stderr);

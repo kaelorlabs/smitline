@@ -25,7 +25,7 @@ test('serves the console with local security headers', async () => {
     const response = await fetch(`${base}/`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
-    assert.match(await response.text(), /Prepare the colleague/);
+    assert.match(await response.text(), /Meeting details/);
   });
 });
 
