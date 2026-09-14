@@ -1,0 +1,40 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from preflight import validate
+
+
+class PreflightTests(unittest.TestCase):
+    def configured_root(self, directory):
+        root = Path(directory)
+        (root / '.env').write_text('OPENAI_API_KEY=secret\nTAVILY_API_KEY=search-secret\n')
+        (root / '.env.zoom').write_text(
+            'ZOOM_MEETING_URL=https://us05web.zoom.us/j/123456789\n'
+            'COLLEAGUE_PROFILE=standard\n'
+        )
+        return root
+
+    def test_valid_configuration_returns_runtime_without_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = validate(self.configured_root(directory))
+            self.assertEqual(runtime.profile, 'standard')
+            self.assertFalse(hasattr(runtime, 'openai_api_key'))
+
+    def test_reports_all_actionable_configuration_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.env').write_text('OPENAI_API_KEY=replace_with_your_project_api_key\n')
+            (root / '.env.zoom').write_text('ZOOM_MEETING_URL=http://example.com/room\nCOLLEAGUE_PROFILE=unknown\n')
+            with self.assertRaises(ValueError) as caught:
+                validate(root)
+            message = str(caught.exception)
+            self.assertIn('OPENAI_API_KEY', message)
+            self.assertIn('TAVILY_API_KEY', message)
+            self.assertIn('HTTPS zoom.us', message)
+            self.assertIn('COLLEAGUE_PROFILE', message)
+            self.assertNotIn('replace_with_your_project_api_key', message)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -21,8 +21,8 @@ CODEX_TOOL = {
     'name': 'run_codex',
     'description': (
         'Ask a read-only Codex agent to analyze code, solve a technical problem, '
-        'or query the fictional Northstar Analytics company database for sales, revenue, retention and churn. '
-        'Use this tool for all company metrics and chart requests; it executes SQL and returns numbers and plot data. '
+        'or inspect data available in its configured workspace. Use it for technical and chart requests; '
+        'when the optional demo database is enabled it can execute SQL and return company metrics. '
         'It can also produce an implementation plan. Choose gpt-6-astra for the hardest work, '
         'gpt-5.6-sol for strong general work, gpt-5.6-terra for balanced everyday work, '
         'gpt-5.6-luna for fast inexpensive work, or gpt-5.5 for compatibility.'

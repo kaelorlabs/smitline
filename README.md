@@ -69,6 +69,10 @@ Edit `.env.zoom` with your meeting details:
 ```dotenv
 ZOOM_MEETING_URL=https://us05web.zoom.us/j/YOUR_MEETING_ID
 ZOOM_PASSCODE=your_meeting_passcode
+COLLEAGUE_PROFILE=standard
+COLLEAGUE_PARTICIPANT_NAME=Colleague AI
+COLLEAGUE_CODEX_MODEL=gpt-5.6-terra
+COLLEAGUE_ENABLE_DEMO_DATA=0
 ```
 
 You can use the full Zoom invite URL, including its `pwd` query parameter. Supply the passcode separately if the web client asks for it. Keep these files private; they are ignored by Git.
@@ -79,7 +83,7 @@ You can use the full Zoom invite URL, including its `pwd` query parameter. Suppl
 bash start-zoom-live.sh
 ```
 
-The launcher verifies Codex authentication, builds the Docker images, starts the Zoom browser participant, and runs the Codex worker on the host. The worker creates the demo database automatically. Keep this terminal open for Codex tool calls.
+The launcher validates the configuration without printing secrets, verifies Codex authentication, builds the Docker images, starts the Zoom browser participant, and runs the Codex worker on the host. Keep this terminal open for Codex tool calls.
 
 The first build can take several minutes. The shared Joinly base image includes local speech-model dependencies, although the Zoom audio path uses GPT-Live rather than those models.
 
@@ -132,9 +136,11 @@ Unmute the agent, then try:
 
 The technical worker has access to `zoom-live/codex-workspace`, not your entire development environment. Put intended project material there for analysis. Codex runs read-only: it can query, explain, and plan, but does not modify files through this tool.
 
-### The demo company
+### Optional demo profile and company
 
-**Northstar Analytics** is fictional. Its database contains 180 customers, 926 invoices, and monthly subscription records from January through August 2026.
+The standard profile contains no scripted sales correction or Montreal-specific behavior. To replay the original hackathon scenario, set `COLLEAGUE_PROFILE=demo` and `COLLEAGUE_ENABLE_DEMO_DATA=1` before starting the call.
+
+**Northstar Analytics** is fictional. Its generated database contains 180 customers, 926 invoices, and monthly subscription records from January through August 2026.
 
 | Metric | Expected result |
 | --- | --- |
@@ -145,9 +151,9 @@ Sales exclude refunded invoices. Retention excludes newly acquired customers fro
 
 The generator calibrates August paid invoices to $800,000 for the demo, including an upgrade of the original $78,567 seed. It leaves other months and retention records unchanged.
 
-**Correction demo versus tool demo:** the default meeting prompt includes a supplied 800,000 sales reference, so correcting that specific figure does not establish that Codex ran a query. Ask explicitly for a Codex query and inspect the tool trace to demonstrate database access.
+**Correction demo versus tool demo:** only the `demo` profile includes the supplied 800,000 sales reference, so correcting that specific figure does not establish that Codex ran a query. Ask explicitly for a Codex query and inspect the tool trace to demonstrate database access.
 
-An optional `COLLEAGUE_FACT_CHECK=1` setting in `.env.zoom` replaces the general voice instructions with a sales-only fact-check policy. It loads monthly totals from SQLite at voice-session startup and directs the agent to correct inaccurate sales claims. Leave it unset for the broader conversational demo, including event research. If enabling it before a first run, initialize the database first:
+The `COLLEAGUE_PROFILE=fact_check` setting replaces the general voice instructions with a sales-only fact-check policy. It loads monthly totals from SQLite at voice-session startup and directs the agent to correct inaccurate sales claims. The older `COLLEAGUE_FACT_CHECK=1` switch remains temporarily supported. If enabling fact-check mode before a first run, initialize the database first:
 
 ```bash
 python3 zoom-live/company_database.py
@@ -226,7 +232,7 @@ Want to try voice without Zoom, or reproduce an earlier prototype? See [alternat
 | Symptom | Check |
 | --- | --- |
 | Agent is silent | Admit it, use Ask to Unmute, and inspect `muted`, `stage`, and errors at `/health`. |
-| It only corrects sales claims | Remove `COLLEAGUE_FACT_CHECK=1` and recreate the service. |
+| It only corrects sales claims | Set `COLLEAGUE_PROFILE=standard`, remove the legacy `COLLEAGUE_FACT_CHECK` setting, and recreate the service. |
 | Codex tool fails | Keep the launcher terminal open and verify the host CLI login. A worker lock means another worker is already running. |
 | Updated sales are not reflected | Run the database generator and restart the voice session; fact-check mode caches totals at startup. |
 | Chat attachment is unavailable | The host must allow file transfer and the web client must expose a File control. Delivery remains experimental. |
@@ -234,6 +240,8 @@ Want to try voice without Zoom, or reproduce an earlier prototype? See [alternat
 | Voice API rejects the session | Check account access to the configured voice and backend models, keys, and service errors. |
 
 ## Roadmap
+
+See the [product roadmap](docs/product-roadmap.md) for the production milestones and release criteria.
 
 - Reduce voice and tool-response latency.
 - Improve interruption handling and turn-taking across multiple speakers.
