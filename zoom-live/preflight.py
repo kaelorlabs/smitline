@@ -33,7 +33,7 @@ def validate(root):
     merged = {**general, **meeting}
     errors = []
 
-    for key in ('OPENAI_API_KEY', 'TAVILY_API_KEY', 'ZOOM_MEETING_URL'):
+    for key in ('OPENAI_API_KEY', 'ZOOM_MEETING_URL'):
         value = merged.get(key, '')
         if not value or any(marker in value.lower() for marker in ('replace_with', 'your_meeting', 'your_')):
             errors.append(f'{key} is missing or still a placeholder')
@@ -50,6 +50,16 @@ def validate(root):
     except ValueError as exc:
         errors.append(str(exc))
         runtime = None
+    web_search_setting = merged.get('COLLEAGUE_ENABLE_WEB_SEARCH', '1').strip().lower()
+    if web_search_setting not in ('0', 'false', 'no', 'off'):
+        value = merged.get('TAVILY_API_KEY', '')
+        if not value or any(marker in value.lower() for marker in ('replace_with', 'your_')):
+            errors.append('TAVILY_API_KEY is missing or still a placeholder')
+    workspace_setting = merged.get('COLLEAGUE_WORKSPACE', '').strip()
+    if workspace_setting and Path(workspace_setting).is_absolute():
+        workspace = Path(workspace_setting)
+        if not workspace.is_dir():
+            errors.append('COLLEAGUE_WORKSPACE must point to an existing directory')
     if errors:
         raise ValueError('\n'.join(f'- {error}' for error in errors))
     return runtime
@@ -61,5 +71,6 @@ if __name__ == '__main__':
     except (OSError, ValueError) as exc:
         print(f'Configuration check failed:\n{exc}', file=sys.stderr)
         raise SystemExit(2)
-    print(f'Configuration OK: profile={config.profile}, participant={config.participant_name}, '
-          f'codex_model={config.default_codex_model}, demo_data={str(config.demo_data_enabled).lower()}')
+    print(f'Configuration OK: participant={config.participant_name}, '
+          f'codex_model={config.default_codex_model}, '
+          f'web_search={str(config.web_search_enabled).lower()}, codex={str(config.codex_enabled).lower()}')

@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from codex_tool import CodexJobClient
+from context_tool import search_context
 
 SEARCH_TOOL = {
     'type': 'function', 'name': 'search_web',
@@ -44,9 +45,10 @@ async def search_web(query):
 
 class LocalToolDispatcher:
     """Collect completed function items and continue only after all outputs exist."""
-    def __init__(self, send, state, search=search_web, codex=None):
+    def __init__(self, send, state, search=search_web, codex=None, context_search=search_context):
         self.send, self.state, self.search = send, state, search
         self.codex = codex or CodexJobClient().run
+        self.context_search = context_search
         self.responses = {}
         self.active = {}
         self.seen = set()
@@ -109,6 +111,18 @@ class LocalToolDispatcher:
                     codex_state['last_error'] = result.get('error')
                     codex_state['session_active'] = not bool(result.get('error'))
                     codex_state['last_session_reused'] = result.get('session_reused')
+                elif call.get('name') == 'search_context' and isinstance(args, dict) and set(args) == {'query'}:
+                    context_state = self.state.setdefault('context', {'started': 0, 'completed': 0})
+                    context_state['started'] += 1
+                    self.state['backend_status'] = 'context_search_running'
+                    try:
+                        result = await self.context_search(args['query'])
+                    except Exception:
+                        result = {'error': 'Local context search failed', 'results': []}
+                    context_state['completed'] += 1
+                    context_state['last_error'] = result.get('error')
+                    context_state['last_sources'] = list(dict.fromkeys(
+                        item.get('source') for item in result.get('results', []) if item.get('source')))
                 else:
                     result = {'error': 'Unknown tool or invalid arguments'}
                 if self.closed:

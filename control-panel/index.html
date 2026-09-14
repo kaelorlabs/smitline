@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Colleague AI · Meeting console</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Colleague AI home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Colleague <b>AI</b></span>
+      </a>
+      <div class="connection"><span id="connection-dot"></span><span id="connection-label">Checking system</span></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Meeting operations</p>
+          <h1>Bring a prepared<br>colleague into the room.</h1>
+        </div>
+        <p class="hero-copy">Choose what the agent can access, review the setup, then send it into your Zoom meeting. You stay in control of when it speaks and when the session ends.</p>
+      </section>
+
+      <div id="notice" class="notice" role="status" hidden></div>
+
+      <div class="workspace-grid">
+        <section class="panel setup-panel" aria-labelledby="setup-title">
+          <div class="panel-heading">
+            <div><p class="kicker">Before the call</p><h2 id="setup-title">Prepare the colleague</h2></div>
+            <span class="step">01</span>
+          </div>
+
+          <form id="meeting-form" novalidate>
+            <div class="field full">
+              <label for="meeting-url">Zoom invitation</label>
+              <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="https://zoom.us/j/…">
+              <small class="hint">The complete invitation URL stays on this computer.</small>
+              <small class="error" data-error="meetingUrl"></small>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="passcode">Passcode</label>
+                <input id="passcode" name="passcode" type="password" autocomplete="off" placeholder="Already saved">
+                <small class="hint" id="passcode-hint">Leave blank to keep the saved passcode.</small>
+              </div>
+              <div class="field">
+                <label for="participant-name">Name in the meeting</label>
+                <input id="participant-name" name="participantName" required maxlength="80">
+                <small class="error" data-error="participantName"></small>
+              </div>
+            </div>
+
+            <div class="field full">
+              <label for="model">Codex model</label>
+              <select id="model" name="model"></select>
+              <small class="error" data-error="model"></small>
+            </div>
+
+            <fieldset>
+              <legend>Tools for this meeting</legend>
+              <div class="tool-grid">
+                <label class="tool-card"><input type="checkbox" name="webSearch"><span class="tool-icon">⌁</span><span><b>Web search</b><small>Current facts and sources</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="codex"><span class="tool-icon">›_</span><span><b>Codex</b><small>Read-only project analysis</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="charts"><span class="tool-icon">▥</span><span><b>Charts</b><small>Local PNG artifacts</small></span></label>
+              </div>
+              <small class="error" data-error="charts"></small>
+            </fieldset>
+
+            <div class="field full" id="workspace-field">
+              <label for="workspace">Codex workspace <span>optional</span></label>
+              <input id="workspace" name="workspace" autocomplete="off" placeholder="/Users/you/Projects/product">
+              <small class="hint">Codex receives read-only access to this directory. Empty uses the bundled workspace.</small>
+              <small class="error" data-error="workspace"></small>
+            </div>
+
+            <div class="field full">
+              <label for="meeting-instructions">Meeting guidance <span>optional</span></label>
+              <textarea id="meeting-instructions" name="meetingInstructions" maxlength="2000" placeholder="Example: This is a product review. Prioritize launch blockers and answer only when your contribution is useful."></textarea>
+              <small class="hint">Describe the real meeting, desired role, or relevant constraints. General safety and tool-grounding rules still apply.</small>
+              <small class="error" data-error="meetingInstructions"></small>
+            </div>
+
+            <section class="context-box" aria-labelledby="context-title">
+              <div class="context-heading">
+                <div>
+                  <p class="kicker">Private meeting knowledge</p>
+                  <h3 id="context-title">Add reference context</h3>
+                </div>
+                <span id="context-count">No sources</span>
+              </div>
+              <label for="context-text">Paste text <span>optional</span></label>
+              <textarea id="context-text" maxlength="250000" placeholder="Paste a brief, policy, plan, metrics, customer notes, or other material the agent should be able to reference."></textarea>
+              <label class="file-drop" for="context-files">
+                <span class="file-mark" aria-hidden="true">＋</span>
+                <span><b>Add documents</b><small>TXT, Markdown, CSV, JSON, YAML, PDF, or DOCX · up to 8 MB each</small></span>
+                <input id="context-files" type="file" multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.log,.pdf,.docx,text/plain,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+              </label>
+              <div id="pending-files" class="pending-files" aria-live="polite"></div>
+              <div class="context-actions">
+                <button class="button secondary compact" id="add-context-button" type="button">Add context</button>
+                <button class="text-button" id="clear-context-button" type="button" disabled>Clear saved context</button>
+              </div>
+              <div id="context-sources" class="context-sources" aria-live="polite">
+                <p class="empty">No private sources are available to the agent.</p>
+              </div>
+              <small class="hint">Extracted text stays on this computer. At meeting start, a local search tool becomes available when at least one source is saved.</small>
+            </section>
+
+            <div class="preflight" id="preflight-results" aria-live="polite">
+              <span class="preflight-mark">i</span>
+              <p>Run checks before joining. We’ll verify credentials, Docker, Codex, and the meeting configuration.</p>
+            </div>
+
+            <div class="actions">
+              <button class="button secondary" id="check-button" type="button">Run checks</button>
+              <button class="button primary" id="start-button" type="submit">Start colleague <span>↗</span></button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="panel live-panel" aria-labelledby="live-title">
+          <div class="panel-heading">
+            <div><p class="kicker">During the call</p><h2 id="live-title">Live signal</h2></div>
+            <span class="step">02</span>
+          </div>
+
+          <div class="signal-stage" id="signal-stage">
+            <div class="signal-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p class="signal-label" id="phase-label">Stopped</p>
+            <h3 id="signal-message">Ready when your meeting is.</h3>
+            <p id="signal-detail">Complete the setup and run checks.</p>
+          </div>
+
+          <dl class="telemetry">
+            <div><dt>Microphone</dt><dd id="mic-state">—</dd></div>
+            <div><dt>Listening</dt><dd id="listening-state">—</dd></div>
+            <div><dt>Tool activity</dt><dd id="tool-state">—</dd></div>
+            <div><dt>Session time</dt><dd id="session-time">0:00</dd></div>
+          </dl>
+
+          <div class="live-actions">
+            <a class="button ghost" href="http://127.0.0.1:6082/vnc.html?autoconnect=true" target="_blank" rel="noreferrer">Open meeting view</a>
+            <button class="button danger" id="stop-button" type="button" disabled>Stop colleague</button>
+          </div>
+
+          <details class="logs">
+            <summary>Runtime log</summary>
+            <pre id="runtime-log">No activity yet.</pre>
+          </details>
+        </aside>
+      </div>
+
+      <section class="panel history-panel" aria-labelledby="history-title">
+        <div class="panel-heading">
+          <div><p class="kicker">After the call</p><h2 id="history-title">Meeting memory</h2></div>
+          <span class="step">03</span>
+        </div>
+        <div class="history-layout">
+          <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts will appear here.</p></div>
+          <article class="transcript" id="transcript-view">
+            <p class="transcript-eyebrow">Transcript</p>
+            <h3>Select a meeting</h3>
+            <pre>Your local transcript will open here.</pre>
+          </article>
+        </div>
+      </section>
+    </main>
+    <footer><span>Colleague AI runs locally on this computer.</span><span>Voice and tool requests use your connected accounts.</span></footer>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

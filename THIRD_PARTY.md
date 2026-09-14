@@ -9,4 +9,6 @@ This repository includes source snapshots, not nested Git repositories. Their or
 
 Joinly modifications in this checkpoint: persistent browser-profile support, browser cleanup, optional guest-name entry for signed-in Google sessions, longer join-state wait, and explicit guest-rejection diagnostics.
 
-The CopilotKit starter snapshot is unchanged and retained as a hackathon reference. The live voice interface does not yet integrate CopilotKit. Model weights are downloaded by the upstream Docker build; model and dependency licenses remain those of their respective publishers.
+The CopilotKit starter snapshot is unchanged and retained as an implementation reference. The live voice interface does not yet integrate CopilotKit. Model weights are downloaded by the upstream Docker build; model and dependency licenses remain those of their respective publishers.
+
+The local control panel uses Mozilla PDF.js (`pdfjs-dist`, Apache-2.0) to extract PDF text and Mammoth (`mammoth`, BSD-2-Clause) to extract DOCX text. Their notices and dependency licenses are included in the installed npm packages and lockfile.

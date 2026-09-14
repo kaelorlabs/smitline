@@ -20,10 +20,9 @@ CODEX_TOOL = {
     'type': 'function',
     'name': 'run_codex',
     'description': (
-        'Ask a read-only Codex agent to analyze code, solve a technical problem, '
-        'or inspect data available in its configured workspace. Use it for technical and chart requests; '
-        'when the optional demo database is enabled it can execute SQL and return company metrics. '
-        'It can also produce an implementation plan. Choose gpt-6-astra for the hardest work, '
+        'Ask a read-only Codex agent to inspect the configured workspace and supplied meeting context, analyze code or documents, '
+        'query structured data, perform calculations, solve technical problems, or develop a plan. '
+        'Choose gpt-6-astra for the hardest work, '
         'gpt-5.6-sol for strong general work, gpt-5.6-terra for balanced everyday work, '
         'gpt-5.6-luna for fast inexpensive work, or gpt-5.5 for compatibility.'
     ),
@@ -33,7 +32,7 @@ CODEX_TOOL = {
         'properties': {
             'task': {
                 'type': 'string',
-                'description': 'A self-contained technical task. Include relevant meeting context but never credentials.',
+                'description': 'A self-contained task with relevant meeting context and desired output, but never credentials.',
             },
             'model': {
                 'type': 'string',
