@@ -1,6 +1,6 @@
 # Colleague AI product roadmap
 
-This document turns the hackathon prototype into a product that a team can operate repeatedly and trust. Work is organized around user outcomes rather than demo features.
+This document describes how Colleague AI becomes a product that a team can operate repeatedly and trust. Work is organized around user outcomes.
 
 ## Product principle
 
@@ -10,23 +10,24 @@ Colleague AI should behave like a quiet, prepared teammate: easy to invite, expl
 
 Goal: one developer can configure, start, observe, stop, and restart a meeting agent without editing source code.
 
-- Keep the standard profile free of scripted company facts and event scenarios.
-- Validate participant name, behavior profile, model, keys, and meeting URL before startup.
+- Keep the meeting policy general and accept bounded operator guidance instead of coded scenarios.
+- Validate participant name, meeting guidance, model, keys, and meeting URL before startup.
 - Represent joining, waiting, muted, listening, tool-running, leaving, and failure states explicitly.
 - Ensure meeting audio is forwarded exactly once and stale output is discarded after muting.
 - Preserve transcripts and tool traces with stable identifiers and retention controls.
-- Add deterministic tests for configuration, prompt profiles, mute transitions, tool failures, and meeting lifecycle.
+- Add deterministic tests for configuration, meeting guidance, mute transitions, tool failures, and meeting lifecycle.
 - Replace the shell-and-JSON status experience with a small local control surface.
 
 Exit criteria: a user can paste a meeting invite into a local UI, start one agent, understand every state, complete a spoken tool call, end the session cleanly, and reopen its transcript.
 
 ## Milestone 2 — Workspaces and useful tools
 
-Goal: the agent can safely help with a real project rather than a bundled fictional company.
+Goal: the agent can safely help with a real project through an explicitly selected workspace.
 
 - Let users select an explicit Codex workspace and show its access mode.
-- Make the demo SQLite dataset an installable example rather than an implicit company source.
 - Add tool permissions per meeting: web search, Codex analysis, database connectors, and artifacts.
+- Let operators paste notes and upload common documents, then retrieve bounded passages through a local context-search tool.
+- Add managed company data connectors with scoped credentials, schema discovery, access policies, and auditable read-only queries.
 - Carry relevant meeting context into Codex while keeping resumable sessions scoped to a workspace and meeting.
 - Show tool progress and source links to the organizer.
 - Deliver generated charts through a reliable local artifact page before adding platform-specific chat delivery.
