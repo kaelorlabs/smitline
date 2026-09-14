@@ -199,6 +199,14 @@ Transcripts and traces contain meeting content and are retained until you remove
 
 ## Development
 
+This repository includes a local commit-identity guard in `.githooks`. Enable it once per clone so commits are attributed to the project owner’s verified GitHub account:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The configured author and committer email must be `ankitluthra111@gmail.com`.
+
 | Path | Responsibility |
 | --- | --- |
 | [`zoom-live/`](zoom-live/) | Zoom bridge, local tools, Codex worker, database, transcripts, and tests |
