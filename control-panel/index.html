@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="shell" data-view="meeting">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Colleague AI home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -18,28 +18,23 @@
     </header>
 
     <main>
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Meeting operations</p>
-          <h1>Bring a prepared<br>colleague into the room.</h1>
-        </div>
-        <p class="hero-copy">Choose what the agent can access, review the setup, then send it into your Zoom meeting. You stay in control of when it speaks and when the session ends.</p>
-      </section>
+      <section class="hero"><div><p class="eyebrow">Workspace / Meetings</p><h1 id="page-title">New meeting</h1><p class="hero-copy" id="page-description">Set up your colleague, then invite it into the conversation.</p></div><span class="local-badge">Local workspace</span></section>
+      <nav class="view-nav" aria-label="Workspace views"><button type="button" data-view="meeting" aria-current="page">Meeting setup</button><button type="button" data-view="context">Reference context</button><button type="button" data-view="history">Transcripts</button></nav>
 
       <div id="notice" class="notice" role="status" hidden></div>
 
       <div class="workspace-grid">
         <section class="panel setup-panel" aria-labelledby="setup-title">
           <div class="panel-heading">
-            <div><p class="kicker">Before the call</p><h2 id="setup-title">Prepare the colleague</h2></div>
-            <span class="step">01</span>
+            <div><p class="kicker">Connection</p><h2 id="setup-title">Meeting details</h2></div>
+            <span class="section-tag">Zoom</span>
           </div>
 
           <form id="meeting-form" novalidate>
             <div class="field full">
               <label for="meeting-url">Zoom invitation</label>
               <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="https://zoom.us/j/…">
-              <small class="hint">The complete invitation URL stays on this computer.</small>
+              <small class="hint">Paste the invitation link shared by your host.</small>
               <small class="error" data-error="meetingUrl"></small>
             </div>
 
@@ -65,9 +60,9 @@
             <fieldset>
               <legend>Tools for this meeting</legend>
               <div class="tool-grid">
-                <label class="tool-card"><input type="checkbox" name="webSearch"><span class="tool-icon">⌁</span><span><b>Web search</b><small>Current facts and sources</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="webSearch"><span class="tool-icon" aria-hidden="true">↗</span><span><b>Web search</b><small>Current facts and sources</small></span></label>
                 <label class="tool-card"><input type="checkbox" name="codex"><span class="tool-icon">›_</span><span><b>Codex</b><small>Read-only project analysis</small></span></label>
-                <label class="tool-card"><input type="checkbox" name="charts"><span class="tool-icon">▥</span><span><b>Charts</b><small>Local PNG artifacts</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="charts"><span class="tool-icon" aria-hidden="true">▤</span><span><b>Charts</b><small>Local PNG artifacts</small></span></label>
               </div>
               <small class="error" data-error="charts"></small>
             </fieldset>
@@ -75,14 +70,14 @@
             <div class="field full" id="workspace-field">
               <label for="workspace">Codex workspace <span>optional</span></label>
               <input id="workspace" name="workspace" autocomplete="off" placeholder="/Users/you/Projects/product">
-              <small class="hint">Codex receives read-only access to this directory. Empty uses the bundled workspace.</small>
+              <small class="hint">Codex receives read-only access to this directory. Leave empty to use a separate local workspace.</small>
               <small class="error" data-error="workspace"></small>
             </div>
 
             <div class="field full">
               <label for="meeting-instructions">Meeting guidance <span>optional</span></label>
               <textarea id="meeting-instructions" name="meetingInstructions" maxlength="2000" placeholder="Example: This is a product review. Prioritize launch blockers and answer only when your contribution is useful."></textarea>
-              <small class="hint">Describe the real meeting, desired role, or relevant constraints. General safety and tool-grounding rules still apply.</small>
+              <small class="hint">Give your colleague a role or explain what matters in this meeting.</small>
               <small class="error" data-error="meetingInstructions"></small>
             </div>
 
@@ -109,7 +104,7 @@
               <div id="context-sources" class="context-sources" aria-live="polite">
                 <p class="empty">No private sources are available to the agent.</p>
               </div>
-              <small class="hint">Extracted text stays on this computer. At meeting start, a local search tool becomes available when at least one source is saved.</small>
+              <small class="hint">Save references before starting a meeting. Relevant passages may be sent to your connected AI services when answering questions.</small>
             </section>
 
             <div class="preflight" id="preflight-results" aria-live="polite">
@@ -126,12 +121,12 @@
 
         <aside class="panel live-panel" aria-labelledby="live-title">
           <div class="panel-heading">
-            <div><p class="kicker">During the call</p><h2 id="live-title">Live signal</h2></div>
-            <span class="step">02</span>
+            <div><p class="kicker">Participant</p><h2 id="live-title">Colleague AI</h2></div>
+
           </div>
 
           <div class="signal-stage" id="signal-stage">
-            <div class="signal-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="participant-avatar" aria-hidden="true">c<span>•</span></div>
             <p class="signal-label" id="phase-label">Stopped</p>
             <h3 id="signal-message">Ready when your meeting is.</h3>
             <p id="signal-detail">Complete the setup and run checks.</p>
@@ -158,8 +153,8 @@
 
       <section class="panel history-panel" aria-labelledby="history-title">
         <div class="panel-heading">
-          <div><p class="kicker">After the call</p><h2 id="history-title">Meeting memory</h2></div>
-          <span class="step">03</span>
+          <div><p class="kicker">Meeting archive</p><h2 id="history-title">Transcripts</h2></div>
+
         </div>
         <div class="history-layout">
           <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts will appear here.</p></div>

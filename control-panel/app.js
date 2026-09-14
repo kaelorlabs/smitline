@@ -1,5 +1,28 @@
 const $ = selector => document.querySelector(selector);
 const form = $('#meeting-form');
+const views = {
+  meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
+  context: ['Reference context', 'Give your colleague the documents and details behind the discussion.'],
+  history: ['Transcripts', 'Return to the conversations and decisions from your meetings.'],
+};
+function selectView(view) {
+  if (!views[view]) view = 'meeting';
+  $('.shell').dataset.view = view;
+  $('#page-title').textContent = views[view][0];
+  $('#page-description').textContent = views[view][1];
+  document.querySelectorAll('[data-view]').forEach(button => {
+    if (button.tagName !== 'BUTTON') return;
+    if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+}
+document.querySelectorAll('.view-nav button').forEach(button => {
+  button.addEventListener('click', () => { location.hash = button.dataset.view; });
+});
+window.addEventListener('hashchange', () => selectView(location.hash.slice(1)));
+selectView(location.hash.slice(1));
+let operationBusy = false;
+let latestStatus = {};
 let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
@@ -36,8 +59,9 @@ function showErrors(errors = {}) {
 }
 
 function setBusy(busy, label) {
+  operationBusy = busy;
   $('#check-button').disabled = busy;
-  $('#start-button').disabled = busy;
+  $('#start-button').disabled = busy || Boolean(latestStatus.running) || latestStatus.phase === 'starting';
   if (label) $('#start-button').firstChild.textContent = `${label} `;
   else $('#start-button').firstChild.textContent = 'Start colleague ';
 }
@@ -59,6 +83,7 @@ function describePhase(phase, health) {
 }
 
 function renderStatus(status) {
+  latestStatus = status;
   const health = status.health || {};
   const live = Boolean(status.running);
   const phase = status.phase || 'stopped';
@@ -75,7 +100,7 @@ function renderStatus(status) {
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   $('#stop-button').disabled = !live && phase !== 'starting';
-  $('#start-button').disabled = live || phase === 'starting';
+  $('#start-button').disabled = operationBusy || live || phase === 'starting';
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
   $('#runtime-log').textContent = log || 'No activity yet.';
   renderSessions(status.sessions || []);
