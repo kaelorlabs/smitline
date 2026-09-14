@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from call_record import CallRecord
+from plot_share import create_and_share_plot
 from codex_tool import CODEX_MODELS, CODEX_TOOL, CodexJobClient
 from search_tool import SEARCH_TOOL, LocalToolDispatcher
 from speech_gate import SpeechGate
@@ -123,16 +124,50 @@ Proactive Montreal event research: Participants will discuss local events in Mon
 Once useful results arrive, proactively join in at the next natural pause: "I found something that answers that..." Give a brief answer with the relevant date, place, and source, including prices only when supported. Do not wait to be invited to share a useful answer, but do not speak over a teammate. If someone has already answered the question accurately or the discussion has moved on and the result is no longer useful, stay silent. If the lookup fails or the evidence is inconclusive, do not invent an answer. Then return to listening.'''
     config['instructions'] += demo_context
     config['delegation']['responses']['instructions'] += demo_context
+    plot_policy = (' For chart or plot requests call run_codex to query the data and produce a plot. '
+                   'The application renders a PNG, saves it locally and attempts to attach it to meeting chat. '
+                   'Read plot_share status before describing the result: saved_locally means it was not sent; '
+                   'upload_submitted means submission was attempted but delivery is unconfirmed. '
+                   'Do not read plot JSON aloud. Explain any sharing error honestly.')
+    config['instructions'] += plot_policy
+    config['delegation']['responses']['instructions'] += plot_policy
+    fact_check_mode = os.environ.get('COLLEAGUE_FACT_CHECK') == '1'
+    if fact_check_mode:
+        import sqlite3
+        with sqlite3.connect('file:/zoom-live/codex-workspace/company.sqlite?mode=ro', uri=True) as db:
+            facts = db.execute("SELECT substr(sold_on,1,7), SUM(amount_cents)/100.0 FROM sales WHERE status='paid' GROUP BY 1 ORDER BY 1").fetchall()
+        config['instructions'] = (
+            'You are Colleague AI, a quiet fact checker for fictional Northstar Analytics. '
+            'Listen continuously. Speak ONLY to briefly correct a clearly wrong factual claim about '
+            'paid sales for a covered month. No greetings, acknowledgments, general answers or suggestions. '
+            'No wake phrase is required. Wait for the speaker to finish. Ignore goals, forecasts, '
+            'hypotheticals, quoted examples, other companies and ambiguous metrics. Allow rounding within '
+            '2 percent. Verified database facts, USD paid invoice totals excluding refunds: '
+            + repr(facts) + '. Last month means August 2026 in this demo. '
+            'Correct in one sentence with month and dollar amount, then be silent. Do not repeat '
+            'corrections unless the false claim is repeated. While Zoom is muted remain silent. '
+            'Unmuting is not a request to greet or replay earlier corrections.')
+        state['mode'] = 'fact_check'
+        state['verified_monthly_sales_usd'] = facts
     record.event('session_config', config=config)
     async with ClientSession(timeout=ClientTimeout(total=None, sock_connect=30)) as client:
         async with client.ws_connect('wss://api.openai.com/v1/live/sessions', headers={'Authorization': f'Bearer {api_key}'}, max_msg_size=8*1024*1024) as ws:
             await ws.send_json({'type': 'session.start', 'session': config})
             codex_client = CodexJobClient()
+            async def run_codex_with_plot(task, model):
+                result = await codex_client.run(task, model)
+                if result.get('text'):
+                    shared = await create_and_share_plot(page, result['text'], record.directory)
+                    if shared:
+                        result['plot_share'] = shared
+                        state['last_plot'] = shared
+                        record.event('plot', **shared)
+                return result
             async def send_tool_event(event):
                 if event.get('type') == 'response.item.create':
                     record.event('tool_output', item=event.get('item'))
                 await ws.send_json(event)
-            dispatcher = LocalToolDispatcher(send_tool_event, state, codex=codex_client.run)
+            dispatcher = LocalToolDispatcher(send_tool_event, state, codex=run_codex_with_plot)
             ready = asyncio.Event()
             finished = asyncio.Event()
             gate = SpeechGate(microphone)
@@ -167,6 +202,11 @@ Once useful results arrive, proactively join in at the next natural pause: "I fo
                     if muted != previous:
                         previous = muted
                         record.event('mute_changed', muted=muted)
+                        if fact_check_mode:
+                            await ws.send_json({'type': 'session.instructions.append', 'delegation_id': None,
+                                'content': 'Zoom is now ' + ('muted. Stay silent.' if muted else 'unmuted. Only correct clearly incorrect sales claims under the fact-check policy; otherwise stay silent.')})
+                            await asyncio.sleep(0.1)
+                            continue
                         await ws.send_json({'type': 'session.instructions.append', 'delegation_id': None,
                             'content': ('Zoom has muted your microphone. Listen silently and retain context. Do not speak or backchannel or start new tool work.' if muted else 'Zoom has unmuted your microphone. Listen by default. Answer direct questions and follow-up requests without a wake phrase. Otherwise speak only at a natural pause when tool results or the supplied demo reference support a material correction or a directly relevant fact that could change the decision or answer the unresolved question. Follow the participation and tool policies. Keep replies brief. Do not greet or replay old replies.')})
                     await asyncio.sleep(0.1)

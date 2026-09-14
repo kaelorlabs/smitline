@@ -61,7 +61,14 @@ def run_job(codex, data, output_path, session_id=None, timeout=180):
         'You have a fictional company database in your working directory: company.sqlite. '
         'Read DATABASE.md for its schema and metric definitions. For company sales, revenue, '
         'retention or churn questions, execute a read-only SQL query against that database. '
-        'Report the number, period, units and SQL used. Never answer company metrics from memory.\n\n'
+        'Report the number, period, units and SQL used. Never answer company metrics from memory. '
+        'For a plot or chart request, query the data and include a fenced plot block: '
+        '```plot followed by a newline and a JSON object with exactly title, unit, labels, values, '
+        'then a newline and closing ```. Labels and values are matching arrays with 1–24 entries. '
+        'Values must be finite nonnegative numbers. Title must identify the period, unit must name '
+        'the currency or measure. The application renders this data as a horizontal bar chart PNG '
+        'and attempts to attach it to Zoom chat. You need not write a file. Do not refuse chart '
+        'requests because of the read-only sandbox, and do not claim delivery yourself.\n\n'
         f'Task:\n{task.strip()}'
     )
     command = [codex, 'exec', '--model', model, '--sandbox', 'read-only',

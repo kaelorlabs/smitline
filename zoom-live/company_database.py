@@ -8,6 +8,7 @@ GUIDE = '''# Northstar Analytics — fictional demo company
 
 company.sqlite contains generated data, not real customers or revenue.
 Coverage: January–August 2026, complete calendar months. Currency: USD.
+August 2026 paid sales are calibrated to $800,000 for the fictional demo.
 For an unspecified sales question, use August 2026 and state that period.
 Sales means sum of sales.amount_cents for status='paid', divided by 100.
 Refunded invoices do not count as sales. Amounts use integer cents.
@@ -55,6 +56,17 @@ def ensure_database(workspace):
                     db.execute('INSERT INTO sales VALUES(?,?,?,?,?)', (invoice, customer,
                         f'2026-{month:02}-{rng.randint(1, calendar.monthrange(2026, month)[1]):02}',
                         price, 'refunded' if rng.random() < .025 else 'paid'))
+    # Upgrade the original demo seed too; preserve refunds and retention data.
+    with sqlite3.connect(path) as db:
+        rows = db.execute("SELECT id, amount_cents FROM sales WHERE status='paid' "
+                          "AND sold_on LIKE '2026-08-%' ORDER BY id").fetchall()
+        total = sum(amount for _, amount in rows)
+        if total == 7856700:
+            target = 80000000
+            amounts = [amount * target // total for _, amount in rows]
+            amounts[-1] += target - sum(amounts)
+            db.executemany('UPDATE sales SET amount_cents=? WHERE id=?',
+                           [(amount, row[0]) for row, amount in zip(rows, amounts)])
     (workspace / 'DATABASE.md').write_text(GUIDE)
     return path
 

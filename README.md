@@ -50,8 +50,8 @@ Chart rendering works locally. Sending chart attachments to Zoom chat is experim
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/ankitluthra/colleague-ai.git
-cd colleague-ai
+git clone https://github.com/ankitluthra/colleague-ai-private.git
+cd colleague-ai-private
 cp .env.example .env
 cp zoom-live/meeting.env.example .env.zoom
 chmod 600 .env .env.zoom
