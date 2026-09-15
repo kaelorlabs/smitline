@@ -28,7 +28,7 @@ class SpeechGate:
         while not self.queue.empty():
             self.queue.get_nowait()
         # Joinly's virtual microphone has a two-chunk paced queue. Clear it
-        # while Zoom is muted so those chunks cannot play on the next unmute.
+        # while output is muted so those chunks cannot play on the next unmute.
         pending = self.microphone._queue
         if pending is not None:
             while not pending.empty():

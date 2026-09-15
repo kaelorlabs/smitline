@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.request
 
 from codex_tool import CODEX_MODELS
 ROOT = Path(__file__).resolve().parent
@@ -14,6 +15,29 @@ JOBS = ROOT / 'jobs'
 WORKSPACE = Path(os.environ.get('COLLEAGUE_WORKSPACE') or ROOT / 'codex-workspace').expanduser().resolve()
 CONTEXT_INDEX = ROOT / 'context' / 'index.json'
 SESSIONS = JOBS / 'sessions.json'
+
+
+class BridgeLiveness:
+    """Keep startup tolerant, then stop after the meeting runtime disappears."""
+    def __init__(self, timeout=10):
+        self.timeout = timeout
+        self.seen = False
+        self.last_seen = None
+
+    def update(self, reachable, now):
+        if reachable:
+            self.seen = True
+            self.last_seen = now
+            return True
+        return not self.seen or now - self.last_seen <= self.timeout
+
+
+def bridge_reachable():
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8094/health', timeout=.5) as response:
+            return response.status == 200
+    except OSError:
+        return False
 
 
 def find_codex():
@@ -74,7 +98,7 @@ def run_job(codex, data, output_path, session_id=None, timeout=180):
             'block: ```plot followed by a newline and a JSON object with exactly title, unit, labels, '
             'values, then a newline and closing ```. Labels and values are matching arrays with 1–24 '
             'entries. Values must be finite nonnegative numbers. The application renders the data as a '
-            'PNG and attempts to attach it to Zoom chat. Do not claim delivery yourself. '
+            'PNG and attempts to attach it to meeting chat where supported. Do not claim delivery yourself. '
         )
     prompt += f'\n\nTask:\n{task.strip()}'
     command = [codex, 'exec', '--model', model, '--sandbox', 'read-only',
@@ -125,10 +149,18 @@ def main():
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise SystemExit('Another Zoom Codex worker is already running.')
-    print('Zoom Codex tool worker ready', flush=True)
+        raise SystemExit('Another Meeting Codex worker is already running.')
+    print('Meeting Codex tool worker ready', flush=True)
     sessions = load_sessions()
+    liveness = BridgeLiveness()
+    next_liveness_check = 0
     while True:
+        now = time.monotonic()
+        if now >= next_liveness_check:
+            if not liveness.update(bridge_reachable(), now):
+                print('Meeting runtime stopped; Codex tool worker exiting', flush=True)
+                return
+            next_liveness_check = now + 2
         (JOBS / 'heartbeat').write_text(str(time.time()))
         for request in sorted(JOBS.glob('*.request.json')):
             response = request.with_name(request.name.replace('.request.json', '.response.json'))
@@ -160,4 +192,4 @@ if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        print('Zoom Codex tool worker stopped', flush=True)
+        print('Meeting Codex tool worker stopped', flush=True)

@@ -9,7 +9,10 @@ class SessionConfigTests(unittest.TestCase):
         config = build_session_config(RuntimeConfig.from_environ({}))
         prompt = config['instructions'].lower()
         self.assertIn('any meeting task you can handle reliably', prompt)
-        self.assertIn('without requiring a wake phrase', prompt)
+        self.assertIn('default to listening silently', prompt)
+        self.assertIn('if it is unclear whether someone addressed you, remain silent', prompt)
+        self.assertIn('continue through brief listener backchannels', prompt)
+        self.assertIn('never invoke a tool merely because the conversation mentions a related topic', prompt)
         self.assertIn('choose a tool based on the task rather than the topic', prompt)
 
     def test_operator_guidance_and_tool_permissions_are_applied(self):
@@ -23,7 +26,7 @@ class SessionConfigTests(unittest.TestCase):
         self.assertIn('Focus on release blockers.', config['instructions'])
         self.assertIn('chart or plot requests', config['instructions'])
         tools = config['delegation']['responses']['tools']
-        self.assertEqual([tool['name'] for tool in tools], ['run_codex'])
+        self.assertEqual([tool['name'] for tool in tools], ['send_meeting_chat', 'run_codex'])
 
 
 if __name__ == '__main__':

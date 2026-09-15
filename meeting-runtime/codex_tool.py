@@ -48,9 +48,9 @@ CODEX_TOOL = {
 
 class CodexJobClient:
     def __init__(self, jobs=None, timeout=180, session_key=None):
-        self.jobs = Path(jobs or os.environ.get('CODEX_JOBS_DIR', '/zoom-live/jobs'))
+        self.jobs = Path(jobs or os.environ.get('CODEX_JOBS_DIR', '/meeting-runtime/jobs'))
         self.timeout = timeout
-        meeting = os.environ.get('ZOOM_MEETING_URL', 'local-colleague-ai')
+        meeting = os.environ.get('MEETING_URL', 'local-colleague-ai')
         self.session_key = session_key or hashlib.sha256(meeting.encode()).hexdigest()[:24]
 
     def worker_connected(self):
@@ -66,7 +66,7 @@ class CodexJobClient:
         if model not in CODEX_MODELS:
             return {'error': 'unsupported Codex model', 'available_models': list(CODEX_MODELS)}
         if not self.worker_connected():
-            return {'error': 'Codex worker is not connected. Start the Zoom agent with start-zoom-live.sh.'}
+            return {'error': 'Codex worker is not connected. Start the meeting agent with start-meeting-agent.sh.'}
 
         job_id = uuid.uuid4().hex
         request = self.jobs / f'{job_id}.request.json'

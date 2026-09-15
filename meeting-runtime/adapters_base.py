@@ -1,0 +1,53 @@
+"""Meeting platform contract; browser mechanics stay outside voice orchestration."""
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, asdict
+
+class AuthenticationRequired(RuntimeError):
+    pass
+
+@dataclass(frozen=True)
+class Capabilities:
+    text_chat: bool = True
+    file_delivery: bool = False
+    screen_sharing: bool = False
+    participant_discovery: bool = False
+    def public(self):
+        return asdict(self)
+
+class MeetingPlatformAdapter(ABC):
+    platform_id: str
+    capabilities = Capabilities()
+    def __init__(self, page, stop, stage):
+        self.page, self.stop, self.stage = page, stop, stage
+    def validate_url(self, url):
+        from meeting_urls import platform_for_url
+        if platform_for_url(url) != self.platform_id:
+            raise ValueError('Meeting URL belongs to a different adapter')
+    def normalize_url(self, url):
+        from meeting_urls import normalize_url
+        self.validate_url(url)
+        return normalize_url(url)
+    @abstractmethod
+    async def join(self, url, name, passcode=''): ...
+    @abstractmethod
+    async def get_microphone_state(self): ...
+    @abstractmethod
+    async def mute(self): ...
+    @abstractmethod
+    async def unmute(self): ...
+    @abstractmethod
+    async def connect_audio(self): ...
+    @abstractmethod
+    async def send_chat_message(self, text): ...
+    @abstractmethod
+    async def has_ended(self): ...
+    @abstractmethod
+    async def leave(self): ...
+    async def get_active_speaker(self):
+        return None
+    async def chat_available(self):
+        return False
+
+    async def get_participant_count(self):
+        """Confirmed in-call count including self, or None when unavailable."""
+        return None

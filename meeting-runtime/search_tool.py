@@ -1,4 +1,4 @@
-"""Application-owned web search function, executed locally by the Zoom bridge."""
+"""Application-owned web search function, executed locally by the meeting bridge."""
 import asyncio
 import html
 import json
@@ -45,8 +45,9 @@ async def search_web(query):
 
 class LocalToolDispatcher:
     """Collect completed function items and continue only after all outputs exist."""
-    def __init__(self, send, state, search=search_web, codex=None, context_search=search_context):
+    def __init__(self, send, state, search=search_web, codex=None, context_search=search_context, chat=None, allowed=lambda: True):
         self.send, self.state, self.search = send, state, search
+        self.chat, self.allowed = chat, allowed
         self.codex = codex or CodexJobClient().run
         self.context_search = context_search
         self.responses = {}
@@ -56,6 +57,7 @@ class LocalToolDispatcher:
         self.closed = False
 
     async def handle(self, envelope):
+        if self.closed or not self.allowed(): return
         event = envelope.get('event', {})
         kind = event.get('type')
         delegation = envelope.get('delegation_id')
@@ -80,6 +82,7 @@ class LocalToolDispatcher:
         try:
             submitted = False
             for call in calls:
+                if self.closed or not self.allowed(): return
                 call_id = call['call_id']
                 if call_id in self.seen:
                     continue
@@ -123,6 +126,12 @@ class LocalToolDispatcher:
                     context_state['last_error'] = result.get('error')
                     context_state['last_sources'] = list(dict.fromkeys(
                         item.get('source') for item in result.get('results', []) if item.get('source')))
+                elif call.get('name') == 'send_meeting_chat' and self.chat and isinstance(args, dict) and set(args) == {'text'}:
+                    if not isinstance(args['text'], str) or not 1 <= len(args['text']) <= 2000:
+                        result = {'error': 'Chat text must contain 1–2000 characters'}
+                    else:
+                        try: result = await self.chat(args['text'])
+                        except Exception: result = {'error': 'Meeting chat is unavailable or delivery failed'}
                 else:
                     result = {'error': 'Unknown tool or invalid arguments'}
                 if self.closed:

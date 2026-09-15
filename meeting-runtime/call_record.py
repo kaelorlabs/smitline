@@ -27,7 +27,7 @@ class CallRecord:
 
     def transcript(self, speaker, text, muted):
         self.event('transcript', speaker=speaker, text=text, muted=muted)
-        # Generated text does not prove playback: Zoom mute and interruptions can discard it.
+        # Generated text does not prove playback: Meeting mute and interruptions can discard it.
         label = 'Meeting' if speaker == 'meeting' else 'Agent (generated, playback not guaranteed)'
         key = (speaker, muted)
         prefix = '' if key == self.last_speaker else '\n\n' + label + (' [muted]' if muted else '') + ': '

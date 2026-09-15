@@ -29,7 +29,7 @@ CONTEXT_TOOL = {
 
 
 def context_path():
-    return Path(os.environ.get('COLLEAGUE_CONTEXT_INDEX', '/zoom-live/context/index.json'))
+    return Path(os.environ.get('COLLEAGUE_CONTEXT_INDEX', '/meeting-runtime/context/index.json'))
 
 
 def load_context(index_path=None):

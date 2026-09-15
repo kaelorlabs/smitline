@@ -5,6 +5,7 @@ import sys
 from urllib.parse import urlparse
 
 from runtime_config import RuntimeConfig
+from meeting_urls import platform_for_url
 
 
 def read_env(path):
@@ -29,21 +30,20 @@ def read_env(path):
 def validate(root):
     root = Path(root)
     general = read_env(root / '.env')
-    meeting = read_env(root / '.env.zoom')
+    meeting = read_env(root / '.env.meeting')
     merged = {**general, **meeting}
     errors = []
 
-    for key in ('OPENAI_API_KEY', 'ZOOM_MEETING_URL'):
+    for key in ('OPENAI_API_KEY', 'MEETING_URL'):
         value = merged.get(key, '')
         if not value or any(marker in value.lower() for marker in ('replace_with', 'your_meeting', 'your_')):
             errors.append(f'{key} is missing or still a placeholder')
 
-    url = merged.get('ZOOM_MEETING_URL', '')
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or not re.fullmatch(r'(?:[a-z0-9-]+\.)?zoom\.us', parsed.hostname or ''):
-        errors.append('ZOOM_MEETING_URL must be an HTTPS zoom.us meeting URL')
-    if not re.search(r'/j/\d+|/wc/(?:join/)?\d+', parsed.path):
-        errors.append('ZOOM_MEETING_URL does not contain a recognized meeting ID')
+    url = merged.get('MEETING_URL', '')
+    try:
+        platform_for_url(url)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     try:
         runtime = RuntimeConfig.from_environ(merged)
