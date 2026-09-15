@@ -27,8 +27,9 @@ function bool(value, fallback) {
 
 export function publicSettings(values = {}) {
   return {
-    meetingUrl: values.ZOOM_MEETING_URL || '',
-    hasPasscode: Boolean(values.ZOOM_PASSCODE),
+    platform: detectPlatform(values.MEETING_URL),
+    meetingUrl: values.MEETING_URL || '',
+    hasPasscode: Boolean(values.MEETING_PASSCODE),
     participantName: values.COLLEAGUE_PARTICIPANT_NAME || 'Colleague AI',
     model: values.COLLEAGUE_CODEX_MODEL || 'gpt-5.6-terra',
     workspace: values.COLLEAGUE_WORKSPACE || '',
@@ -43,11 +44,7 @@ export function publicSettings(values = {}) {
 
 export function validateSettings(input, { isDirectory = value => fs.existsSync(value) && fs.statSync(value).isDirectory() } = {}) {
   const errors = {};
-  let url;
-  try { url = new URL(String(input.meetingUrl || '')); } catch { errors.meetingUrl = 'Enter a complete Zoom invite URL.'; }
-  if (url && (url.protocol !== 'https:' || !/(^|\.)zoom\.us$/i.test(url.hostname) || !/\/(?:j|wc\/(?:join\/)?)[/]?\d+/.test(url.pathname))) {
-    errors.meetingUrl = 'Use an HTTPS zoom.us invite containing a meeting ID.';
-  }
+  if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom or Teams meeting invite.';
   const participantName = String(input.participantName || '').trim();
   if (!participantName || participantName.length > 80 || /[\u0000-\u001f]/.test(participantName)) {
     errors.participantName = 'Use 1–80 printable characters.';
@@ -74,8 +71,8 @@ function clean(value) {
 
 export function serializeSettings(input, previous = {}) {
   const lines = [
-    `ZOOM_MEETING_URL=${clean(input.meetingUrl)}`,
-    `ZOOM_PASSCODE=${clean(input.passcode || (input.keepPasscode ? previous.ZOOM_PASSCODE : ''))}`,
+    `MEETING_URL=${clean(input.meetingUrl)}`,
+    `MEETING_PASSCODE=${clean(input.passcode || (input.keepPasscode ? previous.MEETING_PASSCODE : ''))}`,
     `COLLEAGUE_PARTICIPANT_NAME=${clean(input.participantName)}`,
     `COLLEAGUE_CODEX_MODEL=${clean(input.model)}`,
     `COLLEAGUE_ENABLE_WEB_SEARCH=${input.tools?.webSearch ? '1' : '0'}`,
@@ -85,4 +82,14 @@ export function serializeSettings(input, previous = {}) {
     `COLLEAGUE_MEETING_INSTRUCTIONS=${clean(input.meetingInstructions)}`,
   ];
   return `${lines.join('\n')}\n`;
+}
+
+export function detectPlatform(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return null;
+    if (/^(?:[a-z0-9-]+\.)?zoom\.us$/i.test(url.hostname) && /^\/(?:j\/|wc\/(?:join\/)?)[0-9]+\/?$/.test(url.pathname)) return 'zoom';
+    if (['teams.microsoft.com', 'teams.live.com'].includes(url.hostname) && /^\/(?:l\/meetup-join\/[^/]+|meet\/[^/]+)/.test(url.pathname)) return 'teams';
+  } catch {}
+  return null;
 }

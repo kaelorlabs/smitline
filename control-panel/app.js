@@ -70,11 +70,15 @@ function describePhase(phase, health) {
   const states = {
     stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
-    loading_zoom: ['Opening Zoom…', 'Preparing the web meeting client.'],
-    joining_zoom: ['Joining the meeting…', 'Zoom is processing the invitation.'],
-    waiting_for_host: ['Waiting to be admitted.', 'The host will see Colleague AI in the waiting room.'],
-    admitted: ['Admitted. Connecting audio…', 'The colleague will enter muted.'],
-    live_in_zoom: [health?.muted ? 'Listening quietly.' : 'Present in the conversation.', health?.muted ? 'Ask Colleague AI to unmute when you want it to speak.' : 'The agent can answer and use its enabled tools.'],
+    opening_meeting: ['Opening meeting…', 'Preparing the web meeting client.'],
+    joining: ['Joining the meeting…', 'Processing the invitation.'],
+    waiting_for_admission: ['Waiting to be admitted.', 'The host will see Colleague AI in the lobby.'],
+    admitted: ['Admitted.', 'Connecting meeting audio.'],
+    connecting_audio: ['Connecting audio…', 'Preparing the virtual microphone for GPT-Live output.'],
+    live: ['Ready to contribute.', 'Listening continuously and waiting for a direct request or a useful factual correction.'],
+    authentication_required: ['Sign-in required.', 'Connect a Microsoft account for Teams, or inspect the meeting view.'],
+    connecting_account: ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
+    account_connected: ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
     meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
     needs_attention: ['The agent needs attention.', health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
@@ -94,7 +98,8 @@ function renderStatus(status) {
   $('#signal-message').textContent = message;
   $('#signal-detail').textContent = detail;
   $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
-  $('#mic-state').textContent = health.muted === undefined ? '—' : (health.muted ? 'Muted' : 'Open');
+  $('#mic-state').textContent = health.microphoneState || '—';
+  $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
   $('#tool-state').textContent = health.backend_status || '—';
   const seconds = Number(health.usage_seconds || 0);
@@ -228,7 +233,7 @@ form.addEventListener('submit', async event => {
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
-    announce('Colleague AI is starting. Admit it from Zoom when it reaches the waiting room.');
+    announce('Colleague AI is starting. Admit it when it reaches the meeting lobby.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
   finally { setBusy(false); }
@@ -267,6 +272,7 @@ async function init() {
     const settings = data.settings;
     renderContext(data.context);
     $('#meeting-url').value = settings.meetingUrl;
+    updatePlatform();
     $('#participant-name').value = settings.participantName;
     $('#workspace').value = settings.workspace;
     $('#meeting-instructions').value = settings.meetingInstructions;
@@ -284,3 +290,33 @@ async function init() {
 }
 
 init();
+
+function updatePlatform() {
+  let platform = null;
+  try {
+    const host = new URL($('#meeting-url').value).hostname;
+    if (['teams.microsoft.com', 'teams.live.com'].includes(host)) platform = 'Teams';
+    else if (/^(?:[a-z0-9-]+\.)?zoom\.us$/.test(host)) platform = 'Zoom';
+  } catch {}
+  $('#platform-badge').textContent = platform || 'Zoom / Teams';
+  $('#teams-account').hidden = platform !== 'Teams';
+  if (platform === 'Teams') refreshAccount();
+}
+async function refreshAccount() {
+  try {
+    const account = await request('/api/platforms/teams/status');
+    $('#account-state').textContent = account.connected ? 'Connected locally. Microsoft may request sign-in again if the session expires.' : 'Not connected. Guest entry will be attempted first.';
+  } catch { $('#account-state').textContent = 'Could not check account state.'; }
+}
+$('#meeting-url').addEventListener('input', updatePlatform);
+for (const action of ['connect', 'disconnect']) {
+  $(`#${action}-teams`).addEventListener('click', async event => {
+    event.target.disabled = true;
+    try {
+      await request(`/api/platforms/teams/${action}`, { method: 'POST', body: '{}' });
+      announce(action === 'connect' ? 'Preparing the account browser. Open meeting view to sign in.' : 'Microsoft profile removed from this computer.');
+      await refreshAccount(); await refresh();
+    } catch (error) { announce(error.message, true); }
+    finally { event.target.disabled = false; }
+  });
+}
