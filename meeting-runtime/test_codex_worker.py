@@ -2,10 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_worker import run_job
+from codex_worker import BridgeLiveness, run_job
 
 
 class CodexWorkerTests(unittest.TestCase):
+    def test_worker_exits_only_after_a_seen_bridge_stays_unavailable(self):
+        liveness = BridgeLiveness(timeout=10)
+        self.assertTrue(liveness.update(False, 0))
+        self.assertTrue(liveness.update(True, 5))
+        self.assertTrue(liveness.update(False, 15))
+        self.assertFalse(liveness.update(False, 15.01))
+
     def test_first_turn_starts_thread_and_later_turn_resumes_with_new_model(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -28,8 +28,17 @@ test('bounds operator-provided meeting instructions', () => {
 });
 
 test('serializes only runtime settings and preserves a hidden passcode', () => {
-  const text = serializeSettings({ ...valid, keepPasscode: true }, { ZOOM_PASSCODE: 'existing' });
-  assert.equal(parseEnv(text).ZOOM_PASSCODE, 'existing');
+  const text = serializeSettings({ ...valid, keepPasscode: true }, { MEETING_PASSCODE: 'existing' });
+  assert.equal(parseEnv(text).MEETING_PASSCODE, 'existing');
   assert.ok(!text.includes('OPENAI_API_KEY'));
   assert.equal(publicSettings(parseEnv(text)).tools.webSearch, true);
+});
+
+test('Teams invites validate while lookalike hosts and credentials fail', () => {
+  for (const meetingUrl of ['https://teams.microsoft.com/l/meetup-join/abc', 'https://teams.live.com/meet/123?p=secret']) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, true);
+  }
+  for (const meetingUrl of ['https://teams.microsoft.com.evil.org/meet/123', 'https://user:pass@zoom.us/j/123', 'https://zoom.us:8443/j/123', 'https://zoom.us/j/123/extra']) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, false);
+  }
 });

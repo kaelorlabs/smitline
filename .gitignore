@@ -11,9 +11,11 @@ live/*.log
 live/*.wav
 live/verification.json
 live/__pycache__/
-zoom-live/jobs/
-zoom-live/codex-workspace/
-zoom-live/recordings/
+meeting-runtime/jobs/
+meeting-runtime/codex-workspace/
+meeting-runtime/recordings/
 .playwright-cli/
 node_modules/
-zoom-live/context/
+meeting-runtime/context/
+
+meeting-runtime/profiles/

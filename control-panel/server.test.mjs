@@ -78,3 +78,15 @@ test('adds private context without returning its extracted text in bootstrap', a
     await once(server, 'close');
   }
 });
+
+test('meeting controls reject unauthenticated requests', async () => {
+  const server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const endpoint of ['/api/platforms/teams/connect', '/api/platforms/teams/disconnect']) {
+      const result = await fetch(base + endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({allowed:true}) });
+      assert.equal(result.status, 403);
+    }
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

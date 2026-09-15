@@ -10,13 +10,14 @@ import { addContext, clearContext, publicContext, readContext } from './context-
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
-const MEETING_ENV = path.join(ROOT, '.env.zoom');
-const RECORDINGS = path.join(ROOT, 'zoom-live', 'recordings');
-const CONTEXT_INDEX = path.join(ROOT, 'zoom-live', 'context', 'index.json');
+const MEETING_ENV = path.join(ROOT, '.env.meeting');
+const RECORDINGS = path.join(ROOT, 'meeting-runtime', 'recordings');
+const CONTEXT_INDEX = path.join(ROOT, 'meeting-runtime', 'context', 'index.json');
 const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
 const token = crypto.randomBytes(24).toString('base64url');
 const logs = [];
 let launcher = null;
+const PROFILE_ROOT = path.join(ROOT, 'meeting-runtime', 'profiles');
 let lastExit = null;
 
 function headers(type = 'application/json; charset=utf-8') {
@@ -128,6 +129,7 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
       status: await status(),
     });
   }
+  if (request.method === 'GET' && pathname === '/api/platforms/teams/status') return json(response, 200, { connected: fs.existsSync(path.join(PROFILE_ROOT, 'teams-connected')) });
   if (request.method === 'GET' && pathname === '/api/status') return json(response, 200, await status());
   if (request.method === 'GET' && pathname.startsWith('/api/sessions/')) {
     const id = pathname.slice('/api/sessions/'.length);
@@ -146,6 +148,23 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
     return json(response, 200, clearContext(contextIndex));
   }
   const body = await readBody(request);
+  if (request.method === 'POST' && pathname === '/api/platforms/teams/connect') {
+    if (launcherActive(launcher) || await bridgeHealth()) return json(response, 409, { error: 'Stop the current meeting or account connection first.' });
+    fs.mkdirSync(PROFILE_ROOT, { recursive: true, mode: 0o700 });
+    if (!fs.existsSync(MEETING_ENV)) fs.writeFileSync(MEETING_ENV, '', { mode: 0o600 });
+    launcher = spawn('/bin/bash', ['start-meeting-agent.sh'], { cwd: ROOT, env: { ...process.env, COLLEAGUE_AUTH_MODE: 'teams' } });
+    launcher.stdout.on('data', chunk => addLog('account', chunk));
+    launcher.stderr.on('data', chunk => addLog('account', chunk));
+    launcher.on('error', error => { lastExit = -1; addLog('account', error.message); });
+    launcher.on('exit', (code, signal) => { lastExit = code ?? signal; });
+    return json(response, 202, { connecting: true });
+  }
+  if (request.method === 'POST' && pathname === '/api/platforms/teams/disconnect') {
+    if (launcherActive(launcher) || await bridgeHealth()) return json(response, 409, { error: 'Stop the meeting or account browser before disconnecting.' });
+    fs.rmSync(path.join(PROFILE_ROOT, 'teams'), { recursive: true, force: true });
+    fs.rmSync(path.join(PROFILE_ROOT, 'teams-connected'), { force: true });
+    return json(response, 200, { connected: false });
+  }
   if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));
   if (request.method === 'POST' && pathname === '/api/start') {
     if ((launcherActive(launcher)) || await bridgeHealth()) {
@@ -160,7 +179,7 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
     fs.chmodSync(MEETING_ENV, 0o600);
     logs.length = 0;
     lastExit = null;
-    launcher = spawn('/bin/bash', ['start-zoom-live.sh'], { cwd: ROOT, env: process.env });
+    launcher = spawn('/bin/bash', ['start-meeting-agent.sh'], { cwd: ROOT, env: process.env });
     launcher.stdout.on('data', chunk => addLog('agent', chunk));
     launcher.stderr.on('data', chunk => addLog('agent', chunk));
     launcher.on('exit', (code, signal) => { lastExit = code ?? signal; addLog('system', signal ? `Launcher stopped (${signal})` : `Launcher exited with code ${code}`); });
@@ -169,7 +188,7 @@ async function api(request, response, pathname, contextIndex = CONTEXT_INDEX) {
   }
   if (request.method === 'POST' && pathname === '/api/stop') {
     if (launcherActive(launcher)) launcher.kill('SIGTERM');
-    const stopped = await run('docker', ['compose', '-f', 'compose.zoom.yaml', 'stop', 'zoom-live']);
+    const stopped = await run('docker', ['compose', '-f', 'compose.meeting.yaml', 'stop', 'meeting-agent']);
     if (stopped.stdout) addLog('system', stopped.stdout);
     if (stopped.stderr) addLog('system', stopped.stderr);
     return json(response, stopped.code === 0 ? 200 : 500, { stopped: stopped.code === 0 });
