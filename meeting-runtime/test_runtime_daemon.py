@@ -6,8 +6,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from agent_sessions import MeetingSession
 from meeting_repository import MeetingCorruptionError, MeetingRepository
-from session_leases import SessionLeaseStore
+from session_leases import LeaseStateError, SessionLeaseStore
 from test_schemas import (
     TEAMS_URL, TIMESTAMP, ZOOM_URL, agent_session_payload, context_payload,
     handoff_payload, permissions_payload,
@@ -40,7 +41,11 @@ class FakeSupervisor:
         self.contexts = []
         self.cancelled = []
         self.fail_start = False
+        self.fail_context = False
+        self.fail_cancel = False
         self.start_error = RuntimeError('join failed')
+        self.context_error = RuntimeError('context failed')
+        self.cancel_error = RuntimeError('cancel failed')
 
     async def start(self, meeting):
         if self.fail_start:
@@ -48,9 +53,13 @@ class FakeSupervisor:
         self.started.append(meeting.id)
 
     async def add_context(self, meeting_id, context):
+        if self.fail_context:
+            raise self.context_error
         self.contexts.append((meeting_id, context.objective))
 
     async def cancel(self, meeting_id):
+        if self.fail_cancel:
+            raise self.cancel_error
         self.cancelled.append(meeting_id)
 
 
@@ -456,6 +465,223 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         leases.close()
         with self.assertRaises(RuntimeError):
             leases.get('codex', 'thread-origin-1')
+
+    async def test_forward_lifecycle_and_same_state_idempotence(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        self.daemon.transition(meeting_id, 'live')
+        with self.assertRaises(DaemonError):
+            self.daemon.transition(meeting_id, 'joining')
+        current = await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json()
+        self.assertEqual(current['state'], 'live')
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.live'), 1)
+        self.assertEqual(types.count('meeting.joining'), 1)
+        again = self.daemon.transition(meeting_id, 'live')
+        self.assertEqual(again.state, 'live')
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.live'), 1)
+        with self.assertRaises(DaemonError):
+            self.daemon.transition(meeting_id, 'waiting_for_admission')
+        ended = self.daemon.transition(meeting_id, 'ended', reason='host_ended')
+        self.assertEqual(ended.state, 'ended')
+        same = self.daemon.transition(meeting_id, 'ended')
+        self.assertEqual(same.state, 'ended')
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.ended'), 1)
+        with self.assertRaises(DaemonError):
+            self.daemon.transition(meeting_id, 'live')
+
+    async def test_historical_and_second_meeting_use_active_lease(self):
+        historical = MeetingSession.from_dict({
+            'id': 'mtg-0000000000000000',
+            'platform': 'zoom',
+            'meetingUrl': ZOOM_URL,
+            'agentSession': agent_session_payload(),
+            'context': context_payload(),
+            'permissions': permissions_payload(),
+            'state': 'ended',
+            'startedAt': '2026-09-16T16:00:00Z',
+        })
+        self.daemon.meetings.put(historical, None)
+        created = await self.create()
+        self.assertEqual(created.status, 201)
+        meeting_id = (await created.json())['id']
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(status.status, 200)
+        self.assertEqual((await status.json())['meetingId'], meeting_id)
+        beat = await self.client.post(
+            '/v1/agent-sessions/codex/thread-origin-1/lease',
+            headers=self.headers(), json={})
+        self.assertEqual(beat.status, 200)
+        ready = handoff_payload(meetingId=meeting_id, startedAt=TIMESTAMP)
+        self.daemon.store_handoff(ready)
+        second = await self.create()
+        self.assertEqual(second.status, 201)
+        second_id = (await second.json())['id']
+        beat = await self.client.post(
+            '/v1/agent-sessions/codex/thread-origin-1/lease',
+            headers=self.headers(), json={})
+        self.assertEqual(beat.status, 200)
+        self.assertEqual((await beat.json())['meetingId'], second_id)
+
+    async def test_context_and_cancel_supervisor_failures_are_json(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        self.supervisor.fail_context = True
+        updated = context_payload(objective='Updated objective after persist')
+        response = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/context', headers=self.headers(), json=updated)
+        self.assertEqual(response.content_type, 'application/json')
+        self.assertEqual(response.status, 503)
+        body = await response.json()
+        self.assertEqual(body['error']['code'], 'supervisor_context_failed')
+        stored = await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json()
+        self.assertEqual(stored['context']['objective'], 'Updated objective after persist')
+        self.supervisor.fail_context = False
+        self.supervisor.fail_cancel = True
+        cancelled = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/cancel', headers=self.headers())
+        self.assertEqual(cancelled.content_type, 'application/json')
+        self.assertEqual(cancelled.status, 503)
+        self.assertEqual((await cancelled.json())['error']['code'], 'supervisor_cancel_failed')
+        still = await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json()
+        self.assertEqual(still['state'], 'joining')
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('meeting.ended', types)
+
+    async def test_unexpected_exception_is_json_internal_error(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError('secret-token leaked stack')
+
+        self.daemon.get_meeting = boom
+        response = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(response.status, 500)
+        self.assertEqual(response.content_type, 'application/json')
+        body = await response.json()
+        self.assertEqual(body['error']['code'], 'internal_error')
+        self.assertNotIn('secret-token', json.dumps(body))
+        self.assertNotIn(self.auth, json.dumps(body))
+
+    async def test_concurrent_cancel_invokes_supervisor_once(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        original = self.supervisor.cancel
+
+        async def slow_cancel(meeting):
+            await asyncio.sleep(0.05)
+            await original(meeting)
+
+        self.supervisor.cancel = slow_cancel
+        first, second = await asyncio.gather(
+            self.client.post('/v1/meetings/' + meeting_id + '/cancel', headers=self.headers()),
+            self.client.post('/v1/meetings/' + meeting_id + '/cancel', headers=self.headers()),
+        )
+        self.assertEqual(sorted([first.status, second.status]), [200, 200])
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.ended'), 1)
+
+    async def test_false_release_is_prevented_when_release_fails(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+
+        def boom(*_args, **_kwargs):
+            raise LeaseStateError('cannot release')
+
+        self.daemon.leases.release = boom
+        self.daemon.record_finalization_failure(meeting_id, 'supervisor crash')
+        events = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('agent_session.released', events)
+        self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        lease_path = Path(self.daemon.meetings.root) / meeting_id / 'lease.json'
+        self.assertTrue(lease_path.exists())
+
+    async def test_active_turn_handoff_is_immutable(self):
+        created = await self.create()
+        session = await created.json()
+        meeting_id = session['id']
+        record = self.daemon.meetings.get(meeting_id)
+        snapshot = (Path(self.daemon.meetings.root) / meeting_id / 'snapshot.json').read_bytes()
+        self.daemon.leases.start_turn('codex', 'thread-origin-1', record.lease_token, 'turn-1')
+        handoff = handoff_payload(meetingId=meeting_id, startedAt=session['startedAt'])
+        with self.assertRaises(DaemonError):
+            self.daemon.store_handoff(handoff)
+        self.assertEqual(
+            (Path(self.daemon.meetings.root) / meeting_id / 'snapshot.json').read_bytes(),
+            snapshot)
+        self.assertIsNone(self.daemon.meetings.get(meeting_id).handoff)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('handoff.ready', types)
+        self.assertNotIn('meeting.ended', types)
+        self.assertEqual(self.daemon.meetings.get(meeting_id).session.state, 'joining')
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(status.status, 200)
+
+    async def test_duplicate_and_conflicting_handoff(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        self.daemon.store_handoff(ready)
+        again = self.daemon.store_handoff(ready)
+        self.assertEqual(again.meeting_id, meeting_id)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
+        other = handoff_payload(
+            meetingId=meeting_id, startedAt=meeting['startedAt'], summary='Different summary')
+        with self.assertRaises(DaemonError):
+            self.daemon.store_handoff(other)
+
+    async def test_partial_handoff_retries(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        original_complete = self.daemon.leases.complete_finalization
+
+        def boom_complete(*args, **kwargs):
+            raise LeaseStateError('complete failed')
+
+        self.daemon.leases.complete_finalization = boom_complete
+        with self.assertRaises(DaemonError):
+            self.daemon.store_handoff(ready)
+        self.assertIsNotNone(self.daemon.meetings.get(meeting_id).handoff)
+        self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        self.daemon.leases.complete_finalization = original_complete
+        original_release = self.daemon.leases.release
+
+        def boom_release(*args, **kwargs):
+            raise LeaseStateError('cannot release')
+
+        self.daemon.leases.release = boom_release
+        with self.assertRaises(DaemonError):
+            self.daemon.store_handoff(ready)
+        self.daemon.leases.release = original_release
+        original_clear = self.daemon.meetings.clear_lease_token
+
+        def boom_clear(*args, **kwargs):
+            raise RuntimeError('clear failed')
+
+        self.daemon.meetings.clear_lease_token = boom_clear
+        with self.assertRaises(Exception):
+            self.daemon.store_handoff(ready)
+        self.daemon.meetings.clear_lease_token = original_clear
+        stored = self.daemon.store_handoff(ready)
+        self.assertEqual(stored.meeting_id, meeting_id)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
 
 
 class MeetingRepositoryUnitTests(unittest.TestCase):
