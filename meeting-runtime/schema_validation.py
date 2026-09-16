@@ -6,7 +6,13 @@ import re
 
 SCHEMA_VERSION = 1
 MEETING_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
-SECRET_FIELD_SUFFIXES = (
+SECRET_TOKENS = frozenset({
+    'apikey', 'token', 'secret', 'password', 'passwd', 'cookie', 'cookies',
+    'authorization', 'credential', 'credentials', 'privatekey', 'bearer', 'key',
+})
+# Compound glued names such as myaccesstoken. Do not include 'key' here: monkey and
+# turnkey would otherwise be treated as secrets.
+SECRET_COMPOUND_SUFFIXES = (
     'apikey', 'token', 'secret', 'password', 'passwd', 'cookie', 'cookies',
     'authorization', 'credential', 'credentials', 'privatekey', 'bearer',
 )
@@ -16,13 +22,26 @@ def normalized_field_name(name):
     return ''.join(character for character in name.lower() if character.isalnum())
 
 
+def field_tokens(name):
+    tokens = []
+    for piece in re.split(r'[^A-Za-z0-9]+', name):
+        if not piece:
+            continue
+        split_camel = re.sub(r'([a-z0-9])([A-Z])', r'\1\n\2', piece)
+        split_camel = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1\n\2', split_camel)
+        tokens.extend(part.lower() for part in split_camel.split('\n') if part)
+    return tokens
+
+
 def field_name_is_secret(name):
     if not isinstance(name, str):
         return False
+    if any(token in SECRET_TOKENS for token in field_tokens(name)):
+        return True
     normalized = normalized_field_name(name)
     if not normalized:
         return False
-    return any(normalized == suffix or normalized.endswith(suffix) for suffix in SECRET_FIELD_SUFFIXES)
+    return any(normalized == suffix or normalized.endswith(suffix) for suffix in SECRET_COMPOUND_SUFFIXES)
 
 
 def reject_secrets(value, location='payload'):

@@ -203,20 +203,28 @@ class SchemaValidationTests(unittest.TestCase):
             ColleagueEvent.from_dict(missing_meeting)
 
     def test_secret_fields_are_rejected_and_detected(self):
-        self.assertTrue(field_name_is_secret('apiKey'))
-        self.assertTrue(field_name_is_secret('access_token'))
-        self.assertTrue(field_name_is_secret('OPENAI_API_KEY'))
-        self.assertFalse(field_name_is_secret('sessionId'))
-        self.assertFalse(field_name_is_secret('delegationId'))
+        for name in ('apiKey', 'api_key', 'access_token', 'OPENAI_API_KEY', 'openai_key',
+                     'ssh_key', 'private_key', 'client_secret', 'cookie', 'authorization',
+                     'password'):
+            with self.subTest(name=name):
+                self.assertTrue(field_name_is_secret(name))
+        for name in ('sessionId', 'delegationId', 'monkey', 'keyboard', 'turnkey'):
+            with self.subTest(name=name):
+                self.assertFalse(field_name_is_secret(name))
         with self.assertRaises(ValueError):
             AgentSessionRef.from_dict(agent_session_payload(metadata={'apiKey': 'sk-secret'}))
         with self.assertRaises(ValueError):
             AgentSessionRef.from_dict(agent_session_payload(metadata={'authorization': 'Bearer x'}))
         with self.assertRaises(ValueError):
+            AgentSessionRef.from_dict(agent_session_payload(metadata={'openai_key': 'sk-secret'}))
+        with self.assertRaises(ValueError):
             ColleagueEvent.from_dict(event_payload('meeting.ended', reason='done',
                                                    accessToken='secret-token'))
         with self.assertRaises(ValueError):
             reject_secrets({'nested': {'cookie': 'abc'}})
+        with self.assertRaises(ValueError):
+            reject_secrets({'nested': {'ssh_key': 'abc'}})
+        reject_secrets({'nested': {'monkey': 'ok', 'keyboard': 'ok', 'turnkey': 'ok'}})
 
 
 if __name__ == '__main__':

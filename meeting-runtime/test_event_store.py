@@ -40,7 +40,7 @@ class JsonlEventStoreTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def events_path(self, meeting_id='mtg-a'):
-        return self.root / meeting_id / 'events.jsonl'
+        return self.store.root / meeting_id / 'events.jsonl'
 
     def test_interface_and_ordered_round_trip_across_restart(self):
         self.assertIsInstance(self.store, EventStore)
@@ -163,6 +163,57 @@ class JsonlEventStoreTests(unittest.TestCase):
             self.store.append(leaked)
         self.assertFalse(self.events_path().exists())
         self.assertEqual(self.store.replay('mtg-a'), [])
+
+    def test_append_revalidates_constructed_and_mutated_events(self):
+        bogus = ColleagueEvent(
+            version=1, id='evt-bypass', meeting_id='mtg-a', timestamp=TIMESTAMP,
+            type='meeting.thinking', payload={'note': 'not-in-vocabulary'},
+        )
+        with self.assertRaises(ValueError):
+            self.store.append(bogus)
+        missing_reason = ColleagueEvent(
+            version=1, id='evt-empty', meeting_id='mtg-a', timestamp=TIMESTAMP,
+            type='meeting.ended', payload={},
+        )
+        with self.assertRaises(ValueError):
+            self.store.append(missing_reason)
+        constructed = ColleagueEvent(
+            version=1, id='evt-1', meeting_id='mtg-a', timestamp=TIMESTAMP,
+            type='meeting.joining', payload={},
+        )
+        constructed.payload['extra'] = 'injected'
+        with self.assertRaises(ValueError):
+            self.store.append(constructed)
+        valid = ColleagueEvent.from_dict(joining_event('mtg-a', 'evt-ok'))
+        object.__setattr__(valid, 'payload', dict(valid.payload) | {'extra': 'injected'})
+        with self.assertRaises(ValueError):
+            self.store.append(valid)
+        self.assertFalse(self.events_path().exists())
+        self.assertEqual(self.store.replay('mtg-a'), [])
+        stored = self.store.append(joining_event('mtg-a', 'evt-ok'))
+        with self.assertRaises(TypeError):
+            stored.payload['extra'] = 'nope'
+        self.assertEqual(self.store.replay('mtg-a')[0].to_dict(), stored.to_dict())
+
+    def test_symlink_meeting_paths_cannot_escape_the_store_root(self):
+        outside = Path(self.temporary.name) / 'outside'
+        outside.mkdir()
+        victim = outside / 'events.jsonl'
+        victim.write_text('keep-me\n', encoding='utf-8')
+        link = self.store.root / 'mtg-link'
+        link.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            self.store.append(joining_event('mtg-link', 'evt-1'))
+        with self.assertRaises(ValueError):
+            self.store.replay('mtg-link')
+        self.assertEqual(victim.read_text(encoding='utf-8'), 'keep-me\n')
+        self.assertTrue(link.is_symlink())
+        real_dir = self.store.root / 'mtg-a'
+        real_dir.mkdir()
+        (real_dir / 'events.jsonl').symlink_to(victim)
+        with self.assertRaises(ValueError):
+            self.store.append(joining_event('mtg-a', 'evt-2'))
+        self.assertEqual(victim.read_text(encoding='utf-8'), 'keep-me\n')
 
 
 if __name__ == '__main__':

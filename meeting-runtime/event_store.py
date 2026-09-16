@@ -1,8 +1,10 @@
 """Append-only JSONL event storage with meeting isolation and restart-safe recovery."""
 from abc import ABC, abstractmethod
+import errno
 import fcntl
 import json
 import os
+import stat
 import threading
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from schema_validation import reject_secrets, require_meeting_id
 
 _PATH_LOCK_GUARD = threading.Lock()
 _PATH_LOCKS = {}
+_EVENTS_NAME = 'events.jsonl'
 
 
 class EventStore(ABC):
@@ -32,6 +35,39 @@ def _path_lock(path):
             lock = threading.Lock()
             _PATH_LOCKS[key] = lock
         return lock
+
+
+def _directory_flags():
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _is_unsafe_path_error(error):
+    return error.errno in (
+        errno.ELOOP,
+        errno.ENOTDIR,
+        getattr(errno, 'EMLINK', errno.ELOOP),
+    )
+
+
+def _raise_unsafe_path(error, message):
+    if _is_unsafe_path_error(error):
+        raise ValueError(message) from error
+    raise error
+
+
+def _canonical_event(event):
+    if isinstance(event, ColleagueEvent):
+        payload = event.to_dict()
+    elif isinstance(event, dict):
+        payload = event
+    else:
+        raise ValueError('event must be a ColleagueEvent or object')
+    stored = ColleagueEvent.from_dict(payload)
+    reject_secrets(stored.to_dict(), 'event')
+    return stored
 
 
 def _read_all(fd, size=None):
@@ -101,27 +137,106 @@ def _parse_line(line, meeting_id):
 
 
 class JsonlEventStore(EventStore):
-    def __init__(self, root):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(self.root, 0o700)
+    """JSONL store contained under a resolved root directory fd.
 
-    def _events_path(self, meeting_id):
+    Meeting directories and events.jsonl are opened with mkdirat/openat from
+    that fd and O_NOFOLLOW so a precreated last-component symlink cannot escape
+    the store. Python does not expose a portable way to atomically replace a
+    whole ancestor of the configured root after construction; the held root fd
+    keeps the original directory on POSIX. O_NOFOLLOW is a POSIX flag used by
+    this Linux/macOS runtime.
+    """
+
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if self.root.is_symlink():
+            raise ValueError('event store root must not be a symlink')
+        os.chmod(self.root, 0o700)
+        try:
+            self._root_fd = os.open(self.root, _directory_flags())
+        except OSError as error:
+            _raise_unsafe_path(error, 'event store root must not be a symlink')
+        os.fchmod(self._root_fd, 0o700)
+
+    def close(self):
+        fd = getattr(self, '_root_fd', None)
+        if fd is None:
+            return
+        os.close(fd)
+        self._root_fd = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _lock_path(self, meeting_id):
+        return str(self.root / meeting_id / _EVENTS_NAME)
+
+    def _open_meeting_dir(self, meeting_id, *, create):
         meeting_id = require_meeting_id(meeting_id)
-        return self.root / meeting_id / 'events.jsonl'
+        if create:
+            try:
+                os.mkdir(meeting_id, 0o700, dir_fd=self._root_fd)
+            except FileExistsError:
+                pass
+            except OSError as error:
+                _raise_unsafe_path(error, 'meeting storage path must not be a symlink')
+        try:
+            dir_fd = os.open(meeting_id, _directory_flags(), dir_fd=self._root_fd)
+        except FileNotFoundError:
+            if create:
+                raise
+            return None
+        except OSError as error:
+            if error.errno == errno.ENOENT and not create:
+                return None
+            _raise_unsafe_path(error, 'meeting storage path must not be a symlink')
+        try:
+            info = os.fstat(dir_fd)
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise ValueError('meeting storage path must be a directory')
+            os.fchmod(dir_fd, 0o700)
+            return dir_fd
+        except Exception:
+            os.close(dir_fd)
+            raise
+
+    def _open_events(self, meeting_id, *, create):
+        dir_fd = self._open_meeting_dir(meeting_id, create=create)
+        if dir_fd is None:
+            return None, None
+        try:
+            exclusive = os.O_RDWR | os.O_CREAT | os.O_EXCL
+            existing = os.O_RDWR if create else os.O_RDONLY
+            if hasattr(os, 'O_NOFOLLOW'):
+                existing |= os.O_NOFOLLOW
+            try:
+                fd = os.open(_EVENTS_NAME, exclusive if create else existing, 0o600, dir_fd=dir_fd)
+            except FileExistsError:
+                fd = os.open(_EVENTS_NAME, existing, dir_fd=dir_fd)
+        except FileNotFoundError:
+            os.close(dir_fd)
+            if create:
+                raise
+            return None, None
+        except OSError as error:
+            os.close(dir_fd)
+            if error.errno == errno.ENOENT and not create:
+                return None, None
+            _raise_unsafe_path(error, 'events.jsonl must not be a symlink')
+        if create:
+            os.fchmod(fd, 0o600)
+        return dir_fd, fd
 
     def append(self, event):
-        stored = event if isinstance(event, ColleagueEvent) else ColleagueEvent.from_dict(event)
-        serialized = stored.to_dict()
-        reject_secrets(serialized, 'event')
-        encoded = (json.dumps(serialized, ensure_ascii=False) + '\n').encode('utf-8')
-        path = self._events_path(stored.meeting_id)
-        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(path.parent, 0o700)
-        with _path_lock(path):
-            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        stored = _canonical_event(event)
+        encoded = (json.dumps(stored.to_dict(), ensure_ascii=False) + '\n').encode('utf-8')
+        with _path_lock(self._lock_path(stored.meeting_id)):
+            dir_fd, fd = self._open_events(stored.meeting_id, create=True)
             try:
-                os.fchmod(fd, 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 _truncate_incomplete_tail(fd)
                 os.lseek(fd, 0, os.SEEK_END)
@@ -130,20 +245,22 @@ class JsonlEventStore(EventStore):
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
+                os.close(dir_fd)
         return stored
 
     def replay(self, meeting_id):
-        path = self._events_path(meeting_id)
-        if not path.exists():
-            return []
-        with _path_lock(path):
-            fd = os.open(path, os.O_RDONLY)
+        meeting_id = require_meeting_id(meeting_id)
+        with _path_lock(self._lock_path(meeting_id)):
+            dir_fd, fd = self._open_events(meeting_id, create=False)
+            if fd is None:
+                return []
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH)
                 payload = _read_all(fd)
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
+                os.close(dir_fd)
         try:
             text = payload.decode('utf-8')
         except UnicodeDecodeError:
