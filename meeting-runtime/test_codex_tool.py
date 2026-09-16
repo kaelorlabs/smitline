@@ -36,6 +36,27 @@ class CodexJobClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(jobs.glob('*.request.json')), [])
             self.assertEqual(list(jobs.glob('*.response.json')), [])
 
+    async def test_cancel_stops_waiting_and_cleans_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jobs = Path(directory)
+            (jobs / 'heartbeat').write_text(str(time.time()))
+            client = CodexJobClient(jobs, timeout=2, session_key='c' * 24)
+            cancel = asyncio.Event()
+
+            async def run():
+                return await client.run('Long running review', 'gpt-5.6-terra', cancel=cancel)
+
+            task = asyncio.create_task(run())
+            for _ in range(50):
+                if list(jobs.glob('*.request.json')):
+                    break
+                await asyncio.sleep(0.01)
+            cancel.set()
+            result = await task
+            self.assertEqual(result, {'error': 'cancelled'})
+            self.assertEqual(list(jobs.glob('*.request.json')), [])
+            self.assertEqual(list(jobs.glob('*.response.json')), [])
+
     async def test_rejects_unknown_model_before_creating_job(self):
         with tempfile.TemporaryDirectory() as directory:
             jobs = Path(directory)

@@ -41,6 +41,15 @@ class Adapter:
     async def send_chat_message(self, text):
         return {'status': 'submitted'}
 
+    async def has_ended(self):
+        return False
+
+    async def chat_available(self):
+        return False
+
+    async def get_participant_count(self):
+        return 2
+
 
 class ParticipationTests(unittest.IsolatedAsyncioTestCase):
     async def test_reply_uses_stable_platform_connection_and_virtual_gate(self):
@@ -147,7 +156,7 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
             def event(self, *args, **kwargs):
                 pass
 
-            def transcript(self, *args):
+            def transcript(self, *args, **kwargs):
                 pass
 
         adapter, microphone, speaker = Adapter(), Mic(), Speaker()
@@ -167,6 +176,114 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
                 await wait_until(lambda: any(event['type'] == 'session.input_audio.append' for event in socket.sent))
                 inputs = [base64.b64decode(event['audio']) for event in socket.sent if event['type'] == 'session.input_audio.append']
                 self.assertEqual(inputs, [b'continuous input'])
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 1}})
+                await asyncio.wait_for(task, 2)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_client_delegation_keeps_forwarding_meeting_audio(self):
+        import bridge
+        from delegation_router import DelegationRouter
+        from runtime_config import RuntimeConfig
+        from test_delegation_router import FakeProvider
+
+        class Socket:
+            def __init__(self):
+                self.events = asyncio.Queue()
+                self.sent = []
+
+            async def send_json(self, value):
+                self.sent.append(value)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                value = await self.events.get()
+                return SimpleNamespace(type=bridge.WSMsgType.TEXT, json=lambda: value)
+
+            async def close(self):
+                pass
+
+        socket = Socket()
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def ws_connect(self, *args, **kwargs):
+                return socket
+
+        class Speaker:
+            def __init__(self):
+                self.queue = asyncio.Queue()
+
+            async def read(self):
+                return SimpleNamespace(data=await self.queue.get())
+
+        class Record:
+            def event(self, *args, **kwargs):
+                pass
+
+            def transcript(self, *args, **kwargs):
+                pass
+
+            directory = '/tmp'
+
+        async def wait_until(check):
+            for _ in range(200):
+                if check():
+                    return
+                await asyncio.sleep(.01)
+            self.fail('Timed out waiting for bridge event')
+
+        provider = FakeProvider(delay=0.2)
+        router = DelegationRouter(providers={'codex': provider})
+        adapter, microphone, speaker = Adapter(), Mic(), Speaker()
+        with patch.object(bridge, 'ClientSession', Client), patch.object(bridge, 'record', Record()), patch.object(bridge, 'stop', asyncio.Event()):
+            task = asyncio.create_task(bridge.run_voice(
+                speaker, microphone, None, 'test-only', RuntimeConfig.from_environ({}), adapter,
+                router=router))
+            try:
+                await wait_until(lambda: any(event['type'] == 'session.start' for event in socket.sent))
+                start = next(event for event in socket.sent if event['type'] == 'session.start')
+                self.assertEqual(start['session']['delegation'], {'type': 'client'})
+                self.assertFalse(start['session']['store'])
+                await socket.events.put({'type': 'session.started'})
+                await socket.events.put({'type': 'session.future.unknown', 'delta': 'ignore'})
+                await socket.events.put({
+                    'type': 'session.input_transcript.delta',
+                    'delta': 'What does the worker lock do?',
+                    'start_ms': 100, 'end_ms': 400, 'event_id': 'tr-live-1',
+                })
+                await socket.events.put({
+                    'type': 'session.delegation.created',
+                    'offset_ms': 400,
+                    'delegation': {'id': 'item_live_1', 'type': 'delegation', 'target': 'client'},
+                })
+                await provider.started.wait()
+                await speaker.queue.put(b'while-working')
+                await wait_until(lambda: any(
+                    event['type'] == 'session.input_audio.append'
+                    and base64.b64decode(event['audio']) == b'while-working'
+                    for event in socket.sent))
+                await wait_until(lambda: any(
+                    event['type'] == 'session.commentary.append'
+                    and event.get('delegation_id') == 'item_live_1'
+                    for event in socket.sent))
                 await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 1}})
                 await asyncio.wait_for(task, 2)
             finally:

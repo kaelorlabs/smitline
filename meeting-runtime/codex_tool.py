@@ -60,7 +60,7 @@ class CodexJobClient:
         except (OSError, ValueError):
             return False
 
-    async def run(self, task, model):
+    async def run(self, task, model, cancel=None):
         if not isinstance(task, str) or not task.strip() or len(task) > 6000:
             return {'error': 'task must contain 1–6000 characters'}
         if model not in CODEX_MODELS:
@@ -81,6 +81,8 @@ class CodexJobClient:
         deadline = asyncio.get_running_loop().time() + self.timeout
         try:
             while asyncio.get_running_loop().time() < deadline:
+                if cancel is not None and cancel.is_set():
+                    return {'error': 'cancelled'}
                 if response.exists():
                     try:
                         result = json.loads(response.read_text())

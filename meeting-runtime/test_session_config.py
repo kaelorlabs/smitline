@@ -2,6 +2,7 @@ import unittest
 
 from bridge import build_session_config
 from runtime_config import RuntimeConfig
+from test_schemas import context_payload, permissions_payload
 
 
 class SessionConfigTests(unittest.TestCase):
@@ -12,21 +13,31 @@ class SessionConfigTests(unittest.TestCase):
         self.assertIn('default to listening silently', prompt)
         self.assertIn('if it is unclear whether someone addressed you, remain silent', prompt)
         self.assertIn('continue through brief listener backchannels', prompt)
-        self.assertIn('never invoke a tool merely because the conversation mentions a related topic', prompt)
-        self.assertIn('choose a tool based on the task rather than the topic', prompt)
+        self.assertIn('never delegate merely because the conversation mentions a related topic', prompt)
+        self.assertEqual(config['delegation'], {'type': 'client'})
+        self.assertFalse(config['store'])
+        self.assertNotIn('responses', config['delegation'])
+        self.assertNotIn('input', config)
+        self.assertEqual(config['model'], 'gpt-live-1')
 
-    def test_operator_guidance_and_tool_permissions_are_applied(self):
+    def test_operator_guidance_and_handoff_input_are_applied(self):
         runtime = RuntimeConfig.from_environ({
             'COLLEAGUE_ENABLE_WEB_SEARCH': '0',
             'COLLEAGUE_ENABLE_CODEX': '1',
             'COLLEAGUE_ENABLE_CHARTS': '1',
             'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on release blockers.',
         })
-        config = build_session_config(runtime)
+        config = build_session_config(runtime, {
+            'context': context_payload(),
+            'permissions': permissions_payload(),
+        })
         self.assertIn('Focus on release blockers.', config['instructions'])
         self.assertIn('chart or plot requests', config['instructions'])
-        tools = config['delegation']['responses']['tools']
-        self.assertEqual([tool['name'] for tool in tools], ['send_meeting_chat', 'run_codex'])
+        self.assertEqual(config['delegation'], {'type': 'client'})
+        self.assertLessEqual(len(config['input']), 128)
+        roles = [item['role'] for item in config['input']]
+        self.assertEqual(roles[0], 'developer')
+        self.assertIn('user', roles)
 
 
 if __name__ == '__main__':

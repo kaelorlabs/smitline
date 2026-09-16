@@ -133,6 +133,8 @@ def context_index_from_handoff(context):
 def state_from_session(session):
     agent = session.agent_session
     context = session.context.to_dict() if hasattr(session.context, 'to_dict') else session.context
+    permissions = (session.permissions.to_dict()
+                   if hasattr(session.permissions, 'to_dict') else session.permissions)
     return {
         'version': STATE_VERSION,
         'meetingId': session.id,
@@ -140,12 +142,15 @@ def state_from_session(session):
         'meetingUrl': session.meeting_url,
         'participantName': 'Colleague AI',
         'workspace': agent.workspace,
+        'provider': agent.provider,
+        'sessionId': agent.session_id,
         'defaultCodexModel': agent.model or 'gpt-5.6-terra',
         'webSearchEnabled': True,
         'codexEnabled': True,
         'chartsEnabled': False,
         'meetingInstructions': '',
         'context': context,
+        'permissions': permissions,
     }
 
 

@@ -25,8 +25,8 @@ class CallRecord:
             'timestamp': datetime.now(timezone.utc).isoformat(), 'type': kind, **data
         }, ensure_ascii=False) + '\n')
 
-    def transcript(self, speaker, text, muted):
-        self.event('transcript', speaker=speaker, text=text, muted=muted)
+    def transcript(self, speaker, text, muted, **extra):
+        self.event('transcript', speaker=speaker, text=text, muted=muted, **extra)
         # Generated text does not prove playback: Meeting mute and interruptions can discard it.
         label = 'Meeting' if speaker == 'meeting' else 'Agent (generated, playback not guaranteed)'
         key = (speaker, muted)

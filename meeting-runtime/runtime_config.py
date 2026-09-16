@@ -57,6 +57,14 @@ class RuntimeConfig:
         return cls(name, model, web_search, codex, charts, workspace, meeting_instructions)
 
 
+def meeting_state_from_environ(environ=None):
+    env = dict(os.environ if environ is None else environ)
+    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    if not state_path:
+        return {}
+    return read_json(state_path) or {}
+
+
 def resolve_meeting_url(environ=None):
     env = dict(os.environ if environ is None else environ)
     state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
