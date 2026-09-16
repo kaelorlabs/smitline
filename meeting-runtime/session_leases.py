@@ -50,6 +50,10 @@ class LeaseOwnershipError(LeaseError):
     """The supplied lease token does not match the persisted lease."""
 
 
+class LeaseCorruptionError(LeaseError):
+    """A lease record exists but cannot be parsed; the session is not available."""
+
+
 def _directory_flags():
     flags = os.O_RDONLY | os.O_DIRECTORY
     if hasattr(os, 'O_NOFOLLOW'):
@@ -315,6 +319,7 @@ class SessionLeaseStore:
             except FileExistsError:
                 lock_fd = self._open_named(lock_name, existing)
             try:
+                os.fchmod(self._root_fd, 0o700)
                 os.fchmod(lock_fd, 0o600)
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 yield lease_name
@@ -335,19 +340,36 @@ class SessionLeaseStore:
                 return None
             raise
         try:
+            os.fchmod(fd, 0o600)
             chunks = []
             while True:
                 chunk = os.read(fd, 1024 * 64)
                 if not chunk:
                     break
                 chunks.append(chunk)
+            raw = b''.join(chunks)
+            return self._parse_lease_bytes(raw)
         finally:
             os.close(fd)
-        if not chunks:
-            return None
-        payload = json.loads(b''.join(chunks).decode('utf-8'))
-        reject_secrets(payload, 'lease')
-        return SessionLease.from_dict(payload)
+
+    def _parse_lease_bytes(self, raw):
+        if not raw or not raw.strip():
+            raise LeaseCorruptionError('lease record is empty')
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError as error:
+            raise LeaseCorruptionError('lease record is not valid UTF-8') from error
+        if not text.strip():
+            raise LeaseCorruptionError('lease record is empty')
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise LeaseCorruptionError('lease record is not valid JSON') from error
+        try:
+            reject_secrets(payload, 'lease')
+            return SessionLease.from_dict(payload)
+        except (TypeError, ValueError) as error:
+            raise LeaseCorruptionError('lease record does not match the schema') from error
 
     def _store(self, lease_name, lease):
         payload = lease.to_dict()
@@ -518,6 +540,8 @@ class SessionLeaseStore:
         provider = require_enum(provider, 'provider', AGENT_PROVIDERS)
         session_id = require_id(session_id, 'sessionId', max_length=256)
         expected_token = require_id(expected_token, 'token', max_length=256)
+        if owner_is_dead is not True and owner_is_dead is not False:
+            raise ValueError('owner_is_dead must be a boolean')
         now = self._now()
         with self._locked(provider, session_id) as lease_name:
             lease = self._load(lease_name)
@@ -527,7 +551,7 @@ class SessionLeaseStore:
                 raise LeaseOwnershipError('lease token does not match')
             if not self._heartbeat_expired(lease, now):
                 raise LeaseStateError('lease heartbeat has not expired')
-            if not owner_is_dead:
+            if owner_is_dead is False:
                 raise LeaseStateError('lease owner is still alive')
             recovered = _replace(
                 lease,

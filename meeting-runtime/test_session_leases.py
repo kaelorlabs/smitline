@@ -10,8 +10,8 @@ from pathlib import Path
 
 from agent_sessions import AgentSessionRef
 from session_leases import (
-    LeaseConflictError, LeaseOwnershipError, LeaseStateError, SessionLease,
-    SessionLeaseStore, lease_digest,
+    LeaseConflictError, LeaseCorruptionError, LeaseOwnershipError, LeaseStateError,
+    SessionLease, SessionLeaseStore, lease_digest,
 )
 
 
@@ -262,6 +262,78 @@ class SessionLeaseTests(unittest.TestCase):
                 'sessionId': '../etc/passwd',
                 'workspace': '/Users/Taylor/project',
             })
+
+    def _lease_path(self, session_id='thread-origin-1', provider='codex'):
+        return self.store.root / (lease_digest(provider, session_id) + '.json')
+
+    def test_corrupt_records_fail_closed_and_are_preserved(self):
+        self.acquire()
+        path = self._lease_path()
+        cases = {
+            'empty': b'',
+            'whitespace': b'  \n\t',
+            'truncated': b'{"version":1,"leaseId":"x"',
+            'invalid-utf8': b'\xff\xfe\x00not-utf8',
+            'malformed-json': b'{not json',
+            'wrong-version': json.dumps({
+                'version': 2, 'leaseId': 'x', 'provider': 'codex', 'sessionId': 'thread-origin-1',
+                'meetingId': 'mtg-a', 'state': 'acquiring', 'acquiredAt': '2026-09-16T18:00:00Z',
+                'lastHeartbeat': '2026-09-16T18:00:00Z', 'owner': {'identity': 'test'},
+                'activeDelegatedTurn': None, 'finalization': {'status': 'none'},
+            }).encode(),
+            'missing-state': json.dumps({
+                'version': 1, 'leaseId': 'x', 'provider': 'codex', 'sessionId': 'thread-origin-1',
+                'meetingId': 'mtg-a', 'acquiredAt': '2026-09-16T18:00:00Z',
+                'lastHeartbeat': '2026-09-16T18:00:00Z', 'owner': {'identity': 'test'},
+                'activeDelegatedTurn': None, 'finalization': {'status': 'none'},
+            }).encode(),
+        }
+        for label, payload in cases.items():
+            with self.subTest(label=label):
+                path.write_bytes(payload)
+                before = path.read_bytes()
+                with self.assertRaises(LeaseCorruptionError):
+                    self.store.get('codex', 'thread-origin-1')
+                with self.assertRaises(LeaseCorruptionError):
+                    self.acquire(meeting_id='mtg-b')
+                with self.assertRaises(LeaseCorruptionError):
+                    self.store.heartbeat('codex', 'thread-origin-1', 'lease-dummy-token')
+                with self.assertRaises(LeaseCorruptionError):
+                    self.store.release('codex', 'thread-origin-1', 'lease-dummy-token')
+                with self.assertRaises(LeaseCorruptionError):
+                    self.store.recover(
+                        'codex', 'thread-origin-1', 'lease-dummy-token', owner_is_dead=True)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertTrue(path.exists())
+
+    def test_recover_requires_boolean_owner_is_dead(self):
+        lease = self.acquire()
+        path = self._lease_path()
+        before = path.read_bytes()
+        self.clock.advance(31)
+        for value in (1, 'yes', 'true', ['dead'], {'ok': True}):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(ValueError):
+                    self.store.recover('codex', 'thread-origin-1', lease.token, owner_is_dead=value)
+                self.assertEqual(path.read_bytes(), before)
+        with self.assertRaises(LeaseStateError):
+            self.store.recover('codex', 'thread-origin-1', lease.token, owner_is_dead=False)
+        self.assertEqual(path.read_bytes(), before)
+        self.store.recover('codex', 'thread-origin-1', lease.token, owner_is_dead=True)
+        self.assertFalse(path.exists())
+
+    def test_root_and_file_modes_are_restored(self):
+        lease = self.acquire()
+        os.chmod(self.store.root, 0o777)
+        os.chmod(self._lease_path(), 0o666)
+        self.store.get('codex', 'thread-origin-1')
+        self.assertEqual(self.store.root.stat().st_mode & 0o777, 0o700)
+        os.chmod(self.store.root, 0o777)
+        self.store.heartbeat('codex', 'thread-origin-1', lease.token)
+        self.assertEqual(self.store.root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self._lease_path().stat().st_mode & 0o777, 0o600)
+        lock_path = self.store.root / (lease_digest('codex', 'thread-origin-1') + '.lock')
+        self.assertEqual(lock_path.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':
