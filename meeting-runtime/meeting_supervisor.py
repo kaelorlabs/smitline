@@ -272,7 +272,7 @@ class ProductionMeetingSupervisor:
         index = context_index_from_handoff(session.context)
         write_private_json(context_index_path(self.runtime_root, session.id), index)
         write_private_json(context_index_path(self.runtime_root), index)
-        write_private_json(active_meeting_path(self.runtime_root), {'meetingId': session.id})
+        write_private_json(active_meeting_path(self.project_root), {'meetingId': session.id})
         return payload
 
     async def start(self, session):
@@ -321,7 +321,7 @@ class ProductionMeetingSupervisor:
 
     async def _cancel_locked(self, meeting_id):
         if self._active_id not in (None, meeting_id):
-            active = read_json(active_meeting_path(self.runtime_root)) or {}
+            active = read_json(active_meeting_path(self.project_root)) or {}
             if active.get('meetingId') not in (None, meeting_id):
                 return
         await self._stop_watch()
@@ -329,16 +329,16 @@ class ProductionMeetingSupervisor:
         await self._await_stop()
         if self._active_id == meeting_id:
             self._active_id = None
-        active = read_json(active_meeting_path(self.runtime_root)) or {}
+        active = read_json(active_meeting_path(self.project_root)) or {}
         if active.get('meetingId') == meeting_id:
-            write_private_json(active_meeting_path(self.runtime_root), {})
+            write_private_json(active_meeting_path(self.project_root), {})
 
     async def reconcile(self, daemon=None):
         daemon = daemon or self.daemon
         if daemon is None:
             return
         status = await self.launcher.inspect()
-        active = read_json(active_meeting_path(self.runtime_root)) or {}
+        active = read_json(active_meeting_path(self.project_root)) or {}
         claimed = active.get('meetingId')
         if status.get('unknown'):
             return

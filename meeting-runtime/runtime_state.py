@@ -11,6 +11,9 @@ STATE_VERSION = 1
 ACTIVE_NAME = 'active-meeting.json'
 TOKEN_NAME = 'daemon.auth'
 MEETINGS_DIR = 'meetings'
+CONTROL_DIR = '.colleague'
+DAEMON_DATA_NAME = 'daemon-data'
+PORTAL_ACTIVE_NAME = 'portal-active.json'
 
 
 def ensure_private_dir(path):
@@ -58,6 +61,10 @@ def run_root(root):
     return ensure_private_dir(Path(root) / 'run')
 
 
+def control_root(project_root):
+    return ensure_private_dir(Path(project_root) / CONTROL_DIR)
+
+
 def meeting_state_path(root, meeting_id):
     meeting_id = require_meeting_id(meeting_id)
     return run_root(root) / MEETINGS_DIR / meeting_id / 'runtime.json'
@@ -69,12 +76,20 @@ def context_index_path(root, meeting_id=None):
     return run_root(root) / MEETINGS_DIR / require_meeting_id(meeting_id) / 'context.json'
 
 
-def active_meeting_path(root):
-    return run_root(root) / ACTIVE_NAME
+def active_meeting_path(project_root):
+    return control_root(project_root) / ACTIVE_NAME
 
 
-def daemon_token_path(root):
-    return run_root(root) / TOKEN_NAME
+def daemon_token_path(project_root):
+    return control_root(project_root) / TOKEN_NAME
+
+
+def daemon_data_path(project_root):
+    return control_root(project_root) / DAEMON_DATA_NAME
+
+
+def portal_active_path(project_root):
+    return control_root(project_root) / PORTAL_ACTIVE_NAME
 
 
 def file_mode(path):

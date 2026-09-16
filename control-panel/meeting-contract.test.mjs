@@ -65,12 +65,14 @@ test('maps daemon meeting state onto existing product phases', () => {
 });
 
 test('persists the active meeting id for portal restart recovery', () => {
-  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-active-'));
-  writeActiveMeetingId(runtimeRoot, 'mtg-portal00000001');
-  assert.equal(readActiveMeetingId(runtimeRoot), 'mtg-portal00000001');
-  const stored = fs.readFileSync(path.join(runtimeRoot, 'run', 'portal-active.json'), 'utf8');
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-active-'));
+  writeActiveMeetingId(projectRoot, 'mtg-portal00000001');
+  assert.equal(readActiveMeetingId(projectRoot), 'mtg-portal00000001');
+  const stored = fs.readFileSync(path.join(projectRoot, '.colleague', 'portal-active.json'), 'utf8');
   assert.match(stored, /mtg-portal00000001/);
-  assert.equal(fs.statSync(path.join(runtimeRoot, 'run', 'portal-active.json')).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(projectRoot, '.colleague', 'portal-active.json')).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(projectRoot, '.colleague')).mode & 0o777, 0o700);
+  assert.equal(fs.existsSync(path.join(projectRoot, 'meeting-runtime', 'run', 'portal-active.json')), false);
 });
 
 test('context handoff keeps source text in recent conversation', () => {

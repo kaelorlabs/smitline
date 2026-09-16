@@ -247,6 +247,10 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(panel.daemon.calls[0].body.agentSession.sessionId, 'local-portal');
     assert.equal(panel.daemon.calls[0].body.agentSession.workspace, panel.workspace);
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
+    assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), true);
+    assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);
+    assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'daemon.auth')), false);
+    assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'daemon-data')), false);
     const status = await (await fetch(`${panel.base}/api/status`)).json();
     assert.equal(status.running, true);
     assert.equal(status.phase, 'starting');
@@ -334,8 +338,8 @@ test('context updates go to the daemon and are rejected after end', async () => 
     // Stop clears the active id; seed an ended meeting to assert the truthful reject.
     const endedId = [...panel.daemon.meetings.keys()][0];
     panel.daemon.meetings.get(endedId).state = 'ended';
-    fs.mkdirSync(path.join(panel.runtimeRoot, 'run'), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json'), JSON.stringify({ meetingId: endedId }));
+    fs.mkdirSync(path.join(panel.root, '.colleague'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(panel.root, '.colleague', 'portal-active.json'), JSON.stringify({ meetingId: endedId }));
     const rejected = await fetch(`${panel.base}/api/context/add`, {
       method: 'POST',
       headers: panel.headers(bootstrap.token),

@@ -117,7 +117,7 @@ export function createServer({
   }
 
   async function loadMeeting() {
-    const meetingId = readActiveMeetingId(runtimeRoot);
+    const meetingId = readActiveMeetingId(root);
     if (!meetingId) return { meetingId: null, session: null, daemonError: null };
     try {
       const session = await daemonClient.getMeeting(meetingId, { startIfNeeded: false });
@@ -127,7 +127,7 @@ export function createServer({
       return { meetingId, session, daemonError: null };
     } catch (error) {
       if (error.code === 'not_found' || error.status === 404) {
-        clearActiveMeetingId(runtimeRoot);
+        clearActiveMeetingId(root);
         return { meetingId: null, session: null, daemonError: null };
       }
       return { meetingId, session: null, daemonError: error };
@@ -184,7 +184,7 @@ export function createServer({
 
   async function meetingActive() {
     const { session, daemonError } = await loadMeeting();
-    if (daemonError && readActiveMeetingId(runtimeRoot)) return true;
+    if (daemonError && readActiveMeetingId(root)) return true;
     return meetingIsActive(session);
   }
 
@@ -288,7 +288,7 @@ export function createServer({
         lastExit = null;
         addLog('system', 'Starting meeting through the local runtime daemon.');
         const session = await daemonClient.createMeeting(payload);
-        writeActiveMeetingId(runtimeRoot, session.id);
+        writeActiveMeetingId(root, session.id);
         return json(response, 202, { started: true, meetingId: session.id });
       } catch (error) {
         addLog('system', error.message);
@@ -301,16 +301,16 @@ export function createServer({
       }
     }
     if (request.method === 'POST' && pathname === '/api/stop') {
-      const meetingId = readActiveMeetingId(runtimeRoot);
+      const meetingId = readActiveMeetingId(root);
       if (!meetingId) return json(response, 200, { stopped: true });
       try {
         await daemonClient.cancelMeeting(meetingId);
-        clearActiveMeetingId(runtimeRoot);
+        clearActiveMeetingId(root);
         addLog('system', 'Meeting cancelled through the runtime daemon.');
         return json(response, 200, { stopped: true, meetingId });
       } catch (error) {
         if (error.code === 'not_found' || error.status === 404) {
-          clearActiveMeetingId(runtimeRoot);
+          clearActiveMeetingId(root);
           return json(response, 200, { stopped: true });
         }
         addLog('system', error.message);

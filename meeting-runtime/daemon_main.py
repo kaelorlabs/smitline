@@ -6,7 +6,7 @@ import sys
 
 from meeting_supervisor import ProductionMeetingSupervisor
 from runtime_daemon import create_app, require_loopback_bind
-from runtime_state import daemon_token_path, write_private_file
+from runtime_state import daemon_data_path, daemon_token_path, write_private_file
 
 
 def write_auth_token(root, token=None):
@@ -31,10 +31,10 @@ def build_app(args):
     host = require_loopback_bind(args.host)
     project_root = Path(args.root).resolve()
     runtime_root = Path(args.runtime_root or (project_root / 'meeting-runtime')).resolve()
-    token, token_path = write_auth_token(runtime_root)
+    token, token_path = write_auth_token(project_root)
     supervisor = ProductionMeetingSupervisor(project_root, runtime_root=runtime_root)
     app = create_app(
-        root=runtime_root / 'run' / 'daemon-data',
+        root=daemon_data_path(project_root),
         bind_host=host,
         auth_token=token,
         supervisor=supervisor,

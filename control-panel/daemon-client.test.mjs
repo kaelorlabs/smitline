@@ -8,13 +8,13 @@ import { createDaemonClient } from './daemon-client.mjs';
 
 function tempRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-client-'));
-  fs.mkdirSync(path.join(root, 'meeting-runtime', 'run'), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(root, '.colleague'), { recursive: true, mode: 0o700 });
   return root;
 }
 
 test('starts the daemon when the port is closed and waits for the auth token', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, 'meeting-runtime', 'run', 'daemon.auth');
+  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
   const spawns = [];
   const client = createDaemonClient({
     root,
@@ -41,7 +41,7 @@ test('starts the daemon when the port is closed and waits for the auth token', a
 
 test('does not spawn when a healthy daemon is already listening', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, 'meeting-runtime', 'run', 'daemon.auth');
+  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
   fs.writeFileSync(tokenPath, 'existing-token\n', { mode: 0o600 });
   let spawns = 0;
   const client = createDaemonClient({
@@ -61,7 +61,7 @@ test('does not spawn when a healthy daemon is already listening', async () => {
 
 test('re-reads a rotated auth token after 401 and never logs the secret', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, 'meeting-runtime', 'run', 'daemon.auth');
+  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
   fs.writeFileSync(tokenPath, 'stale-token\n', { mode: 0o600 });
   const seen = [];
   const client = createDaemonClient({
@@ -88,7 +88,7 @@ test('status probes do not start a daemon when none is running', async () => {
   let spawns = 0;
   const client = createDaemonClient({
     root,
-    tokenPath: path.join(root, 'meeting-runtime', 'run', 'daemon.auth'),
+    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
     isPortOpen: async () => false,
     spawnDaemon() { spawns += 1; return { unref() {}, on() {} }; },
   });

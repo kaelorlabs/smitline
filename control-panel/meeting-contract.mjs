@@ -4,6 +4,7 @@ import path from 'node:path';
 import { detectPlatform } from './config.mjs';
 
 export const LOCAL_PORTAL_SESSION_ID = 'local-portal';
+export const CONTROL_DIR = '.colleague';
 export const ACTIVE_MEETING_NAME = 'portal-active.json';
 export const SUPERVISOR_ACTIVE_NAME = 'active-meeting.json';
 const ACTIVE_PHASES = new Set([
@@ -114,16 +115,16 @@ export function meetingBusy(status = {}) {
   return ACTIVE_PHASES.has(status.phase);
 }
 
-export function runRoot(runtimeRoot) {
-  return path.join(runtimeRoot, 'run');
+export function controlRoot(projectRoot) {
+  return path.join(projectRoot, CONTROL_DIR);
 }
 
-export function portalActivePath(runtimeRoot) {
-  return path.join(runRoot(runtimeRoot), ACTIVE_MEETING_NAME);
+export function portalActivePath(projectRoot) {
+  return path.join(controlRoot(projectRoot), ACTIVE_MEETING_NAME);
 }
 
-export function supervisorActivePath(runtimeRoot) {
-  return path.join(runRoot(runtimeRoot), SUPERVISOR_ACTIVE_NAME);
+export function supervisorActivePath(projectRoot) {
+  return path.join(controlRoot(projectRoot), SUPERVISOR_ACTIVE_NAME);
 }
 
 function readJsonFile(file) {
@@ -134,25 +135,26 @@ function readJsonFile(file) {
   }
 }
 
-export function readActiveMeetingId(runtimeRoot) {
-  const portal = readJsonFile(portalActivePath(runtimeRoot));
+export function readActiveMeetingId(projectRoot) {
+  const portal = readJsonFile(portalActivePath(projectRoot));
   if (portal?.meetingId) return portal.meetingId;
-  const supervisor = readJsonFile(supervisorActivePath(runtimeRoot));
+  const supervisor = readJsonFile(supervisorActivePath(projectRoot));
   return supervisor?.meetingId || null;
 }
 
-export function writeActiveMeetingId(runtimeRoot, meetingId) {
-  const file = portalActivePath(runtimeRoot);
+export function writeActiveMeetingId(projectRoot, meetingId) {
+  const file = portalActivePath(projectRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify({ meetingId })}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
   fs.chmodSync(file, 0o600);
+  try { fs.chmodSync(path.dirname(file), 0o700); } catch {}
   return meetingId;
 }
 
-export function clearActiveMeetingId(runtimeRoot) {
-  try { fs.unlinkSync(portalActivePath(runtimeRoot)); } catch (error) {
+export function clearActiveMeetingId(projectRoot) {
+  try { fs.unlinkSync(portalActivePath(projectRoot)); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
 }

@@ -297,7 +297,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
 
         self.launcher.unknown = False
         self.launcher.running = True
-        write_path = active_meeting_path(self.runtime)
+        write_path = active_meeting_path(self.root)
         from runtime_state import write_private_json
         write_private_json(write_path, {'meetingId': meeting.id})
         await self.supervisor.reconcile(self.daemon)
@@ -316,12 +316,13 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon.failures, [])
 
     async def test_token_file_permissions_and_secret_exclusion(self):
-        token, path = write_auth_token(self.runtime, 'daemon-test-token')
+        token, path = write_auth_token(self.root, 'daemon-test-token')
         self.assertEqual(token, 'daemon-test-token')
-        self.assertEqual(path, daemon_token_path(self.runtime))
+        self.assertEqual(path, daemon_token_path(self.root))
         self.assertEqual(file_mode(path), 0o600)
-        self.assertEqual(file_mode(self.runtime / 'run'), 0o700)
+        self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
         self.assertEqual(path.read_text(encoding='utf-8').strip(), 'daemon-test-token')
+        self.assertFalse((self.runtime / 'run' / 'daemon.auth').exists())
         from runtime_state import write_private_json
         with self.assertRaises(ValueError):
             write_private_json(meeting_state_path(self.runtime, 'mtg-secret0000001'), {
@@ -396,7 +397,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.host_worker.starts.clear()
         self.daemon.meetings.records[meeting.id] = FakeRecord(meeting)
         from runtime_state import write_private_json
-        write_private_json(active_meeting_path(self.runtime), {'meetingId': meeting.id})
+        write_private_json(active_meeting_path(self.root), {'meetingId': meeting.id})
         await self.supervisor.reconcile(self.daemon)
         self.assertEqual(len(self.host_worker.starts), 1)
         restarted = self.host_worker.handles[-1]
@@ -407,6 +408,51 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.supervisor._worker)
         await self.supervisor.reconcile(self.daemon)
         self.assertIsNone(self.supervisor._worker)
+
+
+    async def test_mounted_runtime_tree_excludes_daemon_control_secrets(self):
+        from runtime_state import daemon_data_path, write_private_file
+        token, token_path = write_auth_token(self.root, 'host-only-daemon-token')
+        write_private_file(
+            daemon_data_path(self.root) / 'leases' / 'lease.json',
+            '{"leaseId":"lease-secret-value","provider":"codex"}\n',
+        )
+        meeting = session()
+        await self.supervisor.start(meeting)
+        self.assertEqual(token_path, self.root / '.colleague' / 'daemon.auth')
+        self.assertTrue((self.root / '.colleague' / 'active-meeting.json').is_file())
+        self.assertTrue((daemon_data_path(self.root) / 'leases' / 'lease.json').is_file())
+        for path in self.runtime.rglob('*'):
+            self.assertNotEqual(path.name, 'daemon.auth')
+            self.assertNotEqual(path.name, 'daemon-data')
+            self.assertNotEqual(path.name, 'portal-active.json')
+            self.assertNotEqual(path.name, 'active-meeting.json')
+            if path.is_file():
+                text = path.read_text(encoding='utf-8', errors='replace')
+                self.assertNotIn('host-only-daemon-token', text)
+                self.assertNotIn('lease-secret-value', text)
+                self.assertNotIn('leaseId', text)
+        self.assertTrue((self.runtime / 'run' / 'meetings' / meeting.id / 'runtime.json').is_file())
+        self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
+        self.assertEqual(file_mode(token_path), 0o600)
+
+    def test_daemon_entrypoint_keeps_control_state_host_only(self):
+        from daemon_main import build_app, build_parser
+        from runtime_state import daemon_data_path
+        args = build_parser().parse_args([
+            '--root', str(self.root), '--runtime-root', str(self.runtime),
+        ])
+        app, _host, _port, token_path = build_app(args)
+        try:
+            self.assertEqual(token_path, daemon_token_path(self.root))
+            self.assertEqual(app.runtime_daemon.root, daemon_data_path(self.root).resolve())
+            self.assertTrue(token_path.is_file())
+            self.assertFalse((self.runtime / 'run' / 'daemon.auth').exists())
+            self.assertFalse((self.runtime / 'run' / 'daemon-data').exists())
+            self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
+            self.assertEqual(file_mode(daemon_data_path(self.root)), 0o700)
+        finally:
+            app.runtime_daemon.close()
 
 
 class HostWorkerEnvTests(unittest.TestCase):

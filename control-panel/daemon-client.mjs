@@ -59,7 +59,7 @@ export function createDaemonClient(options = {}) {
   const root = options.root;
   const host = options.host || process.env.COLLEAGUE_DAEMON_HOST || DEFAULT_DAEMON_HOST;
   const port = Number(options.port || process.env.COLLEAGUE_DAEMON_PORT || DEFAULT_DAEMON_PORT);
-  const tokenPath = options.tokenPath || path.join(root, 'meeting-runtime', 'run', 'daemon.auth');
+  const tokenPath = options.tokenPath || path.join(root, '.colleague', 'daemon.auth');
   const fetchImpl = options.fetchImpl || fetch;
   const isPortOpen = options.isPortOpen || (() => portOpen(host, port));
   const spawnDaemon = options.spawnDaemon || (() => spawn('/bin/bash', ['start-runtime-daemon.sh'], {
