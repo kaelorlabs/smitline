@@ -1,0 +1,492 @@
+import asyncio
+import json
+import os
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from meeting_repository import MeetingCorruptionError, MeetingRepository
+from session_leases import SessionLeaseStore
+from test_schemas import (
+    TEAMS_URL, TIMESTAMP, ZOOM_URL, agent_session_payload, context_payload,
+    handoff_payload, permissions_payload,
+)
+
+try:
+    from aiohttp.test_utils import TestClient, TestServer
+    from runtime_daemon import DaemonError, create_app, require_loopback_bind
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
+    TestClient = None
+    TestServer = None
+
+
+class FakeClock:
+    def __init__(self, moment=None):
+        self.now = moment or datetime(2026, 9, 16, 17, 0, tzinfo=timezone.utc)
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now = self.now + timedelta(seconds=seconds)
+
+
+class FakeSupervisor:
+    def __init__(self):
+        self.started = []
+        self.contexts = []
+        self.cancelled = []
+        self.fail_start = False
+        self.start_error = RuntimeError('join failed')
+
+    async def start(self, meeting):
+        if self.fail_start:
+            raise self.start_error
+        self.started.append(meeting.id)
+
+    async def add_context(self, meeting_id, context):
+        self.contexts.append((meeting_id, context.objective))
+
+    async def cancel(self, meeting_id):
+        self.cancelled.append(meeting_id)
+
+
+def create_payload(**overrides):
+    payload = {
+        'meetingUrl': ZOOM_URL,
+        'agentSession': agent_session_payload(),
+        'context': context_payload(),
+        'permissions': permissions_payload(),
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def read_sse(response, *, min_events=1, min_comments=0, timeout=2.0):
+    buffer = b''
+    events = []
+    comments = []
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if len(events) >= min_events and len(comments) >= min_comments:
+            break
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(response.content.read(1024), timeout=remaining)
+        except asyncio.TimeoutError:
+            break
+        if not chunk:
+            break
+        buffer += chunk
+        while b'\n\n' in buffer:
+            block, buffer = buffer.split(b'\n\n', 1)
+            text = block.decode('utf-8')
+            if text.startswith(':'):
+                comments.append(text)
+                continue
+            event = {}
+            data_lines = []
+            for line in text.split('\n'):
+                if line.startswith('id: '):
+                    event['id'] = line[4:]
+                elif line.startswith('event: '):
+                    event['event'] = line[7:]
+                elif line.startswith('data: '):
+                    data_lines.append(line[6:])
+            if data_lines:
+                event['data'] = json.loads('\n'.join(data_lines))
+                events.append(event)
+    return events, comments
+
+
+@unittest.skipUnless(HAS_AIOHTTP, 'aiohttp is required')
+class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.clock = FakeClock()
+        self.supervisor = FakeSupervisor()
+        self.auth = 'test-daemon-token'
+        self.app = create_app(
+            root=self.temporary.name,
+            auth_token=self.auth,
+            supervisor=self.supervisor,
+            clock=self.clock,
+            sse_poll_interval=0.02,
+            sse_heartbeat_interval=0.05,
+            max_body_bytes=4096,
+        )
+        self.daemon = self.app.runtime_daemon
+        self.client = TestClient(TestServer(self.app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    def headers(self, **extra):
+        return {'Authorization': 'Bearer ' + self.auth, **extra}
+
+    async def create(self, **overrides):
+        response = await self.client.post(
+            '/v1/meetings', json=create_payload(**overrides), headers=self.headers())
+        return response
+
+    async def test_auth_missing_wrong_query_and_correct(self):
+        created = await self.create()
+        self.assertEqual(created.status, 201)
+        meeting_id = (await created.json())['id']
+        missing = await self.client.get('/v1/meetings/' + meeting_id)
+        self.assertEqual(missing.status, 401)
+        wrong = await self.client.get(
+            '/v1/meetings/' + meeting_id, headers={'Authorization': 'Bearer other-token'})
+        self.assertEqual(wrong.status, 401)
+        query = await self.client.get('/v1/meetings/' + meeting_id + '?token=' + self.auth)
+        self.assertEqual(query.status, 401)
+        ok = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(ok.status, 200)
+        body = await ok.json()
+        self.assertNotIn('leaseId', json.dumps(body))
+        self.assertNotIn(self.auth, json.dumps(body))
+
+    async def test_non_loopback_bind_is_rejected(self):
+        with self.assertRaises(ValueError):
+            require_loopback_bind('8.8.8.8')
+        with self.assertRaises(ValueError):
+            create_app(root=self.temporary.name, bind_host='192.168.1.9', auth_token='x')
+        self.assertEqual(require_loopback_bind('127.0.0.1'), '127.0.0.1')
+        self.assertEqual(require_loopback_bind('::1'), '::1')
+
+    async def test_body_type_size_and_schema_errors(self):
+        text = await self.client.post(
+            '/v1/meetings', data=b'{"meetingUrl":"x"}',
+            headers=self.headers(**{'Content-Type': 'text/plain'}))
+        self.assertEqual(text.status, 415)
+        huge = await self.client.post(
+            '/v1/meetings', data=b'{' + b'x' * 5000 + b'}',
+            headers=self.headers(**{'Content-Type': 'application/json'}))
+        self.assertIn(huge.status, (413, 400))
+        invalid = await self.create(meetingUrl='https://example.com/not-a-meeting')
+        self.assertEqual(invalid.status, 422)
+        extra = await self.create(unknown='nope')
+        self.assertEqual(extra.status, 422)
+        missing = await self.client.post(
+            '/v1/meetings', json={'meetingUrl': ZOOM_URL}, headers=self.headers())
+        self.assertEqual(missing.status, 422)
+
+    async def test_url_platform_detection_and_create_contract(self):
+        zoom = await self.create()
+        self.assertEqual(zoom.status, 201)
+        body = await zoom.json()
+        self.assertEqual(body['platform'], 'zoom')
+        self.assertEqual(body['state'], 'joining')
+        self.assertEqual(body['startedAt'], TIMESTAMP)
+        self.assertTrue(body['id'].startswith('mtg-'))
+        self.assertEqual(len(self.supervisor.started), 1)
+        teams = await self.create(
+            meetingUrl=TEAMS_URL,
+            agentSession=agent_session_payload(sessionId='thread-teams-1'),
+        )
+        self.assertEqual(teams.status, 201)
+        self.assertEqual((await teams.json())['platform'], 'teams')
+
+    async def test_create_acquire_conflict_is_atomic(self):
+        first, second = await asyncio.gather(self.create(), self.create())
+        statuses = sorted([first.status, second.status])
+        self.assertEqual(statuses, [201, 409])
+        winner = first if first.status == 201 else second
+        meeting = await winner.json()
+        self.assertEqual(len(self.supervisor.started), 1)
+        leased = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(leased.status, 200)
+        status = await leased.json()
+        self.assertEqual(status['meetingId'], meeting['id'])
+        self.assertEqual(status['state'], 'in_meeting')
+        self.assertNotIn('leaseId', status)
+
+    async def test_unconfigured_supervisor_and_startup_failure_rollback(self):
+        root = Path(self.temporary.name) / 'unconfigured'
+        app = create_app(root=root, auth_token=self.auth, clock=self.clock)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            response = await client.post(
+                '/v1/meetings', json=create_payload(), headers=self.headers())
+            self.assertEqual(response.status, 503)
+            body = await response.json()
+            self.assertEqual(body['error']['code'], 'supervisor_unavailable')
+            self.assertIn('not configured', body['error']['message'])
+            self.assertNotIn(self.auth, json.dumps(body))
+        finally:
+            await client.close()
+        self.supervisor.fail_start = True
+        try:
+            failed = await self.create(agentSession=agent_session_payload(sessionId='thread-fail-1'))
+            self.assertEqual(failed.status, 503)
+            meeting = await failed.json()
+            self.assertEqual(meeting.get('error', {}).get('code'), 'supervisor_unavailable')
+            status = await self.client.get(
+                '/v1/agent-sessions/codex/thread-fail-1/status', headers=self.headers())
+            self.assertEqual(status.status, 404)
+        finally:
+            self.supervisor.fail_start = False
+
+    async def test_startup_failure_persists_ended_meeting(self):
+        self.supervisor.fail_start = True
+        captured = []
+
+        class CaptureSupervisor(FakeSupervisor):
+            async def start(inner, meeting):
+                captured.append(meeting.id)
+                raise RuntimeError('admission denied')
+
+        self.supervisor = CaptureSupervisor()
+        await self.client.close()
+        self.app = create_app(
+            root=self.temporary.name + '-ended',
+            auth_token=self.auth,
+            supervisor=self.supervisor,
+            clock=self.clock,
+        )
+        self.daemon = self.app.runtime_daemon
+        self.client = TestClient(TestServer(self.app))
+        await self.client.start_server()
+        response = await self.create()
+        self.assertEqual(response.status, 503)
+        meeting_id = captured[0]
+        stored = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(stored.status, 200)
+        body = await stored.json()
+        self.assertEqual(body['state'], 'ended')
+        events = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', events)
+        self.assertIn('agent_session.released', events)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+
+    async def test_durable_restart_and_permissions(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        snapshot = Path(self.daemon.meetings.root) / meeting_id / 'snapshot.json'
+        self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.daemon.meetings.root.stat().st_mode & 0o777, 0o700)
+        os.chmod(self.daemon.meetings.root, 0o777)
+        await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(self.daemon.meetings.root.stat().st_mode & 0o777, 0o700)
+        app = create_app(
+            root=self.temporary.name, auth_token=self.auth, supervisor=self.supervisor,
+            clock=self.clock)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            restored = await client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+            self.assertEqual(restored.status, 200)
+            body = await restored.json()
+            self.assertEqual(body['id'], meeting_id)
+            self.assertEqual(body['platform'], 'zoom')
+            status = await client.get(
+                '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+            self.assertEqual(status.status, 200)
+        finally:
+            await client.close()
+
+    async def test_context_rules_and_cancel_idempotence(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        updated_context = context_payload(objective='Updated objective')
+        updated = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/context', json=updated_context,
+            headers=self.headers())
+        self.assertEqual(updated.status, 200)
+        self.assertEqual((await updated.json())['context']['objective'], 'Updated objective')
+        self.assertEqual(self.supervisor.contexts[-1], (meeting_id, 'Updated objective'))
+        first = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/cancel', headers=self.headers())
+        self.assertEqual(first.status, 200)
+        self.assertEqual((await first.json())['state'], 'ended')
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        second = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/cancel', headers=self.headers())
+        self.assertEqual(second.status, 200)
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        late = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/context', json=updated_context,
+            headers=self.headers())
+        self.assertEqual(late.status, 409)
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(status.status, 200)
+        premature = await self.client.delete(
+            '/v1/agent-sessions/codex/thread-origin-1/lease', headers=self.headers())
+        self.assertEqual(premature.status, 409)
+
+    async def test_handoff_matching_finalization_and_release_order(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
+        self.assertEqual(missing.status, 404)
+        mismatch = handoff_payload(meetingId=meeting_id, startedAt='2020-01-01T00:00:00Z')
+        with self.assertRaises(DaemonError):
+            self.daemon.store_handoff(mismatch)
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(status.status, 200)
+        await self.client.post('/v1/meetings/' + meeting_id + '/cancel', headers=self.headers())
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        stored = self.daemon.store_handoff(ready)
+        self.assertEqual(stored.meeting_id, meeting_id)
+        handoff = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
+        self.assertEqual(handoff.status, 200)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
+        released = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(released.status, 404)
+        body = await handoff.json()
+        self.assertNotIn('leaseId', json.dumps(body))
+        self.assertNotIn(self.auth, json.dumps(body))
+
+    async def test_lease_endpoints_heartbeat_and_no_token_leakage(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        before = await status.json()
+        beat = await self.client.post(
+            '/v1/agent-sessions/codex/thread-origin-1/lease', headers=self.headers())
+        self.assertEqual(beat.status, 200)
+        after = await beat.json()
+        self.assertEqual(after['meetingId'], meeting_id)
+        self.assertNotIn('leaseId', after)
+        self.assertNotIn('leaseId', before)
+        self.assertGreaterEqual(after['lastHeartbeat'], before['lastHeartbeat'])
+        gone = await self.client.get(
+            '/v1/agent-sessions/codex/missing-thread/status', headers=self.headers())
+        self.assertEqual(gone.status, 404)
+
+    async def test_sse_order_replay_last_event_id_heartbeat_and_disconnect(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        response = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/events', headers=self.headers())
+        self.assertEqual(response.status, 200)
+        self.assertIn('text/event-stream', response.headers['Content-Type'])
+        events, comments = await read_sse(response, min_events=2, min_comments=1)
+        types = [event['event'] for event in events]
+        self.assertEqual(types[:2], ['agent_session.locked', 'meeting.joining'])
+        self.assertTrue(any('heartbeat' in comment for comment in comments))
+        for event in events:
+            self.assertNotIn('leaseId', json.dumps(event['data']))
+        last_id = events[0]['id']
+        await response.release()
+        resumed = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/events',
+            headers=self.headers(**{'Last-Event-ID': last_id}))
+        replayed, _comments = await read_sse(resumed, min_events=1)
+        self.assertTrue(replayed)
+        self.assertNotEqual(replayed[0]['id'], last_id)
+        self.assertEqual(replayed[0]['event'], 'meeting.joining')
+        await resumed.release()
+
+    async def test_corrupt_snapshot_is_fail_closed(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        path = Path(self.daemon.meetings.root) / meeting_id / 'snapshot.json'
+        before = path.read_bytes()
+        path.write_bytes(b'')
+        response = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(response.status, 409)
+        self.assertEqual((await response.json())['error']['code'], 'corrupt_snapshot')
+        self.assertEqual(path.read_bytes(), b'')
+        conflict = await self.create()
+        self.assertEqual(conflict.status, 409)
+        path.write_bytes(before)
+
+    async def test_symlink_and_path_resistance(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        path = Path(self.daemon.meetings.root) / meeting_id / 'snapshot.json'
+        victim = Path(self.temporary.name) / 'outside.json'
+        victim.write_text('keep-me', encoding='utf-8')
+        path.unlink()
+        path.symlink_to(victim)
+        response = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertIn(response.status, (409, 422))
+        self.assertEqual(victim.read_text(encoding='utf-8'), 'keep-me')
+        traversal = await self.client.get('/v1/meetings/../etc/passwd', headers=self.headers())
+        self.assertIn(traversal.status, (400, 404, 422))
+
+    async def test_secret_absence_and_default_supervisor_does_not_fake_start(self):
+        created = await self.create()
+        body = await created.json()
+        dumped = json.dumps(body)
+        self.assertNotIn('leaseId', dumped)
+        self.assertNotIn(self.auth, dumped)
+        self.assertNotIn('Bearer', dumped)
+        lease_path = Path(self.daemon.meetings.root) / body['id'] / 'lease.json'
+        self.assertTrue(lease_path.exists())
+        self.assertEqual(self.supervisor.started, [body['id']])
+
+    async def test_finalization_failure_releases_lease(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        self.daemon.record_finalization_failure(meeting_id, 'handoff_append_failed')
+        status = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(status.status, 404)
+        stored = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual((await stored.json())['state'], 'ended')
+
+    async def test_closed_repository_guard(self):
+        created = await self.create()
+        meeting_id = (await created.json())['id']
+        store = MeetingRepository(self.daemon.meetings.root)
+        store.close()
+        with self.assertRaises(RuntimeError):
+            store.get(meeting_id)
+        leases = SessionLeaseStore(self.daemon.leases.root)
+        leases.close()
+        with self.assertRaises(RuntimeError):
+            leases.get('codex', 'thread-origin-1')
+
+
+class MeetingRepositoryUnitTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.store = MeetingRepository(self.temporary.name)
+
+    def tearDown(self):
+        self.store.close()
+        self.temporary.cleanup()
+
+    def test_empty_snapshot_is_corruption_not_absence(self):
+        from agent_sessions import MeetingSession
+        session = MeetingSession.from_dict({
+            'id': 'mtg-repo1',
+            'platform': 'zoom',
+            'meetingUrl': ZOOM_URL,
+            'agentSession': agent_session_payload(),
+            'context': context_payload(),
+            'permissions': permissions_payload(),
+            'state': 'joining',
+            'startedAt': TIMESTAMP,
+        })
+        self.store.put(session, 'lease-secret-value')
+        path = self.store.root / 'mtg-repo1' / 'snapshot.json'
+        path.write_bytes(b'  \n')
+        with self.assertRaises(MeetingCorruptionError):
+            self.store.get('mtg-repo1')
+        self.assertEqual(path.read_bytes(), b'  \n')
+        self.assertIsNone(self.store.get('mtg-missing'))
+
+
+if __name__ == '__main__':
+    unittest.main()
