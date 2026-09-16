@@ -148,7 +148,10 @@ class JsonlEventStore(EventStore):
     """
 
     def __init__(self, root):
+        self._root_fd = None
         self.root = Path(root).resolve()
+        if self.root.exists() and not self.root.is_dir():
+            raise ValueError('event store root must be a directory')
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         if self.root.is_symlink():
             raise ValueError('event store root must not be a symlink')
@@ -156,8 +159,14 @@ class JsonlEventStore(EventStore):
         try:
             self._root_fd = os.open(self.root, _directory_flags())
         except OSError as error:
+            if error.errno == errno.ENOTDIR:
+                raise ValueError('event store root must be a directory') from error
             _raise_unsafe_path(error, 'event store root must not be a symlink')
         os.fchmod(self._root_fd, 0o700)
+
+    def _ensure_open(self):
+        if getattr(self, '_root_fd', None) is None:
+            raise RuntimeError('event store is closed')
 
     def close(self):
         fd = getattr(self, '_root_fd', None)
@@ -173,9 +182,11 @@ class JsonlEventStore(EventStore):
             pass
 
     def _lock_path(self, meeting_id):
+        self._ensure_open()
         return str(self.root / meeting_id / _EVENTS_NAME)
 
     def _open_meeting_dir(self, meeting_id, *, create):
+        self._ensure_open()
         meeting_id = require_meeting_id(meeting_id)
         if create:
             try:
@@ -205,6 +216,7 @@ class JsonlEventStore(EventStore):
             raise
 
     def _open_events(self, meeting_id, *, create):
+        self._ensure_open()
         dir_fd = self._open_meeting_dir(meeting_id, create=create)
         if dir_fd is None:
             return None, None
@@ -232,6 +244,7 @@ class JsonlEventStore(EventStore):
         return dir_fd, fd
 
     def append(self, event):
+        self._ensure_open()
         stored = _canonical_event(event)
         encoded = (json.dumps(stored.to_dict(), ensure_ascii=False) + '\n').encode('utf-8')
         with _path_lock(self._lock_path(stored.meeting_id)):
@@ -249,6 +262,7 @@ class JsonlEventStore(EventStore):
         return stored
 
     def replay(self, meeting_id):
+        self._ensure_open()
         meeting_id = require_meeting_id(meeting_id)
         with _path_lock(self._lock_path(meeting_id)):
             dir_fd, fd = self._open_events(meeting_id, create=False)

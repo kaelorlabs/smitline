@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import tempfile
 import threading
 import unittest
@@ -214,6 +215,38 @@ class JsonlEventStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.append(joining_event('mtg-a', 'evt-2'))
         self.assertEqual(victim.read_text(encoding='utf-8'), 'keep-me\n')
+
+    def test_closed_store_rejects_append_and_replay_without_escaping(self):
+        self.store.append(joining_event('mtg-a', 'evt-1'))
+        root = self.store.root
+        self.store.close()
+        self.store.close()
+        stray = Path.cwd() / 'mtg-after-close'
+        try:
+            with self.assertRaises(RuntimeError) as caught:
+                self.store.append(joining_event('mtg-after-close', 'evt-2'))
+            self.assertEqual(str(caught.exception), 'event store is closed')
+            with self.assertRaises(RuntimeError) as caught:
+                self.store.replay('mtg-a')
+            self.assertEqual(str(caught.exception), 'event store is closed')
+            self.assertFalse(stray.exists())
+            self.assertFalse((Path.cwd() / 'events.jsonl').exists())
+            self.assertFalse((root / 'mtg-after-close').exists())
+            self.assertTrue((root / 'mtg-a' / 'events.jsonl').exists())
+            restarted = JsonlEventStore(root)
+            self.assertEqual([event.id for event in restarted.replay('mtg-a')], ['evt-1'])
+        finally:
+            if stray.exists():
+                shutil.rmtree(stray)
+
+    def test_regular_file_root_is_rejected_as_not_a_directory(self):
+        path = Path(self.temporary.name) / 'not-a-dir'
+        path.write_text('not a directory', encoding='utf-8')
+        with self.assertRaises(ValueError) as caught:
+            JsonlEventStore(path)
+        message = str(caught.exception).lower()
+        self.assertIn('directory', message)
+        self.assertNotIn('symlink', message)
 
 
 if __name__ == '__main__':
