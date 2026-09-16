@@ -740,6 +740,269 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
         self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
 
+    def _track_acquired_ids(self):
+        ids = []
+        original = self.daemon.leases.acquire
+
+        def wrapped(agent, meeting_id):
+            ids.append(meeting_id)
+            return original(agent, meeting_id)
+
+        self.daemon.leases.acquire = wrapped
+        return ids
+
+    async def _create_should_fail(self, session_id='thread-origin-1'):
+        response = await self.create(agentSession=agent_session_payload(sessionId=session_id))
+        self.assertGreaterEqual(response.status, 500)
+        return response
+
+    async def test_create_put_before_write_releases_lease(self):
+        ids = self._track_acquired_ids()
+        original = self.daemon.meetings.put
+        self.daemon.meetings.put = _once_fail(
+            original, lambda *a, **k: True, RuntimeError('put before write'))
+        response = await self._create_should_fail()
+        self.assertEqual((await response.json())['error']['code'], 'create_failed')
+        meeting_id = ids[0]
+        stored = await self.client.get('/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual(stored.status, 200)
+        self.assertEqual((await stored.json())['state'], 'ended')
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', types)
+        self.assertIn('agent_session.released', types)
+        self.assertEqual(self.supervisor.started, [])
+        self.assertEqual(self.supervisor.cancelled, [])
+
+    async def test_create_put_after_write_ends_and_releases(self):
+        ids = self._track_acquired_ids()
+        original = self.daemon.meetings.put
+        self.daemon.meetings.put = _fail_after_once(original, RuntimeError('put after write'))
+        response = await self._create_should_fail()
+        self.assertEqual((await response.json())['error']['code'], 'create_failed')
+        meeting_id = ids[0]
+        self.assertEqual((await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json())['state'], 'ended')
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', types)
+        self.assertIn('agent_session.released', types)
+        self.assertEqual(self.supervisor.started, [])
+
+    async def test_create_locked_event_before_and_after_write(self):
+        ids = self._track_acquired_ids()
+        original = self.daemon.events.append
+        self.daemon.events.append = _once_fail(
+            original, _event_type_predicate('agent_session.locked'),
+            RuntimeError('locked before write'))
+        await self._create_should_fail('thread-locked-before')
+        meeting_id = ids[0]
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('agent_session.locked', types)
+        self.assertIn('meeting.ended', types)
+        self.assertIn('agent_session.released', types)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-locked-before'))
+
+        ids = self._track_acquired_ids()
+        self.daemon.events.append = _fail_after_once(
+            original, RuntimeError('locked after write'),
+            predicate=_event_type_predicate('agent_session.locked'))
+        await self._create_should_fail('thread-locked-after')
+        meeting_id = ids[-1]
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('agent_session.locked', types)
+        self.assertNotIn('meeting.joining', types)
+        self.assertIn('meeting.ended', types)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-locked-after'))
+
+    async def test_create_joining_event_before_and_after_write(self):
+        ids = self._track_acquired_ids()
+        original = self.daemon.events.append
+        self.daemon.events.append = _once_fail(
+            original, _event_type_predicate('meeting.joining'),
+            RuntimeError('joining before write'))
+        await self._create_should_fail('thread-joining-before')
+        meeting_id = ids[0]
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('agent_session.locked', types)
+        self.assertNotIn('meeting.joining', types)
+        self.assertIn('meeting.ended', types)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-joining-before'))
+
+        ids = self._track_acquired_ids()
+        self.daemon.events.append = _fail_after_once(
+            original, RuntimeError('joining after write'),
+            predicate=_event_type_predicate('meeting.joining'))
+        await self._create_should_fail('thread-joining-after')
+        meeting_id = ids[-1]
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.joining', types)
+        self.assertEqual(self.supervisor.started, [])
+        self.assertIn('meeting.ended', types)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-joining-after'))
+
+    async def test_enter_meeting_after_start_cancels_supervisor(self):
+        ids = self._track_acquired_ids()
+        original = self.daemon.leases.enter_meeting
+        self.daemon.leases.enter_meeting = _once_fail(
+            original, lambda *a, **k: True, RuntimeError('enter after start'))
+        response = await self._create_should_fail('thread-enter-1')
+        self.assertEqual((await response.json())['error']['code'], 'create_failed')
+        meeting_id = ids[0]
+        self.assertEqual(self.supervisor.started, [meeting_id])
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        stored = await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json()
+        self.assertEqual(stored['state'], 'ended')
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-enter-1'))
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', types)
+        self.assertIn('agent_session.released', types)
+        self.assertEqual(types.count('agent_session.released'), 1)
+
+    async def test_create_start_before_and_after_write(self):
+        ids = self._track_acquired_ids()
+        original = self.supervisor.start
+
+        async def fail_before(_meeting):
+            raise RuntimeError('start before write')
+
+        self.supervisor.start = fail_before
+        response = await self._create_should_fail('thread-start-before')
+        self.assertEqual((await response.json())['error']['code'], 'supervisor_unavailable')
+        meeting_id = ids[0]
+        self.assertEqual(self.supervisor.started, [])
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-start-before'))
+
+        ids = self._track_acquired_ids()
+        self.supervisor.started = []
+        self.supervisor.cancelled = []
+
+        async def fail_after(meeting):
+            await original(meeting)
+            raise RuntimeError('start after write')
+
+        self.supervisor.start = fail_after
+        response = await self._create_should_fail('thread-start-after')
+        self.assertEqual((await response.json())['error']['code'], 'supervisor_unavailable')
+        meeting_id = ids[-1]
+        self.assertEqual(self.supervisor.started, [meeting_id])
+        self.assertEqual(self.supervisor.cancelled, [meeting_id])
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-start-after'))
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', types)
+        self.assertIn('agent_session.released', types)
+
+    async def test_create_cleanup_failure_preserves_lease(self):
+        ids = self._track_acquired_ids()
+        original_put = self.daemon.meetings.put
+        self.daemon.meetings.put = _once_fail(
+            original_put, lambda *a, **k: True, RuntimeError('put before write'))
+        original_release = self.daemon.leases.release
+
+        def boom(*_a, **_k):
+            raise LeaseStateError('cannot release')
+
+        self.daemon.leases.release = boom
+        response = await self._create_should_fail('thread-cleanup-1')
+        self.assertEqual(response.status, 503)
+        self.assertEqual((await response.json())['error']['code'], 'retry_required')
+        meeting_id = ids[0]
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('agent_session.released', types)
+        self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-cleanup-1'))
+        lease_path = Path(self.daemon.meetings.root) / meeting_id / 'lease.json'
+        self.assertTrue(lease_path.exists())
+
+    async def test_concurrent_handoff_cancel_and_failure_converge(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        original_cancel = self.supervisor.cancel
+
+        async def slow_cancel(meeting_id_arg):
+            await asyncio.sleep(0.05)
+            await original_cancel(meeting_id_arg)
+
+        self.supervisor.cancel = slow_cancel
+
+        async def delayed_handoff():
+            await asyncio.sleep(0)
+            return self.daemon.store_handoff(ready)
+
+        async def delayed_failure():
+            await asyncio.sleep(0.01)
+            try:
+                return self.daemon.record_finalization_failure(meeting_id, 'race')
+            except DaemonError as error:
+                return error
+
+        cancel_response, handoff_result, failure_result = await asyncio.gather(
+            self.client.post('/v1/meetings/' + meeting_id + '/cancel', headers=self.headers()),
+            delayed_handoff(),
+            delayed_failure(),
+            return_exceptions=True,
+        )
+        stored = await (await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())).json()
+        self.assertEqual(stored['state'], 'ended')
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.ended'), 1)
+        if 'handoff.ready' in types:
+            self.assertLess(types.index('meeting.ended'), types.index('handoff.ready'))
+            if 'agent_session.released' in types:
+                self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
+        if 'agent_session.released' in types:
+            self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        else:
+            self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        self.assertEqual(types.count('agent_session.released'), 0 if (
+            self.daemon.leases.get('codex', 'thread-origin-1') is not None) else 1)
+        self.assertNotIsInstance(cancel_response, Exception)
+        self.assertEqual(cancel_response.status, 200)
+
+    async def test_independent_meetings_do_not_block_each_other(self):
+        gate = asyncio.Event()
+        original_start = self.supervisor.start
+
+        async def blocked_start(meeting):
+            if meeting.agent_session.session_id == 'thread-origin-1':
+                await gate.wait()
+            await original_start(meeting)
+
+        self.supervisor.start = blocked_start
+        slow = asyncio.create_task(self.create())
+        await asyncio.sleep(0.05)
+        fast = await self.create(agentSession=agent_session_payload(sessionId='thread-fast-1'))
+        self.assertEqual(fast.status, 201, await fast.text())
+        self.assertFalse(slow.done())
+        gate.set()
+        slow_response = await slow
+        self.assertEqual(slow_response.status, 201)
+
+    async def test_duplicate_concurrent_handoff_is_exactly_once(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+
+        def run_handoff():
+            return self.daemon.store_handoff(ready)
+
+        first, second = await asyncio.gather(
+            asyncio.to_thread(run_handoff),
+            asyncio.to_thread(run_handoff),
+        )
+        self.assertEqual(first.meeting_id, meeting_id)
+        self.assertEqual(second.meeting_id, meeting_id)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('meeting.ended'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+
 
 def _once_fail(original, predicate, error):
     state = {'fired': False}
@@ -749,6 +1012,21 @@ def _once_fail(original, predicate, error):
             state['fired'] = True
             raise error
         return original(*args, **kwargs)
+
+    return wrapper
+
+
+def _fail_after_once(original, error, predicate=None):
+    state = {'fired': False}
+
+    def wrapper(*args, **kwargs):
+        if predicate is not None and not predicate(*args, **kwargs):
+            return original(*args, **kwargs)
+        result = original(*args, **kwargs)
+        if not state['fired']:
+            state['fired'] = True
+            raise error
+        return result
 
     return wrapper
 

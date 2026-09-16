@@ -1,4 +1,5 @@
 """Authenticated loopback daemon over schemas, EventStore, and SessionLeaseStore."""
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
@@ -113,6 +114,21 @@ def _new_id(prefix):
 
 
 class RuntimeDaemon:
+    """Loopback meeting daemon.
+
+    Threading contract: the aiohttp event loop owns async entry points
+    (create, context, cancel). Synchronous supervisor callbacks
+    (transition, store_handoff, record_finalization_failure) may run on
+    that loop or on a worker thread. Each meeting_id has an asyncio.Lock
+    that serializes async entry points, including supervisor I/O, and a
+    threading.RLock used only around durable local writes — never across
+    await. Sync callbacks take the RLock for their full body so identical
+    concurrent handoff/finalization stays exactly-once without hopping
+    threads. Different meetings use different locks and do not block each
+    other. Callers must not wait on the event loop while holding the
+    RLock.
+    """
+
     def __init__(
         self,
         root,
@@ -137,6 +153,7 @@ class RuntimeDaemon:
         self.sse_heartbeat_interval = sse_heartbeat_interval
         self._lock_guard = threading.Lock()
         self._async_locks = {}
+        self._write_locks = {}
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
@@ -157,6 +174,23 @@ class RuntimeDaemon:
                 lock = asyncio.Lock()
                 self._async_locks[meeting_id] = lock
             return lock
+
+    def _write_lock(self, meeting_id):
+        with self._lock_guard:
+            lock = self._write_locks.get(meeting_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._write_locks[meeting_id] = lock
+            return lock
+
+    @contextmanager
+    def _serialize_writes(self, meeting_id):
+        lock = self._write_lock(meeting_id)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
 
     def _append(self, meeting_id, event_type, **payload):
         event = {
@@ -238,6 +272,53 @@ class RuntimeDaemon:
         self.meetings.clear_lease_token(session.id)
         self._append_once(session.id, 'agent_session.released', sessionId=agent.session_id)
 
+    def _create_failure(self, error, phase):
+        if isinstance(error, DaemonError):
+            return error
+        if phase == 'start':
+            message = 'meeting supervisor failed to start'
+            if str(error) == 'meeting supervisor is not configured':
+                message = str(error)
+            return DaemonError(503, 'supervisor_unavailable', message)
+        return DaemonError(503, 'create_failed', 'meeting create did not complete')
+
+    def _persist_create_abort(self, session, lease, record, reason):
+        token = lease.token if lease is not None else (None if record is None else record.lease_token)
+        ended = self._replace_session(session, state='ended')
+        try:
+            record = self.meetings.put(ended, token)
+        except Exception:
+            if record is None:
+                record = MeetingRecord(session=ended, lease_token=token)
+            else:
+                record = MeetingRecord(
+                    session=ended, lease_token=token, handoff=record.handoff)
+        try:
+            self._append_once(session.id, 'meeting.ended', reason=reason)
+        except Exception:
+            pass
+        return record
+
+    async def _abort_create(self, session, lease, record, started, phase, error):
+        reason = 'supervisor_start_failed' if phase == 'start' else 'create_failed'
+        if started:
+            try:
+                await self.supervisor.cancel(session.id)
+            except Exception:
+                pass
+        cleanup_error = None
+        with self._serialize_writes(session.id):
+            record = self._persist_create_abort(session, lease, record, reason)
+            try:
+                self._fail_lease(record, reason)
+            except Exception as fail_error:
+                cleanup_error = fail_error
+        if self.leases.get(session.agent_session.provider, session.agent_session.session_id) is not None:
+            raise DaemonError(
+                503, 'retry_required', 'meeting create cleanup did not complete') from (
+                    cleanup_error or error)
+        raise self._create_failure(error, phase) from error
+
     async def create_meeting(self, payload):
         reject_unknown_fields(payload, CREATE_FIELDS, 'meeting')
         try:
@@ -246,7 +327,7 @@ class RuntimeDaemon:
         except (KeyError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', 'meetingUrl is invalid') from error
         meeting_id = _new_id('mtg-')
-        started = _iso(self._now())
+        started_at = _iso(self._now())
         try:
             session = MeetingSession.from_dict({
                 'id': meeting_id,
@@ -256,7 +337,7 @@ class RuntimeDaemon:
                 'context': payload.get('context'),
                 'permissions': payload.get('permissions'),
                 'state': 'joining',
-                'startedAt': started,
+                'startedAt': started_at,
             })
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
@@ -266,33 +347,25 @@ class RuntimeDaemon:
         except LeaseConflictError as error:
             raise DaemonError(409, 'conflict', 'agent session is already leased') from error
         record = None
-        try:
-            record = self.meetings.put(session, lease.token)
-            self._append(meeting_id, 'agent_session.locked', sessionId=agent.session_id)
-            self._append(meeting_id, 'meeting.joining')
+        started = False
+        phase = 'snapshot'
+        async with self._async_lock(meeting_id):
             try:
+                with self._serialize_writes(meeting_id):
+                    record = self.meetings.put(session, lease.token)
+                    phase = 'locked_event'
+                    self._append(meeting_id, 'agent_session.locked', sessionId=agent.session_id)
+                    phase = 'joining_event'
+                    self._append(meeting_id, 'meeting.joining')
+                phase = 'start'
+                started = True
                 await self.supervisor.start(session)
-            except DaemonError:
-                raise
+                phase = 'enter_meeting'
+                with self._serialize_writes(meeting_id):
+                    self.leases.enter_meeting(agent.provider, agent.session_id, lease.token)
+                return session
             except Exception as error:
-                ended = self._replace_session(session, state='ended')
-                try:
-                    record = self.meetings.put(ended, lease.token)
-                    self._append_once(meeting_id, 'meeting.ended', reason='supervisor_start_failed')
-                except Exception:
-                    if record is None:
-                        record = MeetingRecord(session=ended, lease_token=lease.token)
-                    else:
-                        record = MeetingRecord(session=ended, lease_token=lease.token)
-                self._fail_lease(record, 'supervisor_start_failed')
-                message = 'meeting supervisor failed to start'
-                if str(error) == 'meeting supervisor is not configured':
-                    message = str(error)
-                raise DaemonError(503, 'supervisor_unavailable', message) from error
-            self.leases.enter_meeting(agent.provider, agent.session_id, lease.token)
-            return session
-        except DaemonError:
-            raise
+                await self._abort_create(session, lease, record, started, phase, error)
 
     async def get_meeting(self, meeting_id):
         return self._record(meeting_id).session
@@ -303,11 +376,12 @@ class RuntimeDaemon:
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
         async with self._async_lock(meeting_id):
-            record = self._record(meeting_id)
-            if record.session.state == 'ended':
-                raise DaemonError(409, 'conflict', 'cannot update context after the meeting has ended')
-            updated = self._replace_session(record.session, context=context.to_dict())
-            self._persist(updated, record.lease_token)
+            with self._serialize_writes(meeting_id):
+                record = self._record(meeting_id)
+                if record.session.state == 'ended':
+                    raise DaemonError(409, 'conflict', 'cannot update context after the meeting has ended')
+                updated = self._replace_session(record.session, context=context.to_dict())
+                self._persist(updated, record.lease_token)
             try:
                 await self.supervisor.add_context(meeting_id, context)
             except DaemonError:
@@ -316,17 +390,19 @@ class RuntimeDaemon:
                 raise DaemonError(
                     503, 'supervisor_context_failed',
                     'meeting supervisor failed to update context') from error
-            if record.lease_token:
-                agent = updated.agent_session
-                self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
-            return updated
+            with self._serialize_writes(meeting_id):
+                if record.lease_token:
+                    agent = updated.agent_session
+                    self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
+                return updated
 
     async def cancel_meeting(self, meeting_id):
         async with self._async_lock(meeting_id):
-            record = self._record(meeting_id)
-            session = record.session
-            if session.state == 'ended':
-                return session
+            with self._serialize_writes(meeting_id):
+                record = self._record(meeting_id)
+                session = record.session
+                if session.state == 'ended':
+                    return session
             try:
                 await self.supervisor.cancel(meeting_id)
             except DaemonError:
@@ -335,16 +411,17 @@ class RuntimeDaemon:
                 raise DaemonError(
                     503, 'supervisor_cancel_failed',
                     'meeting supervisor failed to cancel') from error
-            record = self._record(meeting_id)
-            if record.session.state == 'ended':
-                return record.session
-            ended = self._replace_session(record.session, state='ended')
-            self._persist(ended, record.lease_token)
-            self._append_once(meeting_id, 'meeting.ended', reason='cancelled')
-            if record.lease_token:
-                agent = ended.agent_session
-                self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
-            return ended
+            with self._serialize_writes(meeting_id):
+                record = self._record(meeting_id)
+                if record.session.state == 'ended':
+                    return record.session
+                ended = self._replace_session(record.session, state='ended')
+                self._persist(ended, record.lease_token)
+                self._append_once(meeting_id, 'meeting.ended', reason='cancelled')
+                if record.lease_token:
+                    agent = ended.agent_session
+                    self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
+                return ended
 
     async def get_handoff(self, meeting_id):
         record = self._record(meeting_id)
@@ -358,23 +435,24 @@ class RuntimeDaemon:
 
     def transition(self, meeting_id, state, *, reason=None):
         require_enum(state, 'state', LIFECYCLE_STATES)
-        record = self._record(meeting_id)
-        current = record.session.state
-        if state == current:
-            return record.session
-        if state not in FORWARD_TRANSITIONS[current]:
-            raise DaemonError(409, 'conflict', f'cannot transition from {current} to {state}')
-        updated = self._replace_session(record.session, state=state)
-        self._persist(updated, record.lease_token)
-        event_type = LIFECYCLE_EVENTS[state]
-        extra = {}
-        if event_type == 'meeting.ended':
-            extra['reason'] = reason or 'ended'
-        self._append_once(meeting_id, event_type, **extra)
-        if record.lease_token:
-            agent = updated.agent_session
-            self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
-        return updated
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            current = record.session.state
+            if state == current:
+                return record.session
+            if state not in FORWARD_TRANSITIONS[current]:
+                raise DaemonError(409, 'conflict', f'cannot transition from {current} to {state}')
+            updated = self._replace_session(record.session, state=state)
+            self._persist(updated, record.lease_token)
+            event_type = LIFECYCLE_EVENTS[state]
+            extra = {}
+            if event_type == 'meeting.ended':
+                extra['reason'] = reason or 'ended'
+            self._append_once(meeting_id, event_type, **extra)
+            if record.lease_token:
+                agent = updated.agent_session
+                self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
+            return updated
 
     def heartbeat_lease(self, provider, session_id):
         lease, record = self._lease_pair(provider, session_id)
@@ -393,6 +471,10 @@ class RuntimeDaemon:
                 raise DaemonError(422, 'invalid_request', str(error)) from error
         if not isinstance(handoff, MeetingHandoff):
             raise DaemonError(422, 'invalid_request', 'handoff is invalid')
+        with self._serialize_writes(handoff.meeting_id):
+            return self._store_handoff_locked(handoff)
+
+    def _store_handoff_locked(self, handoff):
         record = self._record(handoff.meeting_id)
         session = record.session
         if handoff.started_at != session.started_at:
@@ -472,16 +554,17 @@ class RuntimeDaemon:
         self._append_once(session.id, 'agent_session.released', sessionId=agent.session_id)
 
     def record_finalization_failure(self, meeting_id, reason):
-        record = self._record(meeting_id)
-        session = record.session
-        if session.state != 'ended':
-            session = self._replace_session(session, state='ended')
-            self._persist(session, record.lease_token)
-            self._append_once(meeting_id, 'meeting.ended', reason=reason)
-            record = self.meetings.get(meeting_id) or MeetingRecord(
-                session=session, lease_token=record.lease_token, handoff=record.handoff)
-        self._fail_lease(record, reason)
-        return session
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            session = record.session
+            if session.state != 'ended':
+                session = self._replace_session(session, state='ended')
+                self._persist(session, record.lease_token)
+                self._append_once(meeting_id, 'meeting.ended', reason=reason)
+                record = self.meetings.get(meeting_id) or MeetingRecord(
+                    session=session, lease_token=record.lease_token, handoff=record.handoff)
+            self._fail_lease(record, reason)
+            return session
 
     def _lease_pair(self, provider, session_id):
         provider = require_enum(provider, 'provider', AGENT_PROVIDERS)
