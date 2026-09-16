@@ -1,0 +1,249 @@
+"""Validated ColleagueEvent envelope and event vocabulary."""
+from dataclasses import dataclass
+from types import MappingProxyType
+
+from meeting_handoff import MeetingHandoff
+from schema_validation import (
+    omit_none, optional_bool, optional_field, optional_int, optional_string,
+    reject_unknown_fields, require_enum, require_field, require_id, require_mapping,
+    require_meeting_id, require_string, require_timestamp, require_version,
+)
+
+
+EVENT_VERSION = 1
+EVENT_TYPES = (
+    'meeting.joining',
+    'meeting.waiting_for_admission',
+    'meeting.live',
+    'meeting.ended',
+    'agent_session.locked',
+    'agent_session.released',
+    'transcript.delta',
+    'delegation.started',
+    'delegation.progress',
+    'delegation.completed',
+    'delegation.cancelled',
+    'approval.required',
+    'artifact.created',
+    'handoff.ready',
+)
+PAYLOAD_FIELDS = {
+    'meeting.joining': (),
+    'meeting.waiting_for_admission': (),
+    'meeting.live': (),
+    'meeting.ended': ('reason',),
+    'agent_session.locked': ('sessionId',),
+    'agent_session.released': ('sessionId',),
+    'transcript.delta': ('entry',),
+    'delegation.started': ('delegationId',),
+    'delegation.progress': ('delegationId', 'message'),
+    'delegation.completed': ('delegationId',),
+    'delegation.cancelled': ('delegationId', 'reason'),
+    'approval.required': ('request',),
+    'artifact.created': ('artifact',),
+    'handoff.ready': ('handoff',),
+}
+ENVELOPE_FIELDS = ('version', 'id', 'meetingId', 'timestamp', 'type')
+TRANSCRIPT_SOURCES = ('input', 'output', 'platform')
+APPROVAL_PERMISSIONS = ('workspace', 'commands', 'edits', 'network', 'commits', 'pushes')
+TRANSCRIPT_ENTRY_FIELDS = (
+    'id', 'text', 'source', 'speaker', 'startOffsetMs', 'endOffsetMs', 'muted', 'delegationId',
+)
+APPROVAL_FIELDS = ('id', 'permission', 'summary', 'createdAt', 'action')
+ARTIFACT_FIELDS = ('id', 'kind', 'path', 'createdAt', 'mediaType', 'description')
+
+
+@dataclass(frozen=True)
+class TranscriptEntry:
+    id: str
+    text: str
+    source: str
+    speaker: str = None
+    start_offset_ms: int = None
+    end_offset_ms: int = None
+    muted: bool = None
+    delegation_id: str = None
+
+    def to_dict(self):
+        return omit_none({
+            'id': self.id,
+            'text': self.text,
+            'source': self.source,
+            'speaker': self.speaker,
+            'startOffsetMs': self.start_offset_ms,
+            'endOffsetMs': self.end_offset_ms,
+            'muted': self.muted,
+            'delegationId': self.delegation_id,
+        })
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = require_mapping(data, 'entry')
+        reject_unknown_fields(payload, TRANSCRIPT_ENTRY_FIELDS, 'entry')
+        return cls(
+            id=require_id(require_field(payload, 'id', 'entry'), 'entry.id'),
+            text=require_string(require_field(payload, 'text', 'entry'), 'entry.text',
+                                allow_empty=True, allow_newlines=True),
+            source=require_enum(require_field(payload, 'source', 'entry'), 'entry.source',
+                                TRANSCRIPT_SOURCES),
+            speaker=optional_string(optional_field(payload, 'speaker'), 'entry.speaker',
+                                    max_length=256),
+            start_offset_ms=optional_int(optional_field(payload, 'startOffsetMs'),
+                                         'entry.startOffsetMs', min_value=0),
+            end_offset_ms=optional_int(optional_field(payload, 'endOffsetMs'),
+                                       'entry.endOffsetMs', min_value=0),
+            muted=optional_bool(optional_field(payload, 'muted'), 'entry.muted'),
+            delegation_id=(
+                None if optional_field(payload, 'delegationId') is None
+                else require_id(payload['delegationId'], 'entry.delegationId')
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    id: str
+    permission: str
+    summary: str
+    created_at: str
+    action: str = None
+
+    def to_dict(self):
+        return omit_none({
+            'id': self.id,
+            'permission': self.permission,
+            'summary': self.summary,
+            'createdAt': self.created_at,
+            'action': self.action,
+        })
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = require_mapping(data, 'request')
+        reject_unknown_fields(payload, APPROVAL_FIELDS, 'request')
+        return cls(
+            id=require_id(require_field(payload, 'id', 'request'), 'request.id'),
+            permission=require_enum(require_field(payload, 'permission', 'request'),
+                                    'request.permission', APPROVAL_PERMISSIONS),
+            summary=require_string(require_field(payload, 'summary', 'request'),
+                                   'request.summary', allow_newlines=True),
+            created_at=require_timestamp(require_field(payload, 'createdAt', 'request'),
+                                         'request.createdAt'),
+            action=optional_string(optional_field(payload, 'action'), 'request.action',
+                                   max_length=256),
+        )
+
+
+@dataclass(frozen=True)
+class Artifact:
+    id: str
+    kind: str
+    path: str
+    created_at: str
+    media_type: str = None
+    description: str = None
+
+    def to_dict(self):
+        return omit_none({
+            'id': self.id,
+            'kind': self.kind,
+            'path': self.path,
+            'createdAt': self.created_at,
+            'mediaType': self.media_type,
+            'description': self.description,
+        })
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = require_mapping(data, 'artifact')
+        reject_unknown_fields(payload, ARTIFACT_FIELDS, 'artifact')
+        return cls(
+            id=require_id(require_field(payload, 'id', 'artifact'), 'artifact.id'),
+            kind=require_string(require_field(payload, 'kind', 'artifact'), 'artifact.kind',
+                                max_length=64),
+            path=require_string(require_field(payload, 'path', 'artifact'), 'artifact.path',
+                                max_length=4096),
+            created_at=require_timestamp(require_field(payload, 'createdAt', 'artifact'),
+                                         'artifact.createdAt'),
+            media_type=optional_string(optional_field(payload, 'mediaType'), 'artifact.mediaType',
+                                       max_length=128),
+            description=optional_string(optional_field(payload, 'description'),
+                                        'artifact.description', allow_newlines=True),
+        )
+
+
+def _payload_from_dict(event_type, payload):
+    if event_type == 'meeting.ended':
+        return {'reason': require_string(require_field(payload, 'reason', 'event'), 'reason')}
+    if event_type in ('agent_session.locked', 'agent_session.released'):
+        return {'sessionId': require_id(require_field(payload, 'sessionId', 'event'),
+                                        'sessionId', max_length=256)}
+    if event_type == 'transcript.delta':
+        return {'entry': TranscriptEntry.from_dict(require_field(payload, 'entry', 'event'))}
+    if event_type in ('delegation.started', 'delegation.completed'):
+        return {'delegationId': require_id(require_field(payload, 'delegationId', 'event'),
+                                           'delegationId')}
+    if event_type == 'delegation.progress':
+        return {
+            'delegationId': require_id(require_field(payload, 'delegationId', 'event'),
+                                       'delegationId'),
+            'message': require_string(require_field(payload, 'message', 'event'), 'message',
+                                      allow_newlines=True),
+        }
+    if event_type == 'delegation.cancelled':
+        return {
+            'delegationId': require_id(require_field(payload, 'delegationId', 'event'),
+                                       'delegationId'),
+            'reason': require_string(require_field(payload, 'reason', 'event'), 'reason'),
+        }
+    if event_type == 'approval.required':
+        return {'request': ApprovalRequest.from_dict(require_field(payload, 'request', 'event'))}
+    if event_type == 'artifact.created':
+        return {'artifact': Artifact.from_dict(require_field(payload, 'artifact', 'event'))}
+    if event_type == 'handoff.ready':
+        return {'handoff': MeetingHandoff.from_dict(require_field(payload, 'handoff', 'event'))}
+    return {}
+
+
+def _serialize_payload(fields):
+    serialized = {}
+    for key, value in fields.items():
+        serialized[key] = value.to_dict() if hasattr(value, 'to_dict') else value
+    return serialized
+
+
+@dataclass(frozen=True)
+class ColleagueEvent:
+    version: int
+    id: str
+    meeting_id: str
+    timestamp: str
+    type: str
+    payload: dict
+
+    def to_dict(self):
+        envelope = {
+            'version': self.version,
+            'id': self.id,
+            'meetingId': self.meeting_id,
+            'timestamp': self.timestamp,
+            'type': self.type,
+        }
+        envelope.update(_serialize_payload(self.payload))
+        return envelope
+
+    @classmethod
+    def from_dict(cls, data):
+        raw = require_mapping(data, 'event')
+        event_type = require_enum(require_field(raw, 'type', 'event'), 'type', EVENT_TYPES)
+        allowed = set(ENVELOPE_FIELDS) | set(PAYLOAD_FIELDS[event_type])
+        reject_unknown_fields(raw, allowed, 'event')
+        payload = _payload_from_dict(event_type, raw)
+        return cls(
+            version=require_version(require_field(raw, 'version', 'event')),
+            id=require_id(require_field(raw, 'id', 'event'), 'id'),
+            meeting_id=require_meeting_id(require_field(raw, 'meetingId', 'event')),
+            timestamp=require_timestamp(require_field(raw, 'timestamp', 'event'), 'timestamp'),
+            type=event_type,
+            payload=MappingProxyType(payload),
+        )
