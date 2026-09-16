@@ -3,7 +3,9 @@ from pathlib import Path
 import asyncio
 import json
 import os
+import subprocess
 
+from schema_validation import field_name_is_secret
 from runtime_state import (
     active_meeting_path, context_index_from_handoff, context_index_path,
     meeting_state_path, read_json, state_from_session, write_private_json,
@@ -140,6 +142,80 @@ class ComposeMeetingAgent:
         return {'running': running, 'unknown': False}
 
 
+PROVIDER_SECRET_ENV = frozenset({
+    'OPENAI_API_KEY', 'MEETING_PASSCODE', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY',
+    'ANTHROPIC_API_KEY', 'MEETING_URL',
+})
+
+
+class SubprocessWorkerHandle:
+    def __init__(self, process):
+        self.process = process
+
+    def poll(self):
+        return self.process.returncode
+
+    def terminate(self):
+        if self.process.returncode is None:
+            self.process.terminate()
+
+    async def wait(self):
+        if self.process.returncode is not None:
+            return self.process.returncode
+        try:
+            return await asyncio.wait_for(self.process.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            self.process.kill()
+            return await self.process.wait()
+
+
+class SubprocessHostWorker:
+    """Starts the host Codex worker. Tests inject a fake instead of this class."""
+
+    def __init__(self, runtime_root, python_executable=None):
+        self.runtime_root = Path(runtime_root)
+        self.python_executable = python_executable or os.environ.get('PYTHON') or 'python3'
+
+    def discover_codex(self):
+        from codex_worker import find_codex
+        return find_codex()
+
+    def check_login(self, codex_bin):
+        result = subprocess.run(
+            [codex_bin, 'login', 'status'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError('Codex CLI is not logged in. Run codex login first.')
+
+    def worker_command(self):
+        return [self.python_executable, '-u', str(self.runtime_root / 'codex_worker.py')]
+
+    def sanitized_environ(self, extra):
+        allowed = {}
+        for key, value in os.environ.items():
+            if key in PROVIDER_SECRET_ENV or field_name_is_secret(key):
+                continue
+            if key in ('PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM',
+                       'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'):
+                allowed[key] = value
+        allowed.update({key: str(value) for key, value in extra.items() if value is not None})
+        for key in list(allowed):
+            if key in PROVIDER_SECRET_ENV or field_name_is_secret(key):
+                allowed.pop(key, None)
+        return allowed
+
+    async def start(self, *, env, cwd):
+        process = await asyncio.create_subprocess_exec(
+            *self.worker_command(),
+            cwd=str(cwd),
+            env=self.sanitized_environ(env),
+        )
+        return SubprocessWorkerHandle(process)
+
+
 class ProductionMeetingSupervisor:
     """Connects RuntimeDaemon meetings to the existing Joinly meeting-agent.
 
@@ -156,6 +232,8 @@ class ProductionMeetingSupervisor:
         launcher=None,
         health=None,
         runner=None,
+        host_worker=None,
+        wants_codex=None,
         poll_interval=1.0,
         start_timeout=30.0,
         stop_timeout=25.0,
@@ -165,6 +243,8 @@ class ProductionMeetingSupervisor:
         self.runner = runner or SubprocessCommandRunner(self.project_root)
         self.launcher = launcher or ComposeMeetingAgent(self.runner)
         self.health = health or UrlHealthClient()
+        self.host_worker = host_worker or SubprocessHostWorker(self.runtime_root)
+        self.wants_codex = wants_codex or (lambda _session: True)
         self.poll_interval = poll_interval
         self.start_timeout = start_timeout
         self.stop_timeout = stop_timeout
@@ -172,6 +252,7 @@ class ProductionMeetingSupervisor:
         self._lock = asyncio.Lock()
         self._active_id = None
         self._watch_task = None
+        self._worker = None
 
     def bind_daemon(self, daemon):
         self.daemon = daemon
@@ -200,15 +281,21 @@ class ProductionMeetingSupervisor:
             if status.get('unknown'):
                 raise DaemonError(503, 'retry_required', 'meeting-agent state is uncertain')
             if self._active_id == session.id and status.get('running'):
+                if self.wants_codex(session) and (
+                        self._worker is None or self._worker.poll() is not None):
+                    await self._start_codex_worker(session)
                 return
             if status.get('running') or (self._active_id not in (None, session.id)):
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
             self._write_session_files(session)
             try:
+                self._preflight_codex(session)
                 await self.launcher.up(self._container_env(session))
                 await self._wait_until_running()
                 await self._wait_until_health()
+                await self._start_codex_worker(session)
             except Exception:
+                await self._stop_worker()
                 await self._stop_container()
                 self._active_id = None
                 raise
@@ -238,6 +325,7 @@ class ProductionMeetingSupervisor:
             if active.get('meetingId') not in (None, meeting_id):
                 return
         await self._stop_watch()
+        await self._stop_worker()
         await self._await_stop()
         if self._active_id == meeting_id:
             self._active_id = None
@@ -264,7 +352,10 @@ class ProductionMeetingSupervisor:
             if self._watch_task is None or self._watch_task.done():
                 self._watch_task = asyncio.create_task(
                     self._watch(record.session), name='meeting-agent-watch-' + claimed)
+            if self._worker is None or self._worker.poll() is not None:
+                await self._start_codex_worker(record.session)
             return
+        await self._stop_worker()
         for meeting_id in daemon.meetings.list_ids():
             record = daemon.meetings.get(meeting_id)
             if record is None or record.session.state == 'ended':
@@ -339,6 +430,9 @@ class ProductionMeetingSupervisor:
                 if not status.get('running'):
                     await self._finalize_without_handoff(session, 'container_exited')
                     return
+                if self._worker is not None and self._worker.poll() is not None:
+                    await self._finalize_without_handoff(session, 'codex_worker_exited')
+                    return
                 health = await self.health.fetch()
                 if not health:
                     continue
@@ -383,6 +477,7 @@ class ProductionMeetingSupervisor:
     async def _finalize_without_handoff(self, session, reason):
         if self._handoff_ready(session.id):
             self._active_id = None
+            await self._stop_worker()
             return
         if self.daemon is not None:
             try:
@@ -390,4 +485,53 @@ class ProductionMeetingSupervisor:
             except DaemonError:
                 pass
         self._active_id = None
+        await self._stop_worker()
         await self._stop_container()
+
+    async def shutdown(self):
+        await self._stop_watch()
+        await self._stop_worker()
+
+    def _host_workspace(self, session):
+        workspace = Path(session.agent_session.workspace).expanduser()
+        if not workspace.is_absolute():
+            raise DaemonError(422, 'invalid_request', 'workspace must be an absolute host path')
+        return str(workspace)
+
+    def _preflight_codex(self, session):
+        if not self.wants_codex(session):
+            return None
+        codex = self.host_worker.discover_codex()
+        if not codex:
+            raise RuntimeError('Codex CLI not found. Install it or set CODEX_BIN, then run codex login.')
+        self.host_worker.check_login(codex)
+        return codex
+
+    async def _start_codex_worker(self, session):
+        if not self.wants_codex(session):
+            return
+        if self._worker is not None and self._worker.poll() is None:
+            return
+        codex = self.host_worker.discover_codex()
+        if not codex:
+            raise RuntimeError('Codex CLI not found. Install it or set CODEX_BIN, then run codex login.')
+        self.host_worker.check_login(codex)
+        workspace = self._host_workspace(session)
+        env = {
+            'CODEX_BIN': codex,
+            'COLLEAGUE_WORKSPACE': workspace,
+            'COLLEAGUE_ENABLE_CHARTS': '0',
+        }
+        handle = await self.host_worker.start(env=env, cwd=str(self.runtime_root))
+        self._worker = handle
+        if handle.poll() is not None:
+            raise RuntimeError('Codex worker exited during startup')
+
+    async def _stop_worker(self):
+        handle = self._worker
+        self._worker = None
+        if handle is None:
+            return
+        if handle.poll() is None:
+            handle.terminate()
+        await handle.wait()

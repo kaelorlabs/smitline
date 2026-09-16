@@ -149,8 +149,6 @@ def environ_from_state(payload):
         mapping['COLLEAGUE_ENABLE_CODEX'] = flags[bool(payload['codexEnabled'])]
     if 'chartsEnabled' in payload:
         mapping['COLLEAGUE_ENABLE_CHARTS'] = flags[bool(payload['chartsEnabled'])]
-    if payload.get('workspace'):
-        mapping['COLLEAGUE_WORKSPACE'] = str(payload['workspace'])
     if payload.get('meetingInstructions') is not None:
         mapping['COLLEAGUE_MEETING_INSTRUCTIONS'] = str(payload['meetingInstructions'])
     if payload.get('meetingUrl'):

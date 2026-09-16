@@ -44,6 +44,52 @@ class FakeLauncher:
         return {'running': self.running, 'unknown': self.unknown}
 
 
+class FakeHostWorkerHandle:
+    def __init__(self, exit_code=None):
+        self.exit_code = exit_code
+        self.terminated = False
+        self.waited = False
+
+    def poll(self):
+        return self.exit_code
+
+    def terminate(self):
+        self.terminated = True
+        if self.exit_code is None:
+            self.exit_code = 0
+
+    async def wait(self):
+        self.waited = True
+        if self.exit_code is None:
+            self.exit_code = 0
+        return self.exit_code
+
+
+class FakeHostWorker:
+    def __init__(self):
+        self.codex_bin = '/usr/local/bin/codex'
+        self.login_ok = True
+        self.fail_start = False
+        self.early_exit = False
+        self.starts = []
+        self.handles = []
+
+    def discover_codex(self):
+        return self.codex_bin
+
+    def check_login(self, _codex_bin):
+        if not self.login_ok:
+            raise RuntimeError('Codex CLI is not logged in. Run codex login first.')
+
+    async def start(self, *, env, cwd):
+        if self.fail_start:
+            raise RuntimeError('worker start failed')
+        handle = FakeHostWorkerHandle(exit_code=1 if self.early_exit else None)
+        self.starts.append({'env': dict(env), 'cwd': cwd})
+        self.handles.append(handle)
+        return handle
+
+
 class FakeHealth:
     def __init__(self, payload=None):
         self.payload = payload if payload is not None else {'stage': 'starting'}
@@ -108,28 +154,35 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.mkdir()
         self.launcher = FakeLauncher()
         self.health = FakeHealth()
+        self.host_worker = FakeHostWorker()
         self.daemon = FakeDaemon()
         self.supervisor = ProductionMeetingSupervisor(
             self.root,
             runtime_root=self.runtime,
             launcher=self.launcher,
             health=self.health,
+            host_worker=self.host_worker,
             poll_interval=0.02,
             start_timeout=0.4,
             stop_timeout=0.4,
         ).bind_daemon(self.daemon)
 
     async def asyncTearDown(self):
-        task = self.supervisor._watch_task
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await self.supervisor.shutdown()
         self.temporary.cleanup()
 
     async def test_launch_to_live_context_cancel_and_heartbeat(self):
         meeting = session()
         await self.supervisor.start(meeting)
         self.assertEqual(len(self.launcher.ups), 1)
+        self.assertEqual(len(self.host_worker.starts), 1)
+        worker_env = self.host_worker.starts[0]['env']
+        self.assertEqual(worker_env['COLLEAGUE_WORKSPACE'], '/Users/Taylor/project')
+        self.assertEqual(worker_env['CODEX_BIN'], '/usr/local/bin/codex')
+        self.assertEqual(self.host_worker.starts[0]['cwd'], str(self.runtime))
+        self.assertNotIn('OPENAI_API_KEY', worker_env)
+        self.assertNotIn('TAVILY_API_KEY', worker_env)
+        self.assertNotIn('MEETING_PASSCODE', worker_env)
         self.assertIn('/meeting-runtime/run/meetings/' + meeting.id, self.launcher.ups[0]['COLLEAGUE_RUNTIME_STATE'])
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(stored['meetingId'], meeting.id)
@@ -154,14 +207,20 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.cancel(meeting.id)
         self.assertGreaterEqual(self.launcher.stops, 1)
         self.assertFalse(self.launcher.running)
+        handle = self.host_worker.handles[0]
+        self.assertTrue(handle.terminated)
+        self.assertTrue(handle.waited)
+        self.assertIsNone(self.supervisor._worker)
         await self.supervisor.cancel(meeting.id)
         self.assertFalse(self.launcher.running)
+        self.assertEqual(len(self.host_worker.handles), 1)
 
     async def test_capacity_is_exclusive_and_idempotent(self):
         first = session()
         await self.supervisor.start(first)
         await self.supervisor.start(first)
         self.assertEqual(len(self.launcher.ups), 1)
+        self.assertEqual(len(self.host_worker.starts), 1)
         other = session(id='mtg-other0000001', agentSession={
             **meeting_session_payload()['agentSession'], 'sessionId': 'thread-other-1',
         })
@@ -190,6 +249,8 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             await self.supervisor.start(session())
         self.assertGreaterEqual(self.launcher.stops, 1)
         self.assertIsNone(self.supervisor._active_id)
+        self.assertEqual(self.host_worker.starts, [])
+        self.assertIsNone(self.supervisor._worker)
 
         self.launcher.fail_up = False
         self.health.payload = None
@@ -198,6 +259,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             await self.supervisor.start(session(id='mtg-healthfail0001'))
         self.assertFalse(self.launcher.running)
         self.assertIsNone(self.supervisor._active_id)
+        self.assertEqual(self.host_worker.starts, [])
 
     async def test_unexpected_exit_records_finalization_failure(self):
         meeting = session()
@@ -206,6 +268,10 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.08)
         self.assertEqual(self.daemon.failures[0][0], meeting.id)
         self.assertEqual(self.daemon.failures[0][1], 'container_exited')
+        handle = self.host_worker.handles[0]
+        self.assertTrue(handle.terminated)
+        self.assertTrue(handle.waited)
+        self.assertIsNone(self.supervisor._worker)
 
     async def test_finished_without_handoff_is_finalization_failure(self):
         meeting = session()
@@ -213,6 +279,10 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.health.payload = {'stage': 'finished'}
         await asyncio.sleep(0.08)
         self.assertEqual(self.daemon.failures[-1][1], 'runtime_ended_before_handoff')
+        handle = self.host_worker.handles[0]
+        self.assertTrue(handle.terminated)
+        self.assertTrue(handle.waited)
+        self.assertIsNone(self.supervisor._worker)
 
     async def test_restart_reconciliation(self):
         meeting = session()
@@ -233,6 +303,9 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.reconcile(self.daemon)
         self.assertEqual(self.supervisor._active_id, meeting.id)
         self.assertTrue(self.supervisor._watch_task)
+        self.assertEqual(len(self.host_worker.starts), 1)
+        await self.supervisor.reconcile(self.daemon)
+        self.assertEqual(len(self.host_worker.starts), 1)
 
     async def test_uncertain_running_container_is_not_taken_over(self):
         meeting = session()
@@ -261,6 +334,99 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
                 'version': 1,
                 'password': 'meeting-passcode',
             })
+
+    async def test_codex_disabled_does_not_start_worker(self):
+        self.supervisor.wants_codex = lambda _session: False
+        meeting = session()
+        await self.supervisor.start(meeting)
+        self.assertEqual(self.host_worker.starts, [])
+        self.assertIsNone(self.supervisor._worker)
+        await self.supervisor.cancel(meeting.id)
+        self.assertEqual(self.host_worker.handles, [])
+
+    async def test_missing_codex_and_login_failure_are_truthful(self):
+        self.host_worker.codex_bin = None
+        with self.assertRaises(RuntimeError) as raised:
+            await self.supervisor.start(session())
+        self.assertIn('Codex CLI not found', str(raised.exception))
+        self.assertFalse(self.launcher.running)
+        self.assertEqual(self.launcher.ups, [])
+        self.assertIsNone(self.supervisor._worker)
+        self.assertEqual(self.host_worker.starts, [])
+
+        self.host_worker.codex_bin = '/usr/local/bin/codex'
+        self.host_worker.login_ok = False
+        with self.assertRaises(RuntimeError) as raised:
+            await self.supervisor.start(session(id='mtg-loginfail00001'))
+        self.assertIn('not logged in', str(raised.exception))
+        self.assertFalse(self.launcher.running)
+        self.assertEqual(self.host_worker.starts, [])
+
+    async def test_early_worker_exit_stops_container(self):
+        self.host_worker.early_exit = True
+        with self.assertRaises(RuntimeError) as raised:
+            await self.supervisor.start(session())
+        self.assertIn('exited during startup', str(raised.exception))
+        self.assertFalse(self.launcher.running)
+        self.assertIsNone(self.supervisor._worker)
+        handle = self.host_worker.handles[0]
+        self.assertTrue(handle.waited)
+
+    async def test_worker_death_records_finalization_and_stops(self):
+        meeting = session()
+        await self.supervisor.start(meeting)
+        handle = self.host_worker.handles[0]
+        handle.exit_code = 1
+        await asyncio.sleep(0.08)
+        self.assertEqual(self.daemon.failures[-1][1], 'codex_worker_exited')
+        self.assertTrue(handle.waited)
+        self.assertIsNone(self.supervisor._worker)
+        self.assertFalse(self.launcher.running)
+
+    async def test_shutdown_and_reconcile_await_worker(self):
+        meeting = session()
+        await self.supervisor.start(meeting)
+        handle = self.host_worker.handles[0]
+        await self.supervisor.shutdown()
+        self.assertTrue(handle.terminated)
+        self.assertTrue(handle.waited)
+        self.assertIsNone(self.supervisor._worker)
+        self.assertTrue(self.launcher.running)
+
+        self.host_worker.starts.clear()
+        self.daemon.meetings.records[meeting.id] = FakeRecord(meeting)
+        from runtime_state import write_private_json
+        write_private_json(active_meeting_path(self.runtime), {'meetingId': meeting.id})
+        await self.supervisor.reconcile(self.daemon)
+        self.assertEqual(len(self.host_worker.starts), 1)
+        restarted = self.host_worker.handles[-1]
+        self.launcher.running = False
+        await self.supervisor.reconcile(self.daemon)
+        self.assertTrue(restarted.terminated)
+        self.assertTrue(restarted.waited)
+        self.assertIsNone(self.supervisor._worker)
+        await self.supervisor.reconcile(self.daemon)
+        self.assertIsNone(self.supervisor._worker)
+
+
+class HostWorkerEnvTests(unittest.TestCase):
+    def test_sanitized_environ_drops_provider_secrets(self):
+        from meeting_supervisor import SubprocessHostWorker
+        worker = SubprocessHostWorker('/tmp/runtime')
+        env = worker.sanitized_environ({
+            'CODEX_BIN': '/usr/local/bin/codex',
+            'COLLEAGUE_WORKSPACE': '/Users/Taylor/project',
+            'OPENAI_API_KEY': 'sk-secret',
+            'TAVILY_API_KEY': 'tvly-secret',
+            'MEETING_PASSCODE': '1234',
+            'MEETING_URL': 'https://zoom.us/j/1',
+        })
+        self.assertEqual(env['CODEX_BIN'], '/usr/local/bin/codex')
+        self.assertEqual(env['COLLEAGUE_WORKSPACE'], '/Users/Taylor/project')
+        self.assertNotIn('OPENAI_API_KEY', env)
+        self.assertNotIn('TAVILY_API_KEY', env)
+        self.assertNotIn('MEETING_PASSCODE', env)
+        self.assertNotIn('MEETING_URL', env)
 
 
 class RuntimeStateConfigTests(unittest.TestCase):

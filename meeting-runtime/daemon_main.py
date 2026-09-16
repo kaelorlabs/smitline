@@ -47,8 +47,7 @@ def build_app(args):
         await supervisor.reconcile(app.runtime_daemon)
 
     async def on_cleanup(_app):
-        if supervisor._watch_task is not None:
-            supervisor._watch_task.cancel()
+        await supervisor.shutdown()
 
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
