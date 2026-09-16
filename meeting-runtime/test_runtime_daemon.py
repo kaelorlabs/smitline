@@ -597,7 +597,8 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
             raise LeaseStateError('cannot release')
 
         self.daemon.leases.release = boom
-        self.daemon.record_finalization_failure(meeting_id, 'supervisor crash')
+        with self.assertRaises(DaemonError):
+            self.daemon.record_finalization_failure(meeting_id, 'supervisor crash')
         events = [event.type for event in self.daemon.events.replay(meeting_id)]
         self.assertNotIn('agent_session.released', events)
         self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
@@ -682,6 +683,82 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         types = [event.type for event in self.daemon.events.replay(meeting_id)]
         self.assertEqual(types.count('handoff.ready'), 1)
         self.assertEqual(types.count('agent_session.released'), 1)
+        self.assertEqual(types.count('meeting.ended'), 1)
+        self.assertLess(types.index('meeting.ended'), types.index('handoff.ready'))
+        self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
+
+    async def test_retry_restores_meeting_ended_before_handoff_ready(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        original = self.daemon.events.append
+        self.daemon.events.append = _once_fail(
+            original, _event_type_predicate('meeting.ended'),
+            RuntimeError('ended append failed'))
+        with self.assertRaises(Exception):
+            self.daemon.store_handoff(ready)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertNotIn('meeting.ended', types)
+        self.assertNotIn('handoff.ready', types)
+        self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        self.daemon.events.append = original
+        stored = self.daemon.store_handoff(ready)
+        self.assertEqual(stored.meeting_id, meeting_id)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('meeting.ended'), 1)
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
+        self.assertLess(types.index('meeting.ended'), types.index('handoff.ready'))
+        self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+
+    async def test_retry_restores_handoff_ready_before_release(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+        original = self.daemon.events.append
+        self.daemon.events.append = _once_fail(
+            original, _event_type_predicate('handoff.ready'),
+            RuntimeError('handoff.ready append failed'))
+        with self.assertRaises(Exception):
+            self.daemon.store_handoff(ready)
+        record = self.daemon.meetings.get(meeting_id)
+        self.assertIsNotNone(record.handoff)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('meeting.ended', types)
+        self.assertNotIn('handoff.ready', types)
+        self.assertIsNotNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+        self.daemon.events.append = original
+        self.daemon.store_handoff(ready)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('meeting.ended'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
+        self.assertLess(types.index('meeting.ended'), types.index('handoff.ready'))
+        self.assertLess(types.index('handoff.ready'), types.index('agent_session.released'))
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+
+
+def _once_fail(original, predicate, error):
+    state = {'fired': False}
+
+    def wrapper(*args, **kwargs):
+        if not state['fired'] and predicate(*args, **kwargs):
+            state['fired'] = True
+            raise error
+        return original(*args, **kwargs)
+
+    return wrapper
+
+
+def _event_type_predicate(wanted):
+    def predicate(event, *args, **kwargs):
+        if isinstance(event, dict):
+            return event.get('type') == wanted
+        return getattr(event, 'type', None) == wanted
+    return predicate
 
 
 class MeetingRepositoryUnitTests(unittest.TestCase):

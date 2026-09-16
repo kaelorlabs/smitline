@@ -397,37 +397,48 @@ class RuntimeDaemon:
         session = record.session
         if handoff.started_at != session.started_at:
             raise DaemonError(422, 'invalid_request', 'handoff does not match the meeting')
-        if record.handoff is not None:
-            if record.handoff.to_dict() != handoff.to_dict():
-                raise DaemonError(409, 'conflict', 'a different handoff is already stored')
-            self._complete_release_after_handoff(session, record.lease_token)
-            return record.handoff
+        if record.handoff is not None and record.handoff.to_dict() != handoff.to_dict():
+            raise DaemonError(409, 'conflict', 'a different handoff is already stored')
         agent = session.agent_session
         token = record.lease_token
         lease = None
         if token:
             lease = self.leases.get(agent.provider, agent.session_id)
+        elif record.handoff is None:
+            lease = self.leases.get(agent.provider, agent.session_id)
+        if record.handoff is None:
             if lease is not None:
-                if lease.token != token:
+                if token and lease.token != token:
                     raise DaemonError(409, 'conflict', 'meeting lease token does not match')
                 if lease.active_delegated_turn:
                     raise DaemonError(
                         409, 'conflict', 'cannot finalize while a delegated turn is active')
                 if lease.state == 'in_meeting':
                     try:
-                        self.leases.begin_finalization(agent.provider, agent.session_id, token)
+                        self.leases.begin_finalization(
+                            agent.provider, agent.session_id, token or lease.token)
                     except (LeaseConflictError, LeaseStateError) as error:
                         raise DaemonError(409, 'conflict', str(error)) from error
         if session.state != 'ended':
             session = self._replace_session(session, state='ended')
             self._persist(session, token)
-            self._append_once(session.id, 'meeting.ended', reason='handoff_ready')
-        self.meetings.store_handoff(handoff)
+        self._append_once(session.id, 'meeting.ended', reason='handoff_ready')
+        if record.handoff is None:
+            self.meetings.store_handoff(handoff)
         self._append_once(session.id, 'handoff.ready', handoff=handoff.to_dict())
+        self._require_handoff_event_order(session.id)
         self._complete_release_after_handoff(session, token)
         return handoff
 
+    def _require_handoff_event_order(self, meeting_id):
+        types = [event.type for event in self.events.replay(meeting_id)]
+        if 'meeting.ended' not in types or 'handoff.ready' not in types:
+            raise DaemonError(503, 'handoff_incomplete', 'handoff events are not durable')
+        if types.index('meeting.ended') > types.index('handoff.ready'):
+            raise DaemonError(503, 'handoff_incomplete', 'handoff events are not durable')
+
     def _complete_release_after_handoff(self, session, token):
+        self._require_handoff_event_order(session.id)
         agent = session.agent_session
         lease = self.leases.get(agent.provider, agent.session_id)
         if lease is None:
@@ -469,10 +480,7 @@ class RuntimeDaemon:
             self._append_once(meeting_id, 'meeting.ended', reason=reason)
             record = self.meetings.get(meeting_id) or MeetingRecord(
                 session=session, lease_token=record.lease_token, handoff=record.handoff)
-        try:
-            self._fail_lease(record, reason)
-        except DaemonError:
-            return session
+        self._fail_lease(record, reason)
         return session
 
     def _lease_pair(self, provider, session_id):
