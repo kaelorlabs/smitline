@@ -96,6 +96,38 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([kind for kind, _ in self.record.events].count('delegation.started'), 1)
         self.assertEqual([kind for kind, _ in self.record.events].count('delegation.completed'), 1)
 
+    async def test_request_text_is_only_the_triggering_utterance(self):
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta', 'delta': 'First we should talk about billing.',
+            'start_ms': 50, 'end_ms': 400, 'event_id': 'old-1',
+        })
+        self.session.note_transcript({
+            'type': 'session.output_transcript.delta', 'delta': 'Okay.',
+            'start_ms': 450, 'end_ms': 700, 'event_id': 'old-a',
+        })
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta', 'delta': 'What about invoices?',
+            'start_ms': 800, 'end_ms': 1100, 'event_id': 'old-2',
+        })
+        self.session.note_transcript({
+            'type': 'session.output_transcript.delta', 'delta': 'Go on.',
+            'start_ms': 1200, 'end_ms': 1400, 'event_id': 'old-b',
+        })
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta', 'delta': 'What does ',
+            'start_ms': 2000, 'end_ms': 2200, 'event_id': 'cur-a',
+        })
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta', 'delta': 'the worker lock do?',
+            'start_ms': 2250, 'end_ms': 2600, 'event_id': 'cur-b',
+        })
+        await self.session.submit(created('item_latest', offset_ms=2600))
+        request = self.provider.calls[0]
+        self.assertEqual(request.request_text, 'What does the worker lock do?')
+        self.assertNotIn('billing', request.request_text)
+        self.assertIn('billing', request.transcript)
+        self.assertIn('invoices', request.transcript)
+
     async def test_no_task_text_is_recoverable_and_does_not_invent_work(self):
         await self.session.submit(created('item_empty', offset_ms=10))
         commentary = [item for item in self.sent if item['type'] == 'session.commentary.append']

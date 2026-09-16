@@ -171,7 +171,7 @@ class ClientDelegation:
     def _request(self, event, delegation_id):
         offset = event.get('offset_ms')
         spoken = self.assembler.relevant_request(offset) or ''
-        transcript = self.assembler.text_at_or_before(offset, source=None)
+        transcript = self.assembler.bounded_transcript(offset)
         provider = self.meeting_state.get('provider') or 'codex'
         workspace = self.meeting_state.get('workspace') or self.runtime.workspace
         model = self.meeting_state.get('defaultCodexModel') or self.runtime.default_codex_model
