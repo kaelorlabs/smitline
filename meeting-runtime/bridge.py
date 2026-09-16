@@ -15,7 +15,7 @@ from plot_share import create_and_share_plot
 from codex_tool import CODEX_MODELS, CODEX_TOOL, CodexJobClient
 from search_tool import SEARCH_TOOL, LocalToolDispatcher
 from speech_gate import SpeechGate
-from runtime_config import RuntimeConfig
+from runtime_config import RuntimeConfig, resolve_meeting_url
 from meeting_connection import joined_meeting
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
@@ -245,7 +245,7 @@ async def main():
     state['recording'] = str(record.directory)
     record.event('started')
     api_key = os.environ['OPENAI_API_KEY']
-    url = os.environ['MEETING_URL']
+    url = resolve_meeting_url()
     state['platform'] = platform_for_url(url)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

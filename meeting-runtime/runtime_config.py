@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from codex_tool import CODEX_MODELS
+from runtime_state import environ_from_state, read_json
 
 
 def _boolean(value, default=False):
@@ -29,7 +30,11 @@ class RuntimeConfig:
 
     @classmethod
     def from_environ(cls, environ=None):
-        env = os.environ if environ is None else environ
+        env = dict(os.environ if environ is None else environ)
+        state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+        if state_path:
+            overlay = environ_from_state(read_json(state_path) or {})
+            env.update(overlay)
         name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Colleague AI').strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError('COLLEAGUE_PARTICIPANT_NAME must contain 1–80 printable characters')
@@ -50,3 +55,16 @@ class RuntimeConfig:
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
         return cls(name, model, web_search, codex, charts, workspace, meeting_instructions)
+
+
+def resolve_meeting_url(environ=None):
+    env = dict(os.environ if environ is None else environ)
+    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    if state_path:
+        overlay = environ_from_state(read_json(state_path) or {})
+        if overlay.get('MEETING_URL'):
+            return overlay['MEETING_URL']
+    url = env.get('MEETING_URL')
+    if not url:
+        raise KeyError('MEETING_URL')
+    return url
