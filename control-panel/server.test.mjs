@@ -90,3 +90,283 @@ test('meeting controls reject unauthenticated requests', async () => {
     }
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+function createFakeDaemon() {
+  const meetings = new Map();
+  const calls = [];
+  let unavailable = false;
+  return {
+    calls,
+    meetings,
+    setUnavailable(value = true) { unavailable = value; },
+    async ensure() {
+      if (unavailable) {
+        const error = new Error('Runtime daemon is unavailable. Start it or retry from the console.');
+        error.status = 503;
+        error.code = 'daemon_unavailable';
+        throw error;
+      }
+    },
+    async createMeeting(payload) {
+      calls.push({ method: 'POST', path: '/v1/meetings', body: payload });
+      await this.ensure();
+      if ([...meetings.values()].some(meeting => meeting.state !== 'ended')) {
+        const error = new Error('meeting agent is already running');
+        error.status = 409;
+        error.code = 'capacity_exceeded';
+        throw error;
+      }
+      const session = {
+        id: `mtg-portal${String(meetings.size + 1).padStart(8, '0')}`,
+        state: 'joining',
+        meetingUrl: payload.meetingUrl,
+        agentSession: payload.agentSession,
+        context: payload.context,
+        permissions: payload.permissions,
+      };
+      meetings.set(session.id, session);
+      return session;
+    },
+    async getMeeting(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}` });
+      if (unavailable) {
+        const error = new Error('Runtime daemon is unavailable. Start it or retry from the console.');
+        error.status = 503;
+        error.code = 'daemon_unavailable';
+        throw error;
+      }
+      const session = meetings.get(id);
+      if (!session) {
+        const error = new Error('meeting not found');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      return session;
+    },
+    async cancelMeeting(id) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/cancel`, body: {} });
+      await this.ensure();
+      const session = meetings.get(id);
+      if (!session) {
+        const error = new Error('meeting not found');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      session.state = 'ended';
+      return session;
+    },
+    async updateContext(id, payload) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/context`, body: payload });
+      const session = meetings.get(id);
+      if (!session) {
+        const error = new Error('meeting not found');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      if (session.state === 'ended') {
+        const error = new Error('cannot update context after the meeting has ended');
+        error.status = 409;
+        error.code = 'conflict';
+        throw error;
+      }
+      session.context = payload;
+      return session;
+    },
+    async leaseStatus() {
+      return { state: 'in_meeting' };
+    },
+  };
+}
+
+async function withPanel(run) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-panel-'));
+  fs.writeFileSync(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\n', { mode: 0o600 });
+  const workspace = path.join(root, 'project');
+  fs.mkdirSync(workspace);
+  const runtimeRoot = path.join(root, 'meeting-runtime');
+  const daemon = createFakeDaemon();
+  const accountSpawns = [];
+  const server = createServer({
+    root,
+    runtimeRoot,
+    contextIndex: path.join(runtimeRoot, 'context', 'index.json'),
+    meetingEnv: path.join(root, '.env.meeting'),
+    daemon,
+    spawnAccount(env) {
+      accountSpawns.push(env);
+      return { stdout: { on() {} }, stderr: { on() {} }, on() {}, exitCode: null, signalCode: null };
+    },
+    runCommand: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await run({
+      base, root, workspace, runtimeRoot, daemon, accountSpawns,
+      async bootstrap() {
+        return (await fetch(`${base}/api/bootstrap`)).json();
+      },
+      headers(csrf) {
+        return {
+          'Content-Type': 'application/json',
+          Origin: 'http://127.0.0.1:8095',
+          'X-Colleague-Token': csrf,
+        };
+      },
+      settings: {
+        meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
+        participantName: 'Colleague AI',
+        model: 'gpt-5.6-terra',
+        workspace,
+        meetingInstructions: 'Stay brief.',
+        tools: { webSearch: false, codex: true, charts: false },
+      },
+    });
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+}
+
+test('start uses the daemon, keeps .env.meeting operator-managed, and hides daemon secrets', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const started = await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    assert.equal(started.status, 202);
+    const body = await started.json();
+    assert.equal(body.started, true);
+    assert.equal(panel.daemon.calls[0].path, '/v1/meetings');
+    assert.equal(panel.daemon.calls[0].body.agentSession.sessionId, 'local-portal');
+    assert.equal(panel.daemon.calls[0].body.agentSession.workspace, panel.workspace);
+    assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
+    const status = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(status.running, true);
+    assert.equal(status.phase, 'starting');
+    const encoded = JSON.stringify({ bootstrap, status, body });
+    assert.equal(encoded.includes('Bearer'), false);
+    assert.equal('OPENAI_API_KEY' in (bootstrap.settings || {}), false);
+  });
+});
+
+test('duplicate start is rejected and stop/cancel is idempotent', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const start = () => fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    assert.equal((await start()).status, 202);
+    const duplicate = await start();
+    assert.equal(duplicate.status, 409);
+    assert.equal(panel.daemon.calls.filter(call => call.path === '/v1/meetings').length, 1);
+    const stop = () => fetch(`${panel.base}/api/stop`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal((await stop()).status, 200);
+    assert.equal((await stop()).status, 200);
+    const status = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(status.running, false);
+  });
+});
+
+test('recovers an active meeting after the portal process restarts', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    const meetingId = panel.daemon.calls[0] ? [...panel.daemon.meetings.keys()][0] : null;
+    assert.ok(meetingId);
+    const restarted = createServer({
+      root: panel.root,
+      runtimeRoot: panel.runtimeRoot,
+      contextIndex: path.join(panel.runtimeRoot, 'context', 'index.json'),
+      daemon: panel.daemon,
+      runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    });
+    restarted.listen(0, '127.0.0.1');
+    await once(restarted, 'listening');
+    try {
+      const status = await (await fetch(`http://127.0.0.1:${restarted.address().port}/api/status`)).json();
+      assert.equal(status.running, true);
+      assert.equal(status.meetingId, meetingId);
+      assert.equal(status.phase, 'starting');
+    } finally {
+      restarted.close();
+      await once(restarted, 'close');
+    }
+  });
+});
+
+test('context updates go to the daemon and are rejected after end', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    const added = await fetch(`${panel.base}/api/context/add`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ text: 'Private launch target is October 4.', files: [] }),
+    });
+    assert.equal(added.status, 200);
+    assert.equal(panel.daemon.calls.some(call => call.path.endsWith('/context')), true);
+    await fetch(`${panel.base}/api/stop`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    // Stop clears the active id; seed an ended meeting to assert the truthful reject.
+    const endedId = [...panel.daemon.meetings.keys()][0];
+    panel.daemon.meetings.get(endedId).state = 'ended';
+    fs.mkdirSync(path.join(panel.runtimeRoot, 'run'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json'), JSON.stringify({ meetingId: endedId }));
+    const rejected = await fetch(`${panel.base}/api/context/add`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ text: 'After the call.', files: [] }),
+    });
+    assert.equal(rejected.status, 409);
+  });
+});
+
+test('daemon unavailability is truthful and Teams auth cannot race a live meeting', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    panel.daemon.setUnavailable(true);
+    const failed = await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    assert.equal(failed.status, 503);
+    panel.daemon.setUnavailable(false);
+    assert.equal((await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    })).status, 202);
+    const teams = await fetch(`${panel.base}/api/platforms/teams/connect`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal(teams.status, 409);
+    assert.equal(panel.accountSpawns.length, 0);
+  });
+});

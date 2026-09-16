@@ -23,6 +23,13 @@ window.addEventListener('hashchange', () => selectView(location.hash.slice(1)));
 selectView(location.hash.slice(1));
 let operationBusy = false;
 let latestStatus = {};
+const ACTIVE_PHASES = new Set([
+  'starting', 'opening_meeting', 'joining', 'waiting_for_admission', 'admitted',
+  'connecting_audio', 'live',
+]);
+function meetingBusy(status = {}) {
+  return Boolean(status.running) || ACTIVE_PHASES.has(status.phase);
+}
 let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
@@ -61,12 +68,12 @@ function showErrors(errors = {}) {
 function setBusy(busy, label) {
   operationBusy = busy;
   $('#check-button').disabled = busy;
-  $('#start-button').disabled = busy || Boolean(latestStatus.running) || latestStatus.phase === 'starting';
+  $('#start-button').disabled = busy || meetingBusy(latestStatus);
   if (label) $('#start-button').firstChild.textContent = `${label} `;
   else $('#start-button').firstChild.textContent = 'Start colleague ';
 }
 
-function describePhase(phase, health) {
+function describePhase(phase, health, status = {}) {
   const states = {
     stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
@@ -80,7 +87,7 @@ function describePhase(phase, health) {
     connecting_account: ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
     account_connected: ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
     meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
-    needs_attention: ['The agent needs attention.', health?.error || 'Open the runtime log for details.'],
+    needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
   };
   return states[phase] || ['Working…', 'The current stage is shown above.'];
@@ -91,8 +98,8 @@ function renderStatus(status) {
   const health = status.health || {};
   const live = Boolean(status.running);
   const phase = status.phase || 'stopped';
-  const [message, detail] = describePhase(phase, health);
-  $('#connection-label').textContent = live ? 'Local agent connected' : (phase === 'starting' ? 'Agent starting' : 'Local console ready');
+  const [message, detail] = describePhase(phase, health, status);
+  $('#connection-label').textContent = live ? 'Local agent connected' : (meetingBusy(status) ? 'Agent starting' : 'Local console ready');
   $('.connection').classList.toggle('live', live);
   $('#phase-label').textContent = phase.replaceAll('_', ' ');
   $('#signal-message').textContent = message;
@@ -104,8 +111,8 @@ function renderStatus(status) {
   $('#tool-state').textContent = health.backend_status || '—';
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-  $('#stop-button').disabled = !live && phase !== 'starting';
-  $('#start-button').disabled = operationBusy || live || phase === 'starting';
+  $('#stop-button').disabled = !meetingBusy(status);
+  $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
   $('#runtime-log').textContent = log || 'No activity yet.';
   renderSessions(status.sessions || []);
