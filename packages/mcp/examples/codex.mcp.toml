@@ -1,0 +1,8 @@
+# Colleague AI MCP for Codex.
+# The host integration MUST inject the real originating thread id into
+# start_meeting.sessionId. This server cannot read Codex's current session.
+
+[mcp_servers.colleague-ai]
+command = "node"
+args = ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"]
+cwd = "/absolute/path/to/colleague-ai-private"

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "colleague-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"],
+      "env": {
+        "COLLEAGUE_ROOT": "/absolute/path/to/colleague-ai-private"
+      }
+    }
+  }
+}

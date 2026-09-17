@@ -1,0 +1,19 @@
+{
+  "name": "@colleague-ai/mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local MCP adapter for Colleague AI. Thin stdio JSON-RPC wrapper over the TypeScript SDK.",
+  "bin": {
+    "colleague-mcp": "./src/server.mjs"
+  },
+  "main": "./src/session.mjs",
+  "files": [
+    "src",
+    "README.md",
+    "examples"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

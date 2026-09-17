@@ -6,7 +6,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "test": "node --test control-panel/*.test.mjs gpt-live/server.test.mjs packages/sdk-typescript/test/*.test.mjs packages/cli/test/*.test.mjs"
+    "test": "node --test control-panel/*.test.mjs gpt-live/server.test.mjs packages/sdk-typescript/test/*.test.mjs packages/cli/test/*.test.mjs packages/mcp/test/*.test.mjs"
   },
   "dependencies": {
     "mammoth": "1.12.3",
