@@ -165,7 +165,7 @@ Status meanings:
 | Selective speech and mute transport | Partial | GPT-Live-driven participation and virtual audio gating exist. Cross-platform unmute/remute behavior is still an active reliability area. |
 | Local runtime daemon | Implemented | Authenticated loopback HTTP/SSE API owns sessions, events, leases, approvals, artifacts, providers, and supervision. |
 | Durable event and meeting storage | Implemented | Versioned schemas, append-only events, transcript/archive records, validation, recovery, and local retention paths exist. |
-| Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. A turnkey Codex host integration that automatically supplies the active thread and context is not yet installed or proven end to end. |
+| Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. The local Codex MCP integration now supplies the active `CODEX_THREAD_ID`; automatic context construction and the full live round trip still need acceptance testing. |
 | Cursor provider | Partial | Capability-detected adapter exists. Exact resume depends on documented capabilities of the installed Cursor CLI and host-provided session identity. |
 | Claude Code provider | Partial | Capability-detected adapter exists. Exact resume depends on documented capabilities of the installed Claude CLI and host-provided session identity. |
 | Structured context handoff | Implemented | Versioned objective, task, summary, decision, constraint, question, file, conversation, and Git-state transfer exists. Automatic host-side construction is still integration work. |
@@ -182,7 +182,7 @@ Status meanings:
 | TypeScript SDK | Implemented locally | Blocking handle, events, status, cancellation, approvals, artifacts, and durable handoff exist. Package is not published. |
 | Python SDK | Implemented locally | Mirrors the local daemon contract. Package is not published. |
 | CLI | Implemented locally | Blocking join/status/cancel/handoff/approval/artifact workflows exist. Distribution and installer UX remain. |
-| MCP adapter | Implemented locally | Thin stdio adapter over the TypeScript SDK exists, including durable-task behavior where the client supports it. It cannot discover host conversation identity by itself. |
+| MCP adapter | Implemented locally | Thin stdio adapter over the TypeScript SDK exists, including durable-task behavior where the client supports it. In Codex, `join_current_meeting` consumes the real host-provided `CODEX_THREAD_ID`; other hosts must still pass an explicit session id or use context continuity. |
 | Local operations portal | Implemented | Manual launch and operations console at `127.0.0.1:8095`; always context continuity. It should remain optional. |
 | Hosted runner/control plane | Foundation only | Pairing and isolation primitives exist. There is no production multi-tenant hosted service. |
 | Packaging and onboarding | Partial | Local scripts and documentation exist. There is no one-command public installation or published SDK/CLI/MCP package. |
@@ -194,7 +194,7 @@ Status meanings:
 These percentages are directional estimates, not release metrics:
 
 - **Local proof of concept:** approximately **90%**. The system can join calls, converse, use tools, retain transcripts, and operate through the portal.
-- **Local developer preview:** approximately **70–75%**. The shared daemon, adapters, SDKs, CLI, MCP, providers, permissions, and handoffs exist; agent-native installation and full live reliability are unfinished.
+- **Local developer preview:** approximately **75–80%**. The shared daemon, adapters, SDKs, CLI, MCP, providers, permissions, handoffs, and Codex installer exist; automatic context quality and full live reliability remain unfinished.
 - **Reliable developer beta:** approximately **50–60%**. Distribution, automatic host context/session capture, lifecycle polish, cross-platform acceptance, telemetry, recovery UX, and compatibility support are still required.
 - **Hosted multi-user product:** approximately **20–30%**. The security model and pairing foundation exist, but accounts, organizations, encrypted secret management, durable hosted control plane, billing, fleet operations, and production isolation are not built.
 
@@ -202,12 +202,12 @@ The project is beyond a hackathon demo and has a substantial product foundation.
 
 ## Highest-priority product gaps
 
-### 1. Turn the existing surfaces into a real host integration
+### 1. Prove and harden the Codex host integration
 
-Build and prove a Codex-first integration that:
+The Codex-native MCP entry point and installer now exist. Complete and prove the vertical slice so it:
 
-- Is simple to install and configure.
-- Obtains the real active thread ID through a supported host mechanism.
+- Remains simple to install, diagnose, update, and remove.
+- Continues to obtain the real active thread ID through the supported host environment.
 - Builds the structured context handoff from the current task without exporting hidden reasoning.
 - Supplies the current workspace, model, and explicit permissions.
 - Starts the local daemon automatically.
@@ -266,7 +266,7 @@ Run repeatable real meetings for Zoom, Teams, and Meet covering:
 
 ### Milestone A — Codex-native vertical slice
 
-- [ ] Install Colleague AI as a supported Codex integration.
+- [x] Install Colleague AI as a local Codex MCP integration.
 - [ ] Start a meeting from an existing Codex conversation without opening the portal.
 - [ ] Pass the real Codex thread ID and structured context automatically.
 - [ ] Confirm the session is exclusively leased while the meeting is active.
@@ -395,4 +395,5 @@ When updating this file, use these rules:
 - Confirmed the main product gap is the turnkey host integration that automatically supplies the active coding-agent session and context.
 - Confirmed the portal remains an optional context-continuity operations console rather than the desired primary user experience.
 - Recorded live cross-platform acceptance, distribution, meeting output delivery, enterprise context connectors, and hosted multi-user operation as unfinished work.
-
+- Added a Codex-native `join_current_meeting` entry point that consumes the real `CODEX_THREAD_ID` supplied by the host and fails closed when it is unavailable.
+- Added an idempotent Codex MCP installer, safe CLI defaults for the current Codex thread/workspace, and a local diagnostic command.

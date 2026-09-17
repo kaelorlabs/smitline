@@ -8,6 +8,7 @@ import { createMcpSession, TOOL_DEFINITIONS, TASKS_EXTENSION } from '../src/sess
 import { startStdioServer } from '../src/server.mjs';
 
 const serverPath = fileURLToPath(new URL('../src/server.mjs', import.meta.url));
+const ZOOM = 'https://zoom.us/j/555';
 
 function context() {
   return {
@@ -36,7 +37,7 @@ function permissions() {
 
 function exactArgs(overrides = {}) {
   return {
-    url: 'https://zoom.us/j/555',
+    url: ZOOM,
     provider: 'codex',
     sessionId: 'thread-abc',
     workspace: '/tmp/colleague-workspace',
@@ -291,7 +292,7 @@ test('initialize advertises tools and the tasks extension', async () => {
   const listed = await call(session, 'tools/list', {});
   const names = listed.result.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
-    'start_meeting', 'get_meeting_status', 'add_meeting_context',
+    'join_current_meeting', 'start_meeting', 'get_meeting_status', 'add_meeting_context',
     'cancel_meeting', 'get_meeting_handoff', 'retry_meeting_handoff',
     'list_meeting_approvals', 'get_meeting_approval', 'decide_meeting_approval',
     'list_meeting_artifacts', 'get_meeting_artifact',
@@ -302,6 +303,47 @@ test('initialize advertises tools and the tasks extension', async () => {
     'get_runner_status', 'pair_runner', 'complete_runner_pair', 'unpair_runner',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
+});
+
+test('Codex-native join uses the host thread and safe defaults', async () => {
+  const colleague = createFakeColleague();
+  const session = createMcpSession({
+    colleague,
+    currentCodexSessionId: 'thread-from-codex-host',
+    log() {},
+  });
+  const result = await callTool(session, 'join_current_meeting', {
+    url: ZOOM,
+    workspace: '/tmp/current-workspace',
+    context: context(),
+  });
+  assert.equal(result.result.structuredContent.continuity, 'exact');
+  const status = await callTool(session, 'get_meeting_status', {
+    meetingId: result.result.structuredContent.meetingId,
+  });
+  const created = status.result.structuredContent;
+  assert.equal(created.agentSession.provider, 'codex');
+  assert.equal(created.agentSession.sessionId, 'thread-from-codex-host');
+  assert.equal(created.agentSession.workspace, '/tmp/current-workspace');
+  assert.equal(created.agentSession.metadata.source, 'codex-current-session');
+  assert.equal(created.permissions.workspace, 'read-only');
+  assert.equal(created.permissions.commands, 'approval-required');
+  assert.equal(created.permissions.edits, 'disabled');
+});
+
+test('Codex-native join fails closed when the host thread is unavailable', async () => {
+  const session = createMcpSession({
+    colleague: createFakeColleague(),
+    currentCodexSessionId: '',
+    log() {},
+  });
+  const result = await callTool(session, 'join_current_meeting', {
+    url: ZOOM,
+    workspace: '/tmp/current-workspace',
+    context: context(),
+  });
+  assert.equal(result.result.isError, true);
+  assert.match(result.result.structuredContent.message, /CODEX_THREAD_ID/);
 });
 
 test('exact start requires explicit session and preserves it', async () => {

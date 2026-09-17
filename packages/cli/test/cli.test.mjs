@@ -15,7 +15,7 @@ function runColleague(args, { env = {}, input, sigintAfterJoin, cwd } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args], {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...process.env, CODEX_THREAD_ID: '', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -89,7 +89,26 @@ test('exact continuity without --thread is validation exit 2', async () => {
     '--wait',
   ]);
   assert.equal(result.code, 2);
-  assert.match(result.stderr, /--thread/);
+  assert.match(result.stderr, /--thread|CODEX_THREAD_ID/);
+});
+
+test('Codex-native CLI defaults to the host thread and current workspace', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-current-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const daemon = await startFakeDaemon({ root, readyDelayMs: 10 });
+  t.after(() => daemon.close());
+  const result = await runColleague([
+    'join',
+    '--meeting', ZOOM,
+    '--wait',
+    '--root', root,
+    '--port', String(daemon.port),
+  ], { cwd: root, env: { CODEX_THREAD_ID: 'thread-from-codex-host' } });
+  assert.equal(result.code, 0, result.stderr);
+  const created = [...daemon.state.meetings.values()][0];
+  assert.equal(created.agentSession.provider, 'codex');
+  assert.equal(created.agentSession.sessionId, 'thread-from-codex-host');
+  assert.equal(created.agentSession.workspace, await fs.realpath(root));
 });
 
 test('context continuity permits local-portal without a thread', async (t) => {

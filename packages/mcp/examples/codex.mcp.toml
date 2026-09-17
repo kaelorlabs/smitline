@@ -1,6 +1,6 @@
 # Colleague AI MCP for Codex.
-# The host integration MUST inject the real originating thread id into
-# start_meeting.sessionId. This server cannot read Codex's current session.
+# join_current_meeting reads the real CODEX_THREAD_ID supplied by Codex and
+# fails closed when it is unavailable. Restart Codex after installing.
 
 [mcp_servers.colleague-ai]
 command = "node"

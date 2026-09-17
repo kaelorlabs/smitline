@@ -22,7 +22,7 @@ function requestInterrupt() {
 }
 
 const USAGE = `Usage:
-  colleague join --meeting <url> --agent <provider> --workspace <path>
+  colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
                [--screen-share]
@@ -178,20 +178,21 @@ function colleagueFromArgs(args) {
 
 async function joinCommand(args) {
   if (!args.meeting) throw new ValidationError('--meeting is required');
-  if (!args.agent) throw new ValidationError('--agent is required');
-  if (!args.workspace) throw new ValidationError('--workspace is required');
+  const provider = args.agent || 'codex';
+  const workspace = path.resolve(args.workspace || process.cwd());
   const exact = !args['context-continuity'];
-  if (exact && !args.thread) {
-    throw new ValidationError('exact continuity requires --thread; pass --context-continuity for context-only joins');
+  const thread = args.thread || (provider === 'codex' ? process.env.CODEX_THREAD_ID : undefined);
+  if (exact && !thread) {
+    throw new ValidationError('exact continuity requires --thread or CODEX_THREAD_ID; pass --context-continuity for context-only joins');
   }
   const context = await readContext(args);
   const { root, client } = colleagueFromArgs(args);
   const meeting = await client.joinMeeting({
     url: args.meeting,
     agentSession: {
-      provider: args.agent,
-      sessionId: args.thread || 'local-portal',
-      workspace: path.resolve(args.workspace),
+      provider,
+      sessionId: thread || 'local-portal',
+      workspace,
       ...(args.model ? { model: args.model } : {}),
     },
     context,

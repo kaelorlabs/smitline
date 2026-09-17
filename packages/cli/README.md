@@ -8,6 +8,14 @@ Requires Node.js 22+. Not published to npm. Talks only to the loopback daemon.
 
 Exact continuity requires `--thread` (the real originating coding-agent session id). Never pass `last`, `latest`, or `--last`. Zoom, Teams, and Google Meet HTTPS invites are accepted.
 
+Inside Codex, `--agent` defaults to `codex`, `--thread` defaults to the host-provided `CODEX_THREAD_ID`, and `--workspace` defaults to the current directory:
+
+```bash
+colleague join --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" --wait
+```
+
+Outside Codex, or when selecting another provider, pass the values explicitly:
+
 ```bash
 colleague join \
   --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \

@@ -8,6 +8,7 @@ Do not publish this package and do not install it globally.
 
 | Tool | Behavior |
 | --- | --- |
+| `join_current_meeting` | Codex-native exact-continuity join using the host-provided `CODEX_THREAD_ID` |
 | `start_meeting` | Creates a meeting and returns a durable `{ meetingId }` immediately |
 | `get_meeting_status` | Current daemon session |
 | `add_meeting_context` | Versioned `ContextHandoff` |
@@ -31,7 +32,9 @@ Clients without Tasks should poll `get_meeting_handoff`.
 
 ## Codex
 
-The Codex host integration must inject `$CODEX_THREAD_ID` (or the App Server thread id). Example `~/.codex/config.toml` mcp_servers fragment:
+Codex supplies `CODEX_THREAD_ID` to local tools. Use `join_current_meeting`; the MCP server reads that host-provided value and fails closed when it is unavailable. The tool still requires the coding agent to pass the current workspace and a structured context handoff.
+
+Example `~/.codex/config.toml` mcp_servers fragment:
 
 ```toml
 [mcp_servers.colleague-ai]
@@ -40,7 +43,7 @@ args = ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"]
 cwd = "/absolute/path/to/colleague-ai-private"
 ```
 
-See `examples/codex.mcp.toml`. Pass that thread id into `start_meeting.sessionId`.
+See `examples/codex.mcp.toml`. Restart Codex after changing MCP configuration. Use `start_meeting` with an explicit session id only for non-Codex hosts or integration testing.
 
 ## Cursor
 

@@ -8,12 +8,22 @@ import {
   redact,
   validateContext,
 } from '../../sdk-typescript/src/index.mjs';
+import { fileURLToPath } from 'node:url';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const MCP_SERVER_VERSION = '1.0.0';
 export const TASKS_EXTENSION = 'io.modelcontextprotocol/tasks';
 const FORBIDDEN_SESSION_IDS = new Set(['', '--last', 'last', 'latest', '--latest']);
 const PROVIDERS = new Set(['codex', 'cursor', 'claude-code', 'generic']);
+const DEFAULT_COLLEAGUE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const DEFAULT_SAFE_PERMISSIONS = Object.freeze({
+  workspace: 'read-only',
+  commands: 'approval-required',
+  edits: 'disabled',
+  network: 'approval-required',
+  commits: 'disabled',
+  pushes: 'disabled',
+});
 
 const CONTEXT_SCHEMA = {
   type: 'object',
@@ -66,6 +76,26 @@ const PERMISSIONS_SCHEMA = {
 };
 
 export const TOOL_DEFINITIONS = [
+  {
+    name: 'join_current_meeting',
+    description: 'Join a Zoom, Teams, or Google Meet call from the current Codex conversation. The server uses the real CODEX_THREAD_ID supplied by Codex, so callers must not invent or look up a session id. Pass a bounded summary of the current work as context. Returns a meeting handle immediately unless this client advertises MCP Tasks and waitUntilHandoff is true.',
+    execution: { taskSupport: 'optional' },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['url', 'workspace', 'context'],
+      properties: {
+        url: { type: 'string', description: 'https Zoom, Teams, or Google Meet invitation URL' },
+        workspace: { type: 'string', description: 'Absolute path of the current coding workspace' },
+        model: { type: 'string' },
+        context: CONTEXT_SCHEMA,
+        permissions: PERMISSIONS_SCHEMA,
+        waitUntilHandoff: { type: 'boolean' },
+        cameraEnabled: { type: 'boolean', description: 'When false, join audio-only. Default true.' },
+        screenShareEnabled: { type: 'boolean', description: 'When true, observe incoming shared content. Default false.' },
+      },
+    },
+  },
   {
     name: 'start_meeting',
     description: 'Start a Colleague AI Zoom, Teams, or Google Meet meeting through the local daemon. Exact continuity requires the host integration to inject the real originating thread id. Generic MCP clients should set continuity to context. Returns a durable meeting handle immediately; poll get_meeting_handoff unless this client advertised MCP Tasks on the request.',
@@ -500,11 +530,12 @@ export function createMcpSession(options = {}) {
   });
   const leaveRunning = Boolean(options.leaveRunningOnShutdown ?? process.env.COLLEAGUE_MCP_LEAVE_RUNNING === '1');
   const createColleague = options.createColleague || (() => new Colleague({
-    root: options.root || process.env.COLLEAGUE_ROOT || process.cwd(),
+    root: options.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT,
     host: '127.0.0.1',
     port: options.port || process.env.COLLEAGUE_DAEMON_PORT,
   }));
   const colleague = options.colleague || createColleague();
+  const currentCodexSessionId = options.currentCodexSessionId ?? process.env.CODEX_THREAD_ID;
   const handles = new Map();
   const tasks = new Map();
   const notifications = [];
@@ -684,7 +715,26 @@ export function createMcpSession(options = {}) {
     return toolResult(payload);
   }
 
+  async function joinCurrentMeeting(args, message) {
+    if (typeof currentCodexSessionId !== 'string'
+        || FORBIDDEN_SESSION_IDS.has(currentCodexSessionId)
+        || currentCodexSessionId === 'local-portal') {
+      throw new ValidationError(
+        'Codex did not provide CODEX_THREAD_ID to this MCP server; restart Codex after installing the integration or use start_meeting with an explicit real sessionId',
+      );
+    }
+    return startMeeting({
+      ...args,
+      provider: 'codex',
+      sessionId: currentCodexSessionId,
+      continuity: 'exact',
+      permissions: args.permissions || DEFAULT_SAFE_PERMISSIONS,
+      metadata: { source: 'codex-current-session' },
+    }, message);
+  }
+
   async function callTool(name, args, message) {
+    if (name === 'join_current_meeting') return joinCurrentMeeting(args, message);
     if (name === 'start_meeting') return startMeeting(args, message);
     if (name === 'get_meeting_status') {
       const handle = await resolveHandle(args.meetingId);
@@ -950,7 +1000,7 @@ export function createMcpSession(options = {}) {
           extensions: { [TASKS_EXTENSION]: {} },
         },
         serverInfo: { name: 'colleague-ai', version: MCP_SERVER_VERSION },
-        instructions: 'Colleague AI MCP adapter talks only to the loopback daemon. Host integrations (Codex, Cursor) must inject the real originating sessionId for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.',
+        instructions: 'Colleague AI MCP adapter talks only to the loopback daemon. In Codex, use join_current_meeting so the server uses the real CODEX_THREAD_ID supplied by the host. Other integrations must inject the real originating sessionId into start_meeting for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.',
       });
     }
     if (method === 'ping') return rpcResult(id, {});

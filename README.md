@@ -75,6 +75,20 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 
 ## Get started
 
+For the agent-native Codex experience, register the local integration once:
+
+```bash
+bash scripts/install-codex-integration.sh
+```
+
+Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. Codex calls `join_current_meeting` with the real host-provided thread id, current workspace, a bounded context handoff, and safe default permissions. The portal remains available as an optional operations console.
+
+Run the local diagnostic at any time:
+
+```bash
+npm run doctor
+```
+
 ### 1. Clone and configure
 
 ```bash
