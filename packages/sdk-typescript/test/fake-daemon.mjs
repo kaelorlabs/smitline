@@ -1,0 +1,337 @@
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+function json(response, status, payload) {
+  response.writeHead(status, { 'Content-Type': 'application/json' });
+  response.end(JSON.stringify(payload));
+}
+
+function readBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    request.on('error', reject);
+  });
+}
+
+export function sseFrame(event) {
+  return `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+export async function startFakeDaemon(options = {}) {
+  const token = options.token || 'test-daemon-token';
+  const root = options.root;
+  if (root) {
+    const authPath = path.join(root, '.colleague', 'daemon.auth');
+    await fs.mkdir(path.dirname(authPath), { recursive: true, mode: 0o700 });
+    await fs.writeFile(authPath, `${token}\n`, { mode: 0o600 });
+  }
+  const state = {
+    token,
+    rotatedToken: options.rotatedToken || null,
+    created: 0,
+    cancels: 0,
+    retries: 0,
+    contexts: 0,
+    meetings: new Map(),
+    handoffs: new Map(),
+    events: new Map(),
+    sseClients: [],
+    requireAuth: options.requireAuth !== false,
+    readyDelayMs: options.readyDelayMs || 0,
+    closeStreamAfter: options.closeStreamAfter || 0,
+    failCreate: options.failCreate || null,
+    unrecoverable: false,
+    lastAuthorization: '',
+    requests: [],
+  };
+
+  function currentToken() {
+    return state.token;
+  }
+
+  function authorized(request) {
+    if (!state.requireAuth) return true;
+    const header = request.headers.authorization || '';
+    state.lastAuthorization = header;
+    const expected = `Bearer ${currentToken()}`;
+    return header === expected;
+  }
+
+  function meetingEvents(id) {
+    if (!state.events.has(id)) state.events.set(id, []);
+    return state.events.get(id);
+  }
+
+  function pushEvent(id, event) {
+    const events = meetingEvents(id);
+    events.push(event);
+    for (const client of state.sseClients.filter((item) => item.meetingId === id)) {
+      if (client.seen.has(event.id)) continue;
+      client.seen.add(event.id);
+      client.response.write(sseFrame(event));
+    }
+  }
+
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://127.0.0.1');
+    state.requests.push({ method: request.method, path: url.pathname, lastEventId: request.headers['last-event-id'] || '' });
+    if (!authorized(request)) {
+      json(response, 401, { error: { code: 'unauthorized', message: 'invalid token' } });
+      return;
+    }
+    try {
+      if (request.method === 'POST' && url.pathname === '/v1/meetings') {
+        const body = JSON.parse((await readBody(request)) || '{}');
+        if (state.failCreate) {
+          json(response, state.failCreate.status || 503, { error: state.failCreate });
+          return;
+        }
+        state.created += 1;
+        const id = options.meetingId || `mtg-${state.created}`;
+        const session = {
+          id,
+          platform: body.meetingUrl?.includes('teams.') ? 'teams' : 'zoom',
+          meetingUrl: body.meetingUrl,
+          agentSession: body.agentSession,
+          context: body.context,
+          permissions: body.permissions,
+          state: 'joining',
+          startedAt: '2026-09-16T00:00:00Z',
+        };
+        state.meetings.set(id, session);
+        pushEvent(id, {
+          version: 1,
+          id: 'evt-join',
+          meetingId: id,
+          timestamp: session.startedAt,
+          type: 'meeting.joining',
+        });
+        if (state.readyDelayMs >= 0) {
+          setTimeout(() => {
+            session.state = 'live';
+            pushEvent(id, {
+              version: 1,
+              id: 'evt-live',
+              meetingId: id,
+              timestamp: session.startedAt,
+              type: 'meeting.live',
+            });
+            pushEvent(id, {
+              version: 1,
+              id: 'evt-transcript',
+              meetingId: id,
+              timestamp: session.startedAt,
+              type: 'transcript.final',
+              text: 'secret meeting speech must not be printed',
+            });
+            pushEvent(id, {
+              version: 1,
+              id: 'evt-delegation',
+              meetingId: id,
+              timestamp: session.startedAt,
+              type: 'delegation.started',
+              taskId: 'task-1',
+            });
+            if (options.autoHandoff !== false) {
+              const handoff = options.handoffFactory?.(id, session) || {
+                version: 1,
+                meetingId: id,
+                startedAt: session.startedAt,
+                endedAt: '2026-09-16T00:01:00Z',
+                summary: 'done',
+                decisions: [],
+                requirements: [],
+                actionItems: [],
+                unresolvedQuestions: [],
+                filesDiscussed: [],
+                workPerformed: [],
+                artifacts: [],
+                transcriptPath: `recordings/${id}/transcript.jsonl`,
+                recommendedNextAction: 'review',
+                handoffId: `hnd-${id}`,
+                archivePath: `recordings/${id}`,
+                partial: Boolean(options.partial),
+              };
+              session.state = 'ended';
+              state.handoffs.set(id, handoff);
+              pushEvent(id, {
+                version: 1,
+                id: 'evt-ready',
+                meetingId: id,
+                timestamp: handoff.endedAt,
+                type: 'handoff.ready',
+                handoff,
+              });
+            }
+          }, state.readyDelayMs);
+        }
+        json(response, 201, session);
+        return;
+      }
+
+      const meetingMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)(?:\/(.*))?$/);
+      if (meetingMatch) {
+        const meetingId = decodeURIComponent(meetingMatch[1]);
+        const rest = meetingMatch[2] || '';
+        const meeting = state.meetings.get(meetingId);
+        if (!meeting && rest !== 'events') {
+          json(response, 404, { error: { code: 'not_found', message: 'meeting not found' } });
+          return;
+        }
+        if (request.method === 'GET' && rest === '') {
+          json(response, 200, meeting);
+          return;
+        }
+        if (request.method === 'POST' && rest === 'context') {
+          const body = JSON.parse((await readBody(request)) || '{}');
+          state.contexts += 1;
+          meeting.context = body;
+          json(response, 200, meeting);
+          return;
+        }
+        if (request.method === 'POST' && rest === 'cancel') {
+          state.cancels += 1;
+          meeting.state = 'ended';
+          const handoff = state.handoffs.get(meetingId) || {
+            version: 1,
+            meetingId,
+            startedAt: meeting.startedAt,
+            endedAt: '2026-09-16T00:02:00Z',
+            summary: 'cancelled',
+            decisions: [],
+            requirements: [],
+            actionItems: [],
+            unresolvedQuestions: [],
+            filesDiscussed: [],
+            workPerformed: [],
+            artifacts: [],
+            transcriptPath: `recordings/${meetingId}/transcript.jsonl`,
+            recommendedNextAction: 'stop',
+            handoffId: `hnd-${meetingId}`,
+            archivePath: `recordings/${meetingId}`,
+            partial: Boolean(options.cancelPartial),
+            endReason: 'cancelled',
+          };
+          state.handoffs.set(meetingId, handoff);
+          pushEvent(meetingId, {
+            version: 1,
+            id: `evt-cancel-${state.cancels}`,
+            meetingId,
+            timestamp: handoff.endedAt,
+            type: 'handoff.ready',
+            handoff,
+          });
+          json(response, 200, meeting);
+          return;
+        }
+        if (request.method === 'GET' && rest === 'handoff') {
+          if (state.unrecoverable) {
+            json(response, 409, {
+              error: {
+                code: 'finalization_failed',
+                message: 'unrecoverable handoff failure',
+                archivePath: `recordings/${meetingId}`,
+              },
+            });
+            return;
+          }
+          const handoff = state.handoffs.get(meetingId);
+          if (!handoff) {
+            json(response, 404, { error: { code: 'not_ready', message: 'handoff not ready' } });
+            return;
+          }
+          json(response, 200, handoff);
+          return;
+        }
+        if (request.method === 'POST' && rest === 'handoff/retry') {
+          state.retries += 1;
+          await readBody(request);
+          if (options.retryFailsOnce && state.retries === 1) {
+            json(response, 409, {
+              error: { code: 'handoff_append_failed', message: 'still failing', retryable: true },
+            });
+            return;
+          }
+          const meetingRecord = state.meetings.get(meetingId) || { startedAt: '2026-09-16T00:00:00Z' };
+          const handoff = {
+            version: 1,
+            meetingId,
+            startedAt: meetingRecord.startedAt,
+            endedAt: '2026-09-16T00:03:00Z',
+            summary: 'retried',
+            decisions: [],
+            requirements: [],
+            actionItems: [],
+            unresolvedQuestions: [],
+            filesDiscussed: [],
+            workPerformed: [],
+            artifacts: [],
+            transcriptPath: `recordings/${meetingId}/transcript.jsonl`,
+            recommendedNextAction: 'review',
+            handoffId: `hnd-${meetingId}`,
+            archivePath: `recordings/${meetingId}`,
+          };
+          state.handoffs.set(meetingId, handoff);
+          json(response, 200, handoff);
+          return;
+        }
+        if (request.method === 'GET' && rest === 'events') {
+          const lastEventId = request.headers['last-event-id'] || '';
+          response.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+          response.flushHeaders?.();
+          response.write(': connected\n\n');
+          const events = meetingEvents(meetingId);
+          const seen = new Set();
+          let start = 0;
+          if (lastEventId) {
+            const index = events.findIndex((event) => event.id === lastEventId);
+            start = index === -1 ? 0 : index + 1;
+          }
+          for (const event of events.slice(start)) {
+            seen.add(event.id);
+            response.write(sseFrame(event));
+          }
+          const client = { meetingId, response, seen };
+          state.sseClients.push(client);
+          if (state.closeStreamAfter) {
+            setTimeout(() => response.end(), state.closeStreamAfter);
+          }
+          request.on('close', () => {
+            state.sseClients = state.sseClients.filter((item) => item !== client);
+          });
+          return;
+        }
+      }
+      json(response, 404, { error: { code: 'not_found', message: 'no such route' } });
+    } catch (error) {
+      json(response, 500, { error: { code: 'internal', message: error.message } });
+    }
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    port,
+    token,
+    state,
+    url: `http://127.0.0.1:${port}`,
+    rotateToken(next = 'rotated-daemon-token') {
+      state.token = next;
+      return next;
+    },
+    async writeAuth(nextToken) {
+      if (!root) return;
+      await fs.writeFile(path.join(root, '.colleague', 'daemon.auth'), `${nextToken}\n`, { mode: 0o600 });
+    },
+    close() {
+      return new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    },
+  };
+}
