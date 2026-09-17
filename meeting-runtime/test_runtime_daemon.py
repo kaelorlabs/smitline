@@ -166,6 +166,40 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('leaseId', json.dumps(body))
         self.assertNotIn(self.auth, json.dumps(body))
 
+    async def test_providers_status_and_cursor_exact_resume_capability(self):
+        listed = await self.client.get('/v1/providers', headers=self.headers())
+        self.assertEqual(listed.status, 200)
+        body = await listed.json()
+        self.assertEqual([item['id'] for item in body['providers']], ['codex', 'cursor', 'claude-code'])
+        dumped = json.dumps(body)
+        self.assertNotIn('token', dumped.lower())
+        created = await self.create()
+        meeting = await created.json()
+        self.assertEqual(meeting['agentSession']['provider'], 'codex')
+        self.assertEqual(meeting['providerCapabilities']['id'], 'codex')
+        from providers.cursor import CursorProvider
+        from providers.registry import ProviderRegistry
+        self.daemon.provider_registry = ProviderRegistry(providers={
+            'cursor': CursorProvider(command='/bin/echo', help_text='''
+Usage: fake-agent
+  --print <prompt>
+'''),
+        })
+        rejected = await self.create(agentSession=agent_session_payload(
+            provider='cursor', sessionId='thread-cursor-1',
+            metadata={'continuity': 'exact', 'source': 'host'}))
+        self.assertEqual(rejected.status, 422)
+        detail = await rejected.json()
+        self.assertIn('exact_resume_unsupported', json.dumps(detail))
+        allowed = await self.create(agentSession=agent_session_payload(
+            provider='cursor', sessionId='local-portal',
+            metadata={'continuity': 'context', 'source': 'local-portal'}))
+        self.assertEqual(allowed.status, 201)
+        cursor_meeting = await allowed.json()
+        self.assertEqual(cursor_meeting['agentSession']['provider'], 'cursor')
+        self.assertFalse(cursor_meeting['providerCapabilities']['exactSessionResume'])
+        self.assertTrue(cursor_meeting['providerCapabilities']['contextContinuity'])
+
     async def test_non_loopback_bind_is_rejected(self):
         with self.assertRaises(ValueError):
             require_loopback_bind('8.8.8.8')

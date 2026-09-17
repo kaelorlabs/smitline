@@ -144,6 +144,7 @@ export interface DaemonTransport {
   pauseScreenShare(meetingId: string): Promise<Record<string, unknown>>;
   resumeScreenShare(meetingId: string): Promise<Record<string, unknown>>;
   listScreenShareObservations(meetingId: string): Promise<{ observations: Array<Record<string, unknown>> }>;
+  listProviders(): Promise<{ providers: Array<Record<string, unknown>> }>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -196,6 +197,7 @@ export interface ColleagueOptions {
 export class Colleague {
   constructor(options?: ColleagueOptions);
   joinMeeting(request: JoinMeetingRequest): Promise<MeetingHandle>;
+  listProviders(): Promise<{ providers: Array<Record<string, unknown>> }>;
 }
 
 export function createLoopbackTransport(options?: {

@@ -242,6 +242,13 @@ export function createServer({
     const workspace = running ? await workspaceSnapshot(meetingId, session) : { artifacts: [] };
     let gitOperations = [];
     let screenShare = null;
+    let providers = [];
+    try {
+      const listed = await daemonClient.listProviders();
+      providers = listed.providers || [];
+    } catch {
+      providers = [];
+    }
     if (running && meetingId) {
       try {
         const commits = await daemonClient.listCommits(meetingId);
@@ -271,6 +278,8 @@ export function createServer({
       workspaceArtifacts: workspace.artifacts,
       gitOperations,
       screenShare,
+      providers,
+      provider: session?.agentSession?.provider,
     };
   }
 
@@ -285,6 +294,14 @@ export function createServer({
     if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker Desktop and try again.';
     const codex = await runCommand('/bin/bash', ['-lc', 'if command -v codex >/dev/null 2>&1; then codex login status; elif [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then /Applications/ChatGPT.app/Contents/Resources/codex login status; else exit 127; fi'], { cwd: root });
     if (settings.tools?.codex && codex.code !== 0) errors.codex = 'Codex is unavailable or signed out. Run codex login.';
+    if (settings.tools?.cursor) {
+      const cursor = await runCommand('/bin/bash', ['-lc', 'command -v "${CURSOR_BIN:-cursor-agent}" >/dev/null 2>&1'], { cwd: root });
+      if (cursor.code !== 0) errors.cursor = 'Cursor CLI not found. Install cursor-agent and complete its official login.';
+    }
+    if (settings.tools?.claudeCode) {
+      const claude = await runCommand('/bin/bash', ['-lc', 'command -v "${CLAUDE_BIN:-claude}" >/dev/null 2>&1'], { cwd: root });
+      if (claude.code !== 0) errors.claudeCode = 'Claude Code CLI not found. Install claude and run claude login.';
+    }
     return { ready: Object.keys(errors).length === 0, errors };
   }
 

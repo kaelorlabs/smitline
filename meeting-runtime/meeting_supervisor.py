@@ -147,7 +147,7 @@ class ComposeMeetingAgent:
 
 PROVIDER_SECRET_ENV = frozenset({
     'OPENAI_API_KEY', 'MEETING_PASSCODE', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY',
-    'ANTHROPIC_API_KEY', 'MEETING_URL',
+    'ANTHROPIC_API_KEY', 'MEETING_URL', 'CURSOR_API_KEY', 'CODEX_API_KEY',
 })
 
 
@@ -210,13 +210,23 @@ class SubprocessHostWorker:
                 allowed.pop(key, None)
         return allowed
 
-    async def start(self, *, env, cwd):
+    async def start(self, *, env, cwd, command=None):
         process = await asyncio.create_subprocess_exec(
-            *self.worker_command(),
+            *(command or self.worker_command()),
             cwd=str(cwd),
             env=self.sanitized_environ(env),
         )
         return SubprocessWorkerHandle(process)
+
+    def discover_provider(self, provider_id):
+        if provider_id == 'codex':
+            return self.discover_codex()
+        from providers.detect import which_binary
+        if provider_id == 'cursor':
+            return which_binary(('cursor-agent',), 'CURSOR_BIN')
+        if provider_id == 'claude-code':
+            return which_binary(('claude',), 'CLAUDE_BIN')
+        return None
 
 
 class ProductionMeetingSupervisor:
@@ -300,9 +310,9 @@ class ProductionMeetingSupervisor:
             if status.get('unknown'):
                 raise DaemonError(503, 'retry_required', 'meeting-agent state is uncertain')
             if self._active_id == session.id and status.get('running'):
-                if self.wants_codex(session) and (
+                if self._wants_coding_worker(session) and (
                         self._worker is None or self._worker.poll() is not None):
-                    await self._start_codex_worker(session)
+                    await self._start_coding_worker(session)
                 return
             if status.get('running') or (self._active_id not in (None, session.id)):
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
@@ -310,11 +320,11 @@ class ProductionMeetingSupervisor:
                 session, camera_settings=camera_settings,
                 screen_share_settings=screen_share_settings)
             try:
-                self._preflight_codex(session)
+                self._preflight_coding(session)
                 await self.launcher.up(self._container_env(session))
                 await self._wait_until_running()
                 await self._wait_until_health()
-                await self._start_codex_worker(session)
+                await self._start_coding_worker(session)
             except Exception:
                 await self._stop_worker()
                 await self._stop_container()
@@ -378,7 +388,7 @@ class ProductionMeetingSupervisor:
                 self._watch_task = asyncio.create_task(
                     self._watch(record.session), name='meeting-agent-watch-' + claimed)
             if self._worker is None or self._worker.poll() is not None:
-                await self._start_codex_worker(record.session)
+                await self._start_coding_worker(record.session)
             return
         await self._stop_worker()
         for meeting_id in daemon.meetings.list_ids():
@@ -613,7 +623,7 @@ class ProductionMeetingSupervisor:
             return {'status': 'ready', 'idempotent': True}
         if continuity_mode(session.agent_session) == EXACT:
             try:
-                await self._start_codex_worker(session)
+                await self._start_coding_worker(session)
             except Exception:
                 pass
         finalizer = MeetingFinalizer(
@@ -633,8 +643,10 @@ class ProductionMeetingSupervisor:
         if self.append_handoff is not None:
             return await self.append_handoff(session, handoff)
         from providers.base import ProviderRequest
-        from providers.codex import CodexProvider
+        from providers.registry import ProviderRegistry
         agent = session.agent_session
+        if agent.provider in (None, 'generic'):
+            return {'ok': True, 'appended': False, 'reason': 'no_provider_handoff'}
         metadata = dict(agent.metadata or {})
         request = ProviderRequest(
             delegation_id='handoff-' + session.id,
@@ -648,7 +660,10 @@ class ProductionMeetingSupervisor:
             model=agent.model,
             source=metadata.get('source'),
         )
-        return await CodexProvider().append_handoff(request, handoff)
+        adapter = ProviderRegistry().get(agent.provider)
+        if adapter is None:
+            return {'error': 'unknown_provider'}
+        return await adapter.append_handoff(request, handoff)
 
     async def shutdown(self):
         await self._stop_watch()
@@ -660,6 +675,33 @@ class ProductionMeetingSupervisor:
             raise DaemonError(422, 'invalid_request', 'workspace must be an absolute host path')
         return str(workspace)
 
+    def _coding_provider_id(self, session):
+        return getattr(getattr(session, 'agent_session', None), 'provider', None) or 'codex'
+
+    def _wants_coding_worker(self, session):
+        provider = self._coding_provider_id(session)
+        if provider == 'codex':
+            return bool(self.wants_codex(session))
+        return provider in ('cursor', 'claude-code')
+
+    def _preflight_coding(self, session):
+        if not self._wants_coding_worker(session):
+            return None
+        provider = self._coding_provider_id(session)
+        if provider == 'codex':
+            return self._preflight_codex(session)
+        binary = None
+        discover = getattr(self.host_worker, 'discover_provider', None)
+        if callable(discover):
+            binary = discover(provider)
+        if not binary:
+            if provider == 'cursor':
+                raise RuntimeError(
+                    'Cursor CLI not found. Install cursor-agent or set CURSOR_BIN, then complete its official login.')
+            raise RuntimeError(
+                'Claude Code CLI not found. Install claude or set CLAUDE_BIN, then run claude login.')
+        return binary
+
     def _preflight_codex(self, session):
         if not self.wants_codex(session):
             return None
@@ -668,6 +710,42 @@ class ProductionMeetingSupervisor:
             raise RuntimeError('Codex CLI not found. Install it or set CODEX_BIN, then run codex login.')
         self.host_worker.check_login(codex)
         return codex
+
+    async def _start_coding_worker(self, session):
+        if not self._wants_coding_worker(session):
+            return
+        provider = self._coding_provider_id(session)
+        if provider == 'codex':
+            await self._start_codex_worker(session)
+            return
+        if self._worker is not None:
+            if self._worker.poll() is None:
+                return
+            try:
+                await self._worker.wait()
+            except Exception:
+                pass
+            self._worker = None
+        binary = self._preflight_coding(session)
+        workspace = self._host_workspace(session)
+        from provider_jobs import provider_jobs_dir
+        jobs = provider_jobs_dir(provider, self.runtime_root / 'jobs')
+        env = {
+            'COLLEAGUE_PROVIDER': provider,
+            'PROVIDER_JOBS_DIR': str(jobs),
+            'COLLEAGUE_WORKSPACE': workspace,
+            'COLLEAGUE_ENABLE_CHARTS': '0',
+        }
+        if provider == 'cursor':
+            env['CURSOR_BIN'] = binary
+        else:
+            env['CLAUDE_BIN'] = binary
+        python = getattr(self.host_worker, 'python_executable', None) or 'python3'
+        command = [python, '-u', str(self.runtime_root / 'provider_worker.py')]
+        handle = await self.host_worker.start(env=env, cwd=str(self.runtime_root), command=command)
+        self._worker = handle
+        if handle.poll() is not None:
+            raise RuntimeError(provider + ' worker exited during startup')
 
     async def _start_codex_worker(self, session):
         if not self.wants_codex(session):

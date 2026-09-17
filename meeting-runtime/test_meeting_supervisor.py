@@ -9,7 +9,7 @@ from meeting_supervisor import DaemonError, ProductionMeetingSupervisor
 from runtime_state import (
     active_meeting_path, daemon_token_path, file_mode, meeting_state_path, read_json,
 )
-from test_schemas import ZOOM_URL, context_payload, meeting_session_payload
+from test_schemas import ZOOM_URL, context_payload, meeting_session_payload, agent_session_payload
 
 from daemon_main import write_auth_token
 from runtime_config import RuntimeConfig, resolve_meeting_url
@@ -81,13 +81,22 @@ class FakeHostWorker:
         if not self.login_ok:
             raise RuntimeError('Codex CLI is not logged in. Run codex login first.')
 
-    async def start(self, *, env, cwd):
+    async def start(self, *, env, cwd, command=None):
         if self.fail_start:
             raise RuntimeError('worker start failed')
         handle = FakeHostWorkerHandle(exit_code=1 if self.early_exit else None)
-        self.starts.append({'env': dict(env), 'cwd': cwd})
+        self.starts.append({'env': dict(env), 'cwd': cwd, 'command': command})
         self.handles.append(handle)
         return handle
+
+    def discover_provider(self, provider_id):
+        if provider_id == 'codex':
+            return self.codex_bin
+        bins = getattr(self, 'provider_bins', None) or {
+            'cursor': '/usr/local/bin/cursor-agent',
+            'claude-code': '/usr/local/bin/claude',
+        }
+        return bins.get(provider_id)
 
 
 class FakeHealth:
@@ -261,6 +270,22 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.cancel(meeting.id)
         self.assertFalse(self.launcher.running)
         self.assertEqual(len(self.host_worker.handles), 1)
+
+    async def test_cursor_worker_uses_isolated_jobs_and_skips_codex(self):
+        meeting = session(agentSession=agent_session_payload(
+            provider='cursor', sessionId='sess-cursor-1',
+            metadata={'source': 'host', 'continuity': 'context'}))
+        await self.supervisor.start(meeting)
+        env = self.host_worker.starts[0]['env']
+        self.assertEqual(env['COLLEAGUE_PROVIDER'], 'cursor')
+        self.assertTrue(env['PROVIDER_JOBS_DIR'].endswith('/cursor'))
+        self.assertNotIn('CODEX_BIN', env)
+        self.assertEqual(env['CURSOR_BIN'], '/usr/local/bin/cursor-agent')
+        command = self.host_worker.starts[0]['command']
+        self.assertTrue(str(command[-1]).endswith('provider_worker.py'))
+        stored = read_json(meeting_state_path(self.runtime, meeting.id))
+        self.assertEqual(stored['provider'], 'cursor')
+        await self.supervisor.cancel(meeting.id)
 
     async def test_capacity_is_exclusive_and_idempotent(self):
         first = session()

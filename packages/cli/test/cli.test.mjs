@@ -283,4 +283,7 @@ test('approvals commands require explicit meeting and approval ids', async (t) =
   ], { cwd: root });
   assert.equal(share.code, 0, share.stderr);
   assert.equal(JSON.parse(share.stdout).status.paused, false);
+  const providers = await runColleague(['providers', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(providers.code, 0, providers.stderr);
+  assert.equal(JSON.parse(providers.stdout).providers[0].id, 'codex');
 });

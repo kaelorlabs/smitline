@@ -39,8 +39,9 @@ export function ensureDefaultWorkspace(root) {
 }
 
 export function permissionsForTools(tools = {}) {
+  const coding = Boolean(tools.codex || tools.cursor || tools.claudeCode);
   return {
-    workspace: tools.codex ? 'read-only' : 'none',
+    workspace: coding ? 'read-only' : 'none',
     commands: 'disabled',
     edits: 'disabled',
     network: tools.webSearch ? 'allowed' : 'disabled',
@@ -87,7 +88,7 @@ export function buildMeetingCreatePayload(settings, { sources = [], workspace, r
   return {
     meetingUrl: settings.meetingUrl,
     agentSession: {
-      provider: tools.codex ? 'codex' : 'generic',
+      provider: tools.cursor ? 'cursor' : tools.claudeCode ? 'claude-code' : tools.codex ? 'codex' : 'generic',
       sessionId: LOCAL_PORTAL_SESSION_ID,
       workspace: resolved,
       model: settings.model,

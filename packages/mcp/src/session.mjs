@@ -329,6 +329,15 @@ export const TOOL_DEFINITIONS = [
       properties: { meetingId: { type: 'string' } },
     },
   },
+  {
+    name: 'list_coding_providers',
+    description: 'List local coding-agent provider capabilities. Does not return credentials, transcripts, or guessed model names.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
 ];
 
 function nowIso() {
@@ -837,6 +846,13 @@ export function createMcpSession(options = {}) {
         ? await handle.listScreenShareObservations()
         : await transport.listScreenShareObservations(args.meetingId);
       return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'list_coding_providers') {
+      const transport = colleague._transport;
+      const payload = colleague.listProviders
+        ? await colleague.listProviders()
+        : await transport.listProviders();
+      return toolResult(payload);
     }
     throw new ValidationError(`unknown tool: ${name}`);
   }

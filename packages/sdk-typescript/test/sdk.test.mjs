@@ -407,6 +407,8 @@ test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, asy
     assert.equal(paused.status.paused, true);
     const observations = await meeting.listScreenShareObservations();
     assert.deepEqual(observations.observations, []);
+    const providers = await colleague.listProviders();
+    assert.equal(providers.providers[0].id, 'codex');
     const dumped = JSON.stringify({ created, listed, decided, token: daemon.token, commit, push, share });
     assert.equal(dumped.includes('secret meeting speech'), false);
     await meeting.cancel();

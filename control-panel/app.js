@@ -50,6 +50,7 @@ function payload() {
     meetingInstructions: data.get('meetingInstructions')?.trim(),
     tools: {
       webSearch: data.has('webSearch'), codex: data.has('codex'),
+      cursor: data.has('cursor'), claudeCode: data.has('claudeCode'),
       charts: data.has('charts'),
     },
     camera: {
@@ -107,11 +108,13 @@ function describePhase(phase, health, status = {}) {
   };
   const [message, detail] = states[phase] || ['Working…', 'The current stage is shown above.'];
   const continuity = status.continuity || health?.codex?.continuity;
+  const provider = status.provider || health?.provider || 'codex';
+  const agent = provider === 'cursor' ? 'Cursor' : provider === 'claude-code' ? 'Claude Code' : 'Codex';
   if (continuity === 'context') {
-    return [message, detail + ' Codex is using context continuity, not the originating thread.'];
+    return [message, detail + ` ${agent} is using context continuity, not the originating thread.`];
   }
   if (continuity === 'exact') {
-    return [message, detail + ' Codex is resuming the originating session.'];
+    return [message, detail + ` ${agent} is resuming the originating session.`];
   }
   return [message, detail];
 }
@@ -615,10 +618,21 @@ $('#stop-button').addEventListener('click', async () => {
   catch (error) { announce(error.message, true); }
 });
 
-form.elements.codex.addEventListener('change', () => {
-  const enabled = form.elements.codex.checked;
-  $('#workspace-field').hidden = !enabled;
-  if (!enabled) form.elements.charts.checked = false;
+function codingEnabled() {
+  return Boolean(form.elements.codex?.checked || form.elements.cursor?.checked || form.elements.claudeCode?.checked);
+}
+function exclusiveCoding(changed) {
+  if (!changed.checked) return;
+  ['codex', 'cursor', 'claudeCode'].forEach((name) => {
+    if (form.elements[name] && form.elements[name] !== changed) form.elements[name].checked = false;
+  });
+}
+['codex', 'cursor', 'claudeCode'].forEach((name) => {
+  form.elements[name]?.addEventListener('change', (event) => {
+    exclusiveCoding(event.target);
+    $('#workspace-field').hidden = !codingEnabled();
+    if (!form.elements.codex.checked) form.elements.charts.checked = false;
+  });
 });
 async function refresh() {
   try { renderStatus(await request('/api/status')); } catch { $('.connection').classList.remove('live'); $('#connection-label').textContent = 'Console disconnected'; }
@@ -638,10 +652,12 @@ async function init() {
     $('#model').value = settings.model;
     form.elements.webSearch.checked = settings.tools.webSearch;
     form.elements.codex.checked = settings.tools.codex;
+    if (form.elements.cursor) form.elements.cursor.checked = Boolean(settings.tools.cursor);
+    if (form.elements.claudeCode) form.elements.claudeCode.checked = Boolean(settings.tools.claudeCode);
     form.elements.charts.checked = settings.tools.charts;
     savedPasscode = settings.hasPasscode;
     $('#passcode-hint').textContent = savedPasscode ? 'A passcode is saved. Leave blank to keep it.' : 'Optional when the invitation URL includes access credentials.';
-    $('#workspace-field').hidden = !settings.tools.codex;
+    $('#workspace-field').hidden = !(settings.tools.codex || settings.tools.cursor || settings.tools.claudeCode);
     renderStatus(data.status);
     setInterval(refresh, 2000);
   } catch (error) { announce(`Control panel failed to initialize: ${error.message}`, true); }

@@ -219,6 +219,12 @@ function createFakeColleague({ autoHandoff = true } = {}) {
       listScreenShareObservations: async (id) => ({
         observations: (colleague.screenShare.get(id) || {}).observations || [],
       }),
+      listProviders: async () => ({
+        providers: [
+          { id: 'codex', installed: true, usable: true, exactSessionResume: true, supportedModels: [] },
+          { id: 'cursor', installed: false, usable: false, reasonUnavailable: 'missing_binary', supportedModels: [] },
+        ],
+      }),
     },
   };
   colleague.approvals = new Map();
@@ -262,7 +268,7 @@ test('initialize advertises tools and the tasks extension', async () => {
     'list_meeting_commits', 'get_meeting_commit', 'create_meeting_commit',
     'list_meeting_pushes', 'get_meeting_push', 'create_meeting_push',
     'get_meeting_screen_share', 'pause_meeting_screen_share', 'resume_meeting_screen_share',
-    'list_meeting_screen_share_observations',
+    'list_meeting_screen_share_observations', 'list_coding_providers',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -326,6 +332,8 @@ test('approval tools require explicit meeting and approval ids', async () => {
   assert.equal(share.result.structuredContent.status.enabled, false);
   const missingShare = await callTool(session, 'pause_meeting_screen_share', {});
   assert.equal(missingShare.result.isError, true);
+  const providers = await callTool(session, 'list_coding_providers', {});
+  assert.equal(providers.result.structuredContent.providers[0].id, 'codex');
 });
 
 test('rejects last/latest and does not invent a session', async () => {

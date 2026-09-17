@@ -227,6 +227,9 @@ export function createDaemonClient(options = {}) {
     listScreenShareObservations(meetingId) {
       return send('GET', `/v1/meetings/${meetingId}/screen-share/observations`, undefined, { startIfNeeded: false });
     },
+    listProviders() {
+      return send('GET', '/v1/providers', undefined, { startIfNeeded: false });
+    },
     async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
       let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
       if (!token) {

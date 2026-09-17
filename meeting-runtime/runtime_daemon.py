@@ -165,6 +165,7 @@ class RuntimeDaemon:
         git_broker=None,
         jobs_dir=None,
         visual_analyzer=None,
+        provider_registry=None,
         sse_poll_interval=DEFAULT_SSE_POLL,
         sse_heartbeat_interval=DEFAULT_SSE_HEARTBEAT,
     ):
@@ -194,12 +195,29 @@ class RuntimeDaemon:
             artifacts=self.artifacts,
             analyzer=visual_analyzer or UnavailableVisualAnalysisProvider(),
             now=lambda: _iso(self._now()))
+        if provider_registry is None:
+            from providers.registry import ProviderRegistry
+            provider_registry = ProviderRegistry()
+        self.provider_registry = provider_registry
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
             closer = getattr(store, 'close', None)
             if closer is not None:
                 closer()
+
+    def list_providers(self):
+        registry = self.provider_registry
+        payload = {'providers': registry.capabilities()}
+        ensure_public(payload)
+        return payload
+
+    def public_meeting(self, session):
+        payload = session.to_dict()
+        provider_id = session.agent_session.provider
+        payload['providerCapabilities'] = self.provider_registry.capabilities(provider_id)
+        ensure_public(payload)
+        return payload
 
     def _now(self):
         moment = self._clock()
@@ -390,6 +408,21 @@ class RuntimeDaemon:
                 'visualState': 'joining',
             })
             validate_agent_session(session.agent_session)
+            provider_id = session.agent_session.provider
+            if provider_id not in AGENT_PROVIDERS:
+                raise ValueError('unknown coding agent provider')
+            if provider_id not in ('codex', 'generic'):
+                registry = getattr(self, 'provider_registry', None)
+                adapter = registry.get(provider_id) if registry is not None else None
+                if adapter is None:
+                    raise ValueError('unknown coding agent provider')
+                check = adapter.validate_session
+                import inspect
+                result = check(session.agent_session)
+                if inspect.isawaitable(result):
+                    result = await result
+                if isinstance(result, dict) and result.get('ok') is False:
+                    raise ValueError(result.get('code') or result.get('error') or 'provider session is invalid')
             session = self._replace_session(
                 session,
                 permissions=bound_requested_permissions(
@@ -1625,6 +1658,7 @@ def create_app(
     meeting_store=None,
     jobs_dir=None,
     visual_analyzer=None,
+    provider_registry=None,
 ):
     require_loopback_bind(bind_host)
     token = secrets.token_urlsafe(32) if auth_token is None else auth_token
@@ -1641,6 +1675,7 @@ def create_app(
         meeting_store=meeting_store,
         jobs_dir=jobs_dir,
         visual_analyzer=visual_analyzer,
+        provider_registry=provider_registry,
         sse_poll_interval=sse_poll_interval,
         sse_heartbeat_interval=sse_heartbeat_interval,
     )
@@ -1700,21 +1735,21 @@ def create_app(
     async def create_meeting(request):
         payload = await read_json(request)
         session = await daemon.create_meeting(payload)
-        return _public_json(session.to_dict(), status=201)
+        return _public_json(daemon.public_meeting(session), status=201)
 
     async def get_meeting(request):
         session = await daemon.get_meeting(request.match_info['meetingId'])
-        return _public_json(session.to_dict())
+        return _public_json(daemon.public_meeting(session))
 
     async def update_context(request):
         payload = await read_json(request)
         session = await daemon.update_context(request.match_info['meetingId'], payload)
-        return _public_json(session.to_dict())
+        return _public_json(daemon.public_meeting(session))
 
     async def cancel_meeting(request):
         await read_json(request, allow_empty=True)
         session = await daemon.cancel_meeting(request.match_info['meetingId'])
-        return _public_json(session.to_dict())
+        return _public_json(daemon.public_meeting(session))
 
     async def get_handoff(request):
         handoff = await daemon.get_handoff(request.match_info['meetingId'])
@@ -1889,6 +1924,9 @@ def create_app(
         daemon.release_http_lease(request.match_info['provider'], request.match_info['sessionId'])
         return web.Response(status=204)
 
+    async def list_providers(request):
+        return _public_json(daemon.list_providers())
+
     app = web.Application(
         middlewares=(auth_middleware, error_middleware),
         client_max_size=max_body_bytes,
@@ -1896,6 +1934,7 @@ def create_app(
     app.runtime_daemon = daemon
     app.bind_host = bind_host
     app.router.add_post('/v1/meetings', create_meeting)
+    app.router.add_get('/v1/providers', list_providers)
     app.router.add_get('/v1/meetings/{meetingId}', get_meeting)
     app.router.add_post('/v1/meetings/{meetingId}/context', update_context)
     app.router.add_post('/v1/meetings/{meetingId}/cancel', cancel_meeting)

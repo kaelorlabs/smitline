@@ -3,6 +3,7 @@ import asyncio
 
 from providers.base import CodingAgentProvider, ProviderRequest
 from providers.codex import CodexProvider
+from providers.registry import ProviderRegistry
 
 
 PROVIDER_CODEX = 'codex'
@@ -10,7 +11,10 @@ PROVIDER_CODEX = 'codex'
 
 class DelegationRouter:
     def __init__(self, providers=None, default_provider=PROVIDER_CODEX, event_sink=None):
-        self.providers = dict(providers or {})
+        if providers is None:
+            self.providers = ProviderRegistry().mapping()
+        else:
+            self.providers = dict(providers)
         self.default_provider = default_provider
         if PROVIDER_CODEX not in self.providers:
             self.providers[PROVIDER_CODEX] = CodexProvider()

@@ -88,6 +88,16 @@ export async function startFakeDaemon(options = {}) {
       return;
     }
     try {
+      if (request.method === 'GET' && url.pathname === '/v1/providers') {
+        json(response, 200, {
+          providers: [
+            { id: 'codex', installed: true, usable: true, exactSessionResume: true, contextContinuity: true, structuredProgress: true, cancellation: true, handoffAppend: true, workspaceRead: true, workspaceActions: false, supportedModels: [] },
+            { id: 'cursor', installed: false, usable: false, exactSessionResume: false, contextContinuity: false, structuredProgress: false, cancellation: true, handoffAppend: false, workspaceRead: true, workspaceActions: false, supportedModels: [], reasonUnavailable: 'missing_binary' },
+            { id: 'claude-code', installed: false, usable: false, exactSessionResume: false, contextContinuity: false, structuredProgress: false, cancellation: true, handoffAppend: false, workspaceRead: true, workspaceActions: false, supportedModels: [], reasonUnavailable: 'missing_binary' },
+          ],
+        });
+        return;
+      }
       if (request.method === 'POST' && url.pathname === '/v1/meetings') {
         const body = JSON.parse((await readBody(request)) || '{}');
         if (state.failCreate) {

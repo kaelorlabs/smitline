@@ -237,6 +237,16 @@ class FakeTransport:
         payload = self.get_screen_share(meeting_id)
         return {'observations': list(payload.get('observations') or [])}
 
+    def list_providers(self):
+        return {'providers': [
+            {'id': 'codex', 'installed': True, 'usable': True, 'exactSessionResume': True,
+             'contextContinuity': True, 'supportedModels': []},
+            {'id': 'cursor', 'installed': False, 'usable': False, 'reasonUnavailable': 'missing_binary',
+             'supportedModels': []},
+            {'id': 'claude-code', 'installed': False, 'usable': False, 'reasonUnavailable': 'missing_binary',
+             'supportedModels': []},
+        ]}
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -462,6 +472,8 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(paused['status']['paused'])
         observations = await meeting.list_screen_share_observations()
         self.assertEqual(observations['observations'], [])
+        providers = await colleague.list_providers()
+        self.assertEqual(providers['providers'][0]['id'], 'codex')
         await meeting.cancel()
 
 

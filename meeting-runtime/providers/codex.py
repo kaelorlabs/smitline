@@ -1,5 +1,7 @@
 """Host Codex job adapter for client-delegated meeting work."""
 import inspect
+import os
+import shutil
 
 from context_handoff import ContextHandoff
 from context_tool import search_context
@@ -11,6 +13,7 @@ from permissions import permission_mode
 from workspace_actions import WorkspaceActionPlan, plan_needs_mutation
 from workspace_executor import extract_plan_payload
 from .base import CodingAgentProvider
+from .capabilities import ProviderCapabilities
 
 
 def _permission(permissions, name, fallback='disabled'):
@@ -70,6 +73,25 @@ class CodexProvider(CodingAgentProvider):
         self.default_model = default_model
         self.approval_gate = approval_gate
         self.executor = executor
+
+    def capabilities(self):
+        binary = os.environ.get('CODEX_BIN') or shutil.which('codex')
+        installed = bool(binary)
+        return ProviderCapabilities(
+            id='codex',
+            installed=installed,
+            usable=installed,
+            exactSessionResume=True,
+            contextContinuity=True,
+            structuredProgress=True,
+            cancellation=True,
+            handoffAppend=True,
+            workspaceRead=True,
+            workspaceActions=False,
+            supportedModels=CODEX_MODELS,
+            reasonUnavailable=None if installed else 'missing_binary',
+            detectedBinary='codex' if installed else None,
+        )
 
     async def request_action(self, request, category, summary, scope=None, cancel=None):
         mode = permission_mode(request.permissions, category)

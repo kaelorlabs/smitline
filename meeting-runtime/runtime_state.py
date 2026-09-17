@@ -150,7 +150,7 @@ def state_from_session(session):
         'authorizeModel': agent.model is not None,
         'defaultCodexModel': agent.model or 'gpt-5.6-terra',
         'webSearchEnabled': True,
-        'codexEnabled': True,
+        'codexEnabled': agent.provider in ('codex', 'cursor', 'claude-code'),
         'chartsEnabled': False,
         'meetingInstructions': '',
         'context': context,

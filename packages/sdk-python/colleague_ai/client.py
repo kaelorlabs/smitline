@@ -652,6 +652,9 @@ class LoopbackTransport:
     def list_screen_share_observations(self, meeting_id):
         return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/screen-share/observations')
 
+    def list_providers(self):
+        return self._http('GET', '/v1/providers')
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -989,6 +992,9 @@ class Colleague:
         self._inflight = {}
         self._handles = {}
         self._lock = threading.Lock()
+
+    async def list_providers(self):
+        return self._transport.list_providers()
 
     async def join_meeting(self, request):
         payload = validate_join_request(request)

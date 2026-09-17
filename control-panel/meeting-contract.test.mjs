@@ -59,6 +59,14 @@ test('disables workspace and network when those tools are off', () => {
   }, { workspace: '/tmp/ws' });
   assert.equal(payload.agentSession.provider, 'generic');
   assert.equal(payload.permissions.workspace, 'none');
+  const withCursor = buildMeetingCreatePayload({
+    meetingUrl: 'https://us05web.zoom.us/j/123',
+    model: 'gpt-5.6-terra',
+    tools: { cursor: true },
+  }, { workspace: '/tmp/ws' });
+  assert.equal(withCursor.agentSession.provider, 'cursor');
+  assert.equal(withCursor.agentSession.metadata.continuity, 'context');
+  assert.equal(withCursor.permissions.workspace, 'read-only');
 });
 
 test('maps daemon meeting state onto existing product phases', () => {

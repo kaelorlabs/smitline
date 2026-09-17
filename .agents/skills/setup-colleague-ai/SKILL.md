@@ -7,7 +7,7 @@ description: Set up Colleague AI's local Zoom or Teams participant, continuous G
 
 Use the current private checkout. Read `README.md` and `docs/meeting-adapters.md` before setup. Reuse the vendored Joinly source; do not replace it with an upstream clone.
 
-1. Verify Docker Desktop, host Python, Node, and Codex CLI when the Codex tool is enabled.
+1. Verify Docker Desktop, host Python, Node, and the coding-agent CLI you enabled (Codex, Cursor `cursor-agent`, or Claude Code `claude`). See [docs/coding-providers.md](docs/coding-providers.md).
 2. Install Node dependencies with `npm install` if missing.
 3. Keep API credentials in ignored `.env`. Copy `meeting-runtime/meeting.env.example` to `.env.meeting` only if the latter does not exist. Never overwrite existing secrets or print them.
 4. Run `./start-control-panel.sh`, open http://127.0.0.1:8095, provide a Zoom/Teams invite, choose tools and context, then run checks and start.

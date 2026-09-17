@@ -46,6 +46,7 @@ const USAGE = `Usage:
   colleague screen-share pause --meeting-id <id>
   colleague screen-share resume --meeting-id <id>
   colleague screen-share observations --meeting-id <id>
+  colleague providers
 `;
 
 function parseArgs(argv) {
@@ -385,6 +386,12 @@ async function main(argv = process.argv.slice(2)) {
         return EXIT.ok;
       }
       throw new ValidationError('unknown screen-share command');
+    }
+    if (command === 'providers') {
+      const { client } = colleagueFromArgs(args);
+      const result = await client.listProviders();
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return EXIT.ok;
     }
     throw new ValidationError(`unknown command: ${command}`);
   } catch (error) {

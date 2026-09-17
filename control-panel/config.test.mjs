@@ -13,6 +13,15 @@ test('validates a product meeting configuration', () => {
   assert.deepEqual(validateSettings(valid, { isDirectory: value => value === '/work/product' }), { valid: true, errors: {} });
 });
 
+test('rejects two coding agents at once', () => {
+  const result = validateSettings({
+    ...valid,
+    tools: { codex: true, cursor: true, charts: false },
+  }, { isDirectory: () => true });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.codex);
+});
+
 test('rejects unsafe or contradictory meeting settings', () => {
   const result = validateSettings({ ...valid, meetingUrl: 'http://example.com/x', participantName: '', tools: { codex: false, charts: true } });
   assert.equal(result.valid, false);

@@ -25,6 +25,12 @@ class ProviderRequest:
 
 
 class CodingAgentProvider:
+    provider_id = 'generic'
+
+    def capabilities(self):
+        from .capabilities import unavailable_capabilities
+        return unavailable_capabilities(self.provider_id, 'capability_unavailable')
+
     async def validate_session(self, ref):
         from session_continuity import validate_agent_session
         mode = validate_agent_session(ref)

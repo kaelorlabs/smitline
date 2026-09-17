@@ -246,4 +246,4 @@ Colleague AI builds on Joinly’s browser and audio infrastructure. The reposito
 
 ## Zoom and Teams adapters
 
-See [meeting adapters](docs/meeting-adapters.md) for Microsoft account connection, guest fallback, automatic microphone handling, breaking configuration changes, and current test coverage. GPT-Live stays connected throughout the meeting to preserve original audio context and continues using the API while listening.
+See [meeting adapters](docs/meeting-adapters.md) for Microsoft account connection, guest fallback, automatic microphone handling, breaking configuration changes, and current test coverage. See [coding providers](docs/coding-providers.md) for Codex, Cursor, and Claude Code capability detection and login. GPT-Live stays connected throughout the meeting to preserve original audio context and continues using the API while listening.

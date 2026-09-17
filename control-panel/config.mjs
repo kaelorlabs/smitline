@@ -37,6 +37,8 @@ export function publicSettings(values = {}) {
     tools: {
       webSearch: bool(values.COLLEAGUE_ENABLE_WEB_SEARCH, true),
       codex: bool(values.COLLEAGUE_ENABLE_CODEX, true),
+      cursor: bool(values.COLLEAGUE_ENABLE_CURSOR, false),
+      claudeCode: bool(values.COLLEAGUE_ENABLE_CLAUDE_CODE, false),
       charts: bool(values.COLLEAGUE_ENABLE_CHARTS, false),
     },
   };
@@ -52,8 +54,10 @@ export function validateSettings(input, { isDirectory = value => fs.existsSync(v
   if (!MODELS.includes(input.model)) errors.model = 'Choose a supported Codex model.';
   const tools = input.tools || {};
   if (tools.charts && !tools.codex) errors.charts = 'Charts require the Codex tool.';
+  const codingAgents = [tools.codex, tools.cursor, tools.claudeCode].filter(Boolean).length;
+  if (codingAgents > 1) errors.codex = 'Choose one coding agent.';
   const workspace = String(input.workspace || '').trim();
-  if (tools.codex && workspace && (!path.isAbsolute(workspace) || !isDirectory(workspace))) {
+  if ((tools.codex || tools.cursor || tools.claudeCode) && workspace && (!path.isAbsolute(workspace) || !isDirectory(workspace))) {
     errors.workspace = 'Choose an existing absolute directory.';
   }
   const meetingInstructions = String(input.meetingInstructions || '').trim();
@@ -83,6 +87,8 @@ export function serializeSettings(input, previous = {}) {
     `COLLEAGUE_CODEX_MODEL=${clean(input.model)}`,
     `COLLEAGUE_ENABLE_WEB_SEARCH=${input.tools?.webSearch ? '1' : '0'}`,
     `COLLEAGUE_ENABLE_CODEX=${input.tools?.codex ? '1' : '0'}`,
+    `COLLEAGUE_ENABLE_CURSOR=${input.tools?.cursor ? '1' : '0'}`,
+    `COLLEAGUE_ENABLE_CLAUDE_CODE=${input.tools?.claudeCode ? '1' : '0'}`,
     `COLLEAGUE_ENABLE_CHARTS=${input.tools?.charts ? '1' : '0'}`,
     `COLLEAGUE_WORKSPACE=${clean(input.workspace)}`,
     `COLLEAGUE_MEETING_INSTRUCTIONS=${clean(input.meetingInstructions)}`,

@@ -225,6 +225,14 @@ function createFakeDaemon() {
       const current = this.screenShare.get(id) || { observations: [] };
       return { observations: current.observations || [] };
     },
+    async listProviders() {
+      calls.push({ method: 'GET', path: '/v1/providers' });
+      return {
+        providers: [
+          { id: 'codex', installed: true, usable: true, exactSessionResume: true, contextContinuity: true },
+        ],
+      };
+    },
     async getArtifactContent(id, artifactId) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
       const found = (this.artifacts.get(id) || []).find((item) => item.id === artifactId);
@@ -346,10 +354,12 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(started.status, 202);
     const body = await started.json();
     assert.equal(body.started, true);
-    assert.equal(panel.daemon.calls[0].path, '/v1/meetings');
-    assert.equal(panel.daemon.calls[0].body.agentSession.sessionId, 'local-portal');
-    assert.equal(panel.daemon.calls[0].body.agentSession.workspace, panel.workspace);
-    assert.equal(panel.daemon.calls[0].body.screenShare.enabled, false);
+    const created = panel.daemon.calls.find((item) => item.path === '/v1/meetings');
+    assert.ok(created);
+    assert.equal(created.body.agentSession.sessionId, 'local-portal');
+    assert.equal(created.body.agentSession.workspace, panel.workspace);
+    assert.equal(created.body.screenShare.enabled, false);
+    assert.ok(panel.daemon.calls.some((item) => item.path === '/v1/providers'));
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
     assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), true);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);

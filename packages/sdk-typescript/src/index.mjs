@@ -671,6 +671,9 @@ export function createLoopbackTransport(options = {}) {
     listScreenShareObservations(meetingId) {
       return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/screen-share/observations`);
     },
+    listProviders() {
+      return json('GET', '/v1/providers');
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -1003,6 +1006,10 @@ export class Colleague {
     } finally {
       this._inflight.delete(key);
     }
+  }
+
+  async listProviders() {
+    return this._transport.listProviders();
   }
 
   async _join(payload, key) {

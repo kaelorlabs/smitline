@@ -210,12 +210,14 @@ def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=N
         except (OSError, ValueError):
             usage = {}
     ended = ended_at or usage.get('endedAt') or _now()
-    next_action = (
-        'Continue in the original Codex thread.'
-        if getattr(getattr(session, 'agent_session', None), 'session_id', None) not in (
-            None, 'local-portal')
-        else 'Review the local meeting archive.'
-    )
+    session_id = getattr(getattr(session, 'agent_session', None), 'session_id', None)
+    provider = getattr(getattr(session, 'agent_session', None), 'provider', 'codex')
+    if session_id in (None, 'local-portal'):
+        next_action = 'Review the local meeting archive.'
+    elif provider == 'codex':
+        next_action = 'Continue in the original Codex thread.'
+    else:
+        next_action = 'Continue in the originating coding-agent session.'
     if partial:
         next_action = 'Review the partial meeting archive, then continue the original work.'
     handoff = MeetingHandoff(

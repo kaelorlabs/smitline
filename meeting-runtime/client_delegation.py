@@ -308,7 +308,8 @@ class ClientDelegation:
         request = self._request(event, delegation_id)
         progress = None
         try:
-            if not self.runtime.codex_enabled:
+            if not self.runtime.codex_enabled and (
+                    request.provider or 'codex') not in ('cursor', 'claude-code'):
                 result = {'error': 'workspace lookup is disabled for this meeting'}
                 self.router._emit('delegation.started', delegationId=delegation_id)
                 self.router._emit('delegation.completed', delegationId=delegation_id)
