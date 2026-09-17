@@ -47,12 +47,14 @@ class FakeSupervisor:
         self.context_error = RuntimeError('context failed')
         self.cancel_error = RuntimeError('cancel failed')
 
-    async def start(self, meeting, camera_settings=None):
+    async def start(self, meeting, camera_settings=None, screen_share_settings=None):
         if self.fail_start:
             raise self.start_error
         self.started.append(meeting.id)
         self.cameras = getattr(self, 'cameras', [])
         self.cameras.append(camera_settings)
+        self.screen_shares = getattr(self, 'screen_shares', [])
+        self.screen_shares.append(screen_share_settings)
 
     async def add_context(self, meeting_id, context):
         if self.fail_context:
@@ -288,7 +290,7 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         captured = []
 
         class CaptureSupervisor(FakeSupervisor):
-            async def start(inner, meeting, camera_settings=None):
+            async def start(inner, meeting, camera_settings=None, screen_share_settings=None):
                 captured.append(meeting.id)
                 raise RuntimeError('admission denied')
 
@@ -902,7 +904,7 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         ids = self._track_acquired_ids()
         original = self.supervisor.start
 
-        async def fail_before(_meeting, camera_settings=None):
+        async def fail_before(_meeting, camera_settings=None, screen_share_settings=None):
             raise RuntimeError('start before write')
 
         self.supervisor.start = fail_before
@@ -917,8 +919,9 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.supervisor.started = []
         self.supervisor.cancelled = []
 
-        async def fail_after(meeting, camera_settings=None):
-            await original(meeting, camera_settings=camera_settings)
+        async def fail_after(meeting, camera_settings=None, screen_share_settings=None):
+            await original(meeting, camera_settings=camera_settings,
+                           screen_share_settings=screen_share_settings)
             raise RuntimeError('start after write')
 
         self.supervisor.start = fail_after
@@ -1005,10 +1008,11 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         original_start = self.supervisor.start
 
-        async def blocked_start(meeting, camera_settings=None):
+        async def blocked_start(meeting, camera_settings=None, screen_share_settings=None):
             if meeting.agent_session.session_id == 'thread-origin-1':
                 await gate.wait()
-            await original_start(meeting, camera_settings=camera_settings)
+            await original_start(meeting, camera_settings=camera_settings,
+                                 screen_share_settings=screen_share_settings)
 
         self.supervisor.start = blocked_start
         slow = asyncio.create_task(self.create())
@@ -1563,6 +1567,123 @@ class GitDaemonTests(unittest.IsolatedAsyncioTestCase):
             '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
         payload = await handoff.json()
         self.assertTrue(any(item['taskId'] == 'cmt-2' for item in payload['workPerformed']))
+
+
+@unittest.skipUnless(HAS_AIOHTTP, 'aiohttp is required')
+class ScreenShareDaemonTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.clock = FakeClock()
+        self.supervisor = FakeSupervisor()
+        self.auth = 'test-daemon-token'
+        from visual_analysis import StaticVisualAnalysisProvider
+        from visual_hash import solid_png
+        self.png = solid_png(32, 32, 12, 34, 56)
+        self.app = create_app(
+            root=self.temporary.name,
+            auth_token=self.auth,
+            supervisor=self.supervisor,
+            clock=self.clock,
+            jobs_dir=Path(self.temporary.name) / 'jobs',
+            visual_analyzer=StaticVisualAnalysisProvider(
+                {'summary': 'A shared slide', 'confidence': 0.81}),
+            sse_poll_interval=0.02,
+            sse_heartbeat_interval=0.05,
+            max_body_bytes=4096,
+        )
+        self.daemon = self.app.runtime_daemon
+        self.client = TestClient(TestServer(self.app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    def headers(self, **extra):
+        return {'Authorization': 'Bearer ' + self.auth, **extra}
+
+    async def test_disabled_by_default_and_locked_after_start(self):
+        created = await self.client.post(
+            '/v1/meetings', json=create_payload(), headers=self.headers())
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        status = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/screen-share', headers=self.headers())
+        payload = await status.json()
+        self.assertFalse(payload['status']['enabled'])
+        self.assertEqual(payload['status']['degradedReason'], 'disabled')
+        paused = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/screen-share/pause',
+            json={}, headers=self.headers())
+        self.assertEqual(paused.status, 409)
+        enabled = await self.client.post(
+            '/v1/meetings', json=create_payload(
+                screenShare={'enabled': True, 'captureIntervalMs': 3000},
+                agentSession=agent_session_payload(sessionId='thread-share-1')),
+            headers=self.headers())
+        live = await enabled.json()
+        live_id = live['id']
+        live_status = await (await self.client.get(
+            '/v1/meetings/' + live_id + '/screen-share', headers=self.headers())).json()
+        self.assertTrue(live_status['status']['enabled'])
+        self.assertEqual(live_status['settings']['captureIntervalMs'], 3000)
+        resume = await self.client.post(
+            '/v1/meetings/' + live_id + '/screen-share/pause',
+            json={}, headers=self.headers())
+        self.assertEqual(resume.status, 200)
+        paused_status = await resume.json()
+        self.assertTrue(paused_status['status']['paused'])
+        unauth = await self.client.get(
+            '/v1/meetings/' + live_id + '/screen-share')
+        self.assertEqual(unauth.status, 401)
+
+    async def test_ingest_observation_artifact_and_handoff(self):
+        created = await self.client.post(
+            '/v1/meetings', json=create_payload(
+                screenShare={'enabled': True},
+                agentSession=agent_session_payload(sessionId='thread-share-2')),
+            headers=self.headers())
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        from screen_share_pipeline import ScreenShareBus
+        bus = ScreenShareBus(self.daemon.jobs_dir, meeting_id)
+        bus.write_inbox(self.png, {'id': 'frm-test1', 'capturedAt': TIMESTAMP})
+        results = await self.daemon.ingest_screen_share_inbox(meeting_id)
+        self.assertEqual(results[0]['observation']['summary'], 'A shared slide')
+        listed = await (await self.client.get(
+            '/v1/meetings/' + meeting_id + '/screen-share/observations',
+            headers=self.headers())).json()
+        self.assertEqual(listed['observations'][0]['summary'], 'A shared slide')
+        artifacts = await (await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts', headers=self.headers())).json()
+        shot = next(item for item in artifacts['artifacts'] if item['kind'] == 'screenshot')
+        content = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts/' + shot['id'] + '/content',
+            headers=self.headers())
+        self.assertEqual(content.status, 200)
+        self.assertEqual(content.headers['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(content.headers['Cache-Control'], 'no-store')
+        self.assertIn('image/png', content.headers['Content-Type'])
+        body = await content.read()
+        self.assertEqual(body[:8], b'\x89PNG\r\n\x1a\n')
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts/' + shot['id'] + '/content',
+            headers={'Authorization': 'Bearer other'})
+        self.assertEqual(missing.status, 401)
+        traversal = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts/../secret/content',
+            headers=self.headers())
+        self.assertIn(traversal.status, (404, 422))
+        self.daemon.store_handoff(handoff_payload(
+            meetingId=meeting_id, startedAt=meeting['startedAt']))
+        handoff = await (await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())).json()
+        self.assertTrue(any(item['taskId'].startswith('obs-') for item in handoff['workPerformed']))
+        dumped = json.dumps(handoff)
+        self.assertNotIn('\\x89PNG', dumped)
+        events = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('screen_share.started', events)
+        self.assertIn('screen_share.observation', events)
 
 
 if __name__ == '__main__':

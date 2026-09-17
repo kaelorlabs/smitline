@@ -86,6 +86,7 @@ export const TOOL_DEFINITIONS = [
         continuity: { enum: ['exact', 'context'], description: 'Defaults to exact when sessionId is a real thread id.' },
         waitUntilHandoff: { type: 'boolean', description: 'If true and the request advertises MCP Tasks, wait for the durable handoff as a task. Otherwise poll get_meeting_handoff.' },
         cameraEnabled: { type: 'boolean', description: 'When false, join audio-only. Default true.' },
+        screenShareEnabled: { type: 'boolean', description: 'When true, capture meeting shared-content at a low rate. Default false. Voice cannot enable this.' },
       },
     },
   },
@@ -288,6 +289,46 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'get_meeting_screen_share',
+    description: 'Get screen-share capture status for a meeting. Requires an explicit meetingId. Does not return image bytes or transcripts.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'pause_meeting_screen_share',
+    description: 'Pause shared-content capture. Requires an explicit meetingId. Voice cannot enable capture.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'resume_meeting_screen_share',
+    description: 'Resume shared-content capture if it was enabled at start. Requires an explicit meetingId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'list_meeting_screen_share_observations',
+    description: 'List concise shared-content observations. Requires an explicit meetingId. Does not return transcripts or image bytes.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
 ];
 
 function nowIso() {
@@ -313,6 +354,7 @@ function describeEvent(event) {
     return `workspace ${type.replace('workspace.action.', '')}`;
   }
   if (type === 'artifact.created') return `artifact ${event.artifact?.kind || ''}`.trim();
+  if (String(type).startsWith('screen_share.')) return `screen-share ${type.replace('screen_share.', '')}`;
   return String(type);
 }
 
@@ -557,6 +599,7 @@ export function createMcpSession(options = {}) {
       context: args.context,
       permissions: args.permissions,
       ...(args.cameraEnabled === false ? { camera: { enabled: false } } : {}),
+      ...(args.screenShareEnabled === true ? { screenShare: { enabled: true } } : {}),
     });
     attachHandle(handle);
     const progressToken = message?.params?._meta?.progressToken;
@@ -758,6 +801,42 @@ export function createMcpSession(options = {}) {
         ? await handle.createPush(args)
         : await transport.createPush(args.meetingId, args);
       return toolResult({ meetingId: args.meetingId, push });
+    }
+    if (name === 'get_meeting_screen_share') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.getScreenShare
+        ? await handle.getScreenShare()
+        : await transport.getScreenShare(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'pause_meeting_screen_share') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.pauseScreenShare
+        ? await handle.pauseScreenShare()
+        : await transport.pauseScreenShare(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'resume_meeting_screen_share') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.resumeScreenShare
+        ? await handle.resumeScreenShare()
+        : await transport.resumeScreenShare(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'list_meeting_screen_share_observations') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.listScreenShareObservations
+        ? await handle.listScreenShareObservations()
+        : await transport.listScreenShareObservations(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
     }
     throw new ValidationError(`unknown tool: ${name}`);
   }

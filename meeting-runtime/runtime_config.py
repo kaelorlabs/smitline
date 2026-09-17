@@ -30,6 +30,8 @@ class RuntimeConfig:
     camera_enabled: bool = True
     camera_default_on: bool = True
     camera_logo_data_uri: str = ''
+    screen_share_enabled: bool = False
+    screen_share_settings: dict = None
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -78,8 +80,17 @@ class RuntimeConfig:
             except ValueError:
                 camera_logo = ''
         # Never interpret a host filesystem path inside the meeting container.
+        screen_share = {'enabled': False}
+        raw_share = state.get('screenShare')
+        if isinstance(raw_share, dict):
+            from screen_share import parse_screen_share_settings
+            screen_share = parse_screen_share_settings(raw_share)
+        elif state.get('screenShareEnabled') is True:
+            from screen_share import parse_screen_share_settings
+            screen_share = parse_screen_share_settings({'enabled': True})
         return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
-                   camera_enabled, camera_default_on, camera_logo)
+                   camera_enabled, camera_default_on, camera_logo,
+                   screen_share['enabled'], screen_share)
 
 
 def meeting_state_from_environ(environ=None):

@@ -279,7 +279,49 @@ def validate_join_request(request):
     }
     if 'camera' in request:
         payload['camera'] = _validate_camera(request.get('camera'))
+    if 'screenShare' in request:
+        payload['screenShare'] = _validate_screen_share(request.get('screenShare'))
     return payload
+
+
+def _validate_screen_share(value):
+    if not _is_mapping(value):
+        raise ValidationError('screenShare must be an object')
+    known = {'enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds'}
+    extra = set(value) - known
+    if extra:
+        raise ValidationError(f'screenShare.{next(iter(extra))} is not allowed')
+    out = {}
+    if 'enabled' in value:
+        if not isinstance(value['enabled'], bool):
+            raise ValidationError('screenShare.enabled must be a boolean')
+        out['enabled'] = value['enabled']
+    if 'captureIntervalMs' in value:
+        interval = value['captureIntervalMs']
+        if not isinstance(interval, int) or isinstance(interval, bool) or interval < 2000 or interval > 15000:
+            raise ValidationError('screenShare.captureIntervalMs is out of bounds')
+        out['captureIntervalMs'] = interval
+    if 'minChange' in value:
+        change = value['minChange']
+        if not isinstance(change, (int, float)) or isinstance(change, bool) or change < 0 or change > 1:
+            raise ValidationError('screenShare.minChange is out of bounds')
+        out['minChange'] = float(change)
+    if 'maxFrames' in value:
+        frames = value['maxFrames']
+        if not isinstance(frames, int) or isinstance(frames, bool) or frames < 1 or frames > 50:
+            raise ValidationError('screenShare.maxFrames is out of bounds')
+        out['maxFrames'] = frames
+    if 'maxBytes' in value:
+        size = value['maxBytes']
+        if not isinstance(size, int) or isinstance(size, bool) or size < 50_000 or size > 12_000_000:
+            raise ValidationError('screenShare.maxBytes is out of bounds')
+        out['maxBytes'] = size
+    if 'retentionSeconds' in value:
+        seconds = value['retentionSeconds']
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 30 or seconds > 6 * 3600:
+            raise ValidationError('screenShare.retentionSeconds is out of bounds')
+        out['retentionSeconds'] = seconds
+    return out
 
 
 def _validate_camera(value):
@@ -598,6 +640,18 @@ class LoopbackTransport:
         return self._http(
             'GET', f'/v1/meetings/{quote(meeting_id)}/pushes/{quote(operation_id)}')
 
+    def get_screen_share(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/screen-share')
+
+    def pause_screen_share(self, meeting_id):
+        return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/screen-share/pause', {})
+
+    def resume_screen_share(self, meeting_id):
+        return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/screen-share/resume', {})
+
+    def list_screen_share_observations(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/screen-share/observations')
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -761,6 +815,18 @@ class MeetingHandle:
             raise ValidationError('operationId is required')
         return self._transport.get_push(self.id, operation_id)
 
+    async def get_screen_share(self):
+        return self._transport.get_screen_share(self.id)
+
+    async def pause_screen_share(self):
+        return self._transport.pause_screen_share(self.id)
+
+    async def resume_screen_share(self):
+        return self._transport.resume_screen_share(self.id)
+
+    async def list_screen_share_observations(self):
+        return self._transport.list_screen_share_observations(self.id)
+
     def on(self, name: str, handler: Callable[[Any], None]):
         if not callable(handler):
             raise ValidationError('event handler must be a function')
@@ -781,6 +847,7 @@ class MeetingHandle:
                 'workspace': list(self._listeners.get('workspace', ())),
                 'git': list(self._listeners.get('git', ())),
                 'artifact': list(self._listeners.get('artifact', ())),
+                'screen_share': list(self._listeners.get('screen_share', ())),
             }
         for handler in listeners['event']:
             handler(event)
@@ -807,6 +874,9 @@ class MeetingHandle:
                 handler(event)
         if kind == 'artifact.created':
             for handler in listeners.get('artifact', ()):
+                handler(event)
+        if kind.startswith('screen_share.'):
+            for handler in listeners.get('screen_share', ()):
                 handler(event)
 
     def _run_pump(self):

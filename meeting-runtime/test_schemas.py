@@ -260,6 +260,23 @@ class SchemaValidationTests(unittest.TestCase):
             }),
             event_payload('git.action.cancelled', id='evt-13j', operationId='cmt-1',
                           reason='cancelled'),
+            event_payload('screen_share.started', id='evt-13k', status={
+                'enabled': True, 'available': True, 'active': True, 'paused': False,
+                'capturing': True, 'captureIntervalMs': 4000, 'analyzerAvailable': False,
+                'retention': {'maxFrames': 20, 'maxBytes': 8000000, 'retentionSeconds': 3600},
+            }),
+            event_payload('screen_share.stopped', id='evt-13l', reason='paused'),
+            event_payload('screen_share.frame_selected', id='evt-13m', artifact={
+                'id': 'art-frame-1', 'kind': 'screenshot', 'path': 'mtg-abc123/art-frame-1',
+                'createdAt': TIMESTAMP, 'mediaType': 'image/png',
+                'description': 'Selected shared-content frame',
+            }),
+            event_payload('screen_share.observation', id='evt-13n', observation={
+                'id': 'obs-1', 'meetingId': 'mtg-abc123', 'timestamp': TIMESTAMP,
+                'summary': 'A slide with a heading', 'frameArtifactId': 'art-frame-1',
+                'confidence': 0.8,
+            }),
+            event_payload('screen_share.failed', id='evt-13o', reason='analyzer_unavailable'),
             event_payload('handoff.ready', id='evt-14', handoff=handoff_payload()),
             event_payload('handoff.append_failed', id='evt-15', reason='codex unavailable',
                           handoffId='hnd-mtg-abc123', retryable=True),

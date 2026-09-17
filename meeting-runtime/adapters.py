@@ -12,7 +12,7 @@ async def visible(locator):
 
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
-    capabilities = Capabilities(file_delivery=True, camera=True)
+    capabilities = Capabilities(file_delivery=True, camera=True, shared_content=True)
     async def join(self, url, name, passcode=''):
         await join_zoom(self.page, self.normalize_url(url), passcode, self.stop, self.stage, name)
     async def connect_audio(self):
@@ -89,10 +89,16 @@ class ZoomAdapter(MeetingPlatformAdapter):
     async def leave(self):
         button = self.page.get_by_role('button', name=re.compile(r'^leave', re.I)).first
         if await visible(button): await button.click(timeout=2000)
+    async def get_shared_content_state(self):
+        from shared_content import shared_content_state
+        return await shared_content_state(self.page, 'zoom')
+    async def capture_shared_content(self):
+        from shared_content import capture_shared_content
+        return await capture_shared_content(self.page, 'zoom')
 
 class TeamsAdapter(MeetingPlatformAdapter):
     platform_id = 'teams'
-    capabilities = Capabilities(participant_discovery=True, camera=True)
+    capabilities = Capabilities(participant_discovery=True, camera=True, shared_content=True)
     def __init__(self, *args):
         super().__init__(*args)
         from joinly.providers.browser.platforms.teams import TeamsBrowserPlatformController
@@ -223,6 +229,12 @@ class TeamsAdapter(MeetingPlatformAdapter):
         return None
     async def leave(self): await self.controller.leave(self.page)
     async def get_active_speaker(self): return self.controller.active_speaker
+    async def get_shared_content_state(self):
+        from shared_content import shared_content_state
+        return await shared_content_state(self.page, 'teams')
+    async def capture_shared_content(self):
+        from shared_content import capture_shared_content
+        return await capture_shared_content(self.page, 'teams')
 
 REGISTRY = {'zoom': ZoomAdapter, 'teams': TeamsAdapter}
 

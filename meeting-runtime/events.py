@@ -39,6 +39,11 @@ EVENT_TYPES = (
     'git.action.completed',
     'git.action.failed',
     'git.action.cancelled',
+    'screen_share.started',
+    'screen_share.stopped',
+    'screen_share.frame_selected',
+    'screen_share.observation',
+    'screen_share.failed',
     'handoff.ready',
     'handoff.append_failed',
     'presence.updated',
@@ -70,6 +75,11 @@ PAYLOAD_FIELDS = {
     'git.action.completed': ('result',),
     'git.action.failed': ('result',),
     'git.action.cancelled': ('operationId', 'reason'),
+    'screen_share.started': ('status',),
+    'screen_share.stopped': ('reason',),
+    'screen_share.frame_selected': ('artifact',),
+    'screen_share.observation': ('observation',),
+    'screen_share.failed': ('reason',),
     'handoff.ready': ('handoff',),
     'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
     'presence.updated': ('cameraEnabled', 'cameraState', 'visualState', 'degradedReason'),
@@ -328,6 +338,19 @@ def _payload_from_dict(event_type, payload):
             'reason': require_string(require_field(payload, 'reason', 'event'), 'reason',
                                      max_length=64),
         }
+    if event_type == 'screen_share.started':
+        from screen_share import public_status
+        return {'status': public_status(require_field(payload, 'status', 'event'))}
+    if event_type in ('screen_share.stopped', 'screen_share.failed'):
+        from screen_share import DEGRADED_REASONS
+        return {'reason': require_enum(require_field(payload, 'reason', 'event'), 'reason',
+                                       DEGRADED_REASONS)}
+    if event_type == 'screen_share.frame_selected':
+        return {'artifact': Artifact.from_dict(require_field(payload, 'artifact', 'event'))}
+    if event_type == 'screen_share.observation':
+        from screen_share import VisualObservation
+        return {'observation': VisualObservation.from_dict(
+            require_field(payload, 'observation', 'event'))}
     if event_type == 'handoff.ready':
         return {'handoff': MeetingHandoff.from_dict(require_field(payload, 'handoff', 'event'))}
     if event_type == 'handoff.append_failed':

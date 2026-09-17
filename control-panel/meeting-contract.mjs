@@ -102,6 +102,9 @@ export function buildMeetingCreatePayload(settings, { sources = [], workspace, r
       defaultOn: settings.camera?.defaultOn !== false,
       ...(settings.camera?.avatarDataUri ? { avatarDataUri: settings.camera.avatarDataUri } : {}),
     },
+    screenShare: {
+      enabled: settings.screenShare?.enabled === true,
+    },
   };
 }
 

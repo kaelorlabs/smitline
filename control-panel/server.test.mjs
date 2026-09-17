@@ -198,6 +198,33 @@ function createFakeDaemon() {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/pushes` });
       return { pushes: this.pushes.get(id) || [] };
     },
+    screenShare: new Map(),
+    async getScreenShare(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/screen-share` });
+      return this.screenShare.get(id) || {
+        status: { enabled: false, paused: false, capturing: false, degradedReason: 'disabled' },
+        observations: [],
+      };
+    },
+    async pauseScreenShare(id) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/screen-share/pause`, body: {} });
+      const current = this.screenShare.get(id) || { status: { enabled: true }, observations: [] };
+      current.status = { ...current.status, enabled: true, paused: true, capturing: false };
+      this.screenShare.set(id, current);
+      return current;
+    },
+    async resumeScreenShare(id) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/screen-share/resume`, body: {} });
+      const current = this.screenShare.get(id) || { status: { enabled: true }, observations: [] };
+      current.status = { ...current.status, enabled: true, paused: false };
+      this.screenShare.set(id, current);
+      return current;
+    },
+    async listScreenShareObservations(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/screen-share/observations` });
+      const current = this.screenShare.get(id) || { observations: [] };
+      return { observations: current.observations || [] };
+    },
     async getArtifactContent(id, artifactId) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
       const found = (this.artifacts.get(id) || []).find((item) => item.id === artifactId);
@@ -322,6 +349,7 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(panel.daemon.calls[0].path, '/v1/meetings');
     assert.equal(panel.daemon.calls[0].body.agentSession.sessionId, 'local-portal');
     assert.equal(panel.daemon.calls[0].body.agentSession.workspace, panel.workspace);
+    assert.equal(panel.daemon.calls[0].body.screenShare.enabled, false);
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
     assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), true);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);
@@ -377,6 +405,26 @@ test('status lists pending approvals and decide posts a single decision', async 
     assert.equal(gitStatus.gitOperations[0].id, 'cmt-1');
     const gitHtml = await (await fetch(`${panel.base}/`)).text();
     assert.match(gitHtml, /Git operations/);
+    panel.daemon.screenShare.set(meetingId, {
+      status: { enabled: true, paused: false, capturing: true, available: true, active: true },
+      observations: [{
+        id: 'obs-1', meetingId, summary: 'A red slide with a chart', confidence: 0.8,
+        frameArtifactId: 'art-1', timestamp: '2026-09-16T00:00:00Z',
+      }],
+    });
+    const shareStatus = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(shareStatus.screenShare.status.enabled, true);
+    assert.equal(shareStatus.screenShare.observations[0].summary, 'A red slide with a chart');
+    const shareHtml = await (await fetch(`${panel.base}/`)).text();
+    assert.match(shareHtml, /Understand shared content/);
+    assert.match(shareHtml, /Shared content/);
+    const pausedShare = await fetch(`${panel.base}/api/meetings/${meetingId}/screen-share/pause`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({}),
+    });
+    assert.equal(pausedShare.status, 200);
+    assert.equal((await pausedShare.json()).status.paused, true);
     const downloaded = await fetch(`${panel.base}/api/meetings/${meetingId}/artifacts/art-1/content`, {
       headers: panel.headers(bootstrap.token),
     });

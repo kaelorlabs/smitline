@@ -215,6 +215,18 @@ export function createDaemonClient(options = {}) {
     listPushes(meetingId) {
       return send('GET', `/v1/meetings/${meetingId}/pushes`, undefined, { startIfNeeded: false });
     },
+    getScreenShare(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/screen-share`, undefined, { startIfNeeded: false });
+    },
+    pauseScreenShare(meetingId) {
+      return send('POST', `/v1/meetings/${meetingId}/screen-share/pause`, {}, { startIfNeeded: true });
+    },
+    resumeScreenShare(meetingId) {
+      return send('POST', `/v1/meetings/${meetingId}/screen-share/resume`, {}, { startIfNeeded: true });
+    },
+    listScreenShareObservations(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/screen-share/observations`, undefined, { startIfNeeded: false });
+    },
     async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
       let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
       if (!token) {

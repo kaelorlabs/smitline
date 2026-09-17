@@ -25,6 +25,7 @@ const USAGE = `Usage:
   colleague join --meeting <url> --agent <provider> --workspace <path>
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
+               [--screen-share]
   colleague status [--meeting-id <id>]
   colleague cancel [--meeting-id <id>]
   colleague context add --file <path> | --text <json> [--meeting-id <id>]
@@ -41,6 +42,10 @@ const USAGE = `Usage:
   colleague pushes list --meeting-id <id>
   colleague pushes get --meeting-id <id> --operation-id <id>
   colleague pushes create --meeting-id <id> --commit-sha <sha> --remote <name> --branch <name>
+  colleague screen-share status --meeting-id <id>
+  colleague screen-share pause --meeting-id <id>
+  colleague screen-share resume --meeting-id <id>
+  colleague screen-share observations --meeting-id <id>
 `;
 
 function parseArgs(argv) {
@@ -150,6 +155,7 @@ function describeEvent(event) {
     return `workspace ${type.replace('workspace.action.', '')}`;
   }
   if (type === 'artifact.created') return `artifact ${event.artifact?.kind || event.artifact?.id || ''}`.trim();
+  if (type.startsWith('screen_share.')) return `screen-share ${type.replace('screen_share.', '')}`;
   return type;
 }
 
@@ -185,6 +191,7 @@ async function joinCommand(args) {
     },
     context,
     ...(args['no-camera'] ? { camera: { enabled: false } } : {}),
+    ...(args['screen-share'] ? { screenShare: { enabled: true } } : {}),
   });
   await saveMeetingId(root, meeting.id);
   progress(`joined ${meeting.id}`);
@@ -351,6 +358,33 @@ async function main(argv = process.argv.slice(2)) {
         return EXIT.ok;
       }
       throw new ValidationError(`unknown ${command} command`);
+    }
+    if (command === 'screen-share') {
+      if (!args['meeting-id']) throw new ValidationError('screen-share commands require --meeting-id');
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      if (args._[1] === 'status') {
+        const result = await transport.getScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'pause') {
+        const result = await transport.pauseScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'resume') {
+        const result = await transport.resumeScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'observations') {
+        const result = await transport.listScreenShareObservations(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown screen-share command');
     }
     throw new ValidationError(`unknown command: ${command}`);
   } catch (error) {

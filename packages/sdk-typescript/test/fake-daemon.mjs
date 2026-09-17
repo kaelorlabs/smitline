@@ -42,6 +42,7 @@ export async function startFakeDaemon(options = {}) {
     artifacts: new Map(),
     commits: new Map(),
     pushes: new Map(),
+    screenShare: new Map(),
     sseClients: [],
     requireAuth: options.requireAuth !== false,
     readyDelayMs: options.readyDelayMs || 0,
@@ -102,6 +103,7 @@ export async function startFakeDaemon(options = {}) {
           agentSession: body.agentSession,
           context: body.context,
           permissions: body.permissions,
+          screenShare: body.screenShare,
           state: 'joining',
           startedAt: '2026-09-16T00:00:00Z',
         };
@@ -437,6 +439,31 @@ export async function startFakeDaemon(options = {}) {
           }
           json(response, 200, found);
           return;
+        }
+        const shareMatch = rest.match(/^screen-share(?:\/(pause|resume|observations))?$/);
+        if (shareMatch) {
+          if (!state.screenShare.has(meetingId)) {
+            state.screenShare.set(meetingId, {
+              status: { enabled: Boolean(meeting.screenShare?.enabled), paused: false, available: false, active: false, capturing: false },
+              observations: [],
+            });
+          }
+          const share = state.screenShare.get(meetingId);
+          const action = shareMatch[1];
+          if (request.method === 'GET' && !action) {
+            json(response, 200, share);
+            return;
+          }
+          if (request.method === 'GET' && action === 'observations') {
+            json(response, 200, { observations: share.observations || [] });
+            return;
+          }
+          if (request.method === 'POST' && (action === 'pause' || action === 'resume')) {
+            await readBody(request);
+            share.status = { ...share.status, paused: action === 'pause', enabled: true };
+            json(response, 200, share);
+            return;
+          }
         }
         const artifactMatch = rest.match(/^artifacts(?:\/([^/]+))?(?:\/(content))?$/);
         if (artifactMatch && request.method === 'GET') {

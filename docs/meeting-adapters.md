@@ -32,7 +32,7 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 The bridge owns the GPT-Live connection, virtual devices, tool dispatch, transcripts, and selective participation prompt. Platform mute controls establish the audio connection and respect an external mute. A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
-Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Neither adapter implements screen sharing in this release.
+Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Adapters do not share this computer's desktop. Optional incoming shared-content capture is disabled by default and only screenshots the meeting share surface.
 
 ## Breaking migration
 

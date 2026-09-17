@@ -32,7 +32,7 @@ from git_broker import GitBroker
 from workspace_isolation import IsolationError
 
 
-CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions', 'camera')
+CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions', 'camera', 'screenShare')
 CREATE_APPROVAL_FIELDS = (
     'category', 'permission', 'summary', 'scope', 'delegationId', 'ttlSeconds', 'action',
 )
@@ -71,7 +71,7 @@ class DaemonError(Exception):
 
 
 class UnconfiguredMeetingSupervisor:
-    async def start(self, meeting, camera_settings=None):
+    async def start(self, meeting, camera_settings=None, screen_share_settings=None):
         raise RuntimeError('meeting supervisor is not configured')
 
     async def add_context(self, meeting_id, context):
@@ -163,6 +163,8 @@ class RuntimeDaemon:
         lease_store=None,
         meeting_store=None,
         git_broker=None,
+        jobs_dir=None,
+        visual_analyzer=None,
         sse_poll_interval=DEFAULT_SSE_POLL,
         sse_heartbeat_interval=DEFAULT_SSE_HEARTBEAT,
     ):
@@ -185,6 +187,13 @@ class RuntimeDaemon:
         self.git_broker = git_broker or GitBroker(artifacts=self.artifacts)
         self._git_runners = {}
         self._git_cancels = {}
+        self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else (self.root / 'jobs')
+        from screen_share_pipeline import ScreenShareHost
+        from visual_analysis import UnavailableVisualAnalysisProvider
+        self.screen_share_host = ScreenShareHost(
+            artifacts=self.artifacts,
+            analyzer=visual_analyzer or UnavailableVisualAnalysisProvider(),
+            now=lambda: _iso(self._now()))
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
@@ -361,7 +370,9 @@ class RuntimeDaemon:
         started_at = _iso(self._now())
         try:
             from visual_presence import parse_camera_settings
+            from screen_share import parse_screen_share_settings
             camera = parse_camera_settings(payload.get('camera'))
+            screen_share = parse_screen_share_settings(payload.get('screenShare'))
             requested = payload.get('permissions')
             if requested is None:
                 requested = DEFAULT_PERMISSIONS.to_dict()
@@ -391,6 +402,7 @@ class RuntimeDaemon:
             'cameraDefaultOn': camera['defaultOn'],
             'cameraAvatarDataUri': camera['avatarDataUri'],
         }
+        screen_share_settings = dict(screen_share)
         agent = session.agent_session
         try:
             lease = self.leases.acquire(agent, meeting_id)
@@ -411,9 +423,12 @@ class RuntimeDaemon:
                                  cameraEnabled=session.camera_enabled,
                                  cameraState=session.camera_state,
                                  visualState=session.visual_state)
+                    self._init_screen_share_locked(meeting_id, screen_share_settings)
                 phase = 'start'
                 started = True
-                await self.supervisor.start(session, camera_settings=camera_settings)
+                await self.supervisor.start(
+                    session, camera_settings=camera_settings,
+                    screen_share_settings=screen_share_settings)
                 phase = 'enter_meeting'
                 with self._serialize_writes(meeting_id):
                     self.leases.enter_meeting(agent.provider, agent.session_id, lease.token)
@@ -646,6 +661,7 @@ class RuntimeDaemon:
         if changed:
             self._sync_approval_presence_locked(meeting_id)
         self._cancel_git_ops_locked(meeting_id, label)
+        self._pause_screen_share_locked(meeting_id, reason='cancelled' if 'cancel' in label else 'ended')
 
     def _enrich_handoff(self, handoff, session):
         payload = handoff.to_dict()
@@ -676,6 +692,20 @@ class RuntimeDaemon:
                 if artifact_id not in existing_arts:
                     artifacts.append({'artifactId': artifact_id, 'path': artifact_id})
                     existing_arts.add(artifact_id)
+        screen = self.meetings.get_screen_share(session.id) or {}
+        for observation in screen.get('observations') or []:
+            obs_id = observation.get('id')
+            if obs_id and obs_id not in existing_tasks:
+                work.append({
+                    'taskId': obs_id,
+                    'summary': observation.get('summary') or 'Shared-content observation',
+                    'status': 'completed',
+                })
+                existing_tasks.add(obs_id)
+            frame_id = observation.get('frameArtifactId')
+            if frame_id and frame_id not in existing_arts:
+                artifacts.append({'artifactId': frame_id, 'path': frame_id})
+                existing_arts.add(frame_id)
         payload['workPerformed'] = work
         payload['artifacts'] = artifacts
         return MeetingHandoff.from_dict(payload)
@@ -1149,6 +1179,179 @@ class RuntimeDaemon:
             self._ensure_git_runner(meeting_id, operation_id)
         return self._public_git_op(found)
 
+    def _init_screen_share_locked(self, meeting_id, settings):
+        from screen_share import public_status
+        analyzer = self.screen_share_host.analyzer_available()
+        status = public_status({
+            'enabled': settings['enabled'],
+            'available': False,
+            'active': False,
+            'paused': False,
+            'capturing': False,
+            'degradedReason': None if settings['enabled'] else 'disabled',
+            'captureIntervalMs': settings['captureIntervalMs'],
+            'analyzerAvailable': analyzer,
+            'retention': {
+                'maxFrames': settings['maxFrames'],
+                'maxBytes': settings['maxBytes'],
+                'retentionSeconds': settings['retentionSeconds'],
+            },
+        })
+        self.meetings.update_screen_share(meeting_id, lambda current: {
+            'settings': settings,
+            'status': status,
+            'observations': [],
+            'paused': False,
+        })
+        if settings['enabled']:
+            self._append(meeting_id, 'screen_share.started', status=status)
+
+    def _screen_share_record(self, meeting_id):
+        self._record(meeting_id)
+        stored = self.meetings.get_screen_share(meeting_id)
+        if stored is None:
+            raise DaemonError(404, 'not_found', 'meeting not found')
+        return stored
+
+    def get_screen_share(self, meeting_id):
+        stored = self._screen_share_record(meeting_id)
+        from screen_share import public_status
+        return {
+            'status': public_status(dict(stored.get('status') or {}, paused=stored.get('paused'))),
+            'settings': {
+                'enabled': stored['settings']['enabled'],
+                'captureIntervalMs': stored['settings']['captureIntervalMs'],
+                'retention': {
+                    'maxFrames': stored['settings']['maxFrames'],
+                    'maxBytes': stored['settings']['maxBytes'],
+                    'retentionSeconds': stored['settings']['retentionSeconds'],
+                },
+            },
+            'observations': list(stored.get('observations') or []),
+        }
+
+    def list_screen_share_observations(self, meeting_id):
+        stored = self._screen_share_record(meeting_id)
+        return {'observations': list(stored.get('observations') or [])}
+
+    def set_screen_share_paused(self, meeting_id, paused):
+        stored = self._screen_share_record(meeting_id)
+        if not stored['settings']['enabled']:
+            raise DaemonError(409, 'conflict', 'screen-share understanding is disabled')
+        record = self._record(meeting_id)
+        if record.session.state == 'ended' and not paused:
+            raise DaemonError(409, 'conflict', 'cannot resume screen share after the meeting has ended')
+        from screen_share_pipeline import ScreenShareBus
+        from screen_share import public_status
+        bus = ScreenShareBus(self.jobs_dir, meeting_id)
+        bus.write_control(paused=bool(paused))
+        reason = 'paused' if paused else None
+
+        def mutate(current):
+            status = dict(current.get('status') or {})
+            status['paused'] = bool(paused)
+            status['active'] = False if paused else status.get('available')
+            status['capturing'] = False if paused else status.get('capturing')
+            status['degradedReason'] = reason
+            current['paused'] = bool(paused)
+            current['status'] = public_status(status)
+            return current
+
+        updated = self.meetings.update_screen_share(meeting_id, mutate)
+        if paused:
+            self._append(meeting_id, 'screen_share.stopped', reason='paused')
+        elif stored['settings']['enabled']:
+            self._append(meeting_id, 'screen_share.started', status=updated['status'])
+        return self.get_screen_share(meeting_id)
+
+    def _pause_screen_share_locked(self, meeting_id, reason='ended'):
+        stored = self.meetings.get_screen_share(meeting_id)
+        if stored is None or not stored.get('settings', {}).get('enabled'):
+            return
+        if stored.get('paused') and (stored.get('status') or {}).get('degradedReason') in (
+                'ended', 'cancelled', 'share_stopped'):
+            return
+        from screen_share import public_status
+        mapped = reason if reason in ('ended', 'cancelled', 'share_stopped', 'paused') else 'ended'
+
+        def mutate(current):
+            status = dict(current.get('status') or {})
+            status.update({'paused': True, 'active': False, 'capturing': False,
+                           'degradedReason': mapped})
+            current['paused'] = True
+            current['status'] = public_status(status)
+            return current
+
+        try:
+            self.meetings.update_screen_share(meeting_id, mutate)
+        except FileNotFoundError:
+            return
+        self._append(meeting_id, 'screen_share.stopped', reason=mapped)
+
+    def apply_screen_share_health(self, meeting_id, health=None):
+        payload = health or {}
+        stored = self.meetings.get_screen_share(meeting_id)
+        if stored is None or not stored.get('settings', {}).get('enabled'):
+            return None
+        from screen_share import public_status
+        merged = dict(stored.get('status') or {})
+        for key in ('available', 'active', 'capturing', 'paused', 'lastObservationAt',
+                    'degradedReason', 'analyzerAvailable'):
+            if key in payload:
+                merged[key] = payload[key]
+        if stored.get('paused'):
+            merged['paused'] = True
+            merged['active'] = False
+            merged['capturing'] = False
+            merged['degradedReason'] = merged.get('degradedReason') or 'paused'
+
+        def mutate(current):
+            current['status'] = public_status(merged)
+            return current
+
+        try:
+            self.meetings.update_screen_share(meeting_id, mutate)
+        except FileNotFoundError:
+            return None
+        return merged
+
+    async def ingest_screen_share_inbox(self, meeting_id):
+        stored = self.meetings.get_screen_share(meeting_id)
+        if stored is None or not stored['settings']['enabled'] or stored.get('paused'):
+            return []
+        from screen_share_pipeline import ScreenShareBus
+        bus = ScreenShareBus(self.jobs_dir, meeting_id)
+        results = []
+        for path, meta in bus.list_inbox():
+            png = path.read_bytes()
+            result = await self.screen_share_host.ingest_png(
+                meeting_id, png, settings=stored['settings'],
+                emit=lambda event_type, **payload: self._append(meeting_id, event_type, **payload),
+                store_observation=lambda observation: self._store_observation(meeting_id, observation, bus),
+                captured_at=meta.get('capturedAt'),
+            )
+            bus.drop_inbox(path)
+            results.append(result)
+        return results
+
+    def _store_observation(self, meeting_id, observation, bus=None):
+        from screen_share import VisualObservation, public_status
+
+        def mutate(current):
+            items = list(current.get('observations') or [])
+            items.append(observation)
+            settings = current['settings']
+            max_frames = settings['maxFrames']
+            current['observations'] = items[-max_frames:]
+            status = dict(current.get('status') or {})
+            status['lastObservationAt'] = observation.get('timestamp')
+            current['status'] = public_status(status)
+            return current
+
+        self.meetings.update_screen_share(meeting_id, mutate)
+        if bus is not None:
+            bus.write_outbox(VisualObservation.from_dict(observation))
+
     def list_artifacts(self, meeting_id):
         self._record(meeting_id)
         return {'artifacts': self.artifacts.list(meeting_id)}
@@ -1420,6 +1623,8 @@ def create_app(
     event_store=None,
     lease_store=None,
     meeting_store=None,
+    jobs_dir=None,
+    visual_analyzer=None,
 ):
     require_loopback_bind(bind_host)
     token = secrets.token_urlsafe(32) if auth_token is None else auth_token
@@ -1434,6 +1639,8 @@ def create_app(
         event_store=event_store,
         lease_store=lease_store,
         meeting_store=meeting_store,
+        jobs_dir=jobs_dir,
+        visual_analyzer=visual_analyzer,
         sse_poll_interval=sse_poll_interval,
         sse_heartbeat_interval=sse_heartbeat_interval,
     )
@@ -1535,8 +1742,15 @@ def create_app(
         meta, data = daemon.read_artifact_body(
             request.match_info['meetingId'], request.match_info['artifactId'])
         media = meta.get('mediaType')
-        if media not in ('application/json', 'text/plain', 'application/octet-stream'):
+        kind = meta.get('kind')
+        allowed = ('application/json', 'text/plain', 'application/octet-stream',
+                   'image/png', 'image/jpeg')
+        if kind == 'screenshot' and media in ('image/png', 'image/jpeg'):
+            pass
+        elif media not in allowed:
             media = 'application/octet-stream'
+        if kind == 'screenshot' and media not in ('image/png', 'image/jpeg'):
+            raise DaemonError(415, 'unsupported_media_type', 'image artifact type is invalid')
         filename = meta.get('id') or 'artifact'
         return web.Response(
             body=data,
@@ -1589,6 +1803,20 @@ def create_app(
         result = await daemon.get_push(
             request.match_info['meetingId'], request.match_info['operationId'])
         return _public_json(result)
+
+    async def get_screen_share(request):
+        return _public_json(daemon.get_screen_share(request.match_info['meetingId']))
+
+    async def list_screen_share_observations(request):
+        return _public_json(daemon.list_screen_share_observations(request.match_info['meetingId']))
+
+    async def pause_screen_share(request):
+        await read_json(request, allow_empty=True)
+        return _public_json(daemon.set_screen_share_paused(request.match_info['meetingId'], True))
+
+    async def resume_screen_share(request):
+        await read_json(request, allow_empty=True)
+        return _public_json(daemon.set_screen_share_paused(request.match_info['meetingId'], False))
 
     async def get_events(request):
         meeting_id = request.match_info['meetingId']
@@ -1684,6 +1912,10 @@ def create_app(
     app.router.add_get('/v1/meetings/{meetingId}/pushes/{operationId}', get_push)
     app.router.add_post('/v1/meetings/{meetingId}/pushes', create_push)
     app.router.add_get('/v1/meetings/{meetingId}/pushes', list_pushes)
+    app.router.add_get('/v1/meetings/{meetingId}/screen-share/observations', list_screen_share_observations)
+    app.router.add_post('/v1/meetings/{meetingId}/screen-share/pause', pause_screen_share)
+    app.router.add_post('/v1/meetings/{meetingId}/screen-share/resume', resume_screen_share)
+    app.router.add_get('/v1/meetings/{meetingId}/screen-share', get_screen_share)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}/content', get_artifact_content)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}', get_artifact)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts', list_artifacts)

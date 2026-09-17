@@ -46,10 +46,12 @@ test('parseArgs and privacy-safe event rendering', () => {
   assert.equal(args.meeting, ZOOM);
   assert.equal(args.wait, true);
   assert.equal(parseArgs(['join', '--meeting', ZOOM, '--no-camera'])['no-camera'], true);
+  assert.equal(parseArgs(['join', '--meeting', ZOOM, '--screen-share'])['screen-share'], true);
   assert.equal(describeEvent({ type: 'transcript.final', text: 'secret meeting speech' }), 'transcript transcript.final');
   assert.equal(describeEvent({ type: 'delegation.started', taskId: 'task-9' }), 'delegation started task-9');
   assert.ok(!describeEvent({ type: 'transcript.final', text: 'secret meeting speech' }).includes('secret'));
   assert.equal(describeEvent({ type: 'presence.updated', visualState: 'working' }), 'presence working');
+  assert.equal(describeEvent({ type: 'screen_share.observation', summary: 'secret slide' }), 'screen-share observation');
 });
 
 test('join --wait prints final JSON, never transcript text, and uses exit 0', async (t) => {
@@ -274,4 +276,11 @@ test('approvals commands require explicit meeting and approval ids', async (t) =
   ], { cwd: root });
   assert.equal(createdPush.code, 0, createdPush.stderr);
   assert.equal(JSON.parse(createdPush.stdout).kind, 'push');
+  const missingShare = await runColleague(['screen-share', 'status', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(missingShare.code, 2);
+  const share = await runColleague([
+    'screen-share', 'status', '--meeting-id', 'mtg-1', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(share.code, 0, share.stderr);
+  assert.equal(JSON.parse(share.stdout).status.paused, false);
 });

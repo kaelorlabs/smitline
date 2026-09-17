@@ -273,7 +273,7 @@ class ProductionMeetingSupervisor:
             'COLLEAGUE_HOST_RUNTIME_STATE': str(state_path),
         }
 
-    def _write_session_files(self, session, camera_settings=None):
+    def _write_session_files(self, session, camera_settings=None, screen_share_settings=None):
         payload = state_from_session(session)
         if camera_settings:
             if 'cameraEnabled' in camera_settings:
@@ -284,6 +284,9 @@ class ProductionMeetingSupervisor:
             if avatar:
                 payload['cameraAvatarDataUri'] = avatar
             payload.pop('cameraAvatarPath', None)
+        if screen_share_settings:
+            payload['screenShareEnabled'] = bool(screen_share_settings.get('enabled'))
+            payload['screenShare'] = screen_share_settings
         write_private_json(meeting_state_path(self.runtime_root, session.id), payload)
         index = context_index_from_handoff(session.context)
         write_private_json(context_index_path(self.runtime_root, session.id), index)
@@ -291,7 +294,7 @@ class ProductionMeetingSupervisor:
         write_private_json(active_meeting_path(self.project_root), {'meetingId': session.id})
         return payload
 
-    async def start(self, session, camera_settings=None):
+    async def start(self, session, camera_settings=None, screen_share_settings=None):
         async with self._lock:
             status = await self.launcher.inspect()
             if status.get('unknown'):
@@ -303,7 +306,9 @@ class ProductionMeetingSupervisor:
                 return
             if status.get('running') or (self._active_id not in (None, session.id)):
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
-            self._write_session_files(session, camera_settings=camera_settings)
+            self._write_session_files(
+                session, camera_settings=camera_settings,
+                screen_share_settings=screen_share_settings)
             try:
                 self._preflight_codex(session)
                 await self.launcher.up(self._container_env(session))
@@ -477,6 +482,18 @@ class ProductionMeetingSupervisor:
                 if not health:
                     continue
                 terminal = await self._apply_health(session, health)
+                if self.daemon is not None and hasattr(self.daemon, 'apply_screen_share_health'):
+                    share = health.get('screenShare') if isinstance(health, dict) else None
+                    if isinstance(share, dict):
+                        try:
+                            self.daemon.apply_screen_share_health(session.id, share)
+                        except Exception:
+                            pass
+                    if hasattr(self.daemon, 'ingest_screen_share_inbox'):
+                        try:
+                            await self.daemon.ingest_screen_share_inbox(session.id)
+                        except Exception:
+                            pass
                 self._heartbeat(session)
                 if terminal:
                     return

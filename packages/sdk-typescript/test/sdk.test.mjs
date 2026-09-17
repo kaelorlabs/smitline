@@ -401,7 +401,13 @@ test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, asy
       branch: 'colleague-work',
     });
     assert.equal(push.kind, 'push');
-    const dumped = JSON.stringify({ created, listed, decided, token: daemon.token, commit, push });
+    const share = await meeting.getScreenShare();
+    assert.equal(share.status.paused, false);
+    const paused = await meeting.pauseScreenShare();
+    assert.equal(paused.status.paused, true);
+    const observations = await meeting.listScreenShareObservations();
+    assert.deepEqual(observations.observations, []);
+    const dumped = JSON.stringify({ created, listed, decided, token: daemon.token, commit, push, share });
     assert.equal(dumped.includes('secret meeting speech'), false);
     await meeting.cancel();
   });

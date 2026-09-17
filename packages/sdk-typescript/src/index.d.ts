@@ -109,9 +109,17 @@ export interface JoinMeetingRequest {
     defaultOn?: boolean;
     avatarDataUri?: string;
   };
+  screenShare?: {
+    enabled?: boolean;
+    captureIntervalMs?: number;
+    minChange?: number;
+    maxFrames?: number;
+    maxBytes?: number;
+    retentionSeconds?: number;
+  };
 }
 
-export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'workspace' | 'git' | 'artifact' | 'event';
+export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'workspace' | 'git' | 'artifact' | 'screen_share' | 'event';
 
 export interface DaemonTransport {
   createMeeting(payload: Record<string, unknown>): Promise<MeetingSession>;
@@ -132,6 +140,10 @@ export interface DaemonTransport {
   createPush(meetingId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   listPushes(meetingId: string): Promise<{ pushes: Array<Record<string, unknown>> }>;
   getPush(meetingId: string, operationId: string): Promise<Record<string, unknown>>;
+  getScreenShare(meetingId: string): Promise<Record<string, unknown>>;
+  pauseScreenShare(meetingId: string): Promise<Record<string, unknown>>;
+  resumeScreenShare(meetingId: string): Promise<Record<string, unknown>>;
+  listScreenShareObservations(meetingId: string): Promise<{ observations: Array<Record<string, unknown>> }>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -166,6 +178,10 @@ export interface MeetingHandle {
   createPush(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   listPushes(): Promise<{ pushes: Array<Record<string, unknown>> }>;
   getPush(operationId: string): Promise<Record<string, unknown>>;
+  getScreenShare(): Promise<Record<string, unknown>>;
+  pauseScreenShare(): Promise<Record<string, unknown>>;
+  resumeScreenShare(): Promise<Record<string, unknown>>;
+  listScreenShareObservations(): Promise<{ observations: Array<Record<string, unknown>> }>;
   on(event: MeetingEventName, handler: (payload: unknown) => void): () => void;
   events(): AsyncIterable<ColleagueEvent>;
 }

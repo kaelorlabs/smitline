@@ -13,6 +13,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.meeting_instructions, '')
         self.assertTrue(config.camera_enabled)
         self.assertTrue(config.camera_default_on)
+        self.assertFalse(config.screen_share_enabled)
 
     def test_accepts_operator_meeting_guidance(self):
         config = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on launch readiness.'})
@@ -56,6 +57,10 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertFalse(config.camera_default_on)
             self.assertTrue(config.camera_logo_data_uri.startswith('data:image/png'))
             self.assertNotIn('/etc/passwd', config.camera_logo_data_uri)
+
+    def test_screen_share_cannot_be_enabled_from_env(self):
+        config = RuntimeConfig.from_environ({'COLLEAGUE_SCREEN_SHARE': '1'})
+        self.assertFalse(config.screen_share_enabled)
 
 
 if __name__ == '__main__':

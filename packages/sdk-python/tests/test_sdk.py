@@ -53,6 +53,7 @@ class FakeTransport:
         self.ready_delay = 0.02
         self.commits = {}
         self.pushes = {}
+        self.screen_share = {}
 
     def create_meeting(self, payload):
         if self.fail_create:
@@ -216,6 +217,26 @@ class FakeTransport:
                 return item
         raise ColleagueError('push not found', code='not_found', status=404)
 
+    def get_screen_share(self, meeting_id):
+        return self.screen_share.setdefault(meeting_id, {
+            'status': {'enabled': False, 'paused': False, 'degradedReason': 'disabled'},
+            'observations': [],
+        })
+
+    def pause_screen_share(self, meeting_id):
+        payload = self.get_screen_share(meeting_id)
+        payload['status'] = dict(payload.get('status') or {}, paused=True, enabled=True)
+        return payload
+
+    def resume_screen_share(self, meeting_id):
+        payload = self.get_screen_share(meeting_id)
+        payload['status'] = dict(payload.get('status') or {}, paused=False, enabled=True)
+        return payload
+
+    def list_screen_share_observations(self, meeting_id):
+        payload = self.get_screen_share(meeting_id)
+        return {'observations': list(payload.get('observations') or [])}
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -251,6 +272,18 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             'camera': {'enabled': False},
         })
         self.assertEqual(disabled['camera']['enabled'], False)
+        enabled_share = validate_join_request({
+            'url': ZOOM,
+            'agentSession': agent_session(),
+            'screenShare': {'enabled': True, 'captureIntervalMs': 5000},
+        })
+        self.assertTrue(enabled_share['screenShare']['enabled'])
+        with self.assertRaises(ValidationError):
+            validate_join_request({
+                'url': ZOOM,
+                'agentSession': agent_session(),
+                'screenShare': {'enabled': True, 'argv': ['ffmpeg']},
+            })
         with self.assertRaises(ValidationError):
             validate_join_request({
                 'url': ZOOM,
@@ -423,6 +456,12 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             'branch': 'colleague-work',
         })
         self.assertEqual(push['kind'], 'push')
+        share = await meeting.get_screen_share()
+        self.assertFalse(share['status']['enabled'])
+        paused = await meeting.pause_screen_share()
+        self.assertTrue(paused['status']['paused'])
+        observations = await meeting.list_screen_share_observations()
+        self.assertEqual(observations['observations'], [])
         await meeting.cancel()
 
 

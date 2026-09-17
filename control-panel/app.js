@@ -34,6 +34,7 @@ function meetingBusy(status = {}) {
 let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
+let previewUrls = [];
 
 let selectedAvatar = null;
 
@@ -55,6 +56,9 @@ function payload() {
       enabled: data.has('cameraEnabled'),
       defaultOn: data.has('cameraDefaultOn'),
       ...(selectedAvatar ? { avatarDataUri: selectedAvatar } : {}),
+    },
+    screenShare: {
+      enabled: data.has('screenShareEnabled'),
     },
   };
 }
@@ -247,6 +251,123 @@ function renderGit(operations) {
   }));
 }
 
+function revokePreviews() {
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
+}
+
+function shareStateLabel(share, health) {
+  const status = (share && share.status) || health.screenShare || {};
+  if (!status.enabled) return 'off';
+  if (status.paused) return 'paused';
+  if (status.capturing) return 'capturing';
+  if (status.active) return 'shared content';
+  if (status.available) return 'available';
+  const reason = status.degradedReason;
+  return reason ? String(reason).replaceAll('_', ' ') : 'idle';
+}
+
+function renderScreenShare(share, meetingId) {
+  const panel = $('#screen-share-panel');
+  const list = $('#screen-share-list');
+  const actions = $('#screen-share-actions');
+  if (!panel || !list || !actions) return;
+  revokePreviews();
+  const status = share?.status || {};
+  const observations = share?.observations || [];
+  if (!meetingId || (!status.enabled && !observations.length)) {
+    panel.hidden = true;
+    list.replaceChildren();
+    actions.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  actions.replaceChildren();
+  if (status.enabled) {
+    for (const [action, label] of [['pause', 'Pause capture'], ['resume', 'Resume capture']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'resume' ? 'button primary compact' : 'button ghost compact';
+      button.textContent = label;
+      button.disabled = action === 'pause' ? Boolean(status.paused) : !status.paused;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await request(`/api/meetings/${encodeURIComponent(meetingId)}/screen-share/${action}`, {
+            method: 'POST',
+            body: '{}',
+          });
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+  }
+  if (!observations.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = status.paused ? 'Capture is paused.' : 'No shared-content observations yet.';
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...observations.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.summary || 'Shared content';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const confidence = document.createElement('span');
+    confidence.textContent = item.confidence != null ? `confidence ${item.confidence}` : '';
+    const when = document.createElement('span');
+    when.textContent = item.timestamp || '';
+    meta.append(confidence, when);
+    card.append(title, meta);
+    const artifactId = item.frameArtifactId;
+    if (artifactId) {
+      const preview = document.createElement('img');
+      preview.className = 'share-preview';
+      preview.alt = 'Shared content frame';
+      card.append(preview);
+      fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
+        headers: { 'X-Colleague-Token': csrf },
+      }).then(async (response) => {
+        if (!response.ok) return;
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        previewUrls.push(url);
+        preview.src = url;
+      }).catch(() => {});
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'button ghost compact';
+      link.textContent = 'Download frame';
+      link.addEventListener('click', async () => {
+        try {
+          const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
+            headers: { 'X-Colleague-Token': csrf },
+          });
+          if (!response.ok) throw new Error('Download failed.');
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${artifactId}.png`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          announce(error.message, true);
+        }
+      });
+      card.append(link);
+    }
+    return card;
+  }));
+}
+
 function renderStatus(status) {
   latestStatus = status;
   const health = status.health || {};
@@ -268,6 +389,10 @@ function renderStatus(status) {
     ? `${String(cameraState).replaceAll('_', ' ')} (${String(health.degradedReason).replaceAll('_', ' ')})`
     : String(cameraState).replaceAll('_', ' ');
   $('#visual-state').textContent = (health.visualState || '—').replaceAll('_', ' ');
+  const shareState = $('#share-state');
+  if (shareState) shareState.textContent = shareStateLabel(status.screenShare, health);
+  const shareLock = form.querySelector('[name="screenShareEnabled"]');
+  if (shareLock) shareLock.disabled = meetingBusy(status);
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
   $('#tool-state').textContent = health.backend_status || '—';
   const continuity = status.continuity || health.codex?.continuity;
@@ -281,6 +406,7 @@ function renderStatus(status) {
   renderApprovals(pending, status.meetingId);
   renderWorkspace(status.workspaceArtifacts || [], status.meetingId);
   renderGit(status.gitOperations || []);
+  renderScreenShare(status.screenShare, status.meetingId);
   $('#stop-button').disabled = !meetingBusy(status);
   $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');

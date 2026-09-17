@@ -104,6 +104,20 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 send=ws.send_json, record=record, state=state, runtime=runtime,
                 meeting_state=meeting_state, router=router, page=page, adapter=adapter,
                 stop_event=stop, on_presence=_sync_presence)
+            capture_loop = None
+            if runtime.screen_share_enabled:
+                from screen_share_pipeline import ScreenShareBus, ScreenShareCaptureLoop
+                meeting_id = (meeting_state or {}).get('meetingId') or getattr(record, 'meeting_id', None)
+                jobs = os.environ.get('CODEX_JOBS_DIR', '/meeting-runtime/jobs')
+                if meeting_id:
+                    capture_loop = ScreenShareCaptureLoop(
+                        adapter=adapter,
+                        settings=runtime.screen_share_settings,
+                        bus=ScreenShareBus(jobs, meeting_id),
+                        state=state,
+                        stop=stop,
+                        send=ws.send_json,
+                    )
             codex_client = CodexJobClient()
 
             async def send_audio():
@@ -158,13 +172,26 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     stage('closed_without_final_usage')
                     await ws.close()
 
-            task_specs = (
+            task_specs = [
                 ('meeting_audio_input', send_audio),
                 ('reply_audio_output', gate.run),
                 ('microphone_monitor', watch_microphone),
                 ('meeting_lifecycle', watch_meeting),
                 ('session_closer', closer),
-            )
+            ]
+            if capture_loop is not None:
+                async def run_capture():
+                    await ready.wait()
+                    await capture_loop.run()
+                async def drain_share():
+                    await ready.wait()
+                    while not stop.is_set():
+                        await capture_loop.drain_observations()
+                        await asyncio.sleep(0.5)
+                task_specs.extend((
+                    ('screen_share_capture', run_capture),
+                    ('screen_share_observations', drain_share),
+                ))
             tasks = [asyncio.create_task(fn(), name=name) for name, fn in task_specs]
             def task_failed(task):
                 if not task.cancelled() and task.exception():
@@ -223,6 +250,23 @@ async def main():
     state['cameraEnabled'] = runtime.camera_enabled
     state['cameraState'] = 'off' if not runtime.camera_enabled else 'starting'
     state['visualState'] = 'joining'
+    from screen_share import default_settings, public_status
+    share_settings = runtime.screen_share_settings or default_settings()
+    state['screenShare'] = public_status({
+        'enabled': runtime.screen_share_enabled,
+        'available': False,
+        'active': False,
+        'paused': False,
+        'capturing': False,
+        'degradedReason': None if runtime.screen_share_enabled else 'disabled',
+        'captureIntervalMs': share_settings['captureIntervalMs'],
+        'analyzerAvailable': False,
+        'retention': {
+            'maxFrames': share_settings['maxFrames'],
+            'maxBytes': share_settings['maxBytes'],
+            'retentionSeconds': share_settings['retentionSeconds'],
+        },
+    })
     sources = load_context()
     state['context']['enabled'] = bool(sources)
     state['context']['source_count'] = len(sources)
@@ -261,6 +305,11 @@ async def main():
     async def status(_request):
         payload = dict(state)
         payload.update(presence_public_fields(state))
+        share = payload.get('screenShare')
+        if isinstance(share, dict):
+            from screen_share import public_status
+            payload['screenShare'] = public_status(share)
+        payload.pop('last_plot', None)
         return web.json_response(payload, headers={'Cache-Control': 'no-store'})
     app.router.add_get('/health', status)
     runner = web.AppRunner(app)

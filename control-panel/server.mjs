@@ -241,6 +241,7 @@ export function createServer({
     const approvals = running ? await pendingApprovals(meetingId, session) : [];
     const workspace = running ? await workspaceSnapshot(meetingId, session) : { artifacts: [] };
     let gitOperations = [];
+    let screenShare = null;
     if (running && meetingId) {
       try {
         const commits = await daemonClient.listCommits(meetingId);
@@ -248,6 +249,11 @@ export function createServer({
         gitOperations = [...(commits.commits || []), ...(pushes.pushes || [])];
       } catch {
         gitOperations = [];
+      }
+      try {
+        screenShare = await daemonClient.getScreenShare(meetingId);
+      } catch {
+        screenShare = null;
       }
     }
     return {
@@ -264,6 +270,7 @@ export function createServer({
       pendingApprovals: approvals,
       workspaceArtifacts: workspace.artifacts,
       gitOperations,
+      screenShare,
     };
   }
 
@@ -368,6 +375,18 @@ export function createServer({
           return;
         }
         return json(response, 200, await daemonClient.getArtifact(meetingId, artifactId));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    const shareGet = pathname.match(/^\/api\/meetings\/([^/]+)\/screen-share(?:\/(observations))?$/);
+    if (request.method === 'GET' && shareGet) {
+      const meetingId = decodeURIComponent(shareGet[1]);
+      try {
+        if (shareGet[2] === 'observations') {
+          return json(response, 200, await daemonClient.listScreenShareObservations(meetingId));
+        }
+        return json(response, 200, await daemonClient.getScreenShare(meetingId));
       } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });
       }
@@ -506,6 +525,20 @@ export function createServer({
         });
         addLog('system', `Approval ${approvalId} ${approval.status}.`);
         return json(response, 200, { approval });
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    const shareAction = pathname.match(/^\/api\/meetings\/([^/]+)\/screen-share\/(pause|resume)$/);
+    if (request.method === 'POST' && shareAction) {
+      const meetingId = decodeURIComponent(shareAction[1]);
+      const action = shareAction[2];
+      try {
+        const payload = action === 'pause'
+          ? await daemonClient.pauseScreenShare(meetingId)
+          : await daemonClient.resumeScreenShare(meetingId);
+        addLog('system', `Screen-share ${action}.`);
+        return json(response, 200, payload);
       } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });
       }

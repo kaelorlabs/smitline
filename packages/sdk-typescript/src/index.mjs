@@ -277,6 +277,51 @@ export function validateJoinRequest(request) {
     permissions: validatePermissions(request.permissions),
   };
   if (request.camera !== undefined) out.camera = validateCamera(request.camera);
+  if (request.screenShare !== undefined) out.screenShare = validateScreenShare(request.screenShare);
+  return out;
+}
+
+function validateScreenShare(value) {
+  if (!isPlainObject(value)) throw new ValidationError('screenShare must be an object');
+  const known = new Set(['enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds']);
+  for (const key of Object.keys(value)) {
+    if (!known.has(key)) throw new ValidationError(`screenShare.${key} is not allowed`);
+  }
+  const out = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') throw new ValidationError('screenShare.enabled must be a boolean');
+    out.enabled = value.enabled;
+  }
+  if (value.captureIntervalMs !== undefined) {
+    if (!Number.isInteger(value.captureIntervalMs) || value.captureIntervalMs < 2000 || value.captureIntervalMs > 15000) {
+      throw new ValidationError('screenShare.captureIntervalMs is out of bounds');
+    }
+    out.captureIntervalMs = value.captureIntervalMs;
+  }
+  if (value.minChange !== undefined) {
+    if (typeof value.minChange !== 'number' || Number.isNaN(value.minChange) || value.minChange < 0 || value.minChange > 1) {
+      throw new ValidationError('screenShare.minChange is out of bounds');
+    }
+    out.minChange = value.minChange;
+  }
+  if (value.maxFrames !== undefined) {
+    if (!Number.isInteger(value.maxFrames) || value.maxFrames < 1 || value.maxFrames > 50) {
+      throw new ValidationError('screenShare.maxFrames is out of bounds');
+    }
+    out.maxFrames = value.maxFrames;
+  }
+  if (value.maxBytes !== undefined) {
+    if (!Number.isInteger(value.maxBytes) || value.maxBytes < 50_000 || value.maxBytes > 12_000_000) {
+      throw new ValidationError('screenShare.maxBytes is out of bounds');
+    }
+    out.maxBytes = value.maxBytes;
+  }
+  if (value.retentionSeconds !== undefined) {
+    if (!Number.isInteger(value.retentionSeconds) || value.retentionSeconds < 30 || value.retentionSeconds > 6 * 3600) {
+      throw new ValidationError('screenShare.retentionSeconds is out of bounds');
+    }
+    out.retentionSeconds = value.retentionSeconds;
+  }
   return out;
 }
 
@@ -614,6 +659,18 @@ export function createLoopbackTransport(options = {}) {
     getPush(meetingId, operationId) {
       return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/pushes/${encodeURIComponent(operationId)}`);
     },
+    getScreenShare(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/screen-share`);
+    },
+    pauseScreenShare(meetingId) {
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/screen-share/pause`, {});
+    },
+    resumeScreenShare(meetingId) {
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/screen-share/resume`, {});
+    },
+    listScreenShareObservations(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/screen-share/observations`);
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -775,6 +832,22 @@ class MeetingHandleImpl {
     return this._transport.getPush(this.id, operationId);
   }
 
+  async getScreenShare() {
+    return this._transport.getScreenShare(this.id);
+  }
+
+  async pauseScreenShare() {
+    return this._transport.pauseScreenShare(this.id);
+  }
+
+  async resumeScreenShare() {
+    return this._transport.resumeScreenShare(this.id);
+  }
+
+  async listScreenShareObservations() {
+    return this._transport.listScreenShareObservations(this.id);
+  }
+
   on(name, handler) {
     if (typeof handler !== 'function') throw new ValidationError('event handler must be a function');
     const bucket = this._listeners.get(name) || new Set();
@@ -824,6 +897,7 @@ class MeetingHandleImpl {
     if (type.startsWith('workspace.action.')) fire('workspace', event);
     if (type.startsWith('git.action.')) fire('git', event);
     if (type === 'artifact.created') fire('artifact', event);
+    if (type.startsWith('screen_share.')) fire('screen_share', event);
   }
 
   async _runPump() {

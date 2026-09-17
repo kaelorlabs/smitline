@@ -202,12 +202,30 @@ function createFakeColleague({ autoHandoff = true } = {}) {
         colleague.pushes.set(id, [...(colleague.pushes.get(id) || []), created]);
         return created;
       },
+      getScreenShare: async (id) => colleague.screenShare.get(id) || {
+        status: { enabled: false, paused: false, degradedReason: 'disabled' },
+        observations: [],
+      },
+      pauseScreenShare: async (id) => {
+        const payload = { status: { enabled: true, paused: true }, observations: [] };
+        colleague.screenShare.set(id, payload);
+        return payload;
+      },
+      resumeScreenShare: async (id) => {
+        const payload = { status: { enabled: true, paused: false }, observations: [] };
+        colleague.screenShare.set(id, payload);
+        return payload;
+      },
+      listScreenShareObservations: async (id) => ({
+        observations: (colleague.screenShare.get(id) || {}).observations || [],
+      }),
     },
   };
   colleague.approvals = new Map();
   colleague.artifacts = new Map();
   colleague.commits = new Map();
   colleague.pushes = new Map();
+  colleague.screenShare = new Map();
   return colleague;
 }
 
@@ -243,6 +261,8 @@ test('initialize advertises tools and the tasks extension', async () => {
     'list_meeting_artifacts', 'get_meeting_artifact',
     'list_meeting_commits', 'get_meeting_commit', 'create_meeting_commit',
     'list_meeting_pushes', 'get_meeting_push', 'create_meeting_push',
+    'get_meeting_screen_share', 'pause_meeting_screen_share', 'resume_meeting_screen_share',
+    'list_meeting_screen_share_observations',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -302,6 +322,10 @@ test('approval tools require explicit meeting and approval ids', async () => {
     branch: 'colleague-work',
   });
   assert.equal(createdPush.result.structuredContent.push.kind, 'push');
+  const share = await callTool(session, 'get_meeting_screen_share', { meetingId: 'mtg-1' });
+  assert.equal(share.result.structuredContent.status.enabled, false);
+  const missingShare = await callTool(session, 'pause_meeting_screen_share', {});
+  assert.equal(missingShare.result.isError, true);
 });
 
 test('rejects last/latest and does not invent a session', async () => {

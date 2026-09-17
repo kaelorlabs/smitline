@@ -20,9 +20,11 @@ _LEASE_NAME = 'lease.json'
 _HANDOFF_NAME = 'handoff.json'
 _APPROVALS_NAME = 'approvals.json'
 _GIT_OPS_NAME = 'git-ops.json'
+_SCREEN_SHARE_NAME = 'screen-share.json'
 _OWNER_FIELDS = ('leaseId',)
 _APPROVAL_FILE_FIELDS = ('version', 'approvals')
 _GIT_OPS_FILE_FIELDS = ('version', 'operations')
+_SCREEN_SHARE_FILE_FIELDS = ('version', 'settings', 'status', 'observations', 'paused')
 
 
 class MeetingRepositoryError(Exception):
@@ -439,6 +441,81 @@ class MeetingRepository:
                 reject_secrets(payload, 'meeting git operations')
                 self._atomic_write(dir_fd, _GIT_OPS_NAME, payload)
                 return updated
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
+
+    def _read_screen_share(self, dir_fd):
+        from screen_share import parse_screen_share_settings, public_status, VisualObservation
+        raw = self._read_named(dir_fd, _SCREEN_SHARE_NAME)
+        if raw is None:
+            return {
+                'version': 1,
+                'settings': parse_screen_share_settings(None),
+                'status': public_status({'enabled': False, 'degradedReason': 'disabled'}),
+                'observations': [],
+                'paused': False,
+            }
+        payload = self._parse_object(raw, 'meeting screen share')
+        extra = set(payload) - set(_SCREEN_SHARE_FILE_FIELDS)
+        if extra:
+            raise MeetingCorruptionError('meeting screen share does not match the schema')
+        try:
+            reject_secrets(payload, 'meeting screen share')
+            settings = parse_screen_share_settings(payload.get('settings'))
+            status = public_status(payload.get('status') or {'enabled': settings['enabled']})
+            observations = []
+            for item in payload.get('observations') or []:
+                observations.append(VisualObservation.from_dict(item).to_dict())
+            return {
+                'version': 1,
+                'settings': settings,
+                'status': status,
+                'observations': observations,
+                'paused': bool(payload.get('paused')),
+            }
+        except (TypeError, ValueError) as error:
+            raise MeetingCorruptionError('meeting screen share does not match the schema') from error
+
+    def get_screen_share(self, meeting_id):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                return None
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_SH)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    return None
+                return self._read_screen_share(dir_fd)
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
+
+    def update_screen_share(self, meeting_id, mutator):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                raise FileNotFoundError('meeting does not exist')
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    raise FileNotFoundError('meeting does not exist')
+                current = self._read_screen_share(dir_fd)
+                updated = mutator(dict(current))
+                if not isinstance(updated, dict):
+                    raise ValueError('screen share state is invalid')
+                payload = {
+                    'version': 1,
+                    'settings': updated.get('settings') or current['settings'],
+                    'status': updated.get('status') or current['status'],
+                    'observations': list(updated.get('observations') or []),
+                    'paused': bool(updated.get('paused')),
+                }
+                reject_secrets(payload, 'meeting screen share')
+                self._atomic_write(dir_fd, _SCREEN_SHARE_NAME, payload)
+                return payload
             finally:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
                 os.close(dir_fd)

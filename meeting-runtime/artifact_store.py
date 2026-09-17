@@ -9,7 +9,7 @@ from schema_validation import omit_none, reject_secrets, require_id, require_mee
 
 ARTIFACT_KINDS = (
     'plan', 'patch', 'manifest', 'command-log', 'workspace-result', 'file',
-    'git-commit', 'git-push',
+    'git-commit', 'git-push', 'screenshot', 'observation',
 )
 SAFE_MEDIA = {
     'plan': 'application/json',
@@ -20,8 +20,13 @@ SAFE_MEDIA = {
     'file': 'application/octet-stream',
     'git-commit': 'application/json',
     'git-push': 'application/json',
+    'screenshot': 'image/png',
+    'observation': 'application/json',
 }
 MAX_BODY = 1_000_000
+KIND_MAX_BODY = {
+    'screenshot': 2_000_000,
+}
 
 
 class ArtifactStore:
@@ -64,7 +69,9 @@ class ArtifactStore:
             media = media_type or SAFE_MEDIA[kind]
         else:
             raise ValueError('artifact body is invalid')
-        if len(data) > MAX_BODY:
+        if kind == 'screenshot' and media not in ('image/png', 'image/jpeg'):
+            raise ValueError('screenshot media type is invalid')
+        if len(data) > KIND_MAX_BODY.get(kind, MAX_BODY):
             raise ValueError('artifact exceeds size limit')
         artifact_id = artifact_id or ('art-' + secrets.token_hex(6))
         _rel, directory = self._artifact_dir(meeting_id, artifact_id, create=True)
@@ -120,6 +127,6 @@ class ArtifactStore:
         if body.is_symlink() or not body.is_file():
             raise FileNotFoundError('artifact body not found')
         data = body.read_bytes()
-        if len(data) > MAX_BODY:
+        if len(data) > KIND_MAX_BODY.get(meta.get('kind'), MAX_BODY):
             raise ValueError('artifact exceeds size limit')
         return meta, data

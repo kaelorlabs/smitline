@@ -105,6 +105,18 @@ def _work_from_events(events):
             summary=_clip(result.get('summary') or 'Recorded reviewed files'),
             status=status,
         ))
+    for event in events:
+        if event.get('type') != 'screen_share.observation':
+            continue
+        observation = event.get('observation') if isinstance(event.get('observation'), dict) else {}
+        obs_id = observation.get('id')
+        if not isinstance(obs_id, str):
+            continue
+        records.append(AgentWorkRecord(
+            task_id=obs_id[:128],
+            summary=_clip(observation.get('summary') or 'Shared-content observation'),
+            status='completed',
+        ))
     return tuple(records[:50])
 
 

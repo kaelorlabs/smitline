@@ -37,6 +37,14 @@ test('builds a local portal meeting payload with least-privilege permissions', (
   assert.equal(payload.camera.enabled, true);
   assert.equal(payload.camera.defaultOn, true);
   assert.equal('avatarPath' in payload.camera, false);
+  assert.equal(payload.screenShare.enabled, false);
+  const withShare = buildMeetingCreatePayload({
+    meetingUrl: 'https://us05web.zoom.us/j/123',
+    model: 'gpt-5.6-terra',
+    tools: { codex: true },
+    screenShare: { enabled: true },
+  });
+  assert.equal(withShare.screenShare.enabled, true);
 });
 
 test('disables workspace and network when those tools are off', () => {

@@ -7,6 +7,7 @@ import sys
 from meeting_supervisor import ProductionMeetingSupervisor
 from runtime_daemon import create_app, require_loopback_bind
 from runtime_state import daemon_data_path, daemon_token_path, write_private_file
+from visual_analysis import CodexVisualAnalysisProvider
 
 
 def write_auth_token(root, token=None):
@@ -38,6 +39,8 @@ def build_app(args):
         bind_host=host,
         auth_token=token,
         supervisor=supervisor,
+        jobs_dir=runtime_root / 'jobs',
+        visual_analyzer=CodexVisualAnalysisProvider(),
     )
     supervisor.bind_daemon(app.runtime_daemon)
     app.meeting_supervisor = supervisor
