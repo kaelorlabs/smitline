@@ -40,4 +40,5 @@ fi
 echo
 echo "Colleague AI is registered with Codex."
 echo "Restart Codex so it loads the join_current_meeting tool."
+echo "The tool directs Codex to pass the invoking task's CODEX_THREAD_ID explicitly."
 echo "Then open a project task and ask: Join this meeting: <invite URL>"

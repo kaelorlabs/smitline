@@ -8,7 +8,7 @@ Do not publish this package and do not install it globally.
 
 | Tool | Behavior |
 | --- | --- |
-| `join_current_meeting` | Codex-native exact-continuity join using the host-provided `CODEX_THREAD_ID` |
+| `join_current_meeting` | Codex-native exact-continuity join using the invoking task's `CODEX_THREAD_ID` |
 | `start_meeting` | Creates a meeting and returns a durable `{ meetingId }` immediately |
 | `get_meeting_status` | Current daemon session |
 | `add_meeting_context` | Versioned `ContextHandoff` |
@@ -32,7 +32,7 @@ Clients without Tasks should poll `get_meeting_handoff`.
 
 ## Codex
 
-Codex supplies `CODEX_THREAD_ID` to local tools. Use `join_current_meeting`; the MCP server reads that host-provided value and fails closed when it is unavailable. The tool still requires the coding agent to pass the current workspace and a structured context handoff.
+Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not forward that per-task value to a persistent MCP server. Before calling `join_current_meeting`, read the variable from the current task command environment and pass its exact value as `sessionId`. Never invent, infer, or reuse a different ID. The tool also requires the current workspace and a structured context handoff.
 
 Example `~/.codex/config.toml` mcp_servers fragment:
 

@@ -1734,6 +1734,11 @@ def create_app(
             header = request.headers.get('Authorization', '')
             scheme, _, credential = header.partition(' ')
             if scheme != 'Bearer' or not credential or not _bearer_matches(credential, token):
+                # A competing startup can rotate the host-only file before it
+                # discovers that this daemon already owns the port. Restore the
+                # live daemon's credential so local clients can reread and retry.
+                if on_auth_token is not None:
+                    on_auth_token(token)
                 return _json_error(401, 'unauthorized', 'authorization required')
         return await handler(request)
 

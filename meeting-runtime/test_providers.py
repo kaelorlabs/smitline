@@ -10,7 +10,7 @@ from providers.base import ProviderRequest
 from providers.capabilities import ProviderCapabilities
 from providers.claude_code import ClaudeCodeProvider
 from providers.cursor import CursorProvider
-from providers.detect import detect_cli_flags
+from providers.detect import collect_help, detect_cli_flags
 from providers.registry import ProviderRegistry
 from session_continuity import EXACT, CONTEXT
 from test_schemas import context_payload, permissions_payload
@@ -47,6 +47,19 @@ def agent_ref(provider='cursor', session_id='thread-origin-1', continuity=EXACT)
 
 
 class ProviderCapabilityTests(unittest.IsolatedAsyncioTestCase):
+    def test_collect_help_includes_nested_resume_command(self):
+        calls = []
+
+        def runner(args, **_kwargs):
+            calls.append(args)
+            if args[1:] == ['exec', 'resume', '--help']:
+                return Result('Usage: codex exec resume [SESSION_ID] [PROMPT]')
+            return Result('Usage: codex')
+
+        help_text = collect_help('/usr/bin/codex', runner)
+        self.assertIn(['/usr/bin/codex', 'exec', 'resume', '--help'], calls)
+        self.assertEqual(detect_cli_flags(help_text)['resume'], '--resume')
+
     def test_help_feature_detection_does_not_invent_flags(self):
         flags = detect_cli_flags(FULL_HELP)
         self.assertEqual(flags['resume'], '--resume')

@@ -81,7 +81,7 @@ For the agent-native Codex experience, register the local integration once:
 bash scripts/install-codex-integration.sh
 ```
 
-Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. Codex calls `join_current_meeting` with the real host-provided thread id, current workspace, a bounded context handoff, and safe default permissions. The portal remains available as an optional operations console.
+Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. Codex reads `CODEX_THREAD_ID` from its task command environment and passes that exact value to `join_current_meeting` with the current workspace, a bounded context handoff, and safe default permissions. The portal remains available as an optional operations console.
 
 Run the local diagnostic at any time:
 

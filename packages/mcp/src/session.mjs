@@ -78,14 +78,15 @@ const PERMISSIONS_SCHEMA = {
 export const TOOL_DEFINITIONS = [
   {
     name: 'join_current_meeting',
-    description: 'Join a Zoom, Teams, or Google Meet call from the current Codex conversation. The server uses the real CODEX_THREAD_ID supplied by Codex, so callers must not invent or look up a session id. Pass a bounded summary of the current work as context. Returns a meeting handle immediately unless this client advertises MCP Tasks and waitUntilHandoff is true.',
+    description: 'Join a Zoom, Teams, or Google Meet call from the current Codex conversation. Before calling, read CODEX_THREAD_ID from the current Codex command environment and pass that exact value as sessionId; never invent, infer, or reuse a different id. Pass a bounded summary of the current work as context. Returns a meeting handle immediately unless this client advertises MCP Tasks and waitUntilHandoff is true.',
     execution: { taskSupport: 'optional' },
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['url', 'workspace', 'context'],
+      required: ['url', 'sessionId', 'workspace', 'context'],
       properties: {
         url: { type: 'string', description: 'https Zoom, Teams, or Google Meet invitation URL' },
+        sessionId: { type: 'string', description: 'Exact CODEX_THREAD_ID read from the invoking Codex task command environment' },
         workspace: { type: 'string', description: 'Absolute path of the current coding workspace' },
         model: { type: 'string' },
         context: CONTEXT_SCHEMA,
@@ -716,17 +717,18 @@ export function createMcpSession(options = {}) {
   }
 
   async function joinCurrentMeeting(args, message) {
-    if (typeof currentCodexSessionId !== 'string'
-        || FORBIDDEN_SESSION_IDS.has(currentCodexSessionId)
-        || currentCodexSessionId === 'local-portal') {
+    const sessionId = args.sessionId || currentCodexSessionId;
+    if (typeof sessionId !== 'string'
+        || FORBIDDEN_SESSION_IDS.has(sessionId)
+        || sessionId === 'local-portal') {
       throw new ValidationError(
-        'Codex did not provide CODEX_THREAD_ID to this MCP server; restart Codex after installing the integration or use start_meeting with an explicit real sessionId',
+        'join_current_meeting requires the exact CODEX_THREAD_ID from the invoking Codex task command environment',
       );
     }
     return startMeeting({
       ...args,
       provider: 'codex',
-      sessionId: currentCodexSessionId,
+      sessionId,
       continuity: 'exact',
       permissions: args.permissions || DEFAULT_SAFE_PERMISSIONS,
       metadata: { source: 'codex-current-session' },
@@ -1000,7 +1002,7 @@ export function createMcpSession(options = {}) {
           extensions: { [TASKS_EXTENSION]: {} },
         },
         serverInfo: { name: 'colleague-ai', version: MCP_SERVER_VERSION },
-        instructions: 'Colleague AI MCP adapter talks only to the loopback daemon. In Codex, use join_current_meeting so the server uses the real CODEX_THREAD_ID supplied by the host. Other integrations must inject the real originating sessionId into start_meeting for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.',
+        instructions: 'Colleague AI MCP adapter talks only to the loopback daemon. In Codex, read CODEX_THREAD_ID from the invoking task command environment and pass that exact value to join_current_meeting.sessionId. Persistent MCP servers do not receive this per-task environment automatically. Other integrations must inject the real originating sessionId into start_meeting for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.',
       });
     }
     if (method === 'ping') return rpcResult(id, {});

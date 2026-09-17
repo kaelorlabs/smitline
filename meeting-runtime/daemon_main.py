@@ -33,11 +33,15 @@ def build_app(args):
     project_root = Path(args.root).resolve()
     runtime_root = Path(args.runtime_root or (project_root / 'meeting-runtime')).resolve()
     token, token_path = write_auth_token(project_root)
+    def publish_auth_token(current_token):
+        write_private_file(token_path, current_token + '\n')
+
     supervisor = ProductionMeetingSupervisor(project_root, runtime_root=runtime_root)
     app = create_app(
         root=daemon_data_path(project_root),
         bind_host=host,
         auth_token=token,
+        on_auth_token=publish_auth_token,
         supervisor=supervisor,
         jobs_dir=runtime_root / 'jobs',
         visual_analyzer=CodexVisualAnalysisProvider(),

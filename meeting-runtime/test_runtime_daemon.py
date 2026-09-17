@@ -124,9 +124,11 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.clock = FakeClock()
         self.supervisor = FakeSupervisor()
         self.auth = 'test-daemon-token'
+        self.auth_publications = []
         self.app = create_app(
             root=self.temporary.name,
             auth_token=self.auth,
+            on_auth_token=self.auth_publications.append,
             supervisor=self.supervisor,
             clock=self.clock,
             sse_poll_interval=0.02,
@@ -150,11 +152,13 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         return response
 
     async def test_auth_missing_wrong_query_and_correct(self):
+        self.assertEqual(self.auth_publications, [self.auth])
         created = await self.create()
         self.assertEqual(created.status, 201)
         meeting_id = (await created.json())['id']
         missing = await self.client.get('/v1/meetings/' + meeting_id)
         self.assertEqual(missing.status, 401)
+        self.assertEqual(self.auth_publications, [self.auth, self.auth])
         wrong = await self.client.get(
             '/v1/meetings/' + meeting_id, headers={'Authorization': 'Bearer other-token'})
         self.assertEqual(wrong.status, 401)
@@ -1759,4 +1763,3 @@ class ScreenShareDaemonTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

@@ -7,7 +7,7 @@ Repository: `colleague-ai-private`
 Current implementation branch: `developer-platform`
 Prerequisite: retain the Zoom/Teams adapter work in commits `fa4fb33`, `3eaec75`, and `0aa7121` (PR #3) when choosing the implementation base.
 
-> This file preserves the detailed design that guided implementation. Some “current baseline” statements describe the repository before the platform work landed. For current product truth, progress, and open milestones, read [product vision, decisions, and progress](product-vision-and-progress.md). Code and capability tests take precedence over historical implementation instructions.
+> This file preserves the detailed design that guided implementation. Some “current baseline” statements describe the repository before the platform work landed. For current product truth, progress, and open milestones, read [product vision, decisions, and progress](product-vision-and-progress.md). Code and capability tests take precedence over historical implementation instructions. Current Codex hosts expose `CODEX_THREAD_ID` to task command subprocesses but do not automatically forward it to persistent MCP servers, so the invoking agent must pass it explicitly.
 
 ## Purpose
 

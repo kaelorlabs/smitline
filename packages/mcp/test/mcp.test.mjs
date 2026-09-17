@@ -302,6 +302,8 @@ test('initialize advertises tools and the tasks extension', async () => {
     'list_meeting_screen_share_observations', 'list_coding_providers',
     'get_runner_status', 'pair_runner', 'complete_runner_pair', 'unpair_runner',
   ]);
+  const joinCurrent = listed.result.tools.find((tool) => tool.name === 'join_current_meeting');
+  assert.deepEqual(joinCurrent.inputSchema.required, ['url', 'sessionId', 'workspace', 'context']);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
 
@@ -314,6 +316,7 @@ test('Codex-native join uses the host thread and safe defaults', async () => {
   });
   const result = await callTool(session, 'join_current_meeting', {
     url: ZOOM,
+    sessionId: 'thread-from-invoking-task',
     workspace: '/tmp/current-workspace',
     context: context(),
   });
@@ -323,7 +326,7 @@ test('Codex-native join uses the host thread and safe defaults', async () => {
   });
   const created = status.result.structuredContent;
   assert.equal(created.agentSession.provider, 'codex');
-  assert.equal(created.agentSession.sessionId, 'thread-from-codex-host');
+  assert.equal(created.agentSession.sessionId, 'thread-from-invoking-task');
   assert.equal(created.agentSession.workspace, '/tmp/current-workspace');
   assert.equal(created.agentSession.metadata.source, 'codex-current-session');
   assert.equal(created.permissions.workspace, 'read-only');
@@ -339,11 +342,30 @@ test('Codex-native join fails closed when the host thread is unavailable', async
   });
   const result = await callTool(session, 'join_current_meeting', {
     url: ZOOM,
+    sessionId: '',
     workspace: '/tmp/current-workspace',
     context: context(),
   });
   assert.equal(result.result.isError, true);
   assert.match(result.result.structuredContent.message, /CODEX_THREAD_ID/);
+});
+
+test('Codex-native join falls back to the MCP environment for compatible hosts', async () => {
+  const colleague = createFakeColleague();
+  const session = createMcpSession({
+    colleague,
+    currentCodexSessionId: 'thread-from-compatible-host',
+    log() {},
+  });
+  const result = await callTool(session, 'join_current_meeting', {
+    url: ZOOM,
+    workspace: '/tmp/current-workspace',
+    context: context(),
+  });
+  const status = await callTool(session, 'get_meeting_status', {
+    meetingId: result.result.structuredContent.meetingId,
+  });
+  assert.equal(status.result.structuredContent.agentSession.sessionId, 'thread-from-compatible-host');
 });
 
 test('exact start requires explicit session and preserves it', async () => {

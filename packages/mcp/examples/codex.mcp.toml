@@ -1,6 +1,7 @@
 # Colleague AI MCP for Codex.
-# join_current_meeting reads the real CODEX_THREAD_ID supplied by Codex and
-# fails closed when it is unavailable. Restart Codex after installing.
+# Codex must read CODEX_THREAD_ID from the invoking task command environment
+# and pass its exact value to join_current_meeting.sessionId. Persistent MCP
+# servers do not receive the per-task variable. Restart after installing.
 
 [mcp_servers.colleague-ai]
 command = "node"

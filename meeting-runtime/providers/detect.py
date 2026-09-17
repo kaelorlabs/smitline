@@ -22,7 +22,12 @@ def collect_help(command, runner=None):
         return ''
     run = runner or subprocess.run
     chunks = []
-    for args in ([command, '--help'], [command, 'exec', '--help'], [command, '--version']):
+    for args in (
+        [command, '--help'],
+        [command, 'exec', '--help'],
+        [command, 'exec', 'resume', '--help'],
+        [command, '--version'],
+    ):
         try:
             result = run(args, capture_output=True, text=True, timeout=4, check=False)
         except (OSError, subprocess.TimeoutExpired):
@@ -46,7 +51,7 @@ def _resume_token(help_text):
             return token
     if SESSION_RESUME_RE.search(help_text or ''):
         return '--session-id'
-    if re.search(r'\bexec\s+resume\b|\bresume\s+<session', lowered):
+    if re.search(r'\busage:[^\n]*\bexec\s+resume\b|\bresume\s+<session', lowered):
         return '--resume'
     return None
 
