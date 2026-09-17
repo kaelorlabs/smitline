@@ -142,6 +142,43 @@ export const TOOL_DEFINITIONS = [
       properties: { meetingId: { type: 'string' } },
     },
   },
+  {
+    name: 'list_meeting_approvals',
+    description: 'List durable approval requests for a meeting id. Requires an explicit meetingId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'get_meeting_approval',
+    description: 'Get one approval request. Requires explicit meetingId and approvalId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'approvalId'],
+      properties: {
+        meetingId: { type: 'string' },
+        approvalId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'decide_meeting_approval',
+    description: 'Approve or deny a pending approval. Requires explicit meetingId, approvalId, and decision. Voice cannot grant permission.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'approvalId', 'decision'],
+      properties: {
+        meetingId: { type: 'string' },
+        approvalId: { type: 'string' },
+        decision: { enum: ['approved', 'denied'] },
+      },
+    },
+  },
 ];
 
 function nowIso() {
@@ -159,6 +196,10 @@ function describeEvent(event) {
   if (type === 'handoff.ready') return 'handoff ready';
   if (type === 'handoff.append_failed') return 'handoff append failed';
   if (type === 'presence.updated') return `presence ${event.visualState || 'updated'}`;
+  if (String(type).startsWith('approval.')) {
+    const category = event.request?.category || event.request?.permission || '';
+    return `approval ${type.replace('approval.', '')}${category ? ` ${category}` : ''}`;
+  }
   return String(type);
 }
 
@@ -337,6 +378,9 @@ export function createMcpSession(options = {}) {
       addContext: (context) => transport.updateContext(meetingId, context),
       cancel: () => transport.cancelMeeting(meetingId),
       retryFinalization: () => transport.retryHandoff(meetingId),
+      listApprovals: () => transport.listApprovals(meetingId),
+      getApproval: (approvalId) => transport.getApproval(meetingId, approvalId),
+      decideApproval: (approvalId, decision) => transport.decideApproval(meetingId, approvalId, decision),
       get finished() {
         return transport.getHandoff(meetingId);
       },
@@ -483,6 +527,40 @@ export function createMcpSession(options = {}) {
     if (name === 'retry_meeting_handoff') {
       const handle = await resolveHandle(args.meetingId);
       return toolResult({ meetingId: args.meetingId, handoff: await handle.retryFinalization() });
+    }
+    if (name === 'list_meeting_approvals') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.listApprovals
+        ? await handle.listApprovals()
+        : await transport.listApprovals(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'get_meeting_approval') {
+      if (!args?.meetingId || !args?.approvalId) {
+        throw new ValidationError('meetingId and approvalId are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const approval = handle.getApproval
+        ? await handle.getApproval(args.approvalId)
+        : await transport.getApproval(args.meetingId, args.approvalId);
+      return toolResult({ meetingId: args.meetingId, approval });
+    }
+    if (name === 'decide_meeting_approval') {
+      if (!args?.meetingId || !args?.approvalId) {
+        throw new ValidationError('meetingId and approvalId are required');
+      }
+      if (args.decision !== 'approved' && args.decision !== 'denied') {
+        throw new ValidationError('decision must be approved or denied');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const approval = handle.decideApproval
+        ? await handle.decideApproval(args.approvalId, args.decision)
+        : await transport.decideApproval(args.meetingId, args.approvalId, { decision: args.decision });
+      return toolResult({ meetingId: args.meetingId, approval });
     }
     throw new ValidationError(`unknown tool: ${name}`);
   }

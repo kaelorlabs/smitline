@@ -9,16 +9,25 @@ from test_schemas import context_payload, permissions_payload
 
 
 class FakeProvider(CodingAgentProvider):
-    def __init__(self, delay=0, result=None, error=None):
+    def __init__(self, delay=0, result=None, error=None, gate_category=None):
         self.delay = delay
         self.result = result or {'text': 'The worker lock is exclusive per host.'}
         self.error = error
+        self.gate_category = gate_category
         self.calls = []
         self.started = asyncio.Event()
 
     async def run(self, request, cancel):
         self.calls.append(request)
         self.started.set()
+        if self.gate_category and getattr(request, 'approval_gate', None):
+            decision = await request.approval_gate({
+                'category': self.gate_category,
+                'summary': 'Run a workspace lookup',
+                'scope': {'host': 'workspace'},
+            })
+            if (decision or {}).get('status') != 'approved':
+                return {'error': (decision or {}).get('error') or 'approval_denied'}
         deadline = asyncio.get_running_loop().time() + self.delay
         while asyncio.get_running_loop().time() < deadline:
             if cancel is not None and cancel.is_set():
@@ -216,6 +225,83 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         dumped = ' '.join(seen)
         self.assertNotIn('worker lock', dumped)
 
+    async def test_approval_gate_pauses_without_blocking_transcription(self):
+        from visual_presence import map_visual_state
+
+        resume = asyncio.Event()
+        categories = []
+        visuals = []
+
+        async def gate(payload):
+            categories.append(payload['category'])
+            await resume.wait()
+            return {'status': 'approved'}
+
+        self.provider = FakeProvider(delay=0.01, gate_category='commands')
+        self.router = DelegationRouter(providers={'codex': self.provider})
+        self.session = ClientDelegation(
+            send=self._send, record=self.record, state=self.state, runtime=self.runtime,
+            meeting_state={
+                'context': context_payload(),
+                'permissions': permissions_payload(),
+                'workspace': '/Users/Taylor/project',
+                'provider': 'codex',
+                'meetingId': 'mtg-abc123',
+            },
+            router=self.router, progress_interval=0.05, approval_gate=gate,
+            on_presence=lambda: visuals.append(map_visual_state(self.state)))
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta',
+            'delta': 'What does the worker lock do?',
+            'start_ms': 100, 'end_ms': 900, 'event_id': 'tr-gate',
+        })
+        task = self.session.submit(created('item_gate'))
+        await asyncio.wait_for(self.provider.started.wait(), timeout=1)
+        for _ in range(50):
+            if self.state.get('backend_status') == 'waiting_approval':
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(self.state['backend_status'], 'waiting_approval')
+        self.assertEqual(map_visual_state(self.state), 'needs_attention')
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta',
+            'delta': 'Please continue listening.',
+            'start_ms': 1000, 'end_ms': 1600, 'event_id': 'tr-gate-2',
+        })
+        resume.set()
+        await task
+        self.assertIn('session.commentary.append', self._kinds())
+        self.assertEqual(self.state['backend_status'], 'idle')
+        self.assertFalse(self.state.get('awaitingApproval'))
+        self.assertEqual(categories, ['commands'])
+        self.assertIn('needs_attention', visuals)
+
+    async def test_approval_deny_returns_concise_result(self):
+        async def gate(_payload):
+            return {'status': 'denied'}
+
+        self.provider = FakeProvider(delay=0, gate_category='commands')
+        self.router = DelegationRouter(providers={'codex': self.provider})
+        self.session = ClientDelegation(
+            send=self._send, record=self.record, state=self.state, runtime=self.runtime,
+            meeting_state={
+                'context': context_payload(),
+                'permissions': permissions_payload(),
+                'workspace': '/Users/Taylor/project',
+                'provider': 'codex',
+            },
+            router=self.router, progress_interval=0.05, approval_gate=gate)
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta',
+            'delta': 'Please change the file.',
+            'start_ms': 100, 'end_ms': 900, 'event_id': 'tr-deny',
+        })
+        await self.session.submit(created('item_deny'))
+        commentary = [item['content'] for item in self.sent if item['type'] == 'session.commentary.append']
+        self.assertTrue(commentary)
+        self.assertIn('denied', commentary[-1].lower())
+        self.assertNotIn('Please change the file', commentary[-1])
+
 
 class CodexProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_job_payload_omits_control_secrets_and_uses_spoken_request(self):
@@ -254,6 +340,33 @@ class CodexProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('openai', lowered)
         self.assertNotIn('daemon.auth', lowered)
         self.assertNotIn('tavily', lowered)
+
+    async def test_approval_required_network_fails_closed_without_a_gate(self):
+        from providers.codex import CodexProvider
+        from providers.base import ProviderRequest
+        from test_schemas import context_payload, permissions_payload
+
+        searched = []
+
+        class MemoryClient:
+            async def run(self, task, model, cancel=None, **fields):
+                return {'text': 'ok', 'model': model}
+
+        provider = CodexProvider(
+            client=MemoryClient(),
+            search=lambda query: searched.append(query) or {'results': [{'title': 'x', 'url': 'https://example.com'}]},
+            context_search=lambda query: None,
+        )
+        result = await provider.run(ProviderRequest(
+            delegation_id='item_gate',
+            request_text='What is the public fact?',
+            handoff=context_payload(),
+            permissions=permissions_payload(network='approval-required'),
+            workspace='/Users/Taylor/project',
+            provider='codex',
+        ), None)
+        self.assertEqual(result['text'], 'ok')
+        self.assertEqual(searched, [])
 
     async def test_exact_session_fields_are_forwarded_to_the_job_client(self):
         from providers.codex import CodexProvider

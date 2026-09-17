@@ -178,7 +178,7 @@ export function validatePermissions(value) {
     if (!allowed.has(value[field])) throw new ValidationError(`permissions.${field} is invalid`);
     return value[field];
   };
-  return {
+  const out = {
     workspace: check('workspace', WORKSPACE_MODES),
     commands: check('commands', COMMAND_MODES),
     edits: check('edits', EDIT_MODES),
@@ -186,6 +186,22 @@ export function validatePermissions(value) {
     commits: check('commits', COMMIT_MODES),
     pushes: check('pushes', PUSH_MODES),
   };
+  if (out.workspace === 'none') {
+    if (out.commands === 'allowed') throw new ValidationError('commands cannot be allowed when workspace is none');
+    if (out.edits !== 'disabled' || out.commits !== 'disabled' || out.pushes !== 'disabled') {
+      throw new ValidationError('workspace none cannot authorize edits, commits, or pushes');
+    }
+  }
+  if (out.workspace === 'read-only' && out.edits === 'allowed') {
+    throw new ValidationError('edits cannot be allowed without workspace-write');
+  }
+  if (out.workspace !== 'workspace-write' && (out.commits !== 'disabled' || out.pushes !== 'disabled')) {
+    throw new ValidationError('commits and pushes require workspace-write');
+  }
+  if (out.pushes === 'approval-required' && out.commits !== 'approval-required') {
+    throw new ValidationError('pushes require commits to be approval-required');
+  }
+  return out;
 }
 
 function requireStringList(value, name) {
@@ -549,6 +565,19 @@ export function createLoopbackTransport(options = {}) {
     retryHandoff(meetingId) {
       return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/handoff/retry`, {});
     },
+    listApprovals(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/approvals`);
+    },
+    getApproval(meetingId, approvalId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(approvalId)}`);
+    },
+    createApproval(meetingId, payload) {
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/approvals`, payload);
+    },
+    decideApproval(meetingId, approvalId, decision) {
+      const body = typeof decision === 'string' ? { decision } : decision;
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(approvalId)}/decision`, body);
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -652,6 +681,24 @@ class MeetingHandleImpl {
     return this._transport.retryHandoff(this.id);
   }
 
+  async listApprovals() {
+    return this._transport.listApprovals(this.id);
+  }
+
+  async getApproval(approvalId) {
+    if (!approvalId) throw new ValidationError('approvalId is required');
+    return this._transport.getApproval(this.id, approvalId);
+  }
+
+  async decideApproval(approvalId, decision) {
+    if (!approvalId) throw new ValidationError('approvalId is required');
+    const value = typeof decision === 'string' ? decision : decision?.decision;
+    if (value !== 'approved' && value !== 'denied') {
+      throw new ValidationError('decision must be approved or denied');
+    }
+    return this._transport.decideApproval(this.id, approvalId, { decision: value });
+  }
+
   on(name, handler) {
     if (typeof handler !== 'function') throw new ValidationError('event handler must be a function');
     const bucket = this._listeners.get(name) || new Set();
@@ -696,6 +743,7 @@ class MeetingHandleImpl {
     if (type.startsWith('meeting.')) fire('state', event);
     if (type.startsWith('transcript.')) fire('transcript', event);
     if (type.startsWith('delegation.')) fire('delegation', event);
+    if (type.startsWith('approval.')) fire('approval', event);
     if (type === 'approval.required' || type === 'approval_required') fire('approval_required', event);
   }
 

@@ -40,6 +40,9 @@ class FakeDaemon:
     def prepare_finalization(self, meeting_id):
         self.prepared.append(meeting_id)
 
+    def public_approvals(self, meeting_id):
+        return []
+
     def note_append_failure(self, meeting_id, handoff_id, reason):
         self.append_failures.append((meeting_id, handoff_id, reason))
 

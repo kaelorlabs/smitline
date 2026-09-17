@@ -213,3 +213,35 @@ test('status, cancel, context add, and handoff commands use the saved meeting id
   const retry = await runColleague(['handoff', 'retry', '--root', root, '--port', String(daemon.port)], { cwd: root });
   assert.equal(retry.code, 0, retry.stderr);
 });
+
+test('approvals commands require explicit meeting and approval ids', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-appr-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const daemon = await startFakeDaemon({ root, autoHandoff: false, readyDelayMs: 5 });
+  t.after(() => daemon.close());
+  const joined = await runColleague([
+    'join', '--meeting', ZOOM, '--agent', 'codex', '--thread', 'thread-cli',
+    '--workspace', root, '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(joined.code, 0, joined.stderr);
+  const missing = await runColleague(['approvals', 'list', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(missing.code, 2);
+  const created = await fetch(`http://127.0.0.1:${daemon.port}/v1/meetings/mtg-1/approvals`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${daemon.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category: 'commands', summary: 'Run a workspace lookup' }),
+  });
+  const approval = await created.json();
+  const listed = await runColleague([
+    'approvals', 'list', '--meeting-id', 'mtg-1', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.equal(JSON.parse(listed.stdout).approvals[0].id, approval.id);
+  const decided = await runColleague([
+    'approvals', 'decide', '--meeting-id', 'mtg-1', '--approval-id', approval.id,
+    '--decision', 'denied', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(decided.code, 0, decided.stderr);
+  assert.equal(JSON.parse(decided.stdout).status, 'denied');
+  assert.ok(!listed.stdout.includes(daemon.token));
+});

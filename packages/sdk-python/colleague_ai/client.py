@@ -185,6 +185,17 @@ def validate_permissions(value):
         if value.get(field) not in allowed:
             raise ValidationError(f'permissions.{field} is invalid')
         out[field] = value[field]
+    if out['workspace'] == 'none':
+        if out['commands'] == 'allowed':
+            raise ValidationError('commands cannot be allowed when workspace is none')
+        if out['edits'] != 'disabled' or out['commits'] != 'disabled' or out['pushes'] != 'disabled':
+            raise ValidationError('workspace none cannot authorize edits, commits, or pushes')
+    if out['workspace'] == 'read-only' and out['edits'] == 'allowed':
+        raise ValidationError('edits cannot be allowed without workspace-write')
+    if out['workspace'] != 'workspace-write' and (out['commits'] != 'disabled' or out['pushes'] != 'disabled'):
+        raise ValidationError('commits and pushes require workspace-write')
+    if out['pushes'] == 'approval-required' and out['commits'] != 'approval-required':
+        raise ValidationError('pushes require commits to be approval-required')
     return out
 
 
@@ -520,6 +531,23 @@ class LoopbackTransport:
     def retry_handoff(self, meeting_id):
         return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/handoff/retry', {})
 
+    def list_approvals(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/approvals')
+
+    def get_approval(self, meeting_id, approval_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/approvals/{quote(approval_id)}')
+
+    def create_approval(self, meeting_id, payload):
+        return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/approvals', payload)
+
+    def decide_approval(self, meeting_id, approval_id, decision):
+        body = {'decision': decision} if isinstance(decision, str) else dict(decision or {})
+        return self._http(
+            'POST',
+            f'/v1/meetings/{quote(meeting_id)}/approvals/{quote(approval_id)}/decision',
+            body,
+        )
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -632,6 +660,22 @@ class MeetingHandle:
     async def retry_finalization(self):
         return self._transport.retry_handoff(self.id)
 
+    async def list_approvals(self):
+        return self._transport.list_approvals(self.id)
+
+    async def get_approval(self, approval_id):
+        if not approval_id:
+            raise ValidationError('approvalId is required')
+        return self._transport.get_approval(self.id, approval_id)
+
+    async def decide_approval(self, approval_id, decision):
+        if not approval_id:
+            raise ValidationError('approvalId is required')
+        value = decision if isinstance(decision, str) else (decision or {}).get('decision')
+        if value not in {'approved', 'denied'}:
+            raise ValidationError('decision must be approved or denied')
+        return self._transport.decide_approval(self.id, approval_id, {'decision': value})
+
     def on(self, name: str, handler: Callable[[Any], None]):
         if not callable(handler):
             raise ValidationError('event handler must be a function')
@@ -647,6 +691,7 @@ class MeetingHandle:
                 'state': list(self._listeners.get('state', ())),
                 'transcript': list(self._listeners.get('transcript', ())),
                 'delegation': list(self._listeners.get('delegation', ())),
+                'approval': list(self._listeners.get('approval', ())),
                 'approval_required': list(self._listeners.get('approval_required', ())),
             }
         for handler in listeners['event']:
@@ -659,6 +704,9 @@ class MeetingHandle:
                 handler(event)
         if kind.startswith('delegation.'):
             for handler in listeners['delegation']:
+                handler(event)
+        if kind.startswith('approval.'):
+            for handler in listeners['approval']:
                 handler(event)
         if kind in {'approval.required', 'approval_required'}:
             for handler in listeners['approval_required']:

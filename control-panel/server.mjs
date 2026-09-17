@@ -212,12 +212,23 @@ export function createServer({
     }
   }
 
+  async function pendingApprovals(meetingId, session) {
+    if (!meetingId || !meetingIsActive(session)) return [];
+    try {
+      const payload = await daemonClient.listApprovals(meetingId);
+      return (payload.approvals || []).filter((item) => item.status === 'pending');
+    } catch {
+      return [];
+    }
+  }
+
   async function status() {
     const health = await bridgeHealth();
     const { meetingId, session, daemonError } = await loadMeeting();
     const phase = phaseFromDaemon({ session, health, daemonError });
     const running = meetingIsActive(session);
     const lease = running ? await leaseSnapshot(session) : null;
+    const approvals = running ? await pendingApprovals(meetingId, session) : [];
     return {
       phase,
       running,
@@ -229,6 +240,7 @@ export function createServer({
       logs: logs.slice(-40),
       sessions: sessions(),
       daemonError: daemonError ? daemonError.message : undefined,
+      pendingApprovals: approvals,
     };
   }
 
@@ -432,6 +444,20 @@ export function createServer({
           return json(response, 200, { stopped: true });
         }
         addLog('system', error.message);
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    const approvalMatch = pathname.match(/^\/api\/meetings\/([^/]+)\/approvals\/([^/]+)\/decision$/);
+    if (request.method === 'POST' && approvalMatch) {
+      const meetingId = decodeURIComponent(approvalMatch[1]);
+      const approvalId = decodeURIComponent(approvalMatch[2]);
+      try {
+        const approval = await daemonClient.decideApproval(meetingId, approvalId, {
+          decision: body.decision,
+        });
+        addLog('system', `Approval ${approvalId} ${approval.status}.`);
+        return json(response, 200, { approval });
+      } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });
       }
     }

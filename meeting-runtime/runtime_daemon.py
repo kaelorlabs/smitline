@@ -14,17 +14,26 @@ import threading
 from aiohttp import web
 
 from agent_sessions import AGENT_PROVIDERS, MeetingSession
+from approvals import (
+    DEFAULT_TTL_SECONDS, build_approval, event_decision_payload,
+    event_request_payload, expire_if_needed, public_approval,
+)
 from context_handoff import ContextHandoff
 from event_store import JsonlEventStore
 from meeting_handoff import MeetingHandoff
 from meeting_repository import MeetingCorruptionError, MeetingRecord, MeetingRepository
 from meeting_urls import platform_for_url
+from permissions import DEFAULT_PERMISSIONS, bound_requested_permissions, permission_mode
 from schema_validation import reject_secrets, reject_unknown_fields, require_enum, require_id
 from session_continuity import validate_agent_session
 from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
 
 
 CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions', 'camera')
+CREATE_APPROVAL_FIELDS = (
+    'category', 'permission', 'summary', 'scope', 'delegationId', 'ttlSeconds', 'action',
+)
+DECIDE_APPROVAL_FIELDS = ('decision', 'approvalId', 'decidedAt')
 LIFECYCLE_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 FORWARD_TRANSITIONS = {
     'joining': frozenset({'waiting_for_admission', 'live', 'ended'}),
@@ -159,6 +168,7 @@ class RuntimeDaemon:
         self._lock_guard = threading.Lock()
         self._async_locks = {}
         self._write_locks = {}
+        self._approval_waiters = {}
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
@@ -336,13 +346,16 @@ class RuntimeDaemon:
         try:
             from visual_presence import parse_camera_settings
             camera = parse_camera_settings(payload.get('camera'))
+            requested = payload.get('permissions')
+            if requested is None:
+                requested = DEFAULT_PERMISSIONS.to_dict()
             session = MeetingSession.from_dict({
                 'id': meeting_id,
                 'platform': platform,
                 'meetingUrl': meeting_url,
                 'agentSession': payload.get('agentSession'),
                 'context': payload.get('context'),
-                'permissions': payload.get('permissions'),
+                'permissions': requested,
                 'state': 'joining',
                 'startedAt': started_at,
                 'cameraEnabled': camera['enabled'],
@@ -350,6 +363,11 @@ class RuntimeDaemon:
                 'visualState': 'joining',
             })
             validate_agent_session(session.agent_session)
+            session = self._replace_session(
+                session,
+                permissions=bound_requested_permissions(
+                    session.permissions, session.agent_session).to_dict(),
+            )
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
         camera_settings = {
@@ -422,6 +440,7 @@ class RuntimeDaemon:
                 record = self._record(meeting_id)
                 session = record.session
                 if session.state == 'ended':
+                    self._cancel_pending_locked(meeting_id, reason='cancelled')
                     return session
             try:
                 await self.supervisor.cancel(meeting_id)
@@ -438,6 +457,7 @@ class RuntimeDaemon:
                 ended = self._replace_session(record.session, state='ended')
                 self._persist(ended, record.lease_token)
                 self._append_once(meeting_id, 'meeting.ended', reason='cancelled')
+                self._cancel_pending_locked(meeting_id, reason='cancelled')
                 if record.lease_token:
                     agent = ended.agent_session
                     self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
@@ -469,6 +489,8 @@ class RuntimeDaemon:
             if event_type == 'meeting.ended':
                 extra['reason'] = reason or 'ended'
             self._append_once(meeting_id, event_type, **extra)
+            if event_type == 'meeting.ended':
+                self._cancel_pending_locked(meeting_id, reason=extra['reason'])
             if record.lease_token:
                 agent = updated.agent_session
                 self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
@@ -518,6 +540,266 @@ class RuntimeDaemon:
                 self._append(meeting_id, 'presence.updated', **public)
             return updated
 
+    def _approval_workspace(self, meeting_id):
+        return self._record(meeting_id).session.agent_session.workspace
+
+    def _waiter(self, approval_id):
+        with self._lock_guard:
+            event = self._approval_waiters.get(approval_id)
+            if event is None:
+                event = threading.Event()
+                self._approval_waiters[approval_id] = event
+            return event
+
+    def _signal_approval(self, approval_id):
+        self._waiter(approval_id).set()
+
+    def _public_approval_list(self, records):
+        return [public_approval(item) for item in records]
+
+    def public_approvals(self, meeting_id):
+        with self._serialize_writes(meeting_id):
+            records = self._expire_locked(meeting_id)
+            return self._public_approval_list(records)
+
+    def _expire_locked(self, meeting_id):
+        changed = []
+
+        def mutate(records):
+            updated = []
+            for raw in records:
+                next_record = expire_if_needed(raw, now=self._now())
+                if raw.get('status') == 'pending' and next_record.get('status') == 'expired':
+                    changed.append(next_record)
+                updated.append(next_record)
+            return updated
+
+        try:
+            stored = self.meetings.update_approvals(
+                meeting_id, mutate, workspace=self._approval_workspace(meeting_id))
+        except FileNotFoundError as error:
+            raise DaemonError(404, 'not_found', 'meeting not found') from error
+        for item in changed:
+            self._append(meeting_id, 'approval.expired', approvalId=item['id'])
+            self._signal_approval(item['id'])
+        if changed:
+            self._sync_approval_presence_locked(meeting_id)
+        return stored
+
+    def _sync_approval_presence_locked(self, meeting_id):
+        record = self._record(meeting_id)
+        pending = False
+        stored = self.meetings.list_approvals(
+            meeting_id, workspace=record.session.agent_session.workspace) or []
+        for item in stored:
+            if item.get('status') == 'pending':
+                pending = True
+                break
+        if pending and record.session.state != 'ended':
+            self.apply_presence(meeting_id, visualState='needs_attention')
+        elif record.session.state == 'live' and record.session.visual_state == 'needs_attention':
+            self.apply_presence(meeting_id, visualState='listening')
+        elif record.session.state == 'ended' and record.session.visual_state != 'ended':
+            self.apply_presence(meeting_id, visualState='ended')
+
+    def _cancel_pending_locked(self, meeting_id, reason='meeting_ended'):
+        changed = []
+        label = str(reason or 'meeting_ended')[:64]
+
+        def mutate(records):
+            updated = []
+            for raw in records:
+                if raw.get('status') == 'pending':
+                    item = dict(raw)
+                    item['status'] = 'cancelled'
+                    item['resolvedAt'] = _iso(self._now())
+                    changed.append(item)
+                    updated.append(item)
+                else:
+                    updated.append(raw)
+            return updated
+
+        try:
+            self.meetings.update_approvals(
+                meeting_id, mutate, workspace=self._approval_workspace(meeting_id))
+        except FileNotFoundError:
+            return
+        for item in changed:
+            self._append(meeting_id, 'approval.cancelled', approvalId=item['id'], reason=label)
+            self._signal_approval(item['id'])
+        if changed:
+            self._sync_approval_presence_locked(meeting_id)
+
+    def _enrich_handoff(self, handoff, session):
+        payload = handoff.to_dict()
+        if payload.get('permissions') is None:
+            payload['permissions'] = session.permissions.to_dict()
+        if payload.get('approvals') is None:
+            stored = self.meetings.list_approvals(
+                session.id, workspace=session.agent_session.workspace) or []
+            payload['approvals'] = self._public_approval_list(stored)
+        return MeetingHandoff.from_dict(payload)
+
+    def _find_approval(self, records, approval_id):
+        for item in records:
+            if item.get('id') == approval_id:
+                return item
+        return None
+
+    def create_approval(self, meeting_id, payload):
+        reject_unknown_fields(payload, CREATE_APPROVAL_FIELDS, 'approval')
+        reject_secrets(payload, 'approval')
+        category = payload.get('category') or payload.get('permission') or payload.get('action')
+        ttl = payload.get('ttlSeconds', DEFAULT_TTL_SECONDS)
+        if ttl is None:
+            ttl = DEFAULT_TTL_SECONDS
+        if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 1 or ttl > 3600:
+            raise DaemonError(422, 'invalid_request', 'ttlSeconds must be between 1 and 3600')
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            if record.session.state == 'ended':
+                raise DaemonError(409, 'conflict', 'cannot create approvals after the meeting has ended')
+            mode = permission_mode(record.session.permissions, category)
+            if mode != 'approval-required':
+                raise DaemonError(
+                    422, 'invalid_request',
+                    'this action is not configured for approval')
+            try:
+                built = build_approval(
+                    approval_id=_new_id('appr-'),
+                    meeting_id=meeting_id,
+                    category=category,
+                    summary=payload.get('summary'),
+                    created_at=_iso(self._now()),
+                    ttl_seconds=ttl,
+                    delegation_id=payload.get('delegationId'),
+                    scope=payload.get('scope'),
+                    workspace=record.session.agent_session.workspace,
+                )
+            except (TypeError, ValueError) as error:
+                raise DaemonError(422, 'invalid_request', str(error)) from error
+            stored_payload = built.to_dict()
+
+            def mutate(records):
+                records.append(stored_payload)
+                return records
+
+            self.meetings.update_approvals(
+                meeting_id, mutate, workspace=record.session.agent_session.workspace)
+            self._append(
+                meeting_id, 'approval.required', request=event_request_payload(built))
+            self._waiter(stored_payload['id'])
+            self._sync_approval_presence_locked(meeting_id)
+            return public_approval(stored_payload)
+
+    def list_approvals(self, meeting_id):
+        self._record(meeting_id)
+        with self._serialize_writes(meeting_id):
+            records = self._expire_locked(meeting_id)
+            return {'approvals': self._public_approval_list(records)}
+
+    def get_approval(self, meeting_id, approval_id):
+        require_id(approval_id, 'approvalId')
+        self._record(meeting_id)
+        with self._serialize_writes(meeting_id):
+            records = self._expire_locked(meeting_id)
+            found = self._find_approval(records, approval_id)
+            if found is None:
+                raise DaemonError(404, 'not_found', 'approval not found')
+            if found.get('meetingId') != meeting_id:
+                raise DaemonError(409, 'conflict', 'approval does not belong to this meeting')
+            return public_approval(found)
+
+    def decide_approval(self, meeting_id, approval_id, payload):
+        reject_unknown_fields(payload, DECIDE_APPROVAL_FIELDS, 'decision')
+        reject_secrets(payload, 'decision')
+        require_id(approval_id, 'approvalId')
+        if payload.get('approvalId') not in (None, approval_id):
+            raise DaemonError(409, 'conflict', 'approvalId does not match the request')
+        try:
+            decision = require_enum(payload.get('decision'), 'decision', ('approved', 'denied'))
+        except ValueError as error:
+            raise DaemonError(422, 'invalid_request', str(error)) from error
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            records = self._expire_locked(meeting_id)
+            found = self._find_approval(records, approval_id)
+            if found is None:
+                raise DaemonError(404, 'not_found', 'approval not found')
+            if found.get('meetingId') != meeting_id:
+                raise DaemonError(409, 'conflict', 'approval does not belong to this meeting')
+            status = found.get('status')
+            if status == decision:
+                return public_approval(found)
+            if status != 'pending':
+                raise DaemonError(409, 'conflict', 'approval decision is stale')
+            updated = dict(found)
+            updated['status'] = decision
+            updated['decision'] = decision
+            updated['resolvedAt'] = _iso(self._now())
+
+            def mutate(current):
+                out = []
+                for item in current:
+                    if item.get('id') == approval_id:
+                        out.append(updated)
+                    else:
+                        out.append(item)
+                return out
+
+            self.meetings.update_approvals(
+                meeting_id, mutate, workspace=record.session.agent_session.workspace)
+            event_type = 'approval.approved' if decision == 'approved' else 'approval.denied'
+            self._append(
+                meeting_id, event_type,
+                decision=event_decision_payload(updated, updated['resolvedAt']))
+            self._signal_approval(approval_id)
+            self._sync_approval_presence_locked(meeting_id)
+            return public_approval(updated)
+
+    def consume_approval(self, meeting_id, approval_id):
+        require_id(approval_id, 'approvalId')
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            records = self._expire_locked(meeting_id)
+            found = self._find_approval(records, approval_id)
+            if found is None:
+                raise DaemonError(404, 'not_found', 'approval not found')
+            if found.get('status') != 'approved':
+                return public_approval(found)
+            if found.get('consumed'):
+                raise DaemonError(409, 'conflict', 'approval authorization was already used')
+            updated = dict(found)
+            updated['consumed'] = True
+
+            def mutate(current):
+                out = []
+                for item in current:
+                    out.append(updated if item.get('id') == approval_id else item)
+                return out
+
+            self.meetings.update_approvals(
+                meeting_id, mutate, workspace=record.session.agent_session.workspace)
+            return public_approval(updated)
+
+    async def wait_for_decision(self, meeting_id, approval_id, *, timeout=None):
+        require_id(approval_id, 'approvalId')
+        waiter = self._waiter(approval_id)
+        deadline = None if timeout is None else (asyncio.get_event_loop().time() + float(timeout))
+        while True:
+            current = self.get_approval(meeting_id, approval_id)
+            if current.get('status') != 'pending':
+                if current.get('status') == 'approved':
+                    return self.consume_approval(meeting_id, approval_id)
+                return current
+            remaining = 0.05
+            if deadline is not None:
+                remaining = min(remaining, max(0.0, deadline - asyncio.get_event_loop().time()))
+                if remaining <= 0:
+                    return self.get_approval(meeting_id, approval_id)
+            await asyncio.to_thread(waiter.wait, remaining)
+            waiter.clear()
+
     def heartbeat_lease(self, provider, session_id):
         lease, record = self._lease_pair(provider, session_id)
         if lease is None:
@@ -543,8 +825,6 @@ class RuntimeDaemon:
         session = record.session
         if handoff.started_at != session.started_at:
             raise DaemonError(422, 'invalid_request', 'handoff does not match the meeting')
-        if record.handoff is not None and record.handoff.to_dict() != handoff.to_dict():
-            raise DaemonError(409, 'conflict', 'a different handoff is already stored')
         agent = session.agent_session
         token = record.lease_token
         lease = None
@@ -565,6 +845,10 @@ class RuntimeDaemon:
                             agent.provider, agent.session_id, token or lease.token)
                     except (LeaseConflictError, LeaseStateError) as error:
                         raise DaemonError(409, 'conflict', str(error)) from error
+        self._cancel_pending_locked(session.id, reason='handoff_ready')
+        handoff = self._enrich_handoff(handoff, session)
+        if record.handoff is not None and record.handoff.to_dict() != handoff.to_dict():
+            raise DaemonError(409, 'conflict', 'a different handoff is already stored')
         if session.state != 'ended':
             session = self._replace_session(session, state='ended')
             self._persist(session, token)
@@ -863,6 +1147,26 @@ def create_app(
         handoff = await daemon.retry_handoff_append(request.match_info['meetingId'])
         return _public_json(handoff.to_dict())
 
+    async def list_approvals(request):
+        payload = daemon.list_approvals(request.match_info['meetingId'])
+        return _public_json(payload)
+
+    async def create_approval(request):
+        payload = await read_json(request)
+        approval = daemon.create_approval(request.match_info['meetingId'], payload)
+        return _public_json(approval, status=201)
+
+    async def get_approval(request):
+        approval = daemon.get_approval(
+            request.match_info['meetingId'], request.match_info['approvalId'])
+        return _public_json(approval)
+
+    async def decide_approval(request):
+        payload = await read_json(request)
+        approval = daemon.decide_approval(
+            request.match_info['meetingId'], request.match_info['approvalId'], payload)
+        return _public_json(approval)
+
     async def get_events(request):
         meeting_id = request.match_info['meetingId']
         daemon._record(meeting_id)
@@ -947,6 +1251,10 @@ def create_app(
     app.router.add_get('/v1/meetings/{meetingId}/events', get_events)
     app.router.add_get('/v1/meetings/{meetingId}/handoff', get_handoff)
     app.router.add_post('/v1/meetings/{meetingId}/handoff/retry', retry_handoff)
+    app.router.add_post('/v1/meetings/{meetingId}/approvals/{approvalId}/decision', decide_approval)
+    app.router.add_get('/v1/meetings/{meetingId}/approvals/{approvalId}', get_approval)
+    app.router.add_post('/v1/meetings/{meetingId}/approvals', create_approval)
+    app.router.add_get('/v1/meetings/{meetingId}/approvals', list_approvals)
     app.router.add_post('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_heartbeat)
     app.router.add_delete('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_release)
     app.router.add_get('/v1/agent-sessions/{provider}/{sessionId}/status', lease_status)

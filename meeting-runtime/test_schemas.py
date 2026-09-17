@@ -134,6 +134,10 @@ class SchemaValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MeetingPermissions.from_dict(permissions_payload(commits='allowed'))
         with self.assertRaises(ValueError):
+            MeetingPermissions.from_dict(permissions_payload(workspace='none', edits='approval-required'))
+        with self.assertRaises(ValueError):
+            MeetingPermissions.from_dict(permissions_payload(workspace='read-only', edits='allowed'))
+        with self.assertRaises(ValueError):
             AgentSessionRef.from_dict(agent_session_payload(provider='copilot'))
         with self.assertRaises(ValueError):
             AgentSessionRef.from_dict(agent_session_payload(workspace='relative/path'))
@@ -198,6 +202,15 @@ class SchemaValidationTests(unittest.TestCase):
                 'id': 'appr-1', 'permission': 'network', 'summary': 'Allow Tavily search',
                 'createdAt': TIMESTAMP,
             }),
+            event_payload('approval.approved', id='evt-12b', decision={
+                'approvalId': 'appr-1', 'decision': 'approved', 'decidedAt': TIMESTAMP,
+            }),
+            event_payload('approval.denied', id='evt-12c', decision={
+                'approvalId': 'appr-1', 'decision': 'denied', 'decidedAt': TIMESTAMP,
+            }),
+            event_payload('approval.expired', id='evt-12d', approvalId='appr-1'),
+            event_payload('approval.cancelled', id='evt-12e', approvalId='appr-1',
+                          reason='cancelled'),
             event_payload('artifact.created', id='evt-13', artifact={
                 'id': 'art-1', 'kind': 'handoff', 'path': '/tmp/handoff.json',
                 'createdAt': TIMESTAMP,

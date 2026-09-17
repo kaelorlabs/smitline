@@ -144,6 +144,22 @@ class FakeTransport:
         self.handoffs[meeting_id]['summary'] = 'retried'
         return self.handoffs[meeting_id]
 
+    def list_approvals(self, meeting_id):
+        return {'approvals': list(getattr(self, 'approvals', {}).get(meeting_id, []))}
+
+    def get_approval(self, meeting_id, approval_id):
+        for item in getattr(self, 'approvals', {}).get(meeting_id, []):
+            if item['id'] == approval_id:
+                return item
+        raise ColleagueError('approval not found', code='not_found', status=404)
+
+    def decide_approval(self, meeting_id, approval_id, decision):
+        value = decision if isinstance(decision, str) else decision['decision']
+        item = self.get_approval(meeting_id, approval_id)
+        item['status'] = value
+        item['decision'] = value
+        return item
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -179,6 +195,15 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             'camera': {'enabled': False},
         })
         self.assertEqual(disabled['camera']['enabled'], False)
+        with self.assertRaises(ValidationError):
+            validate_join_request({
+                'url': ZOOM,
+                'agentSession': agent_session(),
+                'permissions': {
+                    'workspace': 'none', 'commands': 'allowed', 'edits': 'disabled',
+                    'network': 'disabled', 'commits': 'disabled', 'pushes': 'disabled',
+                },
+            })
 
     async def test_join_preserves_session_and_dedupes_consumers(self):
         transport = FakeTransport()
@@ -300,6 +325,25 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             'recentConversation': [],
         })
         self.assertEqual(updated['context']['objective'], 'ship sdk')
+        await meeting.cancel()
+
+    async def test_approval_handle_requires_ids(self):
+        transport = FakeTransport()
+        transport.auto_handoff = False
+        transport.approvals = {
+            'mtg-1': [{
+                'id': 'appr-1', 'meetingId': 'mtg-1', 'category': 'commands',
+                'summary': 'Run a workspace lookup', 'status': 'pending',
+            }],
+        }
+        colleague = Colleague(transport=transport)
+        meeting = await colleague.join_meeting({'url': ZOOM, 'agentSession': agent_session()})
+        listed = await meeting.list_approvals()
+        self.assertEqual(listed['approvals'][0]['id'], 'appr-1')
+        denied = await meeting.decide_approval('appr-1', 'denied')
+        self.assertEqual(denied['status'], 'denied')
+        with self.assertRaises(ValidationError):
+            await meeting.decide_approval('', 'approved')
         await meeting.cancel()
 
 

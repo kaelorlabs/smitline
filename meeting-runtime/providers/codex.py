@@ -7,6 +7,7 @@ from codex_tool import CODEX_MODELS, CodexJobClient
 from session_continuity import CONTEXT, session_id_of, validate_agent_session
 from startup_input import clip_tokens
 
+from permissions import permission_mode
 from .base import CodingAgentProvider
 
 
@@ -59,11 +60,42 @@ def _call_kwargs(func, extra):
 
 
 class CodexProvider(CodingAgentProvider):
-    def __init__(self, client=None, *, search=None, context_search=None, default_model='gpt-5.6-terra'):
+    def __init__(self, client=None, *, search=None, context_search=None, default_model='gpt-5.6-terra',
+                 approval_gate=None):
         self.client = client or CodexJobClient()
         self.search = search
         self.context_search = search_context if context_search is None else context_search
         self.default_model = default_model
+        self.approval_gate = approval_gate
+
+    async def request_action(self, request, category, summary, scope=None, cancel=None):
+        mode = permission_mode(request.permissions, category)
+        if mode == 'allowed':
+            return {'status': 'approved', 'mode': 'allowed'}
+        if mode != 'approval-required':
+            return {'status': 'denied', 'error': 'approval_denied', 'mode': mode}
+        gate = getattr(request, 'approval_gate', None) or self.approval_gate
+        if gate is None:
+            return {'status': 'denied', 'error': 'approval_denied', 'mode': mode}
+        if cancel is not None and cancel.is_set():
+            return {'status': 'denied', 'error': 'cancelled'}
+        if request.on_progress:
+            request.on_progress('needs approval')
+        result = await _maybe_await(gate({
+            'category': category,
+            'summary': summary,
+            'scope': scope or {},
+            'delegationId': request.delegation_id,
+            'meetingId': request.meeting_id,
+        }))
+        if not isinstance(result, dict):
+            return {'status': 'denied', 'error': 'approval_denied'}
+        status = result.get('status') or result.get('decision')
+        if status == 'approved':
+            return result
+        if status == 'expired':
+            return {'status': 'expired', 'error': 'approval_expired'}
+        return {'status': 'denied', 'error': 'approval_denied'}
 
     def _model(self, request):
         model = request.model or self.default_model
@@ -151,15 +183,22 @@ class CodexProvider(CodingAgentProvider):
                 for item in found['results'][:4]:
                     passages.append(f"{item.get('source', 'source')}: {item.get('passage', '')}")
                 context_block = '\n'.join(passages)
-        if network == 'allowed' and self.search is not None:
-            try:
-                found = await _maybe_await(self.search(spoken[:400]))
-            except Exception:
-                found = None
-            if isinstance(found, dict) and found.get('results'):
-                extras.append('Public sources: ' + '; '.join(
-                    f"{item.get('title', 'source')} ({item.get('url', '')})"
-                    for item in found['results'][:3]))
+        if self.search is not None and network in ('allowed', 'approval-required'):
+            allowed = network == 'allowed'
+            if network == 'approval-required':
+                decision = await self.request_action(
+                    request, 'network', 'Allow a web search for this request',
+                    scope={'host': 'web-search'}, cancel=cancel)
+                allowed = decision.get('status') == 'approved'
+            if allowed:
+                try:
+                    found = await _maybe_await(self.search(spoken[:400]))
+                except Exception:
+                    found = None
+                if isinstance(found, dict) and found.get('results'):
+                    extras.append('Public sources: ' + '; '.join(
+                        f"{item.get('title', 'source')} ({item.get('url', '')})"
+                        for item in found['results'][:3]))
         task = '\n\n'.join(part for part in (
             'Spoken request:\n' + spoken,
             'Meeting context:\n' + _handoff_excerpt(request.handoff),

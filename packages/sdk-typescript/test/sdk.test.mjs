@@ -78,6 +78,14 @@ test('client-side validation rejects secrets, placeholders, and relative workspa
     camera: { enabled: false },
   });
   assert.equal(disabled.camera.enabled, false);
+  await assert.rejects(() => colleague.joinMeeting({
+    url: ZOOM,
+    agentSession: agentSession(),
+    permissions: {
+      workspace: 'none', commands: 'allowed', edits: 'disabled',
+      network: 'disabled', commits: 'disabled', pushes: 'disabled',
+    },
+  }), ValidationError);
 });
 
 test('create preserves explicit agentSession fields and does not start duplicate meetings', { timeout: 8000 }, async (t) => {
@@ -356,4 +364,23 @@ test('iterateSse skips duplicate ids', async () => {
   const ids = [];
   for await (const item of iterateSse(chunks(), { seen: new Set() })) ids.push(item.event.id);
   assert.deepEqual(ids, ['evt-1', 'evt-2']);
+});
+
+test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, async (t) => {
+  await withDaemon(t, { autoHandoff: false }, async ({ colleague, daemon }) => {
+    const meeting = await colleague.joinMeeting(joinRequest());
+    const created = await colleague._transport.createApproval(meeting.id, {
+      category: 'commands',
+      summary: 'Run a workspace lookup',
+    });
+    assert.equal(created.status, 'pending');
+    const listed = await meeting.listApprovals();
+    assert.equal(listed.approvals[0].id, created.id);
+    const decided = await meeting.decideApproval(created.id, 'denied');
+    assert.equal(decided.status, 'denied');
+    await assert.rejects(() => meeting.decideApproval('', 'approved'));
+    const dumped = JSON.stringify({ created, listed, decided, token: daemon.token });
+    assert.equal(dumped.includes('secret meeting speech'), false);
+    await meeting.cancel();
+  });
 });

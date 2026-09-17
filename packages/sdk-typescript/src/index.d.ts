@@ -55,6 +55,24 @@ export interface MeetingHandoff {
   endReason?: string;
   archivePath?: string;
   git?: { branch?: string; commit?: string; dirty?: boolean };
+  permissions?: MeetingPermissions;
+  approvals?: ApprovalRecord[];
+}
+
+export interface ApprovalRecord {
+  version?: 1;
+  id: string;
+  meetingId: string;
+  category: string;
+  permission?: string;
+  summary: string;
+  scope?: Record<string, string>;
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'cancelled';
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string;
+  decision?: 'approved' | 'denied';
+  delegationId?: string;
 }
 
 export interface MeetingSession {
@@ -93,7 +111,7 @@ export interface JoinMeetingRequest {
   };
 }
 
-export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval_required' | 'event';
+export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'event';
 
 export interface DaemonTransport {
   createMeeting(payload: Record<string, unknown>): Promise<MeetingSession>;
@@ -102,6 +120,9 @@ export interface DaemonTransport {
   cancelMeeting(meetingId: string): Promise<MeetingSession>;
   getHandoff(meetingId: string): Promise<MeetingHandoff>;
   retryHandoff(meetingId: string): Promise<MeetingHandoff>;
+  listApprovals(meetingId: string): Promise<{ approvals: ApprovalRecord[] }>;
+  getApproval(meetingId: string, approvalId: string): Promise<ApprovalRecord>;
+  decideApproval(meetingId: string, approvalId: string, decision: { decision: 'approved' | 'denied' } | 'approved' | 'denied'): Promise<ApprovalRecord>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -124,6 +145,9 @@ export interface MeetingHandle {
   addContext(context: ContextHandoff): Promise<MeetingSession>;
   cancel(): Promise<MeetingSession>;
   retryFinalization(): Promise<MeetingHandoff>;
+  listApprovals(): Promise<{ approvals: ApprovalRecord[] }>;
+  getApproval(approvalId: string): Promise<ApprovalRecord>;
+  decideApproval(approvalId: string, decision: 'approved' | 'denied' | { decision: 'approved' | 'denied' }): Promise<ApprovalRecord>;
   on(event: MeetingEventName, handler: (payload: unknown) => void): () => void;
   events(): AsyncIterable<ColleagueEvent>;
 }

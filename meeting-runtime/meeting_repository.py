@@ -18,7 +18,9 @@ _GLOBAL_LOCKS = {}
 _SNAPSHOT_NAME = 'snapshot.json'
 _LEASE_NAME = 'lease.json'
 _HANDOFF_NAME = 'handoff.json'
+_APPROVALS_NAME = 'approvals.json'
 _OWNER_FIELDS = ('leaseId',)
+_APPROVAL_FILE_FIELDS = ('version', 'approvals')
 
 
 class MeetingRepositoryError(Exception):
@@ -324,6 +326,63 @@ class MeetingRepository:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
                 os.close(dir_fd)
         return self.get(meeting_id)
+
+    def _read_approvals(self, dir_fd, *, workspace=None):
+        from approvals import ApprovalRecord
+        raw = self._read_named(dir_fd, _APPROVALS_NAME)
+        if raw is None:
+            return []
+        payload = self._parse_object(raw, 'meeting approvals')
+        extra = set(payload) - set(_APPROVAL_FILE_FIELDS)
+        if extra:
+            raise MeetingCorruptionError('meeting approvals do not match the schema')
+        items = payload.get('approvals')
+        if items is None:
+            return []
+        if not isinstance(items, list):
+            raise MeetingCorruptionError('meeting approvals do not match the schema')
+        try:
+            reject_secrets(payload, 'meeting approvals')
+            return [ApprovalRecord.from_dict(item, workspace=workspace).to_dict() for item in items]
+        except (TypeError, ValueError) as error:
+            raise MeetingCorruptionError('meeting approvals do not match the schema') from error
+
+    def list_approvals(self, meeting_id, *, workspace=None):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                return None
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_SH)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    return None
+                return self._read_approvals(dir_fd, workspace=workspace)
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
+
+    def update_approvals(self, meeting_id, mutator, *, workspace=None):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                raise FileNotFoundError('meeting does not exist')
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    raise FileNotFoundError('meeting does not exist')
+                current = list(self._read_approvals(dir_fd, workspace=workspace))
+                updated = list(mutator(list(current)))
+                if updated == current:
+                    return updated
+                payload = {'version': 1, 'approvals': updated}
+                reject_secrets(payload, 'meeting approvals')
+                self._atomic_write(dir_fd, _APPROVALS_NAME, payload)
+                return updated
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
 
     def list_ids(self):
         self._ensure_open()

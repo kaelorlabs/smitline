@@ -178,6 +178,25 @@ function createFakeDaemon() {
     async leaseStatus() {
       return { state: 'in_meeting' };
     },
+    approvals: new Map(),
+    async listApprovals(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/approvals` });
+      return { approvals: this.approvals.get(id) || [] };
+    },
+    async decideApproval(id, approvalId, body) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/approvals/${approvalId}/decision`, body });
+      const current = this.approvals.get(id) || [];
+      const found = current.find((item) => item.id === approvalId);
+      if (!found) {
+        const error = new Error('approval not found');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      found.status = body.decision;
+      found.decision = body.decision;
+      return found;
+    },
     async getHandoff(id) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/handoff` });
       const handoff = this.handoffs.get(id);
@@ -289,6 +308,44 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     const encoded = JSON.stringify({ bootstrap, status, body });
     assert.equal(encoded.includes('Bearer'), false);
     assert.equal('OPENAI_API_KEY' in (bootstrap.settings || {}), false);
+  });
+});
+
+test('status lists pending approvals and decide posts a single decision', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const started = await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    assert.equal(started.status, 202);
+    const meetingId = [...panel.daemon.meetings.keys()][0];
+    panel.daemon.approvals.set(meetingId, [{
+      id: 'appr-1',
+      meetingId,
+      category: 'commands',
+      summary: 'Run a workspace lookup',
+      scope: { host: 'workspace' },
+      status: 'pending',
+      expiresAt: '2026-09-16T00:15:00Z',
+    }]);
+    const status = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(status.pendingApprovals[0].id, 'appr-1');
+    assert.equal(status.pendingApprovals[0].summary, 'Run a workspace lookup');
+    const html = await (await fetch(`${panel.base}/`)).text();
+    assert.match(html, /Pending approvals/);
+    assert.equal(html.includes('Approve all'), false);
+    const decided = await fetch(`${panel.base}/api/meetings/${meetingId}/approvals/appr-1/decision`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ decision: 'denied' }),
+    });
+    assert.equal(decided.status, 200);
+    const call = panel.daemon.calls.find((item) => String(item.path).includes('/decision'));
+    assert.equal(call.body.decision, 'denied');
+    const dumped = JSON.stringify({ status, html, decided: await decided.json() });
+    assert.equal(dumped.includes('sk-test'), false);
   });
 });
 

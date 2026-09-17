@@ -38,6 +38,7 @@ export async function startFakeDaemon(options = {}) {
     meetings: new Map(),
     handoffs: new Map(),
     events: new Map(),
+    approvals: new Map(),
     sseClients: [],
     requireAuth: options.requireAuth !== false,
     readyDelayMs: options.readyDelayMs || 0,
@@ -277,6 +278,82 @@ export async function startFakeDaemon(options = {}) {
           state.handoffs.set(meetingId, handoff);
           json(response, 200, handoff);
           return;
+        }
+        const approvalMatch = rest.match(/^approvals(?:\/([^/]+))?(?:\/(decision))?$/);
+        if (approvalMatch) {
+          const approvalId = approvalMatch[1];
+          const decisionPart = approvalMatch[2];
+          if (!state.approvals.has(meetingId)) state.approvals.set(meetingId, []);
+          const approvals = state.approvals.get(meetingId);
+          if (request.method === 'GET' && !approvalId) {
+            json(response, 200, { approvals });
+            return;
+          }
+          if (request.method === 'POST' && !approvalId) {
+            const body = JSON.parse((await readBody(request)) || '{}');
+            const created = {
+              version: 1,
+              id: `appr-${approvals.length + 1}`,
+              meetingId,
+              category: body.category || body.permission || 'commands',
+              permission: body.category || body.permission || 'commands',
+              summary: body.summary || 'Requested action',
+              scope: body.scope || {},
+              status: 'pending',
+              createdAt: meeting.startedAt,
+              expiresAt: '2026-09-16T00:15:00Z',
+              delegationId: body.delegationId,
+            };
+            approvals.push(created);
+            pushEvent(meetingId, {
+              version: 1,
+              id: `evt-approval-${created.id}`,
+              meetingId,
+              timestamp: created.createdAt,
+              type: 'approval.required',
+              request: created,
+            });
+            json(response, 201, created);
+            return;
+          }
+          const found = approvals.find((item) => item.id === approvalId);
+          if (!found) {
+            json(response, 404, { error: { code: 'not_found', message: 'approval not found' } });
+            return;
+          }
+          if (request.method === 'GET' && !decisionPart) {
+            json(response, 200, found);
+            return;
+          }
+          if (request.method === 'POST' && decisionPart === 'decision') {
+            const body = JSON.parse((await readBody(request)) || '{}');
+            const decision = body.decision;
+            if (decision !== 'approved' && decision !== 'denied') {
+              json(response, 422, { error: { code: 'invalid_request', message: 'decision is invalid' } });
+              return;
+            }
+            if (found.status === decision) {
+              json(response, 200, found);
+              return;
+            }
+            if (found.status !== 'pending') {
+              json(response, 409, { error: { code: 'conflict', message: 'approval decision is stale' } });
+              return;
+            }
+            found.status = decision;
+            found.decision = decision;
+            found.resolvedAt = '2026-09-16T00:05:00Z';
+            pushEvent(meetingId, {
+              version: 1,
+              id: `evt-decision-${found.id}`,
+              meetingId,
+              timestamp: found.resolvedAt,
+              type: decision === 'approved' ? 'approval.approved' : 'approval.denied',
+              decision: { approvalId: found.id, decision, decidedAt: found.resolvedAt },
+            });
+            json(response, 200, found);
+            return;
+          }
         }
         if (request.method === 'GET' && rest === 'events') {
           const lastEventId = request.headers['last-event-id'] || '';

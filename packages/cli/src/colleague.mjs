@@ -30,6 +30,9 @@ const USAGE = `Usage:
   colleague context add --file <path> | --text <json> [--meeting-id <id>]
   colleague handoff get [--meeting-id <id>]
   colleague handoff retry [--meeting-id <id>]
+  colleague approvals list --meeting-id <id>
+  colleague approvals get --meeting-id <id> --approval-id <id>
+  colleague approvals decide --meeting-id <id> --approval-id <id> --decision approved|denied
 `;
 
 function parseArgs(argv) {
@@ -131,6 +134,10 @@ function describeEvent(event) {
   if (type === 'presence.updated') return `presence ${event.visualState || 'updated'}`;
   if (type === 'handoff.ready') return 'handoff ready';
   if (type === 'handoff.append_failed') return 'handoff append failed';
+  if (String(type).startsWith('approval.')) {
+    const category = event.request?.category || event.request?.permission || event.decision?.decision || '';
+    return `approval ${type.replace('approval.', '')}${category ? ` ${category}` : ''}`;
+  }
   return type;
 }
 
@@ -238,6 +245,33 @@ async function main(argv = process.argv.slice(2)) {
       const { result } = await daemonCall(args, 'retryHandoff');
       writeFinal(result);
       return result?.partial ? EXIT.partial : EXIT.ok;
+    }
+    if (command === 'approvals') {
+      if (!args['meeting-id']) throw new ValidationError('approvals commands require --meeting-id');
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      if (args._[1] === 'list') {
+        const result = await transport.listApprovals(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (!args['approval-id']) throw new ValidationError('this command requires --approval-id');
+      if (args._[1] === 'get') {
+        const result = await transport.getApproval(meetingId, args['approval-id']);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'decide') {
+        const decision = args.decision;
+        if (decision !== 'approved' && decision !== 'denied') {
+          throw new ValidationError('--decision must be approved or denied');
+        }
+        const result = await transport.decideApproval(meetingId, args['approval-id'], { decision });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown approvals command');
     }
     throw new ValidationError(`unknown command: ${command}`);
   } catch (error) {

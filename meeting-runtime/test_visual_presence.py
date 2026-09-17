@@ -37,7 +37,13 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(map_visual_state({
             'stage': 'live', 'backend_status': 'idle', 'floorState': 'listening',
         }), 'listening')
-        self.assertEqual(map_visual_state({'stage': 'live', 'finalizing': True}), 'finalizing')
+        self.assertEqual(map_visual_state({
+            'stage': 'live', 'backend_status': 'waiting_approval', 'floorState': 'listening',
+            'awaitingApproval': True,
+        }), 'needs_attention')
+        self.assertEqual(map_visual_state({
+            'stage': 'live', 'backend_status': 'waiting_approval', 'floorState': 'speaking',
+        }), 'speaking')
         self.assertEqual(map_visual_state({'stage': 'needs_attention'}), 'needs_attention')
         self.assertEqual(map_visual_state({'stage': 'meeting_ended'}), 'ended')
 

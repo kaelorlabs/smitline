@@ -25,6 +25,10 @@ EVENT_TYPES = (
     'delegation.completed',
     'delegation.cancelled',
     'approval.required',
+    'approval.approved',
+    'approval.denied',
+    'approval.expired',
+    'approval.cancelled',
     'artifact.created',
     'handoff.ready',
     'handoff.append_failed',
@@ -43,6 +47,10 @@ PAYLOAD_FIELDS = {
     'delegation.completed': ('delegationId',),
     'delegation.cancelled': ('delegationId', 'reason'),
     'approval.required': ('request',),
+    'approval.approved': ('decision',),
+    'approval.denied': ('decision',),
+    'approval.expired': ('approvalId',),
+    'approval.cancelled': ('approvalId', 'reason'),
     'artifact.created': ('artifact',),
     'handoff.ready': ('handoff',),
     'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
@@ -54,7 +62,11 @@ APPROVAL_PERMISSIONS = ('workspace', 'commands', 'edits', 'network', 'commits', 
 TRANSCRIPT_ENTRY_FIELDS = (
     'id', 'text', 'source', 'speaker', 'startOffsetMs', 'endOffsetMs', 'muted', 'delegationId',
 )
-APPROVAL_FIELDS = ('id', 'permission', 'summary', 'createdAt', 'action')
+APPROVAL_FIELDS = (
+    'id', 'permission', 'summary', 'createdAt', 'action', 'category', 'scope',
+    'delegationId', 'expiresAt', 'status',
+)
+APPROVAL_STATUSES = ('pending', 'approved', 'denied', 'expired', 'cancelled')
 ARTIFACT_FIELDS = ('id', 'kind', 'path', 'createdAt', 'mediaType', 'description')
 
 
@@ -112,6 +124,11 @@ class ApprovalRequest:
     summary: str
     created_at: str
     action: str = None
+    category: str = None
+    scope: dict = None
+    delegation_id: str = None
+    expires_at: str = None
+    status: str = None
 
     def to_dict(self):
         return omit_none({
@@ -120,22 +137,74 @@ class ApprovalRequest:
             'summary': self.summary,
             'createdAt': self.created_at,
             'action': self.action,
+            'category': self.category or self.permission,
+            'scope': None if not self.scope else dict(self.scope),
+            'delegationId': self.delegation_id,
+            'expiresAt': self.expires_at,
+            'status': self.status,
         })
 
     @classmethod
     def from_dict(cls, data):
         payload = require_mapping(data, 'request')
         reject_unknown_fields(payload, APPROVAL_FIELDS, 'request')
+        permission = require_enum(require_field(payload, 'permission', 'request'),
+                                  'request.permission', APPROVAL_PERMISSIONS)
+        category = permission if optional_field(payload, 'category') is None else require_enum(
+            payload['category'], 'request.category', APPROVAL_PERMISSIONS)
+        status = None if optional_field(payload, 'status') is None else require_enum(
+            payload['status'], 'request.status', APPROVAL_STATUSES)
+        scope = optional_field(payload, 'scope')
+        if scope is not None and not isinstance(scope, dict):
+            raise ValueError('request.scope must be an object')
+        lowered = require_string(require_field(payload, 'summary', 'request'),
+                                 'request.summary', max_length=240).lower()
+        if any(token in lowered for token in (
+                'password', 'api key', 'bearer', 'transcript', 'diff --git')):
+            raise ValueError('approval summary cannot include private or command text')
         return cls(
             id=require_id(require_field(payload, 'id', 'request'), 'request.id'),
-            permission=require_enum(require_field(payload, 'permission', 'request'),
-                                    'request.permission', APPROVAL_PERMISSIONS),
-            summary=require_string(require_field(payload, 'summary', 'request'),
-                                   'request.summary', allow_newlines=True),
+            permission=permission,
+            summary=require_string(payload['summary'], 'request.summary', max_length=240),
             created_at=require_timestamp(require_field(payload, 'createdAt', 'request'),
                                          'request.createdAt'),
             action=optional_string(optional_field(payload, 'action'), 'request.action',
-                                   max_length=256),
+                                   max_length=64),
+            category=category,
+            scope=None if scope is None else dict(scope),
+            delegation_id=(
+                None if optional_field(payload, 'delegationId') is None
+                else require_id(payload['delegationId'], 'request.delegationId')
+            ),
+            expires_at=None if optional_field(payload, 'expiresAt') is None else require_timestamp(
+                payload['expiresAt'], 'request.expiresAt'),
+            status=status,
+        )
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    approval_id: str
+    decision: str
+    decided_at: str
+
+    def to_dict(self):
+        return {
+            'approvalId': self.approval_id,
+            'decision': self.decision,
+            'decidedAt': self.decided_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = require_mapping(data, 'decision')
+        reject_unknown_fields(payload, ('approvalId', 'decision', 'decidedAt'), 'decision')
+        return cls(
+            approval_id=require_id(require_field(payload, 'approvalId', 'decision'), 'approvalId'),
+            decision=require_enum(require_field(payload, 'decision', 'decision'), 'decision',
+                                  ('approved', 'denied')),
+            decided_at=require_timestamp(require_field(payload, 'decidedAt', 'decision'),
+                                         'decidedAt'),
         )
 
 
@@ -203,6 +272,16 @@ def _payload_from_dict(event_type, payload):
         }
     if event_type == 'approval.required':
         return {'request': ApprovalRequest.from_dict(require_field(payload, 'request', 'event'))}
+    if event_type in ('approval.approved', 'approval.denied'):
+        return {'decision': ApprovalDecision.from_dict(require_field(payload, 'decision', 'event'))}
+    if event_type == 'approval.expired':
+        return {'approvalId': require_id(require_field(payload, 'approvalId', 'event'), 'approvalId')}
+    if event_type == 'approval.cancelled':
+        return {
+            'approvalId': require_id(require_field(payload, 'approvalId', 'event'), 'approvalId'),
+            'reason': require_string(require_field(payload, 'reason', 'event'), 'reason',
+                                     max_length=64),
+        }
     if event_type == 'artifact.created':
         return {'artifact': Artifact.from_dict(require_field(payload, 'artifact', 'event'))}
     if event_type == 'handoff.ready':

@@ -193,6 +193,16 @@ export function createDaemonClient(options = {}) {
     retryHandoff(meetingId) {
       return send('POST', `/v1/meetings/${meetingId}/handoff/retry`, {}, { startIfNeeded: true });
     },
+    listApprovals(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/approvals`, undefined, { startIfNeeded: false });
+    },
+    getApproval(meetingId, approvalId) {
+      return send('GET', `/v1/meetings/${meetingId}/approvals/${approvalId}`, undefined, { startIfNeeded: false });
+    },
+    decideApproval(meetingId, approvalId, decision) {
+      const body = typeof decision === 'string' ? { decision } : decision;
+      return send('POST', `/v1/meetings/${meetingId}/approvals/${approvalId}/decision`, body, { startIfNeeded: true });
+    },
     leaseStatus(provider, sessionId) {
       return send('GET', `/v1/agent-sessions/${provider}/${sessionId}/status`, undefined, { startIfNeeded: false });
     },

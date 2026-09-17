@@ -160,8 +160,23 @@ function createFakeColleague({ autoHandoff = true } = {}) {
         return handoffs.get(id);
       },
       retryHandoff: async (id) => makeHandoff(id, { summary: 'retried' }),
+      listApprovals: async (id) => ({ approvals: colleague.approvals?.get(id) || [] }),
+      getApproval: async (id, approvalId) => {
+        const found = (colleague.approvals?.get(id) || []).find((item) => item.id === approvalId);
+        if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
+        return found;
+      },
+      decideApproval: async (id, approvalId, decision) => {
+        const found = (colleague.approvals?.get(id) || []).find((item) => item.id === approvalId);
+        if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
+        const value = typeof decision === 'string' ? decision : decision.decision;
+        found.status = value;
+        found.decision = value;
+        return found;
+      },
     },
   };
+  colleague.approvals = new Map();
   return colleague;
 }
 
@@ -193,6 +208,7 @@ test('initialize advertises tools and the tasks extension', async () => {
   assert.deepEqual(names, [
     'start_meeting', 'get_meeting_status', 'add_meeting_context',
     'cancel_meeting', 'get_meeting_handoff', 'retry_meeting_handoff',
+    'list_meeting_approvals', 'get_meeting_approval', 'decide_meeting_approval',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -207,6 +223,26 @@ test('exact start requires explicit session and preserves it', async () => {
   const status = await callTool(session, 'get_meeting_status', { meetingId: 'mtg-1' });
   assert.equal(status.result.structuredContent.agentSession.sessionId, 'thread-abc');
   assert.equal(colleague.created(), 1);
+});
+
+test('approval tools require explicit meeting and approval ids', async () => {
+  const colleague = createFakeColleague({ autoHandoff: false });
+  const session = createMcpSession({ colleague, log() {} });
+  await callTool(session, 'start_meeting', exactArgs());
+  const missing = await callTool(session, 'decide_meeting_approval', { decision: 'approved' });
+  assert.equal(missing.result.isError, true);
+  colleague.approvals.set('mtg-1', [{
+    id: 'appr-1', meetingId: 'mtg-1', category: 'commands',
+    summary: 'Run a workspace lookup', status: 'pending',
+  }]);
+  const listed = await callTool(session, 'list_meeting_approvals', { meetingId: 'mtg-1' });
+  assert.equal(listed.result.structuredContent.approvals[0].id, 'appr-1');
+  const decided = await callTool(session, 'decide_meeting_approval', {
+    meetingId: 'mtg-1', approvalId: 'appr-1', decision: 'denied',
+  });
+  assert.equal(decided.result.structuredContent.approval.status, 'denied');
+  const dumped = JSON.stringify(decided);
+  assert.equal(dumped.includes('secret meeting speech'), false);
 });
 
 test('rejects last/latest and does not invent a session', async () => {
@@ -331,7 +367,10 @@ test('spawned process does not print logs on stdout', async () => {
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline && !(stdout.includes('"jsonrpc"'))) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   child.kill('SIGTERM');
   await new Promise((resolve) => child.on('close', resolve));
   assert.ok(stdout.includes('"jsonrpc":"2.0"') || stdout.includes('"jsonrpc": "2.0"'));

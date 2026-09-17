@@ -108,19 +108,32 @@ class MeetingPermissions:
     def from_dict(cls, data):
         payload = require_mapping(data, 'permissions')
         reject_unknown_fields(payload, PERMISSION_FIELDS, 'permissions')
+        workspace=require_enum(require_field(payload, 'workspace', 'permissions'),
+                              'permissions.workspace', WORKSPACE_PERMISSIONS)
+        commands=require_enum(require_field(payload, 'commands', 'permissions'),
+                             'permissions.commands', COMMAND_PERMISSIONS)
+        edits=require_enum(require_field(payload, 'edits', 'permissions'),
+                          'permissions.edits', COMMAND_PERMISSIONS)
+        network=require_enum(require_field(payload, 'network', 'permissions'),
+                            'permissions.network', COMMAND_PERMISSIONS)
+        commits=require_enum(require_field(payload, 'commits', 'permissions'),
+                            'permissions.commits', COMMIT_PERMISSIONS)
+        pushes=require_enum(require_field(payload, 'pushes', 'permissions'),
+                           'permissions.pushes', COMMIT_PERMISSIONS)
+        if workspace == 'none':
+            if commands == 'allowed':
+                raise ValueError('commands cannot be allowed when workspace is none')
+            if edits != 'disabled' or commits != 'disabled' or pushes != 'disabled':
+                raise ValueError('workspace none cannot authorize edits, commits, or pushes')
+        if workspace == 'read-only' and edits == 'allowed':
+            raise ValueError('edits cannot be allowed without workspace-write')
+        if workspace != 'workspace-write' and (commits != 'disabled' or pushes != 'disabled'):
+            raise ValueError('commits and pushes require workspace-write')
+        if pushes == 'approval-required' and commits != 'approval-required':
+            raise ValueError('pushes require commits to be approval-required')
         return cls(
-            workspace=require_enum(require_field(payload, 'workspace', 'permissions'),
-                                   'permissions.workspace', WORKSPACE_PERMISSIONS),
-            commands=require_enum(require_field(payload, 'commands', 'permissions'),
-                                  'permissions.commands', COMMAND_PERMISSIONS),
-            edits=require_enum(require_field(payload, 'edits', 'permissions'),
-                               'permissions.edits', COMMAND_PERMISSIONS),
-            network=require_enum(require_field(payload, 'network', 'permissions'),
-                                 'permissions.network', COMMAND_PERMISSIONS),
-            commits=require_enum(require_field(payload, 'commits', 'permissions'),
-                                 'permissions.commits', COMMIT_PERMISSIONS),
-            pushes=require_enum(require_field(payload, 'pushes', 'permissions'),
-                                'permissions.pushes', COMMIT_PERMISSIONS),
+            workspace=workspace, commands=commands, edits=edits, network=network,
+            commits=commits, pushes=pushes,
         )
 
 

@@ -5,7 +5,7 @@ class ProviderRequest:
     def __init__(self, *, delegation_id, request_text, handoff=None, transcript='', model=None,
                  permissions=None, workspace=None, provider=None, session_status='live',
                  session_id=None, continuity=None, authorize_model=False, meeting_id=None,
-                 on_progress=None, source=None):
+                 on_progress=None, source=None, approval_gate=None):
         self.delegation_id = delegation_id
         self.request_text = request_text
         self.handoff = handoff
@@ -21,6 +21,7 @@ class ProviderRequest:
         self.meeting_id = meeting_id
         self.on_progress = on_progress
         self.source = source
+        self.approval_gate = approval_gate
 
 
 class CodingAgentProvider:

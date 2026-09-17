@@ -1,4 +1,5 @@
 import { drawPresencePreview, readAvatarFile } from './visual-preview.mjs';
+const $ = (sel) => document.querySelector(sel);
 const form = $('#meeting-form');
 const views = {
   meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
@@ -81,6 +82,9 @@ function setBusy(busy, label) {
 }
 
 function describePhase(phase, health, status = {}) {
+  if ((status.pendingApprovals || []).length && (status.running || phase === 'live')) {
+    return ['Waiting for approval.', 'A workspace action is paused until you approve or deny it.'];
+  }
   const states = {
     stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
@@ -108,6 +112,58 @@ function describePhase(phase, health, status = {}) {
   return [message, detail];
 }
 
+function renderApprovals(pending, meetingId) {
+  const panel = $('#approvals-panel');
+  const list = $('#approval-list');
+  if (!panel || !list) return;
+  if (!pending.length || !meetingId) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...pending.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'approval-card';
+    const title = document.createElement('b');
+    title.textContent = item.category || item.permission || 'action';
+    const summary = document.createElement('p');
+    summary.textContent = item.summary || 'Requested action needs approval.';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const scope = document.createElement('span');
+    const keys = Object.keys(item.scope || {});
+    scope.textContent = keys.length ? keys.map((key) => `${key}: ${item.scope[key]}`).join(' · ') : 'meeting scope';
+    const expiry = document.createElement('span');
+    expiry.textContent = item.expiresAt ? `expires ${item.expiresAt}` : '';
+    meta.append(scope, expiry);
+    const actions = document.createElement('div');
+    actions.className = 'approval-actions';
+    for (const [decision, label] of [['approved', 'Approve'], ['denied', 'Deny']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = decision === 'denied' ? 'button danger compact' : 'button primary compact';
+      button.textContent = label;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await request(`/api/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(item.id)}/decision`, {
+            method: 'POST',
+            body: JSON.stringify({ decision }),
+          });
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+    card.append(title, summary, meta, actions);
+    return card;
+  }));
+}
+
 function renderStatus(status) {
   latestStatus = status;
   const health = status.health || {};
@@ -119,7 +175,9 @@ function renderStatus(status) {
   $('#phase-label').textContent = phase.replaceAll('_', ' ');
   $('#signal-message').textContent = message;
   $('#signal-detail').textContent = detail;
-  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
+  const pending = status.pendingApprovals || [];
+  const waiting = pending.length > 0;
+  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${waiting ? 'waiting' : (health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : '')}`;
   $('#mic-state').textContent = health.microphoneState || '—';
   $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
   const cameraState = health.cameraState || (health.cameraEnabled === false ? 'off' : '—');
@@ -137,6 +195,7 @@ function renderStatus(status) {
       : '—';
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  renderApprovals(pending, status.meetingId);
   $('#stop-button').disabled = !meetingBusy(status);
   $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');

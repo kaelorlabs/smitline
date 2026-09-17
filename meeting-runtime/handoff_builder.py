@@ -148,7 +148,8 @@ def handoff_id_for(meeting_id):
     return STABLE_HANDOFF_PREFIX + require_meeting_id(meeting_id)
 
 
-def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=None):
+def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=None,
+                          approvals=None):
     directory = Path(archive.directory) if isinstance(archive, CallRecord) else Path(archive)
     meeting_id = getattr(session, 'id', None) or getattr(archive, 'meeting_id', None)
     meeting_id = require_meeting_id(meeting_id)
@@ -190,6 +191,8 @@ def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=N
         end_reason=_clip(reason or 'ended', 256) or 'ended',
         archive_path=str(directory.name),
         git=_git_from_session(session),
+        permissions=getattr(session, 'permissions', None),
+        approvals=tuple(approvals or ()),
     )
     reject_secrets(handoff.to_dict(), 'meeting handoff')
     return handoff

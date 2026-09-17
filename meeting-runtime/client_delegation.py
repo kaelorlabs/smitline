@@ -1,9 +1,11 @@
 """GPT-Live client-delegation controller: transcript lookup, progress, and results."""
 import asyncio
+import inspect
 from uuid import uuid4
 
 from context_handoff import ContextHandoff
 from plot_share import create_and_share_plot
+from permissions import permission_mode
 from providers.base import ProviderRequest
 from session_continuity import CONTEXT, continuity_from_payload
 from startup_input import clip_tokens
@@ -46,6 +48,12 @@ def speakable_result(result, plot_share=None):
         return 'I stopped that request.'
     if error == 'no spoken request was available at the delegation offset':
         return 'I did not catch a request I can act on. Please repeat the question.'
+    if error in ('approval_denied', 'denied'):
+        return 'That action was denied.'
+    if error in ('approval_expired', 'expired'):
+        return 'That approval expired before it was decided.'
+    if error in ('approval_cancelled', 'cancelled_approval'):
+        return 'That approval was cancelled.'
     if error:
         return clip_tokens('I could not complete that request. ' + str(error), 500)
     text = (result.get('text') or '').strip()
@@ -63,7 +71,7 @@ def speakable_result(result, plot_share=None):
 class ClientDelegation:
     def __init__(self, *, send, record, state, runtime, meeting_state=None, assembler=None,
                  router=None, page=None, adapter=None, stop_event=None, progress_interval=8.0,
-                 on_presence=None):
+                 on_presence=None, approval_gate=None):
         self.send = send
         self.record = record
         self.state = state
@@ -75,6 +83,7 @@ class ClientDelegation:
         self.stop_event = stop_event
         self.progress_interval = progress_interval
         self.on_presence = on_presence
+        self.approval_gate = approval_gate
         self._closed = False
         self._seen = set()
         self._cancels = {}
@@ -101,6 +110,7 @@ class ClientDelegation:
         elif event_type in ('delegation.completed', 'delegation.cancelled'):
             if not self._open_work():
                 self.state['backend_status'] = 'idle'
+                self.state['awaitingApproval'] = False
         if self.on_presence:
             self.on_presence()
 
@@ -173,8 +183,9 @@ class ClientDelegation:
 
     def _task_done(self, task):
         self._tasks.discard(task)
-        if not self._open_work() and self.state.get('backend_status') == 'working':
+        if not self._open_work() and self.state.get('backend_status') in ('working', 'waiting_approval'):
             self.state['backend_status'] = 'idle'
+            self.state['awaitingApproval'] = False
             if self.on_presence:
                 self.on_presence()
 
@@ -216,7 +227,66 @@ class ClientDelegation:
             meeting_id=self.meeting_state.get('meetingId'),
             on_progress=on_progress,
             source=self.meeting_state.get('source'),
+            approval_gate=self._provider_gate(delegation_id),
         )
+
+    def _provider_gate(self, delegation_id):
+        async def gate(payload):
+            category = (payload or {}).get('category') or (payload or {}).get('permission')
+            return await self.await_approval(
+                category,
+                (payload or {}).get('summary') or 'Requested action needs approval',
+                scope=(payload or {}).get('scope'),
+                delegation_id=delegation_id,
+            )
+        return gate
+
+    async def await_approval(self, category, summary, *, scope=None, delegation_id=None):
+        mode = permission_mode(permissions_from_state(self.meeting_state, self.runtime), category)
+        if mode == 'allowed':
+            return {'status': 'approved', 'mode': 'allowed'}
+        if mode != 'approval-required':
+            return {'status': 'denied', 'error': 'approval_denied', 'mode': mode}
+        if self.approval_gate is None:
+            return {'status': 'denied', 'error': 'approval_denied', 'mode': mode}
+        previous = self.state.get('backend_status')
+        self.state['awaitingApproval'] = True
+        self.state['backend_status'] = 'waiting_approval'
+        if delegation_id:
+            self.router._emit(
+                'delegation.progress', delegationId=delegation_id, message='needs approval')
+        if self.on_presence:
+            self.on_presence()
+        try:
+            result = self.approval_gate({
+                'category': category,
+                'summary': summary,
+                'scope': scope or {},
+                'delegationId': delegation_id,
+                'meetingId': self.meeting_state.get('meetingId'),
+            })
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception:
+            result = {'status': 'denied', 'error': 'approval_denied'}
+        finally:
+            self.state['awaitingApproval'] = False
+            if self._open_work():
+                self.state['backend_status'] = previous if previous == 'working' else 'working'
+            else:
+                self.state['backend_status'] = 'idle'
+            if self.on_presence:
+                self.on_presence()
+        if not isinstance(result, dict):
+            return {'status': 'denied', 'error': 'approval_denied'}
+        status = result.get('status') or result.get('decision')
+        if status == 'approved':
+            return result
+        if status == 'expired':
+            return {'status': 'expired', 'error': 'approval_expired'}
+        if status == 'cancelled':
+            return {'status': 'cancelled', 'error': 'approval_cancelled'}
+        return {'status': 'denied', 'error': 'approval_denied'}
 
     async def _progress_loop(self, delegation_id, cancel):
         await asyncio.sleep(self.progress_interval)

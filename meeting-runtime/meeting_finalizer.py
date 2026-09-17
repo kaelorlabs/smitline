@@ -63,7 +63,14 @@ class MeetingFinalizer:
             handoff = MeetingHandoff.from_dict(existing)
         else:
             archive = CallRecord(self.runtime_root / 'recordings', meeting_id=meeting_id)
-            handoff = build_meeting_handoff(archive, session, reason=reason, partial=partial)
+            approvals = []
+            if self.daemon is not None:
+                try:
+                    approvals = self.daemon.public_approvals(session.id)
+                except Exception:
+                    approvals = []
+            handoff = build_meeting_handoff(
+                archive, session, reason=reason, partial=partial, approvals=approvals)
             _write_json(directory / HANDOFF_NAME, handoff.to_dict())
         status = load_finalization(directory)
         if status.get('status') not in ('appended', 'ready'):

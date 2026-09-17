@@ -1169,5 +1169,153 @@ class MeetingRepositoryUnitTests(unittest.TestCase):
         self.assertIsNone(self.store.get('mtg-missing'))
 
 
+@unittest.skipUnless(HAS_AIOHTTP, 'aiohttp is required')
+class ApprovalDaemonTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.clock = FakeClock()
+        self.supervisor = FakeSupervisor()
+        self.auth = 'test-daemon-token'
+        self.app = create_app(
+            root=self.temporary.name,
+            auth_token=self.auth,
+            supervisor=self.supervisor,
+            clock=self.clock,
+            sse_poll_interval=0.02,
+            sse_heartbeat_interval=0.05,
+            max_body_bytes=4096,
+        )
+        self.daemon = self.app.runtime_daemon
+        self.client = TestClient(TestServer(self.app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    def headers(self, **extra):
+        return {'Authorization': 'Bearer ' + self.auth, **extra}
+
+    async def create(self, **overrides):
+        return await self.client.post(
+            '/v1/meetings', json=create_payload(**overrides), headers=self.headers())
+
+    async def test_permission_escalation_is_rejected_at_create(self):
+        portal = await self.create(
+            agentSession=agent_session_payload(
+                sessionId='local-portal',
+                metadata={'source': 'local-portal', 'continuity': 'context'},
+            ),
+            permissions=permissions_payload(workspace='workspace-write'),
+        )
+        self.assertEqual(portal.status, 422)
+        exact = await self.create(permissions=permissions_payload(commands='allowed'))
+        self.assertEqual(exact.status, 422)
+
+    async def test_approvals_are_atomic_idempotent_and_expire_after_restart(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/approvals', headers={'Authorization': 'Bearer other'})
+        self.assertEqual(missing.status, 401)
+        created_approval = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals',
+            json={'category': 'commands', 'summary': 'Run a workspace lookup',
+                  'scope': {'host': 'workspace'}, 'ttlSeconds': 1},
+            headers=self.headers())
+        self.assertEqual(created_approval.status, 201)
+        approval = await created_approval.json()
+        self.assertEqual(approval['status'], 'pending')
+        self.assertNotIn('consumed', approval)
+        self.assertNotIn('password', str(approval).lower())
+        listed = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/approvals', headers=self.headers())
+        self.assertEqual((await listed.json())['approvals'][0]['id'], approval['id'])
+        first = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals/' + approval['id'] + '/decision',
+            json={'decision': 'approved'}, headers=self.headers())
+        self.assertEqual(first.status, 200)
+        replay = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals/' + approval['id'] + '/decision',
+            json={'decision': 'approved'}, headers=self.headers())
+        self.assertEqual(replay.status, 200)
+        stale = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals/' + approval['id'] + '/decision',
+            json={'decision': 'denied'}, headers=self.headers())
+        self.assertEqual(stale.status, 409)
+        second = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals',
+            json={'category': 'network', 'summary': 'Allow a web search', 'ttlSeconds': 1},
+            headers=self.headers())
+        pending = await second.json()
+        self.clock.advance(2)
+        app = create_app(
+            root=self.temporary.name, auth_token=self.auth, supervisor=self.supervisor,
+            clock=self.clock)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            listed = await client.get(
+                '/v1/meetings/' + meeting_id + '/approvals', headers=self.headers())
+            statuses = {item['id']: item['status'] for item in (await listed.json())['approvals']}
+            self.assertEqual(statuses[pending['id']], 'expired')
+            expired_decision = await client.post(
+                '/v1/meetings/' + meeting_id + '/approvals/' + pending['id'] + '/decision',
+                json={'decision': 'approved'}, headers=self.headers())
+            self.assertEqual(expired_decision.status, 409)
+        finally:
+            await client.close()
+
+    async def test_cancel_meeting_cancels_pending_approvals_and_handoff_includes_policy(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        self.daemon.transition(meeting_id, 'live')
+        pending = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/approvals',
+            json={'category': 'commands', 'summary': 'Run a workspace lookup'},
+            headers=self.headers())
+        approval = await pending.json()
+        stored = await self.client.get(
+            '/v1/meetings/' + meeting_id, headers=self.headers())
+        self.assertEqual((await stored.json())['visualState'], 'needs_attention')
+        cancelled = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/cancel', headers=self.headers())
+        self.assertEqual(cancelled.status, 200)
+        got = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/approvals/' + approval['id'],
+            headers=self.headers())
+        body = await got.json()
+        self.assertEqual(body['status'], 'cancelled')
+        self.daemon.store_handoff(handoff_payload(
+            meetingId=meeting_id, startedAt=meeting['startedAt']))
+        handoff = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
+        payload = await handoff.json()
+        self.assertEqual(payload['permissions']['workspace'], 'read-only')
+        self.assertEqual(payload['approvals'][0]['id'], approval['id'])
+        self.assertEqual(payload['approvals'][0]['status'], 'cancelled')
+
+    async def test_wait_for_decision_is_single_use_and_does_not_block_other_meetings(self):
+        first = await (await self.create()).json()
+        second = await (await self.create(
+            agentSession=agent_session_payload(sessionId='thread-origin-2'))).json()
+        created = self.daemon.create_approval(first['id'], {
+            'category': 'commands', 'summary': 'Run a workspace lookup',
+        })
+        waiter = asyncio.create_task(
+            self.daemon.wait_for_decision(first['id'], created['id'], timeout=2))
+        await asyncio.sleep(0.02)
+        other = await self.client.get(
+            '/v1/meetings/' + second['id'], headers=self.headers())
+        self.assertEqual(other.status, 200)
+        self.daemon.decide_approval(first['id'], created['id'], {'decision': 'approved'})
+        granted = await waiter
+        self.assertEqual(granted['status'], 'approved')
+        with self.assertRaises(DaemonError):
+            self.daemon.consume_approval(first['id'], created['id'])
+
+
 if __name__ == '__main__':
     unittest.main()
