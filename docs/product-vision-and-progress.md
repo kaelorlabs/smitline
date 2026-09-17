@@ -165,7 +165,7 @@ Status meanings:
 | Selective speech and mute transport | Partial | GPT-Live-driven participation and virtual audio gating exist. Cross-platform unmute/remute behavior is still an active reliability area. |
 | Local runtime daemon | Implemented | Authenticated loopback HTTP/SSE API owns sessions, events, leases, approvals, artifacts, providers, and supervision. |
 | Durable event and meeting storage | Implemented | Versioned schemas, append-only events, transcript/archive records, validation, recovery, and local retention paths exist. |
-| Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. The Codex tool now requires the caller to pass the active task's `CODEX_THREAD_ID` explicitly because persistent MCP servers do not inherit per-task variables; automatic context construction and the full live round trip still need acceptance testing. |
+| Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. The installed Codex skill captures the active task's `CODEX_THREAD_ID` and passes it explicitly because persistent MCP servers do not inherit per-task variables; the full live round trip still needs acceptance testing. |
 | Cursor provider | Partial | Capability-detected adapter exists. Exact resume depends on documented capabilities of the installed Cursor CLI and host-provided session identity. |
 | Claude Code provider | Partial | Capability-detected adapter exists. Exact resume depends on documented capabilities of the installed Claude CLI and host-provided session identity. |
 | Structured context handoff | Implemented | Versioned objective, task, summary, decision, constraint, question, file, conversation, and Git-state transfer exists. Automatic host-side construction is still integration work. |
@@ -185,7 +185,7 @@ Status meanings:
 | MCP adapter | Implemented locally | Thin stdio adapter over the TypeScript SDK exists, including durable-task behavior where the client supports it. In Codex, the caller reads the task's `CODEX_THREAD_ID` and passes it to `join_current_meeting`; other hosts must pass an explicit session id or use context continuity. |
 | Local operations portal | Implemented | Manual launch and operations console at `127.0.0.1:8095`; always context continuity. It should remain optional. |
 | Hosted runner/control plane | Foundation only | Pairing and isolation primitives exist. There is no production multi-tenant hosted service. |
-| Packaging and onboarding | Partial | Local scripts and documentation exist. There is no one-command public installation or published SDK/CLI/MCP package. |
+| Packaging and onboarding | Partial | The local installer registers MCP and installs the Codex meeting skill. There is no one-command public distribution or published SDK/CLI/MCP package. |
 | Automated QA | Strong but incomplete | Broad unit and adversarial coverage exists. Automated tests cannot prove browser selectors, tenant policy, admission, audio quality, or real provider behavior. |
 | Live acceptance | Incomplete | A complete current-matrix acceptance run across Zoom, Teams, Meet, exact session resume, approvals, handoff, and restart recovery is still required. |
 
@@ -267,8 +267,8 @@ Run repeatable real meetings for Zoom, Teams, and Meet covering:
 ### Milestone A — Codex-native vertical slice
 
 - [x] Install Colleague AI as a local Codex MCP integration.
-- [ ] Start a meeting from an existing Codex conversation without opening the portal.
-- [ ] Pass the real Codex thread ID and structured context automatically.
+- [ ] Start a meeting from an existing Codex conversation without opening the portal and prove it in a live call.
+- [ ] Verify the installed skill captures the real Codex thread ID and structured context in a live call.
 - [ ] Confirm the session is exclusively leased while the meeting is active.
 - [ ] Complete one read-only delegated task in that exact session.
 - [ ] Append one final handoff and resume the original conversation.

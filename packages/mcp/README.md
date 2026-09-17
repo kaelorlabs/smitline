@@ -32,7 +32,7 @@ Clients without Tasks should poll `get_meeting_handoff`.
 
 ## Codex
 
-Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not forward that per-task value to a persistent MCP server. Before calling `join_current_meeting`, read the variable from the current task command environment and pass its exact value as `sessionId`. Never invent, infer, or reuse a different ID. The tool also requires the current workspace and a structured context handoff.
+Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not forward that per-task value to a persistent MCP server. The installer adds the `join-colleague-ai-meeting` skill, which directs Codex to read the variable from the active task command environment and pass its exact value as `sessionId`. Never invent, infer, or reuse a different ID. The tool also requires the current workspace and a structured context handoff.
 
 Example `~/.codex/config.toml` mcp_servers fragment:
 

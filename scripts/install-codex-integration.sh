@@ -3,9 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER="$ROOT/packages/mcp/src/server.mjs"
+SKILL_SOURCE="$ROOT/.agents/skills/join-colleague-ai-meeting"
+SKILLS_HOME="${CODEX_SKILLS_DIR:-${CODEX_HOME:-$HOME/.codex}/skills}"
+SKILL_DEST="$SKILLS_HOME/join-colleague-ai-meeting"
 
 if [[ ! -f "$SERVER" ]]; then
   echo "Colleague AI MCP server is missing: $SERVER" >&2
+  exit 1
+fi
+
+if [[ ! -f "$SKILL_SOURCE/SKILL.md" ]]; then
+  echo "Colleague AI Codex skill is missing: $SKILL_SOURCE/SKILL.md" >&2
   exit 1
 fi
 
@@ -37,8 +45,13 @@ fi
 
 "$CODEX" mcp add colleague-ai -- node "$SERVER"
 
+install -d -m 700 "$SKILL_DEST" "$SKILL_DEST/agents"
+install -m 600 "$SKILL_SOURCE/SKILL.md" "$SKILL_DEST/SKILL.md"
+install -m 600 "$SKILL_SOURCE/agents/openai.yaml" "$SKILL_DEST/agents/openai.yaml"
+
 echo
 echo "Colleague AI is registered with Codex."
+echo "The exact-continuity meeting skill is installed at $SKILL_DEST."
 echo "Restart Codex so it loads the join_current_meeting tool."
 echo "The tool directs Codex to pass the invoking task's CODEX_THREAD_ID explicitly."
 echo "Then open a project task and ask: Join this meeting: <invite URL>"

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -76,6 +77,15 @@ else {
   const mcp = command(codex, ['mcp', 'get', 'colleague-ai']);
   result(mcp.status === 0 ? 'pass' : 'warn', 'Codex MCP integration', mcp.status === 0 ? 'registered' : 'run scripts/install-codex-integration.sh');
 }
+
+const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+const skillsHome = process.env.CODEX_SKILLS_DIR || path.join(codexHome, 'skills');
+const meetingSkill = path.join(skillsHome, 'join-colleague-ai-meeting', 'SKILL.md');
+result(
+  fs.existsSync(meetingSkill) ? 'pass' : 'fail',
+  'Codex exact-continuity skill',
+  fs.existsSync(meetingSkill) ? 'installed' : 'run scripts/install-codex-integration.sh',
+);
 
 result(fs.existsSync(path.join(root, 'node_modules', 'mammoth')) ? 'pass' : 'fail', 'Node dependencies', 'run npm install when missing');
 
