@@ -26,7 +26,7 @@ The default transport is loopback identity. `FakeTlsSession` is an explicit test
 
 Pairing issues a short-lived, single-use code (default TTL 120 seconds). Completing pairing creates a revocable device identity. The pairing code and `deviceEnrollment` are revealed once. They are never stored in URLs, query strings, logs, events, errors, or `GET /v1/runner` status. The local runner persists only hashes under `hosted/runner-state.json` with mode `0600`.
 
-Revoking a device unpaired the runner. Local loopback continues to work.
+Revoking a device unpairs the runner. Local loopback continues to work.
 
 ## Job binding and permissions
 

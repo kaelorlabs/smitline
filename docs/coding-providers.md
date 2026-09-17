@@ -34,3 +34,5 @@ Use the official **Claude Code CLI** (`claude`, or `CLAUDE_BIN`). Feature detect
 ## Status
 
 `GET /v1/providers`, `colleague providers`, MCP `list_coding_providers`, and the SDKs return truthful capability records: installed, usable, exactSessionResume, contextContinuity, and `reasonUnavailable` when a binary or documented flag is missing. Unknown provider ids fail closed.
+
+See [capabilities](capabilities.md) for the Codex / Cursor / Claude Code matrix.

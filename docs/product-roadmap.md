@@ -60,4 +60,4 @@ Exit criteria: teams choose to bring the agent into recurring meetings because i
 
 ## Current boundary
 
-The repository is currently a local Zoom prototype. OpenAI and Tavily calls use the operator’s accounts. The Zoom web client is automated through a local browser. There is no hosted control plane, multi-tenant isolation, encrypted secret service, or support guarantee yet. Chart files are generated locally; Zoom attachment delivery remains experimental.
+The repository is a **local** product: Zoom, Teams, and Google Meet through a loopback daemon on this computer. OpenAI and Tavily calls use the operator’s accounts. The meeting web client is automated through a local browser. Hosted runtime pairing is a foundation, not production hosting. There is no multi-tenant isolation, encrypted secret service, or support guarantee yet. Chart files are generated locally; Zoom attachment delivery remains experimental. Cursor and Claude Code are optional capability-detected adapters. Exact continuity requires a host-supplied session id.

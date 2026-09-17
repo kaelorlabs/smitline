@@ -50,7 +50,7 @@ fi
 docker compose build joinly
 docker compose -f compose.meeting.yaml up -d --build meeting-agent
 echo 'Agent browser: http://127.0.0.1:6082/vnc.html?autoconnect=true'
-echo 'Status, web-search sources, and Codex runs: http://127.0.0.1:8094/health'
+echo 'Status, web-search sources, and coding-agent runs: http://127.0.0.1:8094/health'
 if [[ "$COLLEAGUE_CODEX_VALUE" == 1 ]]; then
   echo 'Keep this terminal running for Codex tool calls. Ctrl-C stops the Codex worker.'
   exec python3 -u meeting-runtime/codex_worker.py

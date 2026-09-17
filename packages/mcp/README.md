@@ -14,8 +14,12 @@ Do not publish this package and do not install it globally.
 | `cancel_meeting` | SDK cancel; includes a partial handoff when one is ready |
 | `get_meeting_handoff` | Poll for the durable handoff |
 | `retry_meeting_handoff` | Retry exact-session append |
+| `list_meeting_approvals` / `get_meeting_approval` / `decide_meeting_approval` | One decision per approval |
+| `list_meeting_artifacts` / `get_meeting_artifact` | Metadata; content is local |
+| `list_coding_providers` | Truthful capability records |
+| `get_runner_status` / `pair_runner` / `complete_runner_pair` / `unpair_runner` | Foundation pairing; loopback remains supported |
 
-`start_meeting` requires `url`, `provider`, `workspace`, `context`, and `permissions`. Exact continuity also requires the **real originating `sessionId`**. This server never reads the host conversation id, never invents a thread, and rejects `last` / `latest` / `--last`.
+`start_meeting` requires `url`, `provider`, `workspace`, `context`, and `permissions`. Exact continuity also requires the **real originating `sessionId`**. This server never reads the host conversation id, never invents a thread, and rejects `last` / `latest` / `--last`. `cameraEnabled` defaults true. `screenShareEnabled` defaults false and cannot be turned on by voice.
 
 Set `continuity: "context"` for generic MCP clients. That uses `sessionId: "local-portal"` and must not be treated as exact Codex/Cursor resume.
 
@@ -54,6 +58,10 @@ Cursor MCP config (`mcp.json`):
 ```
 
 See `examples/cursor.mcp.json`. Cursor must inject the current composer/chat id; without it, use `continuity: "context"`.
+
+## Claude Code
+
+Claude Code may start this MCP server through Anthropic's documented MCP client setup. Exact continuity still requires the real originating session id from that host. If the installed `claude --help` does not document a resume flag, use `continuity: "context"`. Colleague AI does not invent Claude MCP config keys or resume flags.
 
 ## Security
 

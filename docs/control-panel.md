@@ -13,9 +13,9 @@ chmod 600 .env .env.meeting
 npm install
 ```
 
-Add `OPENAI_API_KEY` to `.env`. Add `TAVILY_API_KEY` when web search will be enabled. Install Docker Desktop, sign in to Codex with `codex login`, and confirm the login with `codex login status`.
+Add `OPENAI_API_KEY` to `.env`. Add `TAVILY_API_KEY` when web search will be enabled. Install Docker Desktop. Sign in to the coding-agent CLI you will enable (`codex login`, Cursor `cursor-agent`, or `claude login`) and confirm that login with the CLI's documented status command.
 
-The control panel never returns API keys to the browser. `.env`, `.env.meeting`, uploaded context, meeting transcripts, Codex job files, and generated artifacts are ignored by Git.
+The control panel never returns API keys to the browser. `.env`, `.env.meeting`, uploaded context, meeting transcripts, job files, artifacts, profiles, and pairing hashes are ignored by Git.
 
 ## Start the console
 
@@ -32,13 +32,16 @@ Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open whil
 3. Choose the participant name and the default Codex model.
 4. Enable only the tools needed for the meeting:
    - **Web search** uses the local `search_web` function backed by Tavily.
-   - **Codex** runs read-only technical work in the selected workspace and maintains a session for the meeting.
+   - **Codex**, **Cursor**, or **Claude Code** — enable only one. The local portal always joins with context continuity (`local-portal`). Exact thread resume is only available through a host SDK/CLI/MCP integration that already has the real session id.
    - **Charts** allows Codex results to be rendered locally and requires Codex.
-5. Optionally select an absolute workspace path. The Codex worker can inspect only this workspace. When it is blank, the worker uses the empty, ignored `meeting-runtime/codex-workspace` directory.
+   - **Show in the meeting** (default on) publishes a virtual camera tile. Task text is never shown.
+   - **Understand shared content** is off by default. It captures the meeting share surface at a low rate. Voice cannot enable it.
+5. Optionally select an absolute workspace path. The selected coding-agent worker can inspect only this workspace. When it is blank, the worker uses the empty, ignored `meeting-runtime/codex-workspace` directory.
 6. Optionally add short meeting instructions. Use these for the agent's role, terminology, response style, or meeting-specific boundaries. Do not use them for credentials.
-7. Run the checks, resolve any reported issue, and start the colleague.
+7. Pair a hosted runner only if you are exercising the foundation control plane. Local loopback remains the supported path. The pairing code is shown once.
+8. Run the checks, resolve any reported issue, and start the colleague.
 
-The checks validate the meeting settings, required credentials, Docker availability, the selected workspace, and Codex login when that tool is enabled.
+The checks validate the meeting settings, required credentials, Docker availability, the selected workspace, and the enabled coding-agent CLI login.
 
 ## Supply private reference context
 
@@ -56,7 +59,9 @@ The console reports the join stage, platform microphone state, listening state, 
 
 The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically.
 
-Stop the colleague from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory. The Codex tool can resume its meeting-scoped session when the meeting identity and workspace are unchanged.
+Stop the colleague from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory. Exact coding-agent resume happens only when a host integration supplied a real session id at join; the portal does not derive a thread from the meeting URL.
+
+Pending approvals appear on the live console. Approve or deny each request individually. Workspace artifacts and git operations are listed there when present.
 
 ## Review local records
 
@@ -72,16 +77,16 @@ The lower-level launcher remains available for automation and debugging:
 bash start-meeting-agent.sh
 ```
 
-It reads `.env.meeting`, validates the configuration, builds and starts the Docker participant, and runs the host Codex worker when enabled. Runtime status is available at [http://127.0.0.1:8094/health](http://127.0.0.1:8094/health), and the browser viewer is available at [http://127.0.0.1:6082/vnc.html?autoconnect=true](http://127.0.0.1:6082/vnc.html?autoconnect=true).
+It reads `.env.meeting`, validates the configuration, builds and starts the Docker participant, and runs the host coding-agent worker when enabled. Runtime status is available at [http://127.0.0.1:8094/health](http://127.0.0.1:8094/health), and the browser viewer is available at [http://127.0.0.1:6082/vnc.html?autoconnect=true](http://127.0.0.1:6082/vnc.html?autoconnect=true).
 
 ## Troubleshooting
 
 - If the console cannot start, run `npm install` and confirm Node.js 22 or later is active.
 - If preflight reports Docker unavailable, start Docker Desktop and rerun the checks.
-- If Codex is unavailable, run `codex login` or set `CODEX_BIN` to the executable path.
+- If Codex is unavailable, run `codex login` or set `CODEX_BIN`. For Cursor, install `cursor-agent` and complete its official login. For Claude Code, run `claude login`.
 - If the participant is silent, address it directly with a question or task and inspect `floorState`, `microphoneState`, the runtime log, and health state. If the platform microphone was externally muted, unmute it through the meeting UI before expecting audio.
-- If Zoom does not admit the participant, inspect the browser viewer for a waiting-room, sign-in, passcode, or host-removal message.
+- If the meeting does not admit the participant, inspect the browser viewer for a waiting-room, sign-in, passcode, or host-removal message.
 - If supplied context is not available, add the source before starting the meeting or restart the participant after changing sources.
 - If chart delivery fails, inspect the saved artifact in the call record. Direct Zoom chat attachment depends on host settings and Zoom web-client support.
 
-See [adapter operation and usage](meeting-adapters.md) for Teams account connection and the continuous GPT-Live listening limitation.
+See [adapter operation and usage](meeting-adapters.md) for Teams/Google account connection and the continuous GPT-Live listening limitation. See [architecture](architecture.md) for retention paths and [capabilities](capabilities.md) for platform and provider matrices.

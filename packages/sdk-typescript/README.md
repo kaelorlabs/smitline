@@ -12,7 +12,7 @@ From the Colleague AI repository:
 node --experimental-vm-modules packages/sdk-typescript/examples/join.mjs
 ```
 
-Import the SDK from a Codex or Cursor host integration:
+Import the SDK from a Codex, Cursor, or Claude Code host integration:
 
 ```ts
 import { Colleague } from '@colleague-ai/sdk';
@@ -42,7 +42,9 @@ meeting.on('delegation', renderDelegation);
 const handoff = await meeting.finished;
 ```
 
-`agentSession.sessionId` must be the originating thread id. Do not pass `--last`, a URL hash, or a model-invented id. Exact continuity requires that real thread. Context-only joins use `sessionId: "local-portal"` from the CLI `--context-continuity` path.
+`agentSession.sessionId` must be the originating thread id. Do not pass `--last`, a URL hash, or a model-invented id. Exact continuity requires that real thread. Context-only joins use `sessionId: "local-portal"` from the CLI `--context-continuity` path or the local portal.
+
+`runnerStatus` / `pairRunner` / `completeRunnerPair` / `unpairRunner` pair a runner to the foundation control plane. Local loopback remains the supported production path. The pairing code is returned once.
 
 ## Meeting handle
 
