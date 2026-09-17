@@ -90,7 +90,15 @@ function describePhase(phase, health, status = {}) {
     needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
   };
-  return states[phase] || ['Working…', 'The current stage is shown above.'];
+  const [message, detail] = states[phase] || ['Working…', 'The current stage is shown above.'];
+  const continuity = status.continuity || health?.codex?.continuity;
+  if (continuity === 'context') {
+    return [message, detail + ' Codex is using context continuity, not the originating thread.'];
+  }
+  if (continuity === 'exact') {
+    return [message, detail + ' Codex is resuming the originating session.'];
+  }
+  return [message, detail];
 }
 
 function renderStatus(status) {
@@ -109,6 +117,12 @@ function renderStatus(status) {
   $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
   $('#tool-state').textContent = health.backend_status || '—';
+  const continuity = status.continuity || health.codex?.continuity;
+  $('#continuity-state').textContent = continuity === 'exact'
+    ? 'Originating thread'
+    : continuity === 'context'
+      ? 'Context only'
+      : '—';
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   $('#stop-button').disabled = !meetingBusy(status);

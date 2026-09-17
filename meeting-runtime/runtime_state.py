@@ -5,6 +5,7 @@ import os
 import stat
 
 from schema_validation import reject_secrets, require_mapping, require_meeting_id
+from session_continuity import continuity_mode
 
 
 STATE_VERSION = 1
@@ -135,7 +136,8 @@ def state_from_session(session):
     context = session.context.to_dict() if hasattr(session.context, 'to_dict') else session.context
     permissions = (session.permissions.to_dict()
                    if hasattr(session.permissions, 'to_dict') else session.permissions)
-    return {
+    metadata = dict(agent.metadata or {})
+    payload = {
         'version': STATE_VERSION,
         'meetingId': session.id,
         'platform': session.platform,
@@ -144,6 +146,8 @@ def state_from_session(session):
         'workspace': agent.workspace,
         'provider': agent.provider,
         'sessionId': agent.session_id,
+        'continuity': continuity_mode(agent),
+        'authorizeModel': agent.model is not None,
         'defaultCodexModel': agent.model or 'gpt-5.6-terra',
         'webSearchEnabled': True,
         'codexEnabled': True,
@@ -152,6 +156,9 @@ def state_from_session(session):
         'context': context,
         'permissions': permissions,
     }
+    if metadata.get('source'):
+        payload['source'] = metadata['source']
+    return payload
 
 
 def environ_from_state(payload):

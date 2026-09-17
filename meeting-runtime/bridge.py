@@ -16,6 +16,7 @@ from codex_tool import CODEX_MODELS, CodexJobClient
 from speech_gate import SpeechGate
 from startup_input import handoff_to_session_input
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
+from session_continuity import continuity_from_payload
 from meeting_connection import joined_meeting
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
@@ -214,6 +215,10 @@ async def main():
     state['charts_enabled'] = runtime.charts_enabled
     state['workspace'] = runtime.workspace or '/meeting-runtime/codex-workspace'
     state['codex']['default_model'] = runtime.default_codex_model
+    continuity = continuity_from_payload(meeting_state)
+    state['codex']['continuity'] = continuity
+    state['codex']['session_id'] = meeting_state.get('sessionId')
+    state['codex']['session_scope'] = 'originating' if continuity == 'exact' else 'meeting'
     record = CallRecord(os.path.join(os.path.dirname(__file__), 'recordings'))
     state['recording'] = str(record.directory)
     record.event('started')

@@ -187,6 +187,8 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(stored['meetingId'], meeting.id)
         self.assertEqual(stored['meetingUrl'], ZOOM_URL)
+        self.assertEqual(stored['sessionId'], 'thread-origin-1')
+        self.assertEqual(stored['continuity'], 'exact')
         dumped = json.dumps(stored)
         self.assertNotIn('leaseId', dumped)
         self.assertNotIn('OPENAI', dumped)

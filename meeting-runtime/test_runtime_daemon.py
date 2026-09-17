@@ -203,6 +203,24 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(teams.status, 201)
         self.assertEqual((await teams.json())['platform'], 'teams')
 
+    async def test_exact_continuity_rejects_last_before_join(self):
+        response = await self.create(agentSession=agent_session_payload(sessionId='--last'))
+        self.assertEqual(response.status, 422)
+        self.assertEqual(self.supervisor.started, [])
+        self.assertIsNone(self.daemon.leases.get('codex', '--last'))
+        claimed = await self.create(agentSession=agent_session_payload(
+            sessionId='local-portal',
+            metadata={'source': 'codex-app-server', 'continuity': 'exact'},
+        ))
+        self.assertEqual(claimed.status, 422)
+        self.assertEqual(self.supervisor.started, [])
+        portal = await self.create(agentSession=agent_session_payload(
+            sessionId='local-portal',
+            metadata={'source': 'local-portal', 'continuity': 'context'},
+        ))
+        self.assertEqual(portal.status, 201)
+        self.assertEqual(len(self.supervisor.started), 1)
+
     async def test_create_acquire_conflict_is_atomic(self):
         first, second = await asyncio.gather(self.create(), self.create())
         statuses = sorted([first.status, second.status])

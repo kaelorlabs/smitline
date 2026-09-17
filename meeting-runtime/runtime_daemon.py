@@ -20,6 +20,7 @@ from meeting_handoff import MeetingHandoff
 from meeting_repository import MeetingCorruptionError, MeetingRecord, MeetingRepository
 from meeting_urls import platform_for_url
 from schema_validation import reject_secrets, reject_unknown_fields, require_enum, require_id
+from session_continuity import validate_agent_session
 from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
 
 
@@ -339,6 +340,7 @@ class RuntimeDaemon:
                 'state': 'joining',
                 'startedAt': started_at,
             })
+            validate_agent_session(session.agent_session)
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
         agent = session.agent_session

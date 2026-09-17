@@ -12,6 +12,22 @@ const ACTIVE_PHASES = new Set([
   'connecting_audio', 'live',
 ]);
 
+export function continuityFromAgentSession(agentSession = {}) {
+  const sessionId = String(agentSession.sessionId || '');
+  const metadata = agentSession.metadata || {};
+  if (metadata.continuity === 'exact' || metadata.continuity === 'context') {
+    if (metadata.continuity === 'exact'
+        && (metadata.source === 'local-portal' || sessionId === LOCAL_PORTAL_SESSION_ID)) {
+      return 'context';
+    }
+    return metadata.continuity;
+  }
+  if (metadata.source === 'local-portal' || sessionId === LOCAL_PORTAL_SESSION_ID) {
+    return 'context';
+  }
+  return 'exact';
+}
+
 export function defaultWorkspace(root) {
   return path.join(root, 'meeting-runtime', 'codex-workspace');
 }
@@ -75,7 +91,7 @@ export function buildMeetingCreatePayload(settings, { sources = [], workspace, r
       sessionId: LOCAL_PORTAL_SESSION_ID,
       workspace: resolved,
       model: settings.model,
-      metadata: { source: 'local-portal' },
+      metadata: { source: 'local-portal', continuity: 'context' },
     },
     context: contextHandoffFromSources(sources, {
       meetingInstructions: settings.meetingInstructions,

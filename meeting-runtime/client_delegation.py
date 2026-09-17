@@ -5,6 +5,7 @@ from uuid import uuid4
 from context_handoff import ContextHandoff
 from plot_share import create_and_share_plot
 from providers.base import ProviderRequest
+from session_continuity import CONTEXT, continuity_from_payload
 from startup_input import clip_tokens
 from transcript_assembler import TranscriptAssembler
 
@@ -180,6 +181,16 @@ class ClientDelegation:
             status = 'joining'
         elif self.state.get('stage') in ('finished', 'meeting_ended'):
             status = 'ended'
+        continuity = self.meeting_state.get('continuity') or continuity_from_payload(self.meeting_state)
+        session_id = self.meeting_state.get('sessionId')
+        if continuity == CONTEXT and session_id == 'local-portal':
+            session_id = None
+
+        def on_progress(message):
+            text = clip_tokens(str(message or ''), 80)
+            if text:
+                self.router._emit('delegation.progress', delegationId=delegation_id, message=text)
+
         return ProviderRequest(
             delegation_id=delegation_id,
             request_text=spoken,
@@ -190,6 +201,12 @@ class ClientDelegation:
             workspace=workspace,
             provider=provider,
             session_status=status,
+            session_id=session_id,
+            continuity=continuity,
+            authorize_model=bool(self.meeting_state.get('authorizeModel')),
+            meeting_id=self.meeting_state.get('meetingId'),
+            on_progress=on_progress,
+            source=self.meeting_state.get('source'),
         )
 
     async def _progress_loop(self, delegation_id, cancel):

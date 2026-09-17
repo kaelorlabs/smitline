@@ -84,6 +84,8 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         task = self.session.submit(created())
         await task
         self.assertEqual(self.provider.calls[0].request_text, 'What does the worker lock do?')
+        self.assertEqual(self.provider.calls[0].continuity, 'context')
+        self.assertIsNone(self.provider.calls[0].session_id)
         self.assertIn('Ship the developer platform', str(self.provider.calls[0].handoff.to_dict()
                                                          if hasattr(self.provider.calls[0].handoff, 'to_dict')
                                                          else self.provider.calls[0].handoff))
@@ -95,6 +97,26 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('exclusive', commentary[0]['content'])
         self.assertEqual([kind for kind, _ in self.record.events].count('delegation.started'), 1)
         self.assertEqual([kind for kind, _ in self.record.events].count('delegation.completed'), 1)
+
+    async def test_exact_origin_session_is_forwarded_on_the_provider_request(self):
+        self.session.meeting_state.update({
+            'sessionId': 'thread-origin-1',
+            'continuity': 'exact',
+            'authorizeModel': False,
+            'meetingId': 'mtg-abc123',
+            'source': 'codex-app-server',
+        })
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta',
+            'delta': 'What did we decide?',
+            'start_ms': 100, 'end_ms': 400, 'event_id': 'tr-exact',
+        })
+        await self.session.submit(created('item_exact', offset_ms=400))
+        request = self.provider.calls[0]
+        self.assertEqual(request.session_id, 'thread-origin-1')
+        self.assertEqual(request.continuity, 'exact')
+        self.assertFalse(request.authorize_model)
+        self.assertEqual(request.meeting_id, 'mtg-abc123')
 
     async def test_request_text_is_only_the_triggering_utterance(self):
         self.session.note_transcript({
@@ -217,6 +239,39 @@ class CodexProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('openai', lowered)
         self.assertNotIn('daemon.auth', lowered)
         self.assertNotIn('tavily', lowered)
+
+    async def test_exact_session_fields_are_forwarded_to_the_job_client(self):
+        from providers.codex import CodexProvider
+        from providers.base import ProviderRequest
+        from test_schemas import context_payload, permissions_payload
+
+        captured = {}
+
+        class MemoryClient:
+            async def run(self, task, model, cancel=None, **fields):
+                captured.update(fields)
+                return {'text': 'ok', 'model': model}
+
+        provider = CodexProvider(client=MemoryClient(), context_search=lambda query: None)
+        await provider.run(ProviderRequest(
+            delegation_id='item_exact',
+            request_text='What did we decide?',
+            handoff=context_payload(),
+            model='gpt-5.6-terra',
+            permissions=permissions_payload(network='disabled'),
+            workspace='/Users/Taylor/project',
+            provider='codex',
+            session_id='thread-origin-1',
+            continuity='exact',
+            authorize_model=False,
+            meeting_id='mtg-abc123',
+            source='codex-app-server',
+        ), None)
+        self.assertEqual(captured['session_id'], 'thread-origin-1')
+        self.assertEqual(captured['continuity'], 'exact')
+        self.assertFalse(captured['authorize_model'])
+        self.assertEqual(captured['meeting_id'], 'mtg-abc123')
+        self.assertNotIn('session_key', captured)
 
 
 if __name__ == '__main__':

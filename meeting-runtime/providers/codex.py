@@ -4,6 +4,7 @@ import inspect
 from context_handoff import ContextHandoff
 from context_tool import search_context
 from codex_tool import CODEX_MODELS, CodexJobClient
+from session_continuity import CONTEXT, session_id_of, validate_agent_session
 from startup_input import clip_tokens
 
 from .base import CodingAgentProvider
@@ -46,6 +47,17 @@ async def _maybe_await(value):
     return value
 
 
+def _call_kwargs(func, extra):
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return extra
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD
+           for parameter in signature.parameters.values()):
+        return extra
+    return {key: value for key, value in extra.items() if key in signature.parameters}
+
+
 class CodexProvider(CodingAgentProvider):
     def __init__(self, client=None, *, search=None, context_search=None, default_model='gpt-5.6-terra'):
         self.client = client or CodexJobClient()
@@ -56,6 +68,60 @@ class CodexProvider(CodingAgentProvider):
     def _model(self, request):
         model = request.model or self.default_model
         return model if model in CODEX_MODELS else self.default_model
+
+    def _job_fields(self, request):
+        return {
+            'session_id': request.session_id,
+            'continuity': request.continuity or CONTEXT,
+            'workspace': request.workspace,
+            'authorize_model': bool(request.authorize_model),
+            'meeting_id': request.meeting_id,
+            'source': request.source,
+            'on_progress': request.on_progress,
+        }
+
+    async def validate_session(self, ref):
+        try:
+            mode = validate_agent_session(ref)
+        except ValueError as error:
+            return {'ok': False, 'error': str(error)}
+        validator = getattr(self.client, 'validate_session', None)
+        if validator is None:
+            return {'ok': True, 'continuity': mode, 'sessionId': session_id_of(ref)}
+        result = await _maybe_await(validator(
+            session_id=session_id_of(ref),
+            continuity=mode,
+            source=(getattr(ref, 'metadata', None) or {}).get('source')
+            if not isinstance(ref, dict) else (ref.get('metadata') or {}).get('source'),
+        ))
+        if isinstance(result, dict):
+            return result
+        return {'ok': True, 'continuity': mode, 'sessionId': session_id_of(ref)}
+
+    async def acquire(self, ref, meeting_id=None):
+        return None
+
+    async def release(self, ref):
+        return None
+
+    async def cancel(self, delegation_id):
+        cancel = getattr(self.client, 'cancel', None)
+        if cancel is None:
+            return None
+        return await _maybe_await(cancel(delegation_id))
+
+    async def append_handoff(self, request, handoff, cancel=None):
+        append = getattr(self.client, 'append_handoff', None)
+        if append is None:
+            return {'error': 'append_handoff is not available'}
+        extra = _call_kwargs(append, {
+            'cancel': cancel,
+            **{key: value for key, value in self._job_fields(request).items()
+               if key != 'on_progress'},
+            'model': self._model(request),
+        })
+        extra.pop('handoff', None)
+        return await _maybe_await(append(handoff, **extra))
 
     async def run(self, request, cancel):
         if cancel is not None and cancel.is_set():
@@ -107,4 +173,8 @@ class CodexProvider(CodingAgentProvider):
             task = task[:6000]
         if cancel is not None and cancel.is_set():
             return {'error': 'cancelled'}
-        return await self.client.run(task, self._model(request), cancel=cancel)
+        extra = _call_kwargs(self.client.run, {
+            'cancel': cancel,
+            **self._job_fields(request),
+        })
+        return await self.client.run(task, self._model(request), **extra)

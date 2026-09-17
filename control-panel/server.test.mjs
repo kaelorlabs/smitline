@@ -254,6 +254,7 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     const status = await (await fetch(`${panel.base}/api/status`)).json();
     assert.equal(status.running, true);
     assert.equal(status.phase, 'starting');
+    assert.equal(status.continuity, 'context');
     const encoded = JSON.stringify({ bootstrap, status, body });
     assert.equal(encoded.includes('Bearer'), false);
     assert.equal('OPENAI_API_KEY' in (bootstrap.settings || {}), false);

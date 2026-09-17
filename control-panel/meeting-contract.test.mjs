@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   buildMeetingCreatePayload,
   contextHandoffFromSources,
+  continuityFromAgentSession,
   meetingBusy,
   meetingIsActive,
   permissionsForTools,
@@ -26,6 +27,7 @@ test('builds a local portal meeting payload with least-privilege permissions', (
   assert.equal(payload.agentSession.provider, 'codex');
   assert.equal(payload.agentSession.sessionId, 'local-portal');
   assert.equal(payload.agentSession.metadata.source, 'local-portal');
+  assert.equal(payload.agentSession.metadata.continuity, 'context');
   assert.equal(payload.permissions.workspace, 'read-only');
   assert.equal(payload.permissions.network, 'allowed');
   assert.equal(payload.permissions.edits, 'disabled');
@@ -62,6 +64,17 @@ test('maps daemon meeting state onto existing product phases', () => {
   assert.equal(meetingIsActive({ state: 'joining' }), true);
   assert.equal(meetingBusy({ running: false, phase: 'joining' }), true);
   assert.equal(meetingBusy({ running: false, phase: 'stopped' }), false);
+});
+
+test('labels portal meetings as context continuity and origin sessions as exact', () => {
+  assert.equal(continuityFromAgentSession({
+    sessionId: 'local-portal',
+    metadata: { source: 'local-portal', continuity: 'context' },
+  }), 'context');
+  assert.equal(continuityFromAgentSession({
+    sessionId: 'thread-origin-1',
+    metadata: { source: 'codex-app-server' },
+  }), 'exact');
 });
 
 test('persists the active meeting id for portal restart recovery', () => {
