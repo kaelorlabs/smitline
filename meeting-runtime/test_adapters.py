@@ -10,9 +10,29 @@ class UrlTests(unittest.TestCase):
         self.assertEqual(platform_for_url('https://us05web.zoom.us/j/123?pwd=x'), 'zoom')
         for url in ('https://teams.microsoft.com/l/meetup-join/abc?context=x', 'https://teams.live.com/meet/123?p=x'):
             self.assertEqual(platform_for_url(url), 'teams')
+        self.assertEqual(platform_for_url('https://meet.google.com/aaa-bbbb-ccc'), 'meet')
+        self.assertEqual(platform_for_url('https://meet.google.com/abc-defg-hij?authuser=0'), 'meet')
         self.assertEqual(normalize_url('https://zoom.us/j/123?pwd=x'), 'https://zoom.us/wc/join/123?pwd=x')
+        self.assertEqual(normalize_url('https://meet.google.com/aaa-bbbb-ccc'), 'https://meet.google.com/aaa-bbbb-ccc')
     def test_rejects_unsafe_and_unsupported(self):
-        for url in ('http://zoom.us/j/123', 'https://zoom.us.evil.com/j/123', 'https://teams.microsoft.com.evil.org/meet/123', 'https://teams.microsoft.us/meet/123', 'https://user:password@zoom.us/j/123', 'https://zoom.us:8443/j/123', 'https://meet.google.com/abc', 'https://zoom.us/j/123/evil'):
+        for url in (
+            'http://zoom.us/j/123', 'https://zoom.us.evil.com/j/123',
+            'https://teams.microsoft.com.evil.org/meet/123', 'https://teams.microsoft.us/meet/123',
+            'https://user:password@zoom.us/j/123', 'https://zoom.us:8443/j/123',
+            'https://meet.google.com/abc', 'https://zoom.us/j/123/evil',
+            'http://meet.google.com/aaa-bbbb-ccc',
+            'https://meet.google.com.evil.org/aaa-bbbb-ccc',
+            'https://www.meet.google.com/aaa-bbbb-ccc',
+            'https://user:pass@meet.google.com/aaa-bbbb-ccc',
+            'https://meet.google.com:8443/aaa-bbbb-ccc',
+            'https://meet.google.com/',
+            'https://meet.google.com/landing',
+            'https://meet.google.com/new',
+            'https://meet.google.com/lookup/nickname',
+            'https://meet.google.com/aaa-bbbb-ccc/event',
+            'https://workspace.google.com/meet/aaa-bbbb-ccc',
+            'https://stream.meet.google.com/aaa-bbbb-ccc',
+        ):
             with self.subTest(url=url), self.assertRaises(ValueError): platform_for_url(url)
 
 class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
@@ -25,8 +45,14 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close()
         await self.pw.stop()
-    def adapter(self, teams=True):
-        return create_adapter('https://teams.microsoft.com/meet/123' if teams else 'https://zoom.us/j/123', self.page, self.stop, self.stages.append)
+    def adapter(self, teams=True, meet=False):
+        if meet:
+            url = 'https://meet.google.com/aaa-bbbb-ccc'
+        elif teams:
+            url = 'https://teams.microsoft.com/meet/123'
+        else:
+            url = 'https://zoom.us/j/123'
+        return create_adapter(url, self.page, self.stop, self.stages.append)
     async def test_teams_lobby_is_not_admission(self):
         await self.page.route('**/*', lambda route: route.fulfill(body='<p>Please wait, someone will let you in</p><button>Leave</button><button>Unmute</button>', content_type='text/html'))
         a = self.adapter()
@@ -118,3 +144,98 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         for html in ('<button>People</button>', '<p>People (1)</p>', '<button hidden>People (1)</button>', '<button>People (0)</button>'):
             await self.page.set_content(html)
             self.assertIsNone(await a.get_participant_count())
+
+    async def test_meet_lobby_is_not_admission(self):
+        await self.page.route('**/*', lambda route: route.fulfill(
+            body='<p>Asking to be let in</p><button>Leave call</button><button>Turn on mic</button>',
+            content_type='text/html'))
+        a = self.adapter(meet=True)
+        task = asyncio.create_task(a.join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague'))
+        try:
+            for _ in range(30):
+                if 'waiting_for_admission' in self.stages: break
+                await asyncio.sleep(.05)
+            self.assertFalse(task.done())
+            await self.page.locator('p').evaluate('(p) => p.remove()')
+            await asyncio.wait_for(task, 2)
+            self.assertIn('admitted', self.stages)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_meet_guest_prejoin_then_admission(self):
+        html = (
+            '<input placeholder="Your name">'
+            '<button>Ask to join</button>'
+            '<button>Turn off mic</button>'
+            '<button>Turn off camera</button>'
+        )
+        await self.page.route('**/*', lambda route: route.fulfill(body=html, content_type='text/html'))
+        a = self.adapter(meet=True)
+        task = asyncio.create_task(a.join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague'))
+        try:
+            for _ in range(40):
+                if 'joining' in self.stages: break
+                await asyncio.sleep(.05)
+            self.assertIn('joining', self.stages)
+            self.assertFalse(task.done())
+            await self.page.evaluate("""() => {
+              document.body.innerHTML = '<button>Leave call</button><button>Turn on mic</button><button>Turn off camera</button>';
+            }""")
+            await asyncio.wait_for(task, 2)
+            self.assertIn('admitted', self.stages)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_meet_auth_failure_and_guest_denial(self):
+        await self.page.route('**/*', lambda route: route.fulfill(body='Sign in to join this video call'))
+        with self.assertRaises(AuthenticationRequired):
+            await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
+        await self.page.unroute('**/*')
+        await self.page.route('**/*', lambda route: route.fulfill(
+            body="You can't join this video call"))
+        with self.assertRaises(AuthenticationRequired):
+            await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
+
+    async def test_meet_mute_camera_chat_end_and_degraded_policy(self):
+        await self.page.set_content('''
+          <button onclick="this.innerText=this.innerText==='Turn on mic'?'Turn off mic':'Turn on mic'">Turn on mic</button>
+          <button onclick="this.setAttribute('aria-label', this.getAttribute('aria-label')==='Turn on camera'?'Turn off camera':'Turn on camera')" aria-label="Turn on camera">cam</button>
+        ''')
+        a = self.adapter(meet=True)
+        self.assertTrue(a.capabilities.camera)
+        self.assertTrue(a.capabilities.shared_content)
+        self.assertEqual(await a.get_microphone_state(), 'muted')
+        await a.unmute()
+        self.assertEqual(await a.get_microphone_state(), 'open')
+        await a.mute()
+        self.assertEqual(await a.get_microphone_state(), 'muted')
+        await a.connect_audio()
+        self.assertEqual(await a.get_microphone_state(), 'muted')
+        self.assertEqual(await a.get_camera_state(), 'off')
+        await a.enable_camera()
+        self.assertEqual(await a.get_camera_state(), 'on')
+        await a.disable_camera()
+        self.assertEqual(await a.get_camera_state(), 'off')
+        self.assertFalse(await a.chat_available())
+        with self.assertRaises(RuntimeError):
+            await a.send_chat_message('hello')
+        await self.page.set_content('<button aria-label="Turn on camera" disabled>cam</button>')
+        self.assertEqual(await a.get_camera_state(), 'blocked')
+        await self.page.set_content('<p>You\'ve been removed from the meeting</p>')
+        self.assertTrue(await a.has_ended())
+        await self.page.set_content('<p>You left the meeting</p>')
+        self.assertTrue(await a.has_ended())
+
+    async def test_meet_participant_count_and_cleanup_leave(self):
+        a = self.adapter(meet=True)
+        await self.page.set_content('<button aria-label="People (2)">People</button>')
+        self.assertEqual(await a.get_participant_count(), 2)
+        await self.page.set_content('<button>People</button>')
+        self.assertIsNone(await a.get_participant_count())
+        await self.page.set_content('<button id="leave">Leave call</button>')
+        await self.page.locator('#leave').evaluate(
+            '(el) => el.addEventListener("click", () => { el.dataset.left = "1" })')
+        await a.leave()
+        self.assertEqual(await self.page.locator('#leave').get_attribute('data-left'), '1')

@@ -10,7 +10,7 @@ from agent_sessions import MeetingSession
 from meeting_repository import MeetingCorruptionError, MeetingRepository
 from session_leases import LeaseStateError, SessionLeaseStore
 from test_schemas import (
-    TEAMS_URL, TIMESTAMP, ZOOM_URL, agent_session_payload, context_payload,
+    MEET_URL, TEAMS_URL, TIMESTAMP, ZOOM_URL, agent_session_payload, context_payload,
     handoff_payload, permissions_payload,
 )
 
@@ -240,6 +240,12 @@ Usage: fake-agent
         )
         self.assertEqual(teams.status, 201)
         self.assertEqual((await teams.json())['platform'], 'teams')
+        meet = await self.create(
+            meetingUrl=MEET_URL,
+            agentSession=agent_session_payload(sessionId='thread-meet-1'),
+        )
+        self.assertEqual(meet.status, 201)
+        self.assertEqual((await meet.json())['platform'], 'meet')
 
     async def test_camera_settings_are_optional_and_presence_is_public(self):
         created = await self.create(camera={'enabled': False, 'defaultOn': False})

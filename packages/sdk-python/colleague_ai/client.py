@@ -110,16 +110,20 @@ def _require_string(value, name, *, allow_empty=False, max_length=8000):
 
 
 def platform_for_url(url: str) -> str:
+    import re
     from urllib.parse import urlparse
     parsed = urlparse(url)
     if parsed.scheme != 'https':
-        raise ValidationError('url must be an https Zoom or Teams invitation')
+        raise ValidationError('url must be an https Zoom, Teams, or Google Meet invitation')
     host = (parsed.hostname or '').lower()
     if host == 'zoom.us' or host.endswith('.zoom.us'):
         return 'zoom'
     if host in {'teams.microsoft.com', 'teams.live.com'}:
         return 'teams'
-    raise ValidationError('url must be a Zoom or Teams invitation')
+    path = parsed.path or ''
+    if host == 'meet.google.com' and re.fullmatch(r'/[a-z]{3}-[a-z]{4}-[a-z]{3}/?', path, re.I):
+        return 'meet'
+    raise ValidationError('url must be a Zoom, Teams, or Google Meet invitation')
 
 
 def validate_agent_session(value):

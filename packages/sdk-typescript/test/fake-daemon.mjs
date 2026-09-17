@@ -108,7 +108,7 @@ export async function startFakeDaemon(options = {}) {
         const id = options.meetingId || `mtg-${state.created}`;
         const session = {
           id,
-          platform: body.meetingUrl?.includes('teams.') ? 'teams' : 'zoom',
+          platform: body.meetingUrl?.includes('teams.') ? 'teams' : body.meetingUrl?.includes('meet.google.com') ? 'meet' : 'zoom',
           meetingUrl: body.meetingUrl,
           agentSession: body.agentSession,
           context: body.context,

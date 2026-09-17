@@ -27,13 +27,13 @@
         <section class="panel setup-panel" aria-labelledby="setup-title">
           <div class="panel-heading">
             <div><p class="kicker">Connection</p><h2 id="setup-title">Meeting details</h2></div>
-            <span class="section-tag" id="platform-badge">Zoom / Teams</span>
+            <span class="section-tag" id="platform-badge">Zoom / Teams / Meet</span>
           </div>
 
           <form id="meeting-form" novalidate>
             <div class="field full">
               <label for="meeting-url">Meeting invitation</label>
-              <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="Paste a Zoom or Teams invitation">
+              <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="Paste a Zoom, Teams, or Google Meet invitation">
               <small class="hint">Paste the invitation link shared by your host.</small>
               <small class="error" data-error="meetingUrl"></small>
             </div>
@@ -44,6 +44,15 @@
               <div class="actions">
                 <button class="button secondary" type="button" id="connect-teams">Connect Microsoft account</button>
                 <button class="button ghost" type="button" id="disconnect-teams">Disconnect</button>
+              </div>
+              <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
+            </div>
+            <div class="field full" id="google-account" hidden>
+              <label>Google account <span>fallback when guest entry is blocked</span></label>
+              <p class="hint" id="google-account-state">Checking connection…</p>
+              <div class="actions">
+                <button class="button secondary" type="button" id="connect-google">Connect Google account</button>
+                <button class="button ghost" type="button" id="disconnect-google">Disconnect</button>
               </div>
               <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
             </div>

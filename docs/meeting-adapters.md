@@ -1,20 +1,20 @@
 # Meeting adapters
 
-Colleague AI runs Zoom and Teams through a shared local browser/audio runtime. Paste a supported invitation into the console; platform detection is automatic. Google Meet and government Teams are not enabled.
+Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared local browser/audio runtime. Paste a supported invitation into the console; platform detection is automatic. Government Teams is not enabled.
 
 ## Operation
 
 1. Run `./start-control-panel.sh` and open http://127.0.0.1:8095.
-2. Paste an HTTPS Zoom, Teams commercial, or Teams Free meeting URL.
-3. For Teams meetings that require an account, choose **Connect Microsoft account**, then **Open meeting view**. Complete Microsoft sign-in yourself. Once the console reports account connected, stop the account browser. The browser profile is stored locally in the ignored `meeting-runtime/profiles/` directory.
-4. Start the colleague. Teams tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant policy may still refuse admission.
+2. Paste an HTTPS Zoom, Teams commercial, Teams Free, or Google Meet (`https://meet.google.com/xxx-yyyy-zzz`) meeting URL.
+3. For Teams or Meet meetings that require an account, choose **Connect Microsoft account** or **Connect Google account**, then **Open meeting view**. Complete sign-in yourself on the official page. Once the console reports account connected, stop the account browser. Browser profiles are stored locally in the ignored `meeting-runtime/profiles/` directory.
+4. Start the colleague. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.
 5. Admit the participant. It connects computer audio and starts listening continuously.
 6. The adapter opens the platform microphone once and keeps the audio connection stable. The virtual microphone transmits silence while Colleague AI listens and immediately transports speech when GPT-Live chooses to respond.
 7. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
 8. A host or participant mute is authoritative; Colleague AI does not reopen the platform microphone automatically.
-9. Stop the colleague to finalize its local transcript. To remove the Microsoft session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
+9. Stop the colleague to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
 
-A connected profile marker means a signed-in Teams account menu was seen. Microsoft can expire that session. If fallback asks for sign-in again, reconnect through the console. One profile and one meeting/account browser can run at a time. Signed-in participation can display the Microsoft account's name rather than the configured guest name.
+A connected profile marker means a signed-in account menu was seen. Google or Microsoft can expire that session. If fallback asks for sign-in again, reconnect through the console. One profile and one meeting/account browser can run at a time. Signed-in participation can display the account's name rather than the configured guest name.
 
 ## Voice context and usage
 
@@ -28,11 +28,11 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 ## Adapter contract
 
-`MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams uses the Joinly Teams controller for chat and leave, with explicit admission and microphone checks in Colleague AI.
+`MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams and Google Meet reuse Joinly controllers for chat and leave, with explicit admission and microphone checks in Colleague AI. Signed-in fallback is declared on the adapter (`signed_in_profile`); the join path does not branch on platform id.
 
 The bridge owns the GPT-Live connection, virtual devices, tool dispatch, transcripts, and selective participation prompt. Platform mute controls establish the audio connection and respect an external mute. A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
-Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Adapters do not share this computer's desktop. Optional incoming shared-content capture is disabled by default and only screenshots the meeting share surface.
+Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Adapters do not share this computer's desktop. Optional incoming shared-content capture is disabled by default and only screenshots the meeting share or presentation surface.
 
 ## Breaking migration
 
@@ -42,7 +42,7 @@ The current names are `meeting-runtime/`, `.env.meeting`, `MEETING_URL`, `MEETIN
 
 Run `node --test control-panel/*.test.mjs` and the runtime unittest suite inside the built meeting image. Browser fixtures use that image's Chromium with no meeting accounts or API credentials. They verify URL rejection, lobby versus admission, account requirements, and individual microphone controls. Participation tests verify model-audio transport, stable microphone connection, blocked microphones, and external mute handling.
 
-Live Zoom/Teams calls remain necessary to validate actual tenant admission, signed-in fallback, two-way audio, chat submission, and restart. Browser fixture tests alone do not establish production compatibility.
+Live Zoom/Teams/Meet calls remain necessary to validate actual tenant admission, signed-in fallback, two-way audio, chat submission, and restart. Browser fixture tests alone do not establish production compatibility.
 
 ### Leaving an empty Teams call
 

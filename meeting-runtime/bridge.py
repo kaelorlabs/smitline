@@ -375,8 +375,12 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        if os.environ.get('COLLEAGUE_AUTH_MODE') == 'teams':
+        mode = os.environ.get('COLLEAGUE_AUTH_MODE')
+        if mode == 'teams':
             from teams_account import connect
+            asyncio.run(connect())
+        elif mode == 'google':
+            from google_account import connect
             asyncio.run(connect())
         else:
             asyncio.run(main())

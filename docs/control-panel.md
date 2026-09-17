@@ -27,7 +27,7 @@ Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open whil
 
 ## Configure a meeting
 
-1. Paste the complete Zoom or Teams invite URL. A URL containing Zoom's `pwd` parameter is supported.
+1. Paste the complete Zoom, Teams, or Google Meet invite URL. A URL containing Zoom's `pwd` parameter is supported. Google Meet codes must be the official `xxx-yyyy-zzz` form on `meet.google.com`.
 2. Enter a passcode when Zoom requires one separately.
 3. Choose the participant name and the default Codex model.
 4. Enable only the tools needed for the meeting:
@@ -54,7 +54,7 @@ Use **Clear saved context** when the material should no longer be available. Thi
 
 The console reports the join stage, platform microphone state, listening state, selected tools, runtime log, and recorded sessions. Admit **Colleague AI** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, asked for a tool result, or able to establish an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
 
-The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom or Teams, that mute is respected and the runtime will not override it automatically.
+The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically.
 
 Stop the colleague from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory. The Codex tool can resume its meeting-scoped session when the meeting identity and workspace are unchanged.
 

@@ -276,6 +276,13 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             validate_join_request({'url': ZOOM, 'agentSession': agent_session(workspace='relative')})
         with self.assertRaises(ValidationError):
             validate_join_request({'url': 'http://zoom.us/j/1', 'agentSession': agent_session()})
+        with self.assertRaises(ValidationError):
+            validate_join_request({'url': 'https://meet.google.com/abc', 'agentSession': agent_session()})
+        meet = validate_join_request({
+            'url': 'https://meet.google.com/aaa-bbbb-ccc',
+            'agentSession': agent_session(),
+        })
+        self.assertEqual(meet['meetingUrl'], 'https://meet.google.com/aaa-bbbb-ccc')
         disabled = validate_join_request({
             'url': ZOOM,
             'agentSession': agent_session(),

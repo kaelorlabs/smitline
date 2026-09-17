@@ -53,3 +53,18 @@ test('Teams invites validate while lookalike hosts and credentials fail', () => 
     assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, false);
   }
 });
+
+test('Google Meet invites validate while malformed codes and lookalikes fail', () => {
+  for (const meetingUrl of ['https://meet.google.com/aaa-bbbb-ccc', 'https://meet.google.com/abc-defg-hij?authuser=0']) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, true);
+  }
+  for (const meetingUrl of [
+    'https://meet.google.com/abc',
+    'https://meet.google.com/landing',
+    'https://meet.google.com.evil.org/aaa-bbbb-ccc',
+    'https://www.meet.google.com/aaa-bbbb-ccc',
+    'http://meet.google.com/aaa-bbbb-ccc',
+  ]) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, false);
+  }
+});

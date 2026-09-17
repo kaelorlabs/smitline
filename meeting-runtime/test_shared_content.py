@@ -1,4 +1,4 @@
-"""Shared-content capture fixtures for Zoom and Teams."""
+"""Shared-content capture fixtures for Zoom, Teams, and Google Meet."""
 import unittest
 from playwright.async_api import async_playwright
 
@@ -20,6 +20,14 @@ TEAMS_SHARE = '''
   <div data-tid="calling-screen-sharing-stage" style="width:320px;height:180px;background:#ff0000"></div>
   <div data-tid="calling-participant-stream" style="width:320px;height:180px;background:#0000ff">gallery</div>
   <div data-tid="chat-pane">chat</div>
+</div>
+'''
+MEET_SHARE = '''
+<style>body { margin: 0 }</style>
+<div style="display:flex">
+  <div data-is-presenting="true" style="width:320px;height:180px;background:#ff0000"></div>
+  <div data-participant-id="gallery" style="width:320px;height:180px;background:#0000ff">gallery</div>
+  <div aria-label="Chat with everyone">chat</div>
 </div>
 '''
 AMBIGUOUS = '''
@@ -46,6 +54,9 @@ class SharedContentFixtures(unittest.IsolatedAsyncioTestCase):
     def teams(self):
         return create_adapter('https://teams.microsoft.com/meet/123', self.page, self.stop, lambda *_: None)
 
+    def meet(self):
+        return create_adapter('https://meet.google.com/aaa-bbbb-ccc', self.page, self.stop, lambda *_: None)
+
     async def test_zoom_and_teams_capture_only_the_share_surface(self):
         await self.page.set_content(ZOOM_SHARE)
         zoom = self.zoom()
@@ -62,6 +73,15 @@ class SharedContentFixtures(unittest.IsolatedAsyncioTestCase):
         red, _green, blue = mean_rgb(png)
         self.assertGreater(red, 180)
         self.assertLess(blue, 80)
+        await self.page.set_content(MEET_SHARE)
+        meet = self.meet()
+        self.assertTrue(meet.capabilities.shared_content)
+        png, located = await meet.capture_shared_content()
+        self.assertTrue(located.available)
+        self.assertEqual(located.confidence, 'high')
+        red, _green, blue = mean_rgb(png)
+        self.assertGreater(red, 180)
+        self.assertLess(blue, 80)
 
     async def test_no_share_and_ambiguous_selectors_capture_nothing(self):
         await self.page.set_content('<div class="gallery-video-container">tiles</div><button>Chat</button>')
@@ -73,6 +93,11 @@ class SharedContentFixtures(unittest.IsolatedAsyncioTestCase):
         png, located = await self.zoom().capture_shared_content()
         self.assertIsNone(png)
         self.assertEqual(located.reason, 'selector_ambiguous')
+        await self.page.set_content(
+            '<div data-participant-id="gallery" style="width:320px;height:180px;background:#0000ff">tiles</div>')
+        png, located = await self.meet().capture_shared_content()
+        self.assertIsNone(png)
+        self.assertFalse(located.available)
 
     async def test_tiny_or_toolbar_matches_are_not_shared_content(self):
         await self.page.set_content(

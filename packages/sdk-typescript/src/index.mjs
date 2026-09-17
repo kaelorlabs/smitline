@@ -118,13 +118,19 @@ function platformForUrl(url) {
   try {
     parsed = new URL(url);
   } catch {
-    throw new ValidationError('url must be a Zoom or Teams invitation');
+    throw new ValidationError('url must be a Zoom, Teams, or Google Meet invitation');
   }
-  if (parsed.protocol !== 'https:') throw new ValidationError('url must be an https Zoom or Teams invitation');
+  if (parsed.protocol !== 'https:') throw new ValidationError('url must be an https Zoom, Teams, or Google Meet invitation');
   const host = parsed.hostname.toLowerCase();
   if (host === 'zoom.us' || host.endsWith('.zoom.us')) return 'zoom';
   if (host === 'teams.microsoft.com' || host === 'teams.live.com') return 'teams';
-  throw new ValidationError('url must be a Zoom or Teams invitation');
+  if (host === 'meet.google.com') {
+    if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/?$/i.test(parsed.pathname)) {
+      throw new ValidationError('url must be a Zoom, Teams, or Google Meet invitation');
+    }
+    return 'meet';
+  }
+  throw new ValidationError('url must be a Zoom, Teams, or Google Meet invitation');
 }
 
 export function validateAgentSession(value) {

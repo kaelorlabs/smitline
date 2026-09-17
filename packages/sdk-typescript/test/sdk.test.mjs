@@ -72,6 +72,15 @@ test('client-side validation rejects secrets, placeholders, and relative workspa
     url: 'http://zoom.us/j/1',
     agentSession: agentSession(),
   }), ValidationError);
+  await assert.rejects(() => colleague.joinMeeting({
+    url: 'https://meet.google.com/abc',
+    agentSession: agentSession(),
+  }), ValidationError);
+  const meet = validateJoinRequest({
+    url: 'https://meet.google.com/aaa-bbbb-ccc',
+    agentSession: agentSession(),
+  });
+  assert.equal(meet.meetingUrl, 'https://meet.google.com/aaa-bbbb-ccc');
   const disabled = validateJoinRequest({
     url: ZOOM,
     agentSession: agentSession(),

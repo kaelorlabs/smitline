@@ -19,6 +19,7 @@ class Capabilities:
 class MeetingPlatformAdapter(ABC):
     platform_id: str
     capabilities = Capabilities()
+    signed_in_profile = None
     def __init__(self, page, stop, stage):
         self.page, self.stop, self.stage = page, stop, stage
     def validate_url(self, url):

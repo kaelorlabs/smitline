@@ -68,14 +68,14 @@ const PERMISSIONS_SCHEMA = {
 export const TOOL_DEFINITIONS = [
   {
     name: 'start_meeting',
-    description: 'Start a Colleague AI Zoom or Teams meeting through the local daemon. Exact continuity requires the host integration to inject the real originating thread id. Generic MCP clients should set continuity to context. Returns a durable meeting handle immediately; poll get_meeting_handoff unless this client advertised MCP Tasks on the request.',
+    description: 'Start a Colleague AI Zoom, Teams, or Google Meet meeting through the local daemon. Exact continuity requires the host integration to inject the real originating thread id. Generic MCP clients should set continuity to context. Returns a durable meeting handle immediately; poll get_meeting_handoff unless this client advertised MCP Tasks on the request.',
     execution: { taskSupport: 'optional' },
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['url', 'provider', 'workspace', 'context', 'permissions'],
       properties: {
-        url: { type: 'string', description: 'https Zoom or Teams invitation URL' },
+        url: { type: 'string', description: 'https Zoom, Teams, or Google Meet invitation URL' },
         provider: { enum: [...PROVIDERS] },
         sessionId: { type: 'string', description: 'Originating thread id. Required for exact continuity. Never last/latest.' },
         workspace: { type: 'string', description: 'Absolute workspace path' },

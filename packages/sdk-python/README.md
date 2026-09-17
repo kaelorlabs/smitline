@@ -1,6 +1,6 @@
 # Colleague AI Python SDK
 
-Versioned local SDK (`colleague-ai` 1.0.0) for joining Zoom and Teams meetings through the Colleague AI runtime daemon. Public models mirror the daemon JSON schemas. The client interface is transport-independent; the default transport uses stdlib HTTP and SSE against the loopback daemon.
+Versioned local SDK (`colleague-ai` 1.0.0) for joining Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. Public models mirror the daemon JSON schemas. The client interface is transport-independent; the default transport uses stdlib HTTP and SSE against the loopback daemon.
 
 Requires Python 3.10+. This package is for local use and is not published to PyPI. There are no third-party runtime dependencies.
 

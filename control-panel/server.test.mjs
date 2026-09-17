@@ -84,7 +84,7 @@ test('meeting controls reject unauthenticated requests', async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const base = `http://127.0.0.1:${server.address().port}`;
-    for (const endpoint of ['/api/platforms/teams/connect', '/api/platforms/teams/disconnect']) {
+    for (const endpoint of ['/api/platforms/teams/connect', '/api/platforms/teams/disconnect', '/api/platforms/google/connect', '/api/platforms/google/disconnect']) {
       const result = await fetch(base + endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({allowed:true}) });
       assert.equal(result.status, 403);
     }
@@ -564,6 +564,13 @@ test('daemon unavailability is truthful and Teams auth cannot race a live meetin
       body: '{}',
     });
     assert.equal(teams.status, 409);
+    assert.equal(panel.accountSpawns.length, 0);
+    const google = await fetch(`${panel.base}/api/platforms/google/connect`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal(google.status, 409);
     assert.equal(panel.accountSpawns.length, 0);
   });
 });

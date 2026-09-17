@@ -1,6 +1,6 @@
 # Colleague AI TypeScript SDK
 
-Versioned local SDK (`@colleague-ai/sdk` 1.0.0) for joining Zoom and Teams meetings through the Colleague AI runtime daemon. The public types mirror the daemon schemas. The client interface is transport-independent; the default transport talks to the loopback daemon.
+Versioned local SDK (`@colleague-ai/sdk` 1.0.0) for joining Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. The public types mirror the daemon schemas. The client interface is transport-independent; the default transport talks to the loopback daemon.
 
 Requires Node.js 22+. This package is for local use and is not published to npm.
 

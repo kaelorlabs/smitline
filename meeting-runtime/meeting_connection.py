@@ -26,12 +26,14 @@ async def joined_meeting(url, name, passcode, env, stop, stage, state,
         try:
             await adapter.join(url, name, passcode)
         except AuthenticationRequired:
-            if adapter.platform_id != 'teams' or not (profile_root / 'teams-connected').is_file():
+            profile = adapter.signed_in_profile
+            marker, directory = profile if profile else (None, None)
+            if not marker or not (profile_root / marker).is_file():
                 state['authenticationState'] = 'required'
                 raise
             # Close the guest completely before using the account profile.
             await stack.aclose()
-            browser = await stack.enter_async_context(browser_factory(env={**guest_env, 'JOINLY_BROWSER_PROFILE_DIR': str(profile_root / 'teams')}))
+            browser = await stack.enter_async_context(browser_factory(env={**guest_env, 'JOINLY_BROWSER_PROFILE_DIR': str(profile_root / directory)}))
             page = await browser.get_page()
             if camera_feed is not None:
                 try:

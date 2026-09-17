@@ -99,9 +99,13 @@ function describePhase(phase, health, status = {}) {
     admitted: ['Admitted.', 'Connecting meeting audio.'],
     connecting_audio: ['Connecting audio…', 'Preparing the virtual microphone for GPT-Live output.'],
     live: ['Ready to contribute.', 'Listening continuously and waiting for a direct request or a useful factual correction.'],
-    authentication_required: ['Sign-in required.', 'Connect a Microsoft account for Teams, or inspect the meeting view.'],
-    connecting_account: ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
-    account_connected: ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
+    authentication_required: ['Sign-in required.', 'Connect a Microsoft account for Teams or a Google account for Meet, or inspect the meeting view.'],
+    connecting_account: health?.mode === 'google_account'
+      ? ['Sign in to Google.', 'Open meeting view and complete the Google sign-in.']
+      : ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
+    account_connected: health?.mode === 'google_account'
+      ? ['Google account connected.', 'Stop the account browser, then start your meeting.']
+      : ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
     meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
     needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
@@ -700,26 +704,37 @@ function updatePlatform() {
     const host = new URL($('#meeting-url').value).hostname;
     if (['teams.microsoft.com', 'teams.live.com'].includes(host)) platform = 'Teams';
     else if (/^(?:[a-z0-9-]+\.)?zoom\.us$/.test(host)) platform = 'Zoom';
+    else if (host === 'meet.google.com') platform = 'Meet';
   } catch {}
-  $('#platform-badge').textContent = platform || 'Zoom / Teams';
+  $('#platform-badge').textContent = platform || 'Zoom / Teams / Meet';
   $('#teams-account').hidden = platform !== 'Teams';
-  if (platform === 'Teams') refreshAccount();
+  $('#google-account').hidden = platform !== 'Meet';
+  if (platform === 'Teams') refreshAccount('teams');
+  if (platform === 'Meet') refreshAccount('google');
 }
-async function refreshAccount() {
+async function refreshAccount(kind = 'teams') {
+  const stateId = kind === 'google' ? 'google-account-state' : 'account-state';
   try {
-    const account = await request('/api/platforms/teams/status');
-    $('#account-state').textContent = account.connected ? 'Connected locally. Microsoft may request sign-in again if the session expires.' : 'Not connected. Guest entry will be attempted first.';
-  } catch { $('#account-state').textContent = 'Could not check account state.'; }
+    const account = await request(`/api/platforms/${kind}/status`);
+    const provider = kind === 'google' ? 'Google' : 'Microsoft';
+    $(`#${stateId}`).textContent = account.connected
+      ? `Connected locally. ${provider} may request sign-in again if the session expires.`
+      : 'Not connected. Guest entry will be attempted first.';
+  } catch { $(`#${stateId}`).textContent = 'Could not check account state.'; }
 }
 $('#meeting-url').addEventListener('input', updatePlatform);
-for (const action of ['connect', 'disconnect']) {
-  $(`#${action}-teams`).addEventListener('click', async event => {
-    event.target.disabled = true;
-    try {
-      await request(`/api/platforms/teams/${action}`, { method: 'POST', body: '{}' });
-      announce(action === 'connect' ? 'Preparing the account browser. Open meeting view to sign in.' : 'Microsoft profile removed from this computer.');
-      await refreshAccount(); await refresh();
-    } catch (error) { announce(error.message, true); }
-    finally { event.target.disabled = false; }
-  });
+for (const [kind, noun] of [['teams', 'Microsoft'], ['google', 'Google']]) {
+  for (const action of ['connect', 'disconnect']) {
+    $(`#${action}-${kind}`)?.addEventListener('click', async event => {
+      event.target.disabled = true;
+      try {
+        await request(`/api/platforms/${kind}/${action}`, { method: 'POST', body: '{}' });
+        announce(action === 'connect'
+          ? 'Preparing the account browser. Open meeting view to sign in.'
+          : `${noun} profile removed from this computer.`);
+        await refreshAccount(kind); await refresh();
+      } catch (error) { announce(error.message, true); }
+      finally { event.target.disabled = false; }
+    });
+  }
 }

@@ -77,7 +77,7 @@ export interface ApprovalRecord {
 
 export interface MeetingSession {
   id: string;
-  platform: 'zoom' | 'teams';
+  platform: 'zoom' | 'teams' | 'meet';
   meetingUrl: string;
   agentSession: AgentSessionRef;
   context: ContextHandoff;

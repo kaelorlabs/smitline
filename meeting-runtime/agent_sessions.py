@@ -12,7 +12,7 @@ from schema_validation import (
 
 
 AGENT_PROVIDERS = ('codex', 'cursor', 'claude-code', 'generic')
-MEETING_PLATFORMS = ('zoom', 'teams')
+MEETING_PLATFORMS = ('zoom', 'teams', 'meet')
 MEETING_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 WORKSPACE_PERMISSIONS = ('none', 'read-only', 'workspace-write')
 COMMAND_PERMISSIONS = ('disabled', 'approval-required', 'allowed')

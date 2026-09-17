@@ -31,8 +31,24 @@ TEAMS_EXCLUDE = (
     '[data-tid="roster-list"]',
     '[id*="gallery"]',
 )
-SELECTORS = {'zoom': ZOOM_SELECTORS, 'teams': TEAMS_SELECTORS}
-EXCLUDE = {'zoom': ZOOM_EXCLUDE, 'teams': TEAMS_EXCLUDE}
+MEET_SELECTORS = (
+    '[data-is-presenting="true"]',
+    '[data-presentation="true"]',
+    '[aria-label*="You are viewing a presentation" i]',
+    '[aria-label*="is presenting" i]',
+    '[aria-label*="presenting now" i]',
+)
+MEET_EXCLUDE = (
+    '[data-self-name]',
+    '[aria-label="Chat with everyone"]',
+    '[aria-label="People"]',
+    '[aria-label="Meeting details"]',
+    'aside[aria-label="Side panel"]',
+    'nav',
+    'header',
+)
+SELECTORS = {'zoom': ZOOM_SELECTORS, 'teams': TEAMS_SELECTORS, 'meet': MEET_SELECTORS}
+EXCLUDE = {'zoom': ZOOM_EXCLUDE, 'teams': TEAMS_EXCLUDE, 'meet': MEET_EXCLUDE}
 
 
 @dataclass(frozen=True)

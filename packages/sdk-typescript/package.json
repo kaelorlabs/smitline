@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local Colleague AI SDK for joining Zoom and Teams meetings through the runtime daemon.",
+  "description": "Local Colleague AI SDK for joining Zoom, Teams, and Google Meet meetings through the runtime daemon.",
   "main": "./src/index.mjs",
   "types": "./src/index.d.ts",
   "exports": {

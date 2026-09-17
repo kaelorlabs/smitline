@@ -4,7 +4,7 @@
 
 ### Bring your coding agent into the conversation.
 
-A voice teammate for Zoom and Microsoft Teams that connects your team to Codex, its chosen workspace, and web search.
+A voice teammate for Zoom, Microsoft Teams, and Google Meet that connects your team to Codex, its chosen workspace, and web search.
 
 [Get started](#get-started) · [Try a conversation](#try-a-conversation) · [How it works](#how-it-works) · [Roadmap](#roadmap)
 
@@ -18,7 +18,7 @@ A voice teammate for Zoom and Microsoft Teams that connects your team to Codex, 
 
 Your team is already talking. Someone needs an answer, a technical explanation, a review of project material, or current public information. Colleague AI brings that work into the call through a voice interface connected to tools.
 
-Give it a Zoom or Teams invite from your coding-agent workflow, start the local bridge, and admit **Colleague AI** to the meeting. It listens continuously and GPT-Live responds selectively when it is directly addressed, receives an explicit task, or can establish an important factual correction. The local audio gate handles transport and platform mute state without making turn-taking decisions.
+Give it a Zoom, Teams, or Google Meet invite from your coding-agent workflow, start the local bridge, and admit **Colleague AI** to the meeting. It listens continuously and GPT-Live responds selectively when it is directly addressed, receives an explicit task, or can establish an important factual correction. The local audio gate handles transport and platform mute state without making turn-taking decisions.
 
 The current product runs locally and has been exercised in live Zoom calls. Conversational timing and meeting compatibility are still being improved.
 
@@ -45,7 +45,7 @@ Chart rendering works locally. Sending chart attachments to Zoom chat is experim
 - An authenticated Codex CLI: run `codex login` and verify with `codex login status`.
 - An OpenAI project API key with access to the configured `gpt-live-1` voice model and `gpt-5.6-terra` backend. This prototype depends on those APIs being available to your account.
 - A Tavily API key for web search.
-- A Zoom or Teams meeting that permits the agent to join through the web client.
+- A Zoom, Teams, or Google Meet meeting that permits the agent to join through the web client.
 
 ### 1. Clone and configure
 
@@ -87,7 +87,7 @@ You can use the full Zoom invite URL, including its `pwd` query parameter. Suppl
 bash start-control-panel.sh
 ```
 
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Paste a Zoom or Teams invite, choose the Codex model, tools, optional read-only workspace, and any meeting-specific guidance. You can also paste private reference text or upload TXT, Markdown, CSV, JSON, YAML, PDF, and DOCX files. Run the checks and start the colleague. The console shows the join stage, microphone and listening state, runtime log, and local meeting transcripts. It writes meeting settings to the ignored `.env.meeting` file; API keys remain in the ignored `.env` file and are never returned to the browser.
+Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Paste a Zoom, Teams, or Google Meet invite, choose the Codex model, tools, optional read-only workspace, and any meeting-specific guidance. You can also paste private reference text or upload TXT, Markdown, CSV, JSON, YAML, PDF, and DOCX files. Run the checks and start the colleague. The console shows the join stage, microphone and listening state, runtime log, and local meeting transcripts. It writes meeting settings to the ignored `.env.meeting` file; API keys remain in the ignored `.env` file and are never returned to the browser.
 
 Uploaded documents are converted to text and stored locally in the ignored `meeting-runtime/context/index.json`. Their contents are not returned in the browser bootstrap response. When the meeting touches supplied company facts, project details, policies, plans, metrics, customers, or terminology, the agent can call the local `search_context` function and answer from matching passages while naming the source document. Clear saved context from the console when it should no longer be available.
 
@@ -155,7 +155,7 @@ The technical worker has access only to the workspace selected in the console. W
 
 ```mermaid
 flowchart LR
-    Team[Zoom or Teams meeting] <-->|Meeting audio| Bridge[Browser and audio bridge]
+    Team[Zoom, Teams, or Meet] <-->|Meeting audio| Bridge[Browser and audio bridge]
     Bridge <-->|Streaming voice| Voice[OpenAI GPT-Live]
     Voice <--> Backend[Delegated reasoning]
     Backend --> Search[search_web]
@@ -236,7 +236,7 @@ See the [product roadmap](docs/product-roadmap.md) for the production milestones
 - Evaluate selective participation and conversational timing across larger meetings.
 - Make chart attachment delivery reliable and visibly confirmed.
 - Add meeting summaries and actionable follow-ups.
-- Broaden meeting-platform support. Zoom and Teams are supported; Google Meet experiments are included but are not verified.
+- Broaden meeting-platform support. Zoom, Teams, and Google Meet are supported; live tenant policies still need acceptance testing.
 
 ## Credits and upstream work
 
@@ -244,6 +244,6 @@ Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vin
 
 Colleague AI builds on Joinly’s browser and audio infrastructure. The repository also retains the CopilotKit Agents Everywhere starter as a reference. See [THIRD_PARTY.md](THIRD_PARTY.md) for pinned upstream revisions and retained licenses. Upstream license terms apply to those components; they do not imply a repository-wide license for our additions.
 
-## Zoom and Teams adapters
+## Zoom, Teams, and Google Meet adapters
 
-See [meeting adapters](docs/meeting-adapters.md) for Microsoft account connection, guest fallback, automatic microphone handling, breaking configuration changes, and current test coverage. See [coding providers](docs/coding-providers.md) for Codex, Cursor, and Claude Code capability detection and login. GPT-Live stays connected throughout the meeting to preserve original audio context and continues using the API while listening.
+See [meeting adapters](docs/meeting-adapters.md) for Microsoft and Google account connection, guest fallback, automatic microphone handling, breaking configuration changes, and current test coverage. See [coding providers](docs/coding-providers.md) for Codex, Cursor, and Claude Code capability detection and login. GPT-Live stays connected throughout the meeting to preserve original audio context and continues using the API while listening.

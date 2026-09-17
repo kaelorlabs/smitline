@@ -317,11 +317,11 @@ export function createServer({
     return meetingIsActive(session);
   }
 
-  function spawnTeamsAccount() {
+  function spawnPlatformAccount(mode) {
     const spawnFn = spawnAccount || ((env) => spawn('/bin/bash', ['start-meeting-agent.sh'], {
       cwd: root, env,
     }));
-    return spawnFn({ ...process.env, COLLEAGUE_AUTH_MODE: 'teams' });
+    return spawnFn({ ...process.env, COLLEAGUE_AUTH_MODE: mode });
   }
 
   async function api(request, response, pathname) {
@@ -336,6 +336,9 @@ export function createServer({
     }
     if (request.method === 'GET' && pathname === '/api/platforms/teams/status') {
       return json(response, 200, { connected: fs.existsSync(path.join(profileRoot, 'teams-connected')) });
+    }
+    if (request.method === 'GET' && pathname === '/api/platforms/google/status') {
+      return json(response, 200, { connected: fs.existsSync(path.join(profileRoot, 'google-connected')) });
     }
     if (request.method === 'GET' && pathname === '/api/status') return json(response, 200, await status());
     if (request.method === 'GET' && pathname.startsWith('/api/sessions/')) {
@@ -445,7 +448,7 @@ export function createServer({
         return json(response, 409, { error: 'Stop the current meeting or account connection first.' });
       }
       fs.mkdirSync(profileRoot, { recursive: true, mode: 0o700 });
-      accountLauncher = spawnTeamsAccount();
+      accountLauncher = spawnPlatformAccount('teams');
       accountLauncher.stdout?.on('data', chunk => addLog('account', chunk));
       accountLauncher.stderr?.on('data', chunk => addLog('account', chunk));
       accountLauncher.on('error', error => { lastExit = -1; addLog('account', error.message); });
@@ -458,6 +461,26 @@ export function createServer({
       }
       fs.rmSync(path.join(profileRoot, 'teams'), { recursive: true, force: true });
       fs.rmSync(path.join(profileRoot, 'teams-connected'), { force: true });
+      return json(response, 200, { connected: false });
+    }
+    if (request.method === 'POST' && pathname === '/api/platforms/google/connect') {
+      if (launcherActive(accountLauncher) || await meetingActive()) {
+        return json(response, 409, { error: 'Stop the current meeting or account connection first.' });
+      }
+      fs.mkdirSync(profileRoot, { recursive: true, mode: 0o700 });
+      accountLauncher = spawnPlatformAccount('google');
+      accountLauncher.stdout?.on('data', chunk => addLog('account', chunk));
+      accountLauncher.stderr?.on('data', chunk => addLog('account', chunk));
+      accountLauncher.on('error', error => { lastExit = -1; addLog('account', error.message); });
+      accountLauncher.on('exit', (code, signal) => { lastExit = code ?? signal; });
+      return json(response, 202, { connecting: true });
+    }
+    if (request.method === 'POST' && pathname === '/api/platforms/google/disconnect') {
+      if (launcherActive(accountLauncher) || await meetingActive()) {
+        return json(response, 409, { error: 'Stop the meeting or account browser before disconnecting.' });
+      }
+      fs.rmSync(path.join(profileRoot, 'google'), { recursive: true, force: true });
+      fs.rmSync(path.join(profileRoot, 'google-connected'), { force: true });
       return json(response, 200, { connected: false });
     }
     if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));

@@ -46,7 +46,7 @@ export function publicSettings(values = {}) {
 
 export function validateSettings(input, { isDirectory = value => fs.existsSync(value) && fs.statSync(value).isDirectory() } = {}) {
   const errors = {};
-  if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom or Teams meeting invite.';
+    if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom, Teams, or Google Meet meeting invite.';
   const participantName = String(input.participantName || '').trim();
   if (!participantName || participantName.length > 80 || /[\u0000-\u001f]/.test(participantName)) {
     errors.participantName = 'Use 1–80 printable characters.';
@@ -102,6 +102,7 @@ export function detectPlatform(value) {
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return null;
     if (/^(?:[a-z0-9-]+\.)?zoom\.us$/i.test(url.hostname) && /^\/(?:j\/|wc\/(?:join\/)?)[0-9]+\/?$/.test(url.pathname)) return 'zoom';
     if (['teams.microsoft.com', 'teams.live.com'].includes(url.hostname) && /^\/(?:l\/meetup-join\/[^/]+|meet\/[^/]+)/.test(url.pathname)) return 'teams';
+    if (url.hostname.toLowerCase() === 'meet.google.com' && /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/?$/i.test(url.pathname)) return 'meet';
   } catch {}
   return null;
 }

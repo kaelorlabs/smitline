@@ -9,6 +9,7 @@ from schema_validation import field_name_is_secret, reject_secrets
 
 ZOOM_URL = 'https://us05web.zoom.us/j/123?pwd=x'
 TEAMS_URL = 'https://teams.microsoft.com/l/meetup-join/abc?context=x'
+MEET_URL = 'https://meet.google.com/aaa-bbbb-ccc'
 TIMESTAMP = '2026-09-16T17:00:00Z'
 
 
@@ -150,6 +151,9 @@ class SchemaValidationTests(unittest.TestCase):
         teams = self.assert_round_trip(MeetingSession, meeting_session_payload(
             platform='teams', meetingUrl=TEAMS_URL, state='waiting_for_admission'))
         self.assertEqual(teams.platform, 'teams')
+        meet = self.assert_round_trip(MeetingSession, meeting_session_payload(
+            platform='meet', meetingUrl=MEET_URL, state='waiting_for_admission'))
+        self.assertEqual(meet.platform, 'meet')
         with self.assertRaises(ValueError):
             MeetingSession.from_dict(meeting_session_payload(meetingUrl=TEAMS_URL))
         with self.assertRaises(ValueError):
