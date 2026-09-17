@@ -109,6 +109,30 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    async def test_operator_unmute_resumes_playback_without_clicking_unmute(self):
+        adapter, microphone, state = Adapter(), Mic(), {}
+        participation = Participation(adapter, microphone, state, quiet_seconds=.03)
+        task = asyncio.create_task(participation.run())
+        voice = struct.pack('<120h', *([500] * 120))
+        try:
+            await asyncio.sleep(.02)
+            adapter.state = 'muted'
+            await participation.platform_microphone_changed('muted')
+            participation.offer(voice)
+            await asyncio.sleep(.05)
+            self.assertEqual(microphone.data, [])
+            self.assertEqual(adapter.opens, 1)
+            adapter.state = 'open'
+            await participation.platform_microphone_changed('open')
+            participation.offer(voice)
+            await asyncio.sleep(.15)
+            self.assertEqual(microphone.data, [voice])
+            self.assertEqual(adapter.opens, 1)
+            self.assertEqual(state['microphoneState'], 'open')
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_blocked_microphone_never_plays(self):
         adapter, microphone, state = Adapter(), Mic(), {}
         adapter.block = True
