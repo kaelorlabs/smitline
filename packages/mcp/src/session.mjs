@@ -179,6 +179,29 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'list_meeting_artifacts',
+    description: 'List host-only workspace action artifacts for a meeting id. Requires an explicit meetingId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'get_meeting_artifact',
+    description: 'Get metadata for one workspace artifact. Requires explicit meetingId and artifactId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'artifactId'],
+      properties: {
+        meetingId: { type: 'string' },
+        artifactId: { type: 'string' },
+      },
+    },
+  },
 ];
 
 function nowIso() {
@@ -200,6 +223,10 @@ function describeEvent(event) {
     const category = event.request?.category || event.request?.permission || '';
     return `approval ${type.replace('approval.', '')}${category ? ` ${category}` : ''}`;
   }
+  if (String(type).startsWith('workspace.action.')) {
+    return `workspace ${type.replace('workspace.action.', '')}`;
+  }
+  if (type === 'artifact.created') return `artifact ${event.artifact?.kind || ''}`.trim();
   return String(type);
 }
 
@@ -381,6 +408,8 @@ export function createMcpSession(options = {}) {
       listApprovals: () => transport.listApprovals(meetingId),
       getApproval: (approvalId) => transport.getApproval(meetingId, approvalId),
       decideApproval: (approvalId, decision) => transport.decideApproval(meetingId, approvalId, decision),
+      listArtifacts: () => transport.listArtifacts(meetingId),
+      getArtifact: (artifactId) => transport.getArtifact(meetingId, artifactId),
       get finished() {
         return transport.getHandoff(meetingId);
       },
@@ -561,6 +590,26 @@ export function createMcpSession(options = {}) {
         ? await handle.decideApproval(args.approvalId, args.decision)
         : await transport.decideApproval(args.meetingId, args.approvalId, { decision: args.decision });
       return toolResult({ meetingId: args.meetingId, approval });
+    }
+    if (name === 'list_meeting_artifacts') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.listArtifacts
+        ? await handle.listArtifacts()
+        : await transport.listArtifacts(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'get_meeting_artifact') {
+      if (!args?.meetingId || !args?.artifactId) {
+        throw new ValidationError('meetingId and artifactId are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const artifact = handle.getArtifact
+        ? await handle.getArtifact(args.artifactId)
+        : await transport.getArtifact(args.meetingId, args.artifactId);
+      return toolResult({ meetingId: args.meetingId, artifact });
     }
     throw new ValidationError(`unknown tool: ${name}`);
   }

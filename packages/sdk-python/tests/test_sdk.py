@@ -160,6 +160,22 @@ class FakeTransport:
         item['decision'] = value
         return item
 
+    def list_artifacts(self, meeting_id):
+        return {'artifacts': list(getattr(self, 'artifacts', {}).get(meeting_id, []))}
+
+    def get_artifact(self, meeting_id, artifact_id):
+        for item in getattr(self, 'artifacts', {}).get(meeting_id, []):
+            if item['id'] == artifact_id:
+                return item
+        raise ColleagueError('artifact not found', code='not_found', status=404)
+
+    def get_artifact_content(self, meeting_id, artifact_id):
+        item = self.get_artifact(meeting_id, artifact_id)
+        return {
+            'mediaType': item.get('mediaType') or 'application/json',
+            'body': json.dumps(item).encode('utf-8'),
+        }
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -344,6 +360,13 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied['status'], 'denied')
         with self.assertRaises(ValidationError):
             await meeting.decide_approval('', 'approved')
+        transport.artifacts = {
+            'mtg-1': [{'id': 'art-1', 'kind': 'plan', 'description': 'Workspace action plan'}],
+        }
+        listed_artifacts = await meeting.list_artifacts()
+        self.assertEqual(listed_artifacts['artifacts'][0]['id'], 'art-1')
+        with self.assertRaises(ValidationError):
+            await meeting.get_artifact('')
         await meeting.cancel()
 
 

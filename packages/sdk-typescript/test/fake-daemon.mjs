@@ -39,6 +39,7 @@ export async function startFakeDaemon(options = {}) {
     handoffs: new Map(),
     events: new Map(),
     approvals: new Map(),
+    artifacts: new Map(),
     sseClients: [],
     requireAuth: options.requireAuth !== false,
     readyDelayMs: options.readyDelayMs || 0,
@@ -354,6 +355,40 @@ export async function startFakeDaemon(options = {}) {
             json(response, 200, found);
             return;
           }
+        }
+        const artifactMatch = rest.match(/^artifacts(?:\/([^/]+))?(?:\/(content))?$/);
+        if (artifactMatch && request.method === 'GET') {
+          const artifactId = artifactMatch[1];
+          const wantContent = artifactMatch[2] === 'content';
+          if (!state.artifacts.has(meetingId)) state.artifacts.set(meetingId, []);
+          const artifacts = state.artifacts.get(meetingId);
+          if (!artifactId) {
+            json(response, 200, { artifacts: artifacts.map(({ body, ...meta }) => meta) });
+            return;
+          }
+          if (artifactId.includes('..') || artifactId.includes('/')) {
+            json(response, 422, { error: { code: 'invalid_request', message: 'artifactId must not contain a path' } });
+            return;
+          }
+          const found = artifacts.find((item) => item.id === artifactId);
+          if (!found) {
+            json(response, 404, { error: { code: 'not_found', message: 'artifact not found' } });
+            return;
+          }
+          if (wantContent) {
+            const data = Buffer.from(found.body || JSON.stringify(found), 'utf8');
+            response.writeHead(200, {
+              'Content-Type': found.mediaType || 'application/json',
+              'Content-Disposition': `attachment; filename="${found.id}"`,
+              'X-Content-Type-Options': 'nosniff',
+              'Cache-Control': 'no-store',
+            });
+            response.end(data);
+            return;
+          }
+          const { body, ...meta } = found;
+          json(response, 200, meta);
+          return;
         }
         if (request.method === 'GET' && rest === 'events') {
           const lastEventId = request.headers['last-event-id'] || '';

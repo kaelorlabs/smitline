@@ -111,7 +111,7 @@ export interface JoinMeetingRequest {
   };
 }
 
-export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'event';
+export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'workspace' | 'artifact' | 'event';
 
 export interface DaemonTransport {
   createMeeting(payload: Record<string, unknown>): Promise<MeetingSession>;
@@ -123,6 +123,9 @@ export interface DaemonTransport {
   listApprovals(meetingId: string): Promise<{ approvals: ApprovalRecord[] }>;
   getApproval(meetingId: string, approvalId: string): Promise<ApprovalRecord>;
   decideApproval(meetingId: string, approvalId: string, decision: { decision: 'approved' | 'denied' } | 'approved' | 'denied'): Promise<ApprovalRecord>;
+  listArtifacts(meetingId: string): Promise<{ artifacts: Array<Record<string, unknown>> }>;
+  getArtifact(meetingId: string, artifactId: string): Promise<Record<string, unknown>>;
+  getArtifactContent(meetingId: string, artifactId: string): Promise<{ mediaType: string; body: Buffer }>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -148,6 +151,9 @@ export interface MeetingHandle {
   listApprovals(): Promise<{ approvals: ApprovalRecord[] }>;
   getApproval(approvalId: string): Promise<ApprovalRecord>;
   decideApproval(approvalId: string, decision: 'approved' | 'denied' | { decision: 'approved' | 'denied' }): Promise<ApprovalRecord>;
+  listArtifacts(): Promise<{ artifacts: Array<Record<string, unknown>> }>;
+  getArtifact(artifactId: string): Promise<Record<string, unknown>>;
+  getArtifactContent(artifactId: string): Promise<{ mediaType: string; body: Buffer }>;
   on(event: MeetingEventName, handler: (payload: unknown) => void): () => void;
   events(): AsyncIterable<ColleagueEvent>;
 }

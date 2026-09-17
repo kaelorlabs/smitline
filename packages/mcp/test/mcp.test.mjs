@@ -174,9 +174,16 @@ function createFakeColleague({ autoHandoff = true } = {}) {
         found.decision = value;
         return found;
       },
+      listArtifacts: async (id) => ({ artifacts: colleague.artifacts?.get(id) || [] }),
+      getArtifact: async (id, artifactId) => {
+        const found = (colleague.artifacts?.get(id) || []).find((item) => item.id === artifactId);
+        if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
+        return found;
+      },
     },
   };
   colleague.approvals = new Map();
+  colleague.artifacts = new Map();
   return colleague;
 }
 
@@ -209,6 +216,7 @@ test('initialize advertises tools and the tasks extension', async () => {
     'start_meeting', 'get_meeting_status', 'add_meeting_context',
     'cancel_meeting', 'get_meeting_handoff', 'retry_meeting_handoff',
     'list_meeting_approvals', 'get_meeting_approval', 'decide_meeting_approval',
+    'list_meeting_artifacts', 'get_meeting_artifact',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -243,6 +251,13 @@ test('approval tools require explicit meeting and approval ids', async () => {
   assert.equal(decided.result.structuredContent.approval.status, 'denied');
   const dumped = JSON.stringify(decided);
   assert.equal(dumped.includes('secret meeting speech'), false);
+  colleague.artifacts.set('mtg-1', [{
+    id: 'art-1', meetingId: 'mtg-1', kind: 'plan', description: 'Workspace action plan',
+  }]);
+  const artifacts = await callTool(session, 'list_meeting_artifacts', { meetingId: 'mtg-1' });
+  assert.equal(artifacts.result.structuredContent.artifacts[0].id, 'art-1');
+  const missingArtifact = await callTool(session, 'get_meeting_artifact', { meetingId: 'mtg-1' });
+  assert.equal(missingArtifact.result.isError, true);
 });
 
 test('rejects last/latest and does not invent a session', async () => {

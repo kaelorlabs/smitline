@@ -456,19 +456,26 @@ class LoopbackTransport:
                 time.sleep(0.05)
             raise StartupError('runtime daemon did not become ready', code='daemon_unavailable')
 
-    def _http(self, method, path, body=None, headers=None, last_event_id='', retried=False):
+    def _http(self, method, path, body=None, headers=None, last_event_id='', retried=False, raw=False):
         self._ensure_daemon()
         if not self._token:
             self._token = self._read_auth()
         if self._request:
             try:
+                if raw:
+                    try:
+                        return self._request(method, path, body=body, token=self._token,
+                                             last_event_id=last_event_id, raw=True)
+                    except TypeError:
+                        return self._request(method, path, body=body, token=self._token,
+                                             last_event_id=last_event_id)
                 return self._request(method, path, body=body, token=self._token, last_event_id=last_event_id)
             except ColleagueError as error:
                 if error.status == 401 and not retried:
                     self._token = self._read_auth()
                     if self._token:
                         return self._http(method, path, body=body, headers=headers,
-                                          last_event_id=last_event_id, retried=True)
+                                          last_event_id=last_event_id, retried=True, raw=raw)
                 raise
         payload = None if body is None else json.dumps(body).encode('utf-8')
         request_headers = {
@@ -485,26 +492,35 @@ class LoopbackTransport:
             method=method,
             headers=request_headers,
         )
+        media_type = 'application/octet-stream'
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
-                raw = response.read()
+                raw_body = response.read()
                 status = response.status
+                media_type = response.headers.get('Content-Type') or media_type
         except urllib.error.HTTPError as error:
-            raw = error.read()
+            raw_body = error.read()
             status = error.code
+            media_type = error.headers.get('Content-Type') if error.headers else media_type
         except OSError as error:
             raise StartupError(redact(error), code='daemon_unavailable') from error
-        try:
-            parsed = json.loads(raw.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            parsed = {'error': {'message': raw[:200].decode('utf-8', 'replace')}}
         if status == 401 and not retried:
             self._token = self._read_auth()
             if self._token:
-                return self._http(method, path, body=body, headers=headers, last_event_id=last_event_id, retried=True)
+                return self._http(method, path, body=body, headers=headers, last_event_id=last_event_id,
+                                  retried=True, raw=raw)
         if status >= 400:
+            try:
+                parsed = json.loads(raw_body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                parsed = {'error': {'message': raw_body[:200].decode('utf-8', 'replace')}}
             raise _map_http_error(status, parsed, f'{method} {path} failed')
-        return parsed
+        if raw:
+            return {'mediaType': media_type, 'body': raw_body}
+        try:
+            return json.loads(raw_body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return {'error': {'message': raw_body[:200].decode('utf-8', 'replace')}}
 
     def create_meeting(self, payload):
         try:
@@ -546,6 +562,20 @@ class LoopbackTransport:
             'POST',
             f'/v1/meetings/{quote(meeting_id)}/approvals/{quote(approval_id)}/decision',
             body,
+        )
+
+    def list_artifacts(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/artifacts')
+
+    def get_artifact(self, meeting_id, artifact_id):
+        return self._http(
+            'GET', f'/v1/meetings/{quote(meeting_id)}/artifacts/{quote(artifact_id)}')
+
+    def get_artifact_content(self, meeting_id, artifact_id):
+        return self._http(
+            'GET',
+            f'/v1/meetings/{quote(meeting_id)}/artifacts/{quote(artifact_id)}/content',
+            raw=True,
         )
 
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
@@ -676,6 +706,19 @@ class MeetingHandle:
             raise ValidationError('decision must be approved or denied')
         return self._transport.decide_approval(self.id, approval_id, {'decision': value})
 
+    async def list_artifacts(self):
+        return self._transport.list_artifacts(self.id)
+
+    async def get_artifact(self, artifact_id):
+        if not artifact_id:
+            raise ValidationError('artifactId is required')
+        return self._transport.get_artifact(self.id, artifact_id)
+
+    async def get_artifact_content(self, artifact_id):
+        if not artifact_id:
+            raise ValidationError('artifactId is required')
+        return self._transport.get_artifact_content(self.id, artifact_id)
+
     def on(self, name: str, handler: Callable[[Any], None]):
         if not callable(handler):
             raise ValidationError('event handler must be a function')
@@ -693,6 +736,8 @@ class MeetingHandle:
                 'delegation': list(self._listeners.get('delegation', ())),
                 'approval': list(self._listeners.get('approval', ())),
                 'approval_required': list(self._listeners.get('approval_required', ())),
+                'workspace': list(self._listeners.get('workspace', ())),
+                'artifact': list(self._listeners.get('artifact', ())),
             }
         for handler in listeners['event']:
             handler(event)
@@ -710,6 +755,12 @@ class MeetingHandle:
                 handler(event)
         if kind in {'approval.required', 'approval_required'}:
             for handler in listeners['approval_required']:
+                handler(event)
+        if kind.startswith('workspace.action.'):
+            for handler in listeners.get('workspace', ()):
+                handler(event)
+        if kind == 'artifact.created':
+            for handler in listeners.get('artifact', ()):
                 handler(event)
 
     def _run_pump(self):

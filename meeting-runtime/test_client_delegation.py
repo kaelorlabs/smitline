@@ -401,6 +401,49 @@ class CodexProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured['meeting_id'], 'mtg-abc123')
         self.assertNotIn('session_key', captured)
 
+    async def test_mutating_plan_uses_the_same_session_and_executor(self):
+        from providers.codex import CodexProvider
+        from providers.base import ProviderRequest
+        from test_schemas import permissions_payload
+
+        calls = []
+
+        class MemoryClient:
+            async def run(self, task, model, cancel=None, **fields):
+                calls.append({'task': task, **fields})
+                return {
+                    'text': '{"categories":["edits"],"summary":"Update the helper","files":[{"path":"src.py"}]}',
+                    'model': model,
+                }
+
+        class FakeExecutor:
+            async def execute(self, request, plan, cancel):
+                return {
+                    'status': 'completed',
+                    'summary': 'Updated workspace files',
+                    'planId': plan.to_dict()['id'],
+                    'delegationId': request.delegation_id,
+                }
+
+        provider = CodexProvider(
+            client=MemoryClient(), context_search=lambda query: None, executor=FakeExecutor())
+        result = await provider.run(ProviderRequest(
+            delegation_id='item_exec',
+            request_text='Please update the helper.',
+            permissions=permissions_payload(workspace='workspace-write', edits='allowed'),
+            workspace='/Users/Taylor/project',
+            provider='codex',
+            session_id='thread-origin-1',
+            continuity='exact',
+            meeting_id='mtg-abc123',
+        ), None)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['summary'], 'Updated workspace files')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['session_id'], 'thread-origin-1')
+        self.assertEqual(calls[0]['continuity'], 'exact')
+        self.assertIn('Return only JSON', calls[0]['task'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -54,6 +54,13 @@ def speakable_result(result, plot_share=None):
         return 'That approval expired before it was decided.'
     if error in ('approval_cancelled', 'cancelled_approval'):
         return 'That approval was cancelled.'
+    if error in ('conflict',):
+        return 'I saved the proposed patch without changing your local files because they were edited.'
+    if error in ('unsupported', 'commits_disabled', 'pushes_disabled'):
+        return 'That action is not available in this meeting.'
+    if result.get('summary') and result.get('status') in (
+            'completed', 'failed', 'conflict', 'unsupported', 'denied', 'cancelled'):
+        return clip_tokens(str(result.get('summary')), 500)
     if error:
         return clip_tokens('I could not complete that request. ' + str(error), 500)
     text = (result.get('text') or '').strip()

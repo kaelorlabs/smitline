@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
@@ -578,6 +579,23 @@ export function createLoopbackTransport(options = {}) {
       const body = typeof decision === 'string' ? { decision } : decision;
       return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(approvalId)}/decision`, body);
     },
+    listArtifacts(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/artifacts`);
+    },
+    getArtifact(meetingId, artifactId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}`);
+    },
+    async getArtifactContent(meetingId, artifactId) {
+      const response = await request('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`);
+      if (!response.ok) {
+        const payload = await readJson(response);
+        throw mapHttpError(response.status, payload, `GET artifact content failed`);
+      }
+      return {
+        mediaType: response.headers.get('content-type') || 'application/octet-stream',
+        body: Buffer.from(await response.arrayBuffer()),
+      };
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -699,6 +717,20 @@ class MeetingHandleImpl {
     return this._transport.decideApproval(this.id, approvalId, { decision: value });
   }
 
+  async listArtifacts() {
+    return this._transport.listArtifacts(this.id);
+  }
+
+  async getArtifact(artifactId) {
+    if (!artifactId) throw new ValidationError('artifactId is required');
+    return this._transport.getArtifact(this.id, artifactId);
+  }
+
+  async getArtifactContent(artifactId) {
+    if (!artifactId) throw new ValidationError('artifactId is required');
+    return this._transport.getArtifactContent(this.id, artifactId);
+  }
+
   on(name, handler) {
     if (typeof handler !== 'function') throw new ValidationError('event handler must be a function');
     const bucket = this._listeners.get(name) || new Set();
@@ -745,6 +777,8 @@ class MeetingHandleImpl {
     if (type.startsWith('delegation.')) fire('delegation', event);
     if (type.startsWith('approval.')) fire('approval', event);
     if (type === 'approval.required' || type === 'approval_required') fire('approval_required', event);
+    if (type.startsWith('workspace.action.')) fire('workspace', event);
+    if (type === 'artifact.created') fire('artifact', event);
   }
 
   async _runPump() {

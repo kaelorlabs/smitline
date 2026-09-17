@@ -179,9 +179,25 @@ function createFakeDaemon() {
       return { state: 'in_meeting' };
     },
     approvals: new Map(),
+    artifacts: new Map(),
     async listApprovals(id) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/approvals` });
       return { approvals: this.approvals.get(id) || [] };
+    },
+    async listArtifacts(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts` });
+      return { artifacts: this.artifacts.get(id) || [] };
+    },
+    async getArtifactContent(id, artifactId) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
+      const found = (this.artifacts.get(id) || []).find((item) => item.id === artifactId);
+      if (!found) {
+        const error = new Error('artifact not found');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      return { mediaType: 'application/json', body: Buffer.from(JSON.stringify(found)) };
     },
     async decideApproval(id, approvalId, body) {
       calls.push({ method: 'POST', path: `/v1/meetings/${id}/approvals/${approvalId}/decision`, body });
@@ -336,6 +352,19 @@ test('status lists pending approvals and decide posts a single decision', async 
     const html = await (await fetch(`${panel.base}/`)).text();
     assert.match(html, /Pending approvals/);
     assert.equal(html.includes('Approve all'), false);
+    panel.daemon.artifacts.set(meetingId, [{
+      id: 'art-1', kind: 'plan', description: 'Workspace action plan', bytes: 24,
+      changedFiles: [{ path: 'src.py' }],
+    }]);
+    const workspaceStatus = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(workspaceStatus.workspaceArtifacts[0].id, 'art-1');
+    const workspaceHtml = await (await fetch(`${panel.base}/`)).text();
+    assert.match(workspaceHtml, /Workspace activity/);
+    const downloaded = await fetch(`${panel.base}/api/meetings/${meetingId}/artifacts/art-1/content`, {
+      headers: panel.headers(bootstrap.token),
+    });
+    assert.equal(downloaded.status, 200);
+    assert.match(downloaded.headers.get('content-disposition') || '', /attachment/);
     const decided = await fetch(`${panel.base}/api/meetings/${meetingId}/approvals/appr-1/decision`, {
       method: 'POST',
       headers: panel.headers(bootstrap.token),

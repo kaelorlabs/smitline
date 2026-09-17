@@ -30,6 +30,11 @@ EVENT_TYPES = (
     'approval.expired',
     'approval.cancelled',
     'artifact.created',
+    'workspace.action.planned',
+    'workspace.action.started',
+    'workspace.action.completed',
+    'workspace.action.failed',
+    'workspace.action.cancelled',
     'handoff.ready',
     'handoff.append_failed',
     'presence.updated',
@@ -52,6 +57,11 @@ PAYLOAD_FIELDS = {
     'approval.expired': ('approvalId',),
     'approval.cancelled': ('approvalId', 'reason'),
     'artifact.created': ('artifact',),
+    'workspace.action.planned': ('plan',),
+    'workspace.action.started': ('planId',),
+    'workspace.action.completed': ('result',),
+    'workspace.action.failed': ('result',),
+    'workspace.action.cancelled': ('planId', 'reason'),
     'handoff.ready': ('handoff',),
     'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
     'presence.updated': ('cameraEnabled', 'cameraState', 'visualState', 'degradedReason'),
@@ -284,6 +294,20 @@ def _payload_from_dict(event_type, payload):
         }
     if event_type == 'artifact.created':
         return {'artifact': Artifact.from_dict(require_field(payload, 'artifact', 'event'))}
+    if event_type == 'workspace.action.planned':
+        from workspace_actions import WorkspaceActionPlan
+        return {'plan': WorkspaceActionPlan.from_dict(require_field(payload, 'plan', 'event'))}
+    if event_type == 'workspace.action.started':
+        return {'planId': require_id(require_field(payload, 'planId', 'event'), 'planId')}
+    if event_type in ('workspace.action.completed', 'workspace.action.failed'):
+        from workspace_actions import WorkspaceActionResult
+        return {'result': WorkspaceActionResult.from_dict(require_field(payload, 'result', 'event'))}
+    if event_type == 'workspace.action.cancelled':
+        return {
+            'planId': require_id(require_field(payload, 'planId', 'event'), 'planId'),
+            'reason': require_string(require_field(payload, 'reason', 'event'), 'reason',
+                                     max_length=64),
+        }
     if event_type == 'handoff.ready':
         return {'handoff': MeetingHandoff.from_dict(require_field(payload, 'handoff', 'event'))}
     if event_type == 'handoff.append_failed':

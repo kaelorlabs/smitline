@@ -244,4 +244,14 @@ test('approvals commands require explicit meeting and approval ids', async (t) =
   assert.equal(decided.code, 0, decided.stderr);
   assert.equal(JSON.parse(decided.stdout).status, 'denied');
   assert.ok(!listed.stdout.includes(daemon.token));
+  daemon.state.artifacts.set('mtg-1', [{
+    id: 'art-1', kind: 'plan', description: 'Workspace action plan', meetingId: 'mtg-1',
+  }]);
+  const missingArtifacts = await runColleague(['artifacts', 'list', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(missingArtifacts.code, 2);
+  const artifacts = await runColleague([
+    'artifacts', 'list', '--meeting-id', 'mtg-1', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(artifacts.code, 0, artifacts.stderr);
+  assert.equal(JSON.parse(artifacts.stdout).artifacts[0].id, 'art-1');
 });

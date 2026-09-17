@@ -63,15 +63,21 @@ def _work_from_events(events):
     completed = {}
     for event in events:
         kind = event.get('type')
-        delegation_id = event.get('delegationId') or event.get('delegation_id')
+        result = event.get('result') if isinstance(event.get('result'), dict) else {}
+        delegation_id = (
+            event.get('delegationId') or event.get('delegation_id') or result.get('delegationId')
+        )
         if kind == 'delegation.started' and isinstance(delegation_id, str):
             started[delegation_id] = event
-        elif kind in ('delegation.completed', 'delegation.cancelled') and isinstance(delegation_id, str):
+        elif kind in ('delegation.completed', 'delegation.cancelled', 'workspace.action.completed') and isinstance(delegation_id, str):
             completed[delegation_id] = event
     records = []
     for delegation_id, event in list(completed.items())[:50]:
         status = 'cancelled' if event.get('type') == 'delegation.cancelled' else 'completed'
-        summary = _clip(event.get('message') or event.get('summary') or ('Delegated turn ' + delegation_id))
+        result = event.get('result') or {}
+        summary = _clip(
+            event.get('message') or event.get('summary') or result.get('summary')
+            or ('Delegated turn ' + delegation_id))
         records.append(AgentWorkRecord(
             task_id=delegation_id[:128],
             summary=summary or ('Delegated turn ' + delegation_id),
@@ -97,6 +103,15 @@ def _artifacts_from_events(events, directory):
             artifact_id=('plot-' + str(len(artifacts) + 1)),
             path=str((directory / name).name),
         ))
+    for event in events:
+        if event.get('type') != 'artifact.created':
+            continue
+        artifact = event.get('artifact') or {}
+        path = artifact.get('path')
+        artifact_id = artifact.get('id')
+        if not isinstance(path, str) or not artifact_id:
+            continue
+        artifacts.append(ArtifactReference(artifact_id=str(artifact_id)[:128], path=path[:4096]))
     for path in sorted(Path(directory).glob('*.png'))[:24]:
         if any(item.path == path.name for item in artifacts):
             continue

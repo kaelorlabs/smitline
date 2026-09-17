@@ -164,6 +164,58 @@ function renderApprovals(pending, meetingId) {
   }));
 }
 
+function renderWorkspace(artifacts, meetingId) {
+  const panel = $('#workspace-panel');
+  const list = $('#workspace-list');
+  if (!panel || !list) return;
+  const items = artifacts || [];
+  if (!items.length || !meetingId) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...items.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.kind || 'artifact';
+    const summary = document.createElement('p');
+    summary.textContent = item.description || item.summary || 'Workspace artifact';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const size = document.createElement('span');
+    size.textContent = item.bytes != null ? `${item.bytes} bytes` : '';
+    const files = document.createElement('span');
+    const changed = (item.changedFiles || []).map((file) => file.path || file).filter(Boolean);
+    files.textContent = changed.length ? changed.join(', ') : (item.status || '');
+    meta.append(size, files);
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'button ghost compact';
+    link.textContent = 'Download';
+    link.addEventListener('click', async () => {
+      try {
+        const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(item.id)}/content`, {
+          headers: { 'X-Colleague-Token': csrf },
+        });
+        if (!response.ok) throw new Error('Download failed.');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = item.id || 'artifact';
+        anchor.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        announce(error.message, true);
+      }
+    });
+    card.append(title, summary, meta, link);
+    return card;
+  }));
+}
+
 function renderStatus(status) {
   latestStatus = status;
   const health = status.health || {};
@@ -196,6 +248,7 @@ function renderStatus(status) {
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   renderApprovals(pending, status.meetingId);
+  renderWorkspace(status.workspaceArtifacts || [], status.meetingId);
   $('#stop-button').disabled = !meetingBusy(status);
   $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');

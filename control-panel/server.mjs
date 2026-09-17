@@ -222,6 +222,16 @@ export function createServer({
     }
   }
 
+  async function workspaceSnapshot(meetingId, session) {
+    if (!meetingId || !meetingIsActive(session)) return { artifacts: [] };
+    try {
+      const payload = await daemonClient.listArtifacts(meetingId);
+      return { artifacts: payload.artifacts || [] };
+    } catch {
+      return { artifacts: [] };
+    }
+  }
+
   async function status() {
     const health = await bridgeHealth();
     const { meetingId, session, daemonError } = await loadMeeting();
@@ -229,6 +239,7 @@ export function createServer({
     const running = meetingIsActive(session);
     const lease = running ? await leaseSnapshot(session) : null;
     const approvals = running ? await pendingApprovals(meetingId, session) : [];
+    const workspace = running ? await workspaceSnapshot(meetingId, session) : { artifacts: [] };
     return {
       phase,
       running,
@@ -241,6 +252,7 @@ export function createServer({
       sessions: sessions(),
       daemonError: daemonError ? daemonError.message : undefined,
       pendingApprovals: approvals,
+      workspaceArtifacts: workspace.artifacts,
     };
   }
 
@@ -323,6 +335,32 @@ export function createServer({
       });
     }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+    const artifactMatch = pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
+    if (request.method === 'GET' && artifactMatch) {
+      const meetingId = decodeURIComponent(artifactMatch[1]);
+      const artifactId = artifactMatch[2] ? decodeURIComponent(artifactMatch[2]) : '';
+      const wantContent = artifactMatch[3] === 'content';
+      try {
+        if (!artifactId) {
+          return json(response, 200, await daemonClient.listArtifacts(meetingId));
+        }
+        if (wantContent) {
+          const payload = await daemonClient.getArtifactContent(meetingId, artifactId);
+          const media = payload.mediaType || 'application/octet-stream';
+          response.writeHead(200, {
+            'Content-Type': media,
+            'Content-Disposition': `attachment; filename="${artifactId}"`,
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'no-store',
+          });
+          response.end(payload.body);
+          return;
+        }
+        return json(response, 200, await daemonClient.getArtifact(meetingId, artifactId));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
     if (request.method === 'POST' && pathname === '/api/context/add') {
       const body = await readBody(request, 20 * 1024 * 1024);
       const { session } = await loadMeeting();

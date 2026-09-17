@@ -169,6 +169,8 @@ class RuntimeDaemon:
         self._async_locks = {}
         self._write_locks = {}
         self._approval_waiters = {}
+        from artifact_store import ArtifactStore
+        self.artifacts = ArtifactStore(self.root / '.colleague' / 'artifacts')
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
@@ -800,6 +802,28 @@ class RuntimeDaemon:
             await asyncio.to_thread(waiter.wait, remaining)
             waiter.clear()
 
+    def list_artifacts(self, meeting_id):
+        self._record(meeting_id)
+        return {'artifacts': self.artifacts.list(meeting_id)}
+
+    def get_artifact(self, meeting_id, artifact_id):
+        self._record(meeting_id)
+        try:
+            return self.artifacts.get(meeting_id, artifact_id)
+        except FileNotFoundError as error:
+            raise DaemonError(404, 'not_found', 'artifact not found') from error
+        except ValueError as error:
+            raise DaemonError(422, 'invalid_request', str(error)) from error
+
+    def read_artifact_body(self, meeting_id, artifact_id):
+        self._record(meeting_id)
+        try:
+            return self.artifacts.read_body(meeting_id, artifact_id)
+        except FileNotFoundError as error:
+            raise DaemonError(404, 'not_found', 'artifact not found') from error
+        except ValueError as error:
+            raise DaemonError(422, 'invalid_request', str(error)) from error
+
     def heartbeat_lease(self, provider, session_id):
         lease, record = self._lease_pair(provider, session_id)
         if lease is None:
@@ -1151,6 +1175,32 @@ def create_app(
         payload = daemon.list_approvals(request.match_info['meetingId'])
         return _public_json(payload)
 
+    async def list_artifacts(request):
+        payload = daemon.list_artifacts(request.match_info['meetingId'])
+        return _public_json(payload)
+
+    async def get_artifact(request):
+        payload = daemon.get_artifact(
+            request.match_info['meetingId'], request.match_info['artifactId'])
+        return _public_json(payload)
+
+    async def get_artifact_content(request):
+        meta, data = daemon.read_artifact_body(
+            request.match_info['meetingId'], request.match_info['artifactId'])
+        media = meta.get('mediaType')
+        if media not in ('application/json', 'text/plain', 'application/octet-stream'):
+            media = 'application/octet-stream'
+        filename = meta.get('id') or 'artifact'
+        return web.Response(
+            body=data,
+            content_type=media,
+            headers={
+                'Content-Disposition': 'attachment; filename="' + filename + '"',
+                'X-Content-Type-Options': 'nosniff',
+                'Cache-Control': 'no-store',
+            },
+        )
+
     async def create_approval(request):
         payload = await read_json(request)
         approval = daemon.create_approval(request.match_info['meetingId'], payload)
@@ -1255,6 +1305,9 @@ def create_app(
     app.router.add_get('/v1/meetings/{meetingId}/approvals/{approvalId}', get_approval)
     app.router.add_post('/v1/meetings/{meetingId}/approvals', create_approval)
     app.router.add_get('/v1/meetings/{meetingId}/approvals', list_approvals)
+    app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}/content', get_artifact_content)
+    app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}', get_artifact)
+    app.router.add_get('/v1/meetings/{meetingId}/artifacts', list_artifacts)
     app.router.add_post('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_heartbeat)
     app.router.add_delete('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_release)
     app.router.add_get('/v1/agent-sessions/{provider}/{sessionId}/status', lease_status)

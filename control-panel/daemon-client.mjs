@@ -203,6 +203,45 @@ export function createDaemonClient(options = {}) {
       const body = typeof decision === 'string' ? { decision } : decision;
       return send('POST', `/v1/meetings/${meetingId}/approvals/${approvalId}/decision`, body, { startIfNeeded: true });
     },
+    listArtifacts(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/artifacts`, undefined, { startIfNeeded: false });
+    },
+    getArtifact(meetingId, artifactId) {
+      return send('GET', `/v1/meetings/${meetingId}/artifacts/${artifactId}`, undefined, { startIfNeeded: false });
+    },
+    async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
+      let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
+      if (!token) {
+        if (!startIfNeeded) throw daemonError('Runtime daemon is not running.', { code: 'daemon_offline' });
+        token = await ensure();
+      }
+      const headers = { Authorization: `Bearer ${token}` };
+      let response;
+      try {
+        response = await fetchImpl(`${baseUrl()}/v1/meetings/${meetingId}/artifacts/${artifactId}/content`, {
+          method: 'GET',
+          headers,
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch {
+        throw daemonError('Runtime daemon is unavailable. Start it or retry from the console.');
+      }
+      if (response.status === 401) {
+        throw daemonError('Runtime daemon rejected the auth token.', { status: 401, code: 'unauthorized' });
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        const payload = parseDaemonBody(text);
+        throw daemonError(payload?.error?.message || 'Runtime daemon request failed.', {
+          status: response.status,
+          code: payload?.error?.code || 'daemon_error',
+        });
+      }
+      return {
+        mediaType: response.headers.get('content-type') || 'application/octet-stream',
+        body: Buffer.from(await response.arrayBuffer()),
+      };
+    },
     leaseStatus(provider, sessionId) {
       return send('GET', `/v1/agent-sessions/${provider}/${sessionId}/status`, undefined, { startIfNeeded: false });
     },

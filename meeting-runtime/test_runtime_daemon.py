@@ -1316,6 +1316,33 @@ class ApprovalDaemonTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(DaemonError):
             self.daemon.consume_approval(first['id'], created['id'])
 
+    async def test_artifact_routes_require_auth_and_stay_inside_the_meeting(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        stored = self.daemon.artifacts.put(
+            meeting_id, kind='plan', body={'summary': 'Update the helper'},
+            description='Workspace action plan')
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts',
+            headers={'Authorization': 'Bearer other'})
+        self.assertEqual(missing.status, 401)
+        listed = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts', headers=self.headers())
+        self.assertEqual(listed.status, 200)
+        self.assertEqual((await listed.json())['artifacts'][0]['id'], stored['id'])
+        escaped = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts/../secret', headers=self.headers())
+        self.assertIn(escaped.status, (404, 422))
+        content = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts/' + stored['id'] + '/content',
+            headers=self.headers())
+        self.assertEqual(content.status, 200)
+        self.assertEqual(content.headers.get('X-Content-Type-Options'), 'nosniff')
+        body = await content.read()
+        self.assertIn(b'Update the helper', body)
+        self.assertNotIn(b'sk-', body)
+
 
 if __name__ == '__main__':
     unittest.main()
