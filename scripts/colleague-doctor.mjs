@@ -81,10 +81,16 @@ else {
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 const skillsHome = process.env.CODEX_SKILLS_DIR || path.join(codexHome, 'skills');
 const meetingSkill = path.join(skillsHome, 'join-colleague-ai-meeting', 'SKILL.md');
+const colleagueCli = path.join(process.env.CODEX_BIN_DIR || path.join(codexHome, 'bin'), 'colleague');
 result(
   fs.existsSync(meetingSkill) ? 'pass' : 'fail',
   'Codex exact-continuity skill',
   fs.existsSync(meetingSkill) ? 'installed' : 'run scripts/install-codex-integration.sh',
+);
+result(
+  fs.existsSync(colleagueCli) && Boolean(fs.statSync(colleagueCli).mode & 0o111) ? 'pass' : 'fail',
+  'Codex exact-continuity launcher',
+  fs.existsSync(colleagueCli) ? colleagueCli : 'run scripts/install-codex-integration.sh',
 );
 
 result(fs.existsSync(path.join(root, 'node_modules', 'mammoth')) ? 'pass' : 'fail', 'Node dependencies', 'run npm install when missing');

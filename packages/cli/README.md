@@ -8,10 +8,10 @@ Requires Node.js 22+. Not published to npm. Talks only to the loopback daemon.
 
 Exact continuity requires `--thread` (the real originating coding-agent session id). Never pass `last`, `latest`, or `--last`. Zoom, Teams, and Google Meet HTTPS invites are accepted.
 
-Inside Codex, `--agent` defaults to `codex`, `--thread` defaults to the host-provided `CODEX_THREAD_ID`, and `--workspace` defaults to the current directory:
+Inside Codex, `--agent` defaults to `codex`, `--thread` defaults to the host-provided `CODEX_THREAD_ID`, and `--workspace` defaults to the current directory. The installed launcher resolves its daemon and auth files from the Colleague AI checkout, independently of the caller's current project:
 
 ```bash
-colleague join --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" --wait
+~/.codex/bin/colleague join --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID"
 ```
 
 Outside Codex, or when selecting another provider, pass the values explicitly:
@@ -27,7 +27,7 @@ colleague join \
 
 `--agent` may be `codex`, `cursor`, or `claude-code` when that CLI is installed and capable. `--context-continuity` joins without an originating thread (`sessionId=local-portal`). `--no-camera` is audio-only. `--screen-share` opts in to incoming shared-content capture (off by default).
 
-`--wait` stays in the foreground, prints concise lifecycle and delegation progress on stderr, and writes the final handoff JSON (plus archive path) to stdout. Ctrl-C requests a clean cancel and still waits for the durable handoff.
+`--wait` stays in the foreground, prints concise lifecycle and delegation progress on stderr, and writes the final handoff JSON (plus archive path) to stdout. Ctrl-C requests a clean cancel and still waits for the durable handoff. Agent-native Codex launches omit `--wait` so the originating task becomes idle and can be resumed for meeting delegations.
 
 ## Other commands
 

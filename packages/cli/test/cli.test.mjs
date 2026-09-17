@@ -6,10 +6,35 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startFakeDaemon } from '../../sdk-typescript/test/fake-daemon.mjs';
-import { describeEvent, parseArgs } from '../src/colleague.mjs';
+import { DEFAULT_COLLEAGUE_ROOT, describeEvent, parseArgs } from '../src/colleague.mjs';
 
 const cli = fileURLToPath(new URL('../src/colleague.mjs', import.meta.url));
 const ZOOM = 'https://zoom.us/j/555111222';
+
+test('installed CLI resolves the Colleague AI repository independently of caller cwd', () => {
+  assert.equal(DEFAULT_COLLEAGUE_ROOT, path.resolve(path.dirname(cli), '../../..'));
+});
+
+test('CLI executes when invoked through an installed symlink', async (t) => {
+  const installDir = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-link-'));
+  t.after(() => fs.rm(installDir, { recursive: true, force: true }));
+  const installedCli = path.join(installDir, 'colleague');
+  await fs.symlink(cli, installedCli);
+  const result = await new Promise((resolve) => {
+    const child = spawn(installedCli, ['help'], {
+      cwd: installDir,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^Usage:/);
+});
 
 function runColleague(args, { env = {}, input, sigintAfterJoin, cwd } = {}) {
   return new Promise((resolve) => {

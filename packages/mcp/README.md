@@ -8,7 +8,7 @@ Do not publish this package and do not install it globally.
 
 | Tool | Behavior |
 | --- | --- |
-| `join_current_meeting` | Codex-native exact-continuity join using the invoking task's `CODEX_THREAD_ID` |
+| `join_current_meeting` | Compatibility join when a host can explicitly supply an exact session id |
 | `start_meeting` | Creates a meeting and returns a durable `{ meetingId }` immediately |
 | `get_meeting_status` | Current daemon session |
 | `add_meeting_context` | Versioned `ContextHandoff` |
@@ -32,7 +32,7 @@ Clients without Tasks should poll `get_meeting_handoff`.
 
 ## Codex
 
-Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not forward that per-task value to a persistent MCP server. The installer adds the `join-colleague-ai-meeting` skill, which directs Codex to read the variable from the active task command environment and pass its exact value as `sessionId`. Never invent, infer, or reuse a different ID. The tool also requires the current workspace and a structured context handoff.
+Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not reliably forward that per-task value to a persistent MCP server. The installer therefore adds a task-local `colleague` CLI launcher and a `join-colleague-ai-meeting` skill. The skill launches the CLI from the active task so it inherits the exact id directly. MCP remains useful for meeting status and controls. `join_current_meeting` is retained for compatible hosts and tests that can explicitly pass the exact id; never invent, infer, or reuse one.
 
 Example `~/.codex/config.toml` mcp_servers fragment:
 

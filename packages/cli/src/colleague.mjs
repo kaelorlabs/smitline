@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ import {
 } from '../../sdk-typescript/src/index.mjs';
 
 const interruptState = { requested: false, handler: null };
+const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
 
 function requestInterrupt() {
   interruptState.requested = true;
@@ -165,7 +167,7 @@ function describeEvent(event) {
 }
 
 function colleagueFromArgs(args) {
-  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || process.cwd());
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
   return {
     root,
     client: new Colleague({
@@ -436,11 +438,18 @@ async function main(argv = process.argv.slice(2)) {
   return EXIT.ok;
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let invoked = false;
+if (process.argv[1]) {
+  try {
+    invoked = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    invoked = path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
 if (invoked) {
   process.on('SIGINT', requestInterrupt);
   process.on('SIGTERM', requestInterrupt);
   main().then((code) => process.exit(code ?? 0), (error) => exitForError(error));
 }
 
-export { main, parseArgs, describeEvent };
+export { main, parseArgs, describeEvent, DEFAULT_COLLEAGUE_ROOT };

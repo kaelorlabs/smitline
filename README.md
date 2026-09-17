@@ -81,7 +81,7 @@ For the agent-native Codex experience, register the local integration once:
 bash scripts/install-codex-integration.sh
 ```
 
-The installer registers the local MCP server and installs the `join-colleague-ai-meeting` Codex skill. Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. The skill makes Codex read `CODEX_THREAD_ID` from the active task command environment and pass that exact value to `join_current_meeting` with the current workspace, a bounded context handoff, and safe default permissions. It fails closed instead of falling back to portal-style context continuity. The portal remains available as an optional operations console.
+The installer adds an exact-continuity launcher at `~/.codex/bin/colleague`, registers the local MCP control server, and installs the `join-colleague-ai-meeting` Codex skill. Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. The skill launches the CLI inside the active task, where it directly inherits `CODEX_THREAD_ID`, and supplies the current workspace plus a bounded context handoff. It fails closed instead of falling back to portal-style context continuity. MCP remains available for status and meeting controls; the portal remains an optional operations console.
 
 Run the local diagnostic at any time:
 
