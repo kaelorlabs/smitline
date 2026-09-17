@@ -171,7 +171,8 @@ class WorkspaceExecutor:
                 specs.append({'argv': verification['argv'], 'cwd': verification.get('cwd')})
             for spec in specs:
                 try:
-                    validate_command(spec['argv'], network_allowed=network_allowed)
+                    validate_command(spec['argv'], network_allowed=network_allowed,
+                                     workspace=isolated or workspace)
                 except IsolationError as error:
                     if 'commit' in str(error) or 'push' in str(error):
                         return self._finish(plan, 'unsupported', 'Commits and pushes are disabled',

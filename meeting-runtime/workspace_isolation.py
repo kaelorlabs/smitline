@@ -11,7 +11,11 @@ from workspace_actions import relative_workspace_path
 
 DENY_NAMES = frozenset({
     '.env', '.env.local', '.env.meeting', '.colleague', '.git', 'id_rsa', 'id_ed25519',
-    'credentials', 'credentials.json', 'daemon.auth',
+    'credentials', 'credentials.json', 'daemon.auth', '.netrc', '.npmrc', '.pypirc',
+})
+DENY_STEMS = frozenset({
+    'secret', 'secrets', 'credential', 'credentials', 'api_key', 'api_keys',
+    'token', 'tokens', 'auth', 'passwd', 'password',
 })
 DENY_SUFFIXES = ('.pem', '.key', '.p12', '.pfx')
 DENY_PARTS = ('.git', '.colleague', 'profiles', 'recordings')
@@ -52,6 +56,9 @@ def denied_relative(path):
     text = str(path).replace('\\', '/')
     name = Path(text).name.lower()
     if name in DENY_NAMES or name.startswith('.env.'):
+        return True
+    stem = Path(name).stem.lower().replace('-', '_')
+    if stem in DENY_STEMS or 'api_key' in name.replace('-', '_'):
         return True
     if any(name.endswith(suffix) for suffix in DENY_SUFFIXES):
         return True

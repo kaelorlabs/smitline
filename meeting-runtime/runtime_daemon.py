@@ -26,7 +26,10 @@ from meeting_urls import platform_for_url
 from permissions import DEFAULT_PERMISSIONS, bound_requested_permissions, permission_mode
 from schema_validation import reject_secrets, reject_unknown_fields, require_enum, require_id
 from session_continuity import validate_agent_session
-from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
+from session_leases import (
+    LeaseConflictError, LeaseCorruptionError, LeaseOwnershipError, LeaseStateError,
+    SessionLeaseStore,
+)
 from git_actions import CommitRequest, GitOperation, PushRequest, build_result
 from git_broker import GitBroker
 from hosted_runtime import HostedRuntime, HostedRuntimeError
@@ -313,6 +316,16 @@ class RuntimeDaemon:
             raise DaemonError(404, 'not_found', 'meeting not found')
         return record
 
+    def _acquire_session_lease(self, agent, meeting_id):
+        try:
+            return self.leases.acquire(agent, meeting_id)
+        except LeaseConflictError as error:
+            try:
+                self.leases.recover(agent.provider, agent.session_id, owner_is_dead=True)
+            except (LeaseStateError, LeaseOwnershipError, LeaseCorruptionError):
+                raise error
+            return self.leases.acquire(agent, meeting_id)
+
     def _persist(self, session, lease_token=None):
         token = lease_token
         if token is None:
@@ -473,7 +486,7 @@ class RuntimeDaemon:
         screen_share_settings = dict(screen_share)
         agent = session.agent_session
         try:
-            lease = self.leases.acquire(agent, meeting_id)
+            lease = self._acquire_session_lease(agent, meeting_id)
         except LeaseConflictError as error:
             raise DaemonError(409, 'conflict', 'agent session is already leased') from error
         record = None

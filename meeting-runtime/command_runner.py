@@ -17,6 +17,13 @@ FORBIDDEN_GIT = frozenset({
     'commit', 'push', 'merge', 'rebase', 'cherry-pick', 'reset', 'tag', 'stash',
     'submodule', 'filter-branch', 'update-ref',
 })
+GIT_REMOTE_MUTATIONS = frozenset({
+    'add', 'set-url', 'remove', 'rm', 'rename', 'prune', 'update', 'set-head', 'set-branches',
+})
+UNISOLATABLE_NETWORK_COMMANDS = frozenset({'python', 'python3', 'node'})
+ABS_PATH_IN_TEXT = re.compile(
+    r'(?:^|[^A-Za-z0-9_+.-])(/(?:[^\'\"\s,;:)\]}]+)|[A-Za-z]:\\(?:[^\'\"\s,;:)\]}]+))'
+)
 ENV_ALLOWLIST = frozenset({
     'PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TMP', 'TEMP', 'TERM',
     'USER', 'LOGNAME', 'TZ',
@@ -46,7 +53,25 @@ def _scrub_env(network_allowed):
     return cleaned
 
 
-def validate_command(argv, *, network_allowed=False):
+def _argv_has_escape(argv, workspace):
+    root = Path(workspace).resolve()
+    for item in argv[1:]:
+        text = str(item).replace('\\', '/')
+        if re.search(r'(?:^|/)\.\.(?:/|$)', text) or text in ('..',) or text.startswith('../'):
+            return True
+        for match in ABS_PATH_IN_TEXT.finditer(' ' + str(item)):
+            raw = match.group(1).rstrip('\'"')
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                continue
+            try:
+                candidate.resolve().relative_to(root)
+            except (ValueError, OSError):
+                return True
+    return False
+
+
+def validate_command(argv, *, network_allowed=False, workspace=None):
     if not argv or not isinstance(argv, list):
         raise IsolationError('command argv is required')
     name = Path(str(argv[0])).name
@@ -58,14 +83,22 @@ def validate_command(argv, *, network_allowed=False):
         sub = argv[1] if len(argv) > 1 else ''
         if sub in FORBIDDEN_GIT or sub in ('commit', 'push'):
             raise IsolationError('git commit and push are disabled')
+        if sub == 'remote':
+            action = argv[2] if len(argv) > 2 else ''
+            if action in GIT_REMOTE_MUTATIONS:
+                raise IsolationError('git remote mutations are disabled')
     if name in ('curl', 'wget', 'nc', 'ssh') and not network_allowed:
         raise IsolationError('network commands are disabled')
+    if name in UNISOLATABLE_NETWORK_COMMANDS and not network_allowed:
+        raise IsolationError('interpreter network isolation is unavailable')
+    if workspace is not None and _argv_has_escape(argv, workspace):
+        raise IsolationError('command argv path escapes the workspace')
     return name
 
 
 def run_command(argv, *, cwd, workspace, timeout=DEFAULT_TIMEOUT, network_allowed=False,
                 cancel=None):
-    name = validate_command(argv, network_allowed=network_allowed)
+    name = validate_command(argv, network_allowed=network_allowed, workspace=workspace)
     root = Path(workspace).resolve()
     workdir = root if not cwd else contained_path(root, cwd)
     if not workdir.is_dir():

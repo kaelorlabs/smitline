@@ -245,6 +245,17 @@ class SessionLeaseTests(unittest.TestCase):
         with self.assertRaises(LeaseConflictError):
             self.acquire(meeting_id='mtg-other')
 
+    def test_expired_lease_is_recoverable_without_the_old_token(self):
+        first = self.acquire()
+        self.clock.advance(31)
+        replacement = self.acquire(meeting_id='mtg-recovery')
+        self.assertEqual(replacement.meeting_id, 'mtg-recovery')
+        self.assertNotEqual(replacement.token, first.token)
+        live = self.store.get('codex', 'thread-origin-1')
+        self.assertEqual(live.meeting_id, 'mtg-recovery')
+        with self.assertRaises(LeaseConflictError):
+            self.acquire(meeting_id='mtg-still-live')
+
     def test_traversal_and_symlink_resistance(self):
         outside = Path(self.temporary.name) / 'outside'
         outside.mkdir()

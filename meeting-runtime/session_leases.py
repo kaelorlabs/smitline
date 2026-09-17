@@ -425,12 +425,24 @@ class SessionLeaseStore:
     def acquire(self, agent_session, meeting_id):
         session = _session_ref(agent_session)
         meeting_id = require_meeting_id(meeting_id)
-        now = _iso(self._now())
+        now_dt = self._now()
+        now = _iso(now_dt)
         owner = self._owner()
         with self._locked(session.provider, session.session_id) as lease_name:
             current = self._load(lease_name)
             if current is not None:
-                raise LeaseConflictError('agent session is already leased')
+                if not self._heartbeat_expired(current, now_dt):
+                    raise LeaseConflictError('agent session is already leased')
+                recovered = _replace(
+                    current,
+                    last_heartbeat=now,
+                    state='failed',
+                    active_delegated_turn=None,
+                    finalization=FinalizationState(
+                        'failed', recorded_at=now, reason='stale owner confirmed dead'),
+                )
+                self._store(lease_name, recovered)
+                self._unlink_lease(lease_name)
             lease = SessionLease.from_dict({
                 'version': LEASE_VERSION,
                 'leaseId': secrets.token_urlsafe(32),
@@ -536,10 +548,11 @@ class SessionLeaseStore:
             self._unlink_lease(lease_name)
             return None
 
-    def recover(self, provider, session_id, expected_token, *, owner_is_dead):
+    def recover(self, provider, session_id, expected_token=None, *, owner_is_dead):
         provider = require_enum(provider, 'provider', AGENT_PROVIDERS)
         session_id = require_id(session_id, 'sessionId', max_length=256)
-        expected_token = require_id(expected_token, 'token', max_length=256)
+        if expected_token is not None:
+            expected_token = require_id(expected_token, 'token', max_length=256)
         if owner_is_dead is not True and owner_is_dead is not False:
             raise ValueError('owner_is_dead must be a boolean')
         now = self._now()
@@ -547,7 +560,10 @@ class SessionLeaseStore:
             lease = self._load(lease_name)
             if lease is None:
                 raise LeaseStateError('no lease exists for this session')
-            if lease.token != expected_token:
+            if expected_token is None:
+                if owner_is_dead is not True:
+                    raise LeaseStateError('lease token is required unless the owner is dead')
+            elif lease.token != expected_token:
                 raise LeaseOwnershipError('lease token does not match')
             if not self._heartbeat_expired(lease, now):
                 raise LeaseStateError('lease heartbeat has not expired')

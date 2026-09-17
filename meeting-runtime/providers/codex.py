@@ -8,6 +8,7 @@ from context_tool import search_context
 from codex_tool import CODEX_MODELS, CodexJobClient
 from session_continuity import CONTEXT, session_id_of, validate_agent_session
 from startup_input import clip_tokens
+from .detect import collect_help, detect_cli_flags
 
 from permissions import permission_mode
 from workspace_actions import WorkspaceActionPlan, plan_needs_mutation
@@ -77,20 +78,29 @@ class CodexProvider(CodingAgentProvider):
     def capabilities(self):
         binary = os.environ.get('CODEX_BIN') or shutil.which('codex')
         installed = bool(binary)
+        if not installed:
+            return ProviderCapabilities(
+                id='codex',
+                reasonUnavailable='missing_binary',
+            )
+        flags = detect_cli_flags(collect_help(binary))
+        resume = bool(flags.get('resume'))
         return ProviderCapabilities(
             id='codex',
-            installed=installed,
-            usable=installed,
-            exactSessionResume=True,
+            installed=True,
+            usable=True,
+            exactSessionResume=resume,
             contextContinuity=True,
             structuredProgress=True,
             cancellation=True,
-            handoffAppend=True,
+            handoffAppend=resume,
             workspaceRead=True,
             workspaceActions=False,
             supportedModels=CODEX_MODELS,
-            reasonUnavailable=None if installed else 'missing_binary',
-            detectedBinary='codex' if installed else None,
+            detectedBinary=os.path.basename(str(binary)),
+            resumeFlag=flags.get('resume'),
+            noninteractiveFlag=flags.get('print'),
+            modelFlag=flags.get('model'),
         )
 
     async def request_action(self, request, category, summary, scope=None, cancel=None):

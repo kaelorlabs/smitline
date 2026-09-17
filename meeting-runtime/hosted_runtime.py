@@ -498,6 +498,34 @@ class InMemoryRemoteControlPlane(ControlPlane):
         self._audit('runner.registered', deviceId=device_id, tenantId=device['tenantId'])
         return {'registered': True, 'protocolVersion': PROTOCOL_VERSION}
 
+    def restore_paired_device(self, state):
+        if not isinstance(state, dict):
+            raise HostedRuntimeError('re_pair_required', 'stored pairing is incomplete; pair again', 409)
+        device_id = state.get('deviceId')
+        tenant_id = state.get('tenantId')
+        user_id = state.get('userId')
+        enrollment_hash = state.get('enrollmentHash')
+        if not device_id or not tenant_id or not user_id or not enrollment_hash:
+            raise HostedRuntimeError('re_pair_required', 'stored pairing is incomplete; pair again', 409)
+        self.tenants.setdefault(tenant_id, {'id': tenant_id})
+        self.users.setdefault(user_id, {'id': user_id, 'tenantId': tenant_id})
+        existing = self.devices.get(device_id)
+        if existing is None:
+            self.devices[device_id] = {
+                'id': device_id,
+                'tenantId': tenant_id,
+                'userId': user_id,
+                'enrollmentHash': enrollment_hash,
+                'revoked': False,
+                'keyId': 'k1',
+                'createdAt': state.get('createdAt') or _iso(self._now()),
+            }
+        elif existing.get('enrollmentHash') != enrollment_hash or existing.get('tenantId') != tenant_id:
+            raise HostedRuntimeError('re_pair_required', 'stored pairing does not match the control plane', 409)
+        if device_id not in self.runners:
+            self.register_runner(device_id)
+        return self.devices[device_id]
+
     def heartbeat(self, device_id):
         runner = self._require_runner(device_id)
         runner['lastHeartbeat'] = self._now()
@@ -544,6 +572,13 @@ class InMemoryRemoteControlPlane(ControlPlane):
         existing = self.jobs.get(assignment_id)
         if existing is not None:
             return dict(existing)
+        for other in self.jobs.values():
+            if other.get('status') in ('cancelled', 'completed'):
+                continue
+            if (other.get('deviceId') == job['deviceId']
+                    and other.get('meetingId') == job['meetingId']
+                    and other.get('sessionId') == job['sessionId']):
+                return dict(other)
         self._rate_check(device['tenantId'], device['id'])
         if job.get('op') in FORBIDDEN_REMOTE_OPS:
             self._audit('job.rejected', assignmentId=assignment_id, reason='forbidden', deviceId=device['id'])
@@ -593,7 +628,7 @@ class InMemoryRemoteControlPlane(ControlPlane):
             event_id = filtered.get('id')
             if event_id and event_id == last:
                 continue
-            bucket = self.events.setdefault(device['tenantId'], [])
+            bucket = self.events.setdefault(device_id, [])
             if event_id and any(item.get('id') == event_id for item in bucket):
                 last = event_id
                 continue
@@ -612,7 +647,7 @@ class InMemoryRemoteControlPlane(ControlPlane):
             runner = self.runners[device_id]
         runner['online'] = True
         runner['lastHeartbeat'] = self._now()
-        stored = self.events.get(device['tenantId'], [])
+        stored = self.events.get(device_id, [])
         replay = []
         seen = not cursor
         for event in stored:
@@ -630,6 +665,8 @@ class InMemoryRemoteControlPlane(ControlPlane):
         job = self.jobs.get(assignment_id)
         if job is None:
             raise HostedRuntimeError('not_found', 'assignment is not available', 404)
+        if job.get('status') == 'cancelled':
+            raise HostedRuntimeError('assignment_cancelled', 'cancelled assignment cannot be completed', 409)
         existing = self.handoffs.get(assignment_id)
         if existing is not None:
             return dict(existing)
@@ -715,6 +752,8 @@ class LocalRunner:
         missing = [field for field in JOB_BINDING_FIELDS if not job.get(field)]
         if missing:
             raise HostedRuntimeError('job_binding_incomplete', 'job binding is incomplete', 422)
+        if self.device_id and job.get('deviceId') != self.device_id:
+            raise HostedRuntimeError('device_isolation', 'job is bound to a different device', 403)
         remote = job['permissions']
         if isinstance(remote, dict):
             remote = MeetingPermissions.from_dict(remote)
@@ -787,6 +826,17 @@ class HostedRuntime:
 
     def status(self):
         with self._lock:
+            if self._state.get('rePairRequired'):
+                payload = {
+                    'mode': 'loopback',
+                    'paired': False,
+                    'controlPlane': 'local',
+                    'protocolVersion': PROTOCOL_VERSION,
+                    'error': 're_pair_required',
+                    'capabilities': self.plane.capabilities(),
+                }
+                reject_secrets(payload, 'runner status')
+                return payload
             device_id = self._state.get('deviceId')
             if not device_id:
                 payload = {
@@ -843,14 +893,26 @@ class HostedRuntime:
         try:
             payload = json.loads(self._state_path.read_text())
         except (OSError, ValueError):
+            self._state = {'rePairRequired': True}
             return
-        if isinstance(payload, dict) and 'deviceEnrollment' not in payload and 'pairingCode' not in payload:
-            self._state = {
-                'deviceId': payload.get('deviceId'),
-                'tenantId': payload.get('tenantId'),
-                'userId': payload.get('userId'),
-                'enrollmentHash': payload.get('enrollmentHash'),
-            }
+        if not isinstance(payload, dict) or 'deviceEnrollment' in payload or 'pairingCode' in payload:
+            self._state = {'rePairRequired': True}
+            return
+        restored = {
+            'deviceId': payload.get('deviceId'),
+            'tenantId': payload.get('tenantId'),
+            'userId': payload.get('userId'),
+            'enrollmentHash': payload.get('enrollmentHash'),
+        }
+        if not restored['deviceId']:
+            self._state = {}
+            return
+        try:
+            self.plane.restore_paired_device(restored)
+        except HostedRuntimeError:
+            self._state = {**restored, 'rePairRequired': True}
+            return
+        self._state = restored
 
     def _save(self):
         stored = omit_none({

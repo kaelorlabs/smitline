@@ -128,7 +128,8 @@ class ExecutorPolicyTests(ExecutorHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied['status'], 'denied')
         self.assertEqual(called, [])
         ran = await executor.execute(
-            self._request(permissions=permissions_payload(commands='allowed', edits='disabled')),
+            self._request(permissions=permissions_payload(
+                commands='allowed', edits='disabled', network='allowed')),
             self._plan(categories=['commands'], files=[], commands=[{'argv': ['python3', '-c', 'print(1)']}]),
         )
         self.assertEqual(ran['status'], 'completed')
@@ -154,7 +155,7 @@ class ExecutorPolicyTests(ExecutorHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(IsolationError):
             run_command(
                 ['python3', '-c', 'import time; time.sleep(5)'],
-                cwd=None, workspace=self.workspace, timeout=0.3)
+                cwd=None, workspace=self.workspace, timeout=0.3, network_allowed=True)
 
 
 @unittest.skipUnless(GIT, 'git is required for isolated workspace mutation tests')
@@ -189,6 +190,15 @@ class IsolationAndExecutorTests(ExecutorHarness, unittest.IsolatedAsyncioTestCas
         self.assertTrue(any(item['kind'] == 'patch' for item in listed))
         dumped = json.dumps(result)
         self.assertNotIn('SECRET=1', dumped)
+
+    def test_secret_like_untracked_files_are_not_seeded(self):
+        from workspace_isolation import create_isolated_workspace, remove_isolated_workspace
+        (self.workspace / 'api_keys.txt').write_text('openai=not-a-real-key\n')
+        dest = Path(self.temporary.name) / 'isolated-secret'
+        create_isolated_workspace(self.workspace, dest)
+        self.addCleanup(lambda: remove_isolated_workspace(self.workspace, dest))
+        self.assertFalse((dest / 'api_keys.txt').exists())
+        self.assertTrue((dest / 'untracked.py').exists())
 
     async def test_conflict_preserves_user_edits_and_patch_artifact(self):
         async def mutate(isolated, plan, request, cancel):

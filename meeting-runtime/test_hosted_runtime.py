@@ -117,10 +117,59 @@ class HostedRuntimeTests(unittest.TestCase):
         self.assertEqual(cancelled['status'], 'cancelled')
         again = self.plane.cancel_job('asg-one')
         self.assertEqual(again['status'], 'cancelled')
-        one = self.plane.complete_handoff('asg-one', 'hnd-1')
-        two = self.plane.complete_handoff('asg-one', 'hnd-other')
+        with self.assertRaises(HostedRuntimeError) as blocked:
+            self.plane.complete_handoff('asg-one', 'hnd-1')
+        self.assertEqual(blocked.exception.code, 'assignment_cancelled')
+        self.assertEqual(self.plane.jobs['asg-one']['status'], 'cancelled')
+
+    def test_one_active_assignment_per_meeting_session(self):
+        paired = self.pair()
+        first = self.plane.assign_job(job(paired['deviceId'], assignmentId='asg-1'))
+        second = self.plane.assign_job(job(paired['deviceId'], assignmentId='asg-2'))
+        self.assertEqual(first['assignmentId'], second['assignmentId'])
+        self.assertEqual(list(self.plane.jobs), ['asg-1'])
+
+    def test_handoff_appends_once_for_a_live_assignment(self):
+        paired = self.pair()
+        self.plane.assign_job(job(
+            paired['deviceId'], assignmentId='asg-live',
+            meetingId='mtg-hosted00000008', sessionId='thread-live',
+        ))
+        one = self.plane.complete_handoff('asg-live', 'hnd-1')
+        two = self.plane.complete_handoff('asg-live', 'hnd-other')
         self.assertEqual(one, two)
         self.assertEqual(two['handoffId'], 'hnd-1')
+
+    def test_pairing_survives_process_restart(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            first = HostedRuntime(Path(directory) / 'hosted', clock=self.clock)
+            started = first.start_pair(tenant_id='ten-a', user_id='usr-a')
+            completed = first.complete_pair(started['pairingId'], started['pairingCode'])
+            self.assertTrue(first.status()['paired'])
+            second = HostedRuntime(Path(directory) / 'hosted', clock=self.clock)
+            status = second.status()
+            self.assertTrue(status['paired'])
+            self.assertEqual(status['deviceId'], completed['deviceId'])
+            self.assertNotEqual(status.get('error'), 're_pair_required')
+
+    def test_events_and_jobs_are_bound_to_the_authenticating_device(self):
+        a = self.pair('ten-a', 'usr-a')
+        started_b = self.plane.start_pairing(tenant_id='ten-a', user_id='usr-b')
+        b = self.plane.complete_pairing(started_b['pairingId'], started_b['pairingCode'])
+        self.plane.register_runner(a['deviceId'])
+        self.plane.register_runner(b['deviceId'])
+        self.plane.upload_events(a['deviceId'], [
+            {'id': 'evt-a', 'type': 'meeting.lifecycle', 'state': 'live'},
+        ])
+        replay = self.plane.reconnect(b['deviceId'], cursor='')
+        self.assertNotIn('evt-a', [item.get('id') for item in replay.get('replay') or []])
+        runner = LocalRunner(self.plane, local_permissions=perms(), device_id=a['deviceId'])
+        with self.assertRaises(HostedRuntimeError) as isolated:
+            runner.accept_job(job(b['deviceId'], assignmentId='asg-foreign', userId='usr-b',
+                                  sessionId='thread-origin-9', meetingId='mtg-hosted00000003'))
+        self.assertEqual(isolated.exception.code, 'device_isolation')
 
     def test_permission_narrowing_and_local_enforcement(self):
         local = perms(workspace='read-only', commands='approval-required')
@@ -239,7 +288,10 @@ class HostedRuntimeTests(unittest.TestCase):
         again = plane.assign_job(job(paired['deviceId']))
         self.assertEqual(first['assignmentId'], again['assignmentId'])
         with self.assertRaises(HostedRuntimeError) as limited:
-            plane.assign_job(job(paired['deviceId'], assignmentId='asg-two'))
+            plane.assign_job(job(
+                paired['deviceId'], assignmentId='asg-two',
+                meetingId='mtg-hosted00000099', sessionId='thread-origin-2',
+            ))
         self.assertEqual(limited.exception.code, 'rate_limited')
 
 

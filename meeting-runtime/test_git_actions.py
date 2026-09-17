@@ -224,6 +224,25 @@ class GitBrokerTests(unittest.TestCase):
                 workspace=self.root)
         self.assertEqual(_run(self.root, ['rev-parse', 'HEAD']), outcome['commitSha'])
 
+    def test_push_fails_closed_if_remote_url_changes_after_commit(self):
+        import subprocess
+        _run(self.root, ['remote', 'add', 'origin', str(Path(self.temporary.name) / 'good.git')])
+        subprocess.run(['git', 'init', '--bare', str(Path(self.temporary.name) / 'good.git')],
+                       check=True, capture_output=True, text=True)
+        subprocess.run(['git', 'init', '--bare', str(Path(self.temporary.name) / 'evil.git')],
+                       check=True, capture_output=True, text=True)
+        outcome = self.broker.commit(self._commit_request(), workspace=self.root)
+        _run(self.root, ['remote', 'set-url', 'origin', str(Path(self.temporary.name) / 'evil.git')])
+        with self.assertRaises(IsolationError):
+            self.broker.push(
+                PushRequest.from_dict(push_payload(commitSha=outcome['commitSha'])),
+                workspace=self.root)
+        evil = subprocess.run(
+            ['git', '--git-dir', str(Path(self.temporary.name) / 'evil.git'),
+             'rev-parse', '--verify', 'refs/heads/colleague-work'],
+            capture_output=True, text=True)
+        self.assertNotEqual(evil.returncode, 0)
+
     def test_timeout_cancel_and_redaction(self):
         cancel = threading.Event()
         cancel.set()

@@ -52,6 +52,8 @@ class ProviderCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flags['resume'], '--resume')
         self.assertEqual(flags['print'], '--print')
         self.assertIsNone(detect_cli_flags('Usage: tool')['resume'])
+        self.assertIsNone(detect_cli_flags(
+            'Usage: tool --session NAME for logs\n--print\n')['resume'])
 
     async def test_exact_resume_requires_documented_flag(self):
         cursor = CursorProvider(command='/bin/echo', help_text=PRINT_ONLY_HELP)
@@ -292,6 +294,22 @@ class ProviderJobIsolationTests(unittest.TestCase):
         cursor = CursorProvider(command='/bin/echo', help_text=FULL_HELP)
         result = handle_job(cursor, {'provider': 'claude-code', 'op': 'run', 'task': 'hi'}, 'job-x')
         self.assertEqual(result['error'], 'unknown_provider')
+
+
+class CodexCapabilityTests(unittest.TestCase):
+    def test_echo_binary_does_not_advertise_exact_resume(self):
+        from providers.codex import CodexProvider
+        original = os.environ.get('CODEX_BIN')
+        os.environ['CODEX_BIN'] = '/bin/echo'
+        try:
+            caps = CodexProvider().capabilities()
+            self.assertTrue(caps.installed)
+            self.assertFalse(caps.exactSessionResume)
+        finally:
+            if original is None:
+                os.environ.pop('CODEX_BIN', None)
+            else:
+                os.environ['CODEX_BIN'] = original
 
 
 if __name__ == '__main__':

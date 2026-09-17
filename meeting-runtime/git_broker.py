@@ -4,6 +4,7 @@ import signal
 import subprocess
 import time
 
+from pathlib import Path
 from command_runner import SECRET_RE
 from git_actions import PROTECTED_BRANCHES, build_result
 from workspace_isolation import (
@@ -99,6 +100,7 @@ class GitBroker:
         self.artifacts = artifacts
         self.protected_branches = frozenset(protected_branches or PROTECTED_BRANCHES)
         self.timeout = timeout
+        self._remote_pins = {}
 
     def _git(self, workspace, args, **kwargs):
         kwargs.setdefault('timeout', self.timeout)
@@ -116,6 +118,45 @@ class GitBroker:
         completed, _output = self._git(
             workspace, ['check-ignore', '-q', '--', relative], check=False)
         return completed.returncode == 0
+
+    def _remote_urls(self, workspace):
+        completed, _output = self._git(workspace, ['remote', '-v'], check=False)
+        urls = {}
+        for line in (completed.stdout or '').splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            name, url = parts[0], parts[1]
+            if '(push)' in line or name not in urls:
+                urls[name] = url
+        return urls
+
+    def _push_url(self, workspace, remote):
+        completed, _output = self._git(
+            workspace, ['remote', 'get-url', '--push', remote], check=False)
+        url = (completed.stdout or '').strip()
+        if completed.returncode == 0 and url:
+            return url
+        completed, _output = self._git(
+            workspace, ['remote', 'get-url', remote], check=False)
+        return (completed.stdout or '').strip()
+
+    def _pin_remotes(self, workspace):
+        key = str(Path(workspace).resolve())
+        pinned = dict(self._remote_pins.get(key) or {})
+        pinned.update(self._remote_urls(workspace))
+        self._remote_pins[key] = pinned
+
+    def _require_pinned_remote(self, workspace, remote):
+        key = str(Path(workspace).resolve())
+        current = self._push_url(workspace, remote)
+        if not current:
+            raise IsolationError('remote is not configured')
+        pinned = (self._remote_pins.get(key) or {}).get(remote)
+        if pinned and pinned != current:
+            raise IsolationError('remote URL changed after approval')
+        self._remote_pins.setdefault(key, {})[remote] = current
+        return current
 
     def _mode(self, workspace, relative):
         completed, _output = self._git(
@@ -171,6 +212,7 @@ class GitBroker:
             raise
         sha = self._head(root)
         tree_completed, _output = self._git(root, ['rev-parse', 'HEAD^{tree}'])
+        self._pin_remotes(root)
         return {
             'commitSha': sha,
             'parentSha': expected,
@@ -194,6 +236,7 @@ class GitBroker:
         remotes = [line.strip() for line in remotes_completed.stdout.splitlines() if line.strip()]
         if remote not in remotes:
             raise IsolationError('remote is not configured')
+        self._require_pinned_remote(root, remote)
         tip_completed, _output = self._git(
             root, ['rev-parse', '--verify', 'refs/heads/' + branch])
         tip = tip_completed.stdout.strip()
