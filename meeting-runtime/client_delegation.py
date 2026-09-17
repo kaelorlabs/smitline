@@ -77,6 +77,9 @@ class ClientDelegation:
         self._seen = set()
         self._cancels = {}
         self._tasks = set()
+        if isinstance(state, dict):
+            state.setdefault('delegationsOpen', True)
+            state.setdefault('acceptingDelegations', True)
         self.router = router or DelegationRouter(event_sink=self._sink)
         if router is not None:
             previous = router.event_sink
@@ -275,6 +278,9 @@ class ClientDelegation:
         self.router.close()
         for cancel in self._cancels.values():
             cancel.set()
+        if isinstance(self.state, dict):
+            self.state['delegationsOpen'] = False
+            self.state['acceptingDelegations'] = False
 
     async def close(self):
         self.cancel_all()

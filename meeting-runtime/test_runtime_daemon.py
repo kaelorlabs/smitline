@@ -1021,6 +1021,68 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types.count('agent_session.released'), 1)
         self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
 
+    async def test_exact_append_failure_retains_lease_and_retry_releases(self):
+        created = await self.create()
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        handoff_id = 'hnd-' + meeting_id
+        self.daemon.prepare_finalization(meeting_id)
+        self.daemon.note_append_failure(meeting_id, handoff_id, 'codex unavailable')
+        lease = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(lease.status, 200)
+        self.assertEqual((await lease.json())['state'], 'finalizing')
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
+        self.assertEqual(missing.status, 404)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('handoff.append_failed', types)
+        self.assertNotIn('handoff.ready', types)
+        self.assertNotIn('agent_session.released', types)
+
+        async def retry(_meeting_id):
+            ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])
+            self.daemon.store_handoff(ready)
+            return {'status': 'ready'}
+
+        self.supervisor.retry_handoff = retry
+        duplicated = await asyncio.gather(
+            self.client.post(
+                '/v1/meetings/' + meeting_id + '/handoff/retry',
+                json={}, headers=self.headers()),
+            self.client.post(
+                '/v1/meetings/' + meeting_id + '/handoff/retry',
+                json={}, headers=self.headers()),
+        )
+        self.assertEqual(sorted(item.status for item in duplicated), [200, 200])
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertEqual(types.count('handoff.ready'), 1)
+        self.assertEqual(types.count('agent_session.released'), 1)
+        released = await self.client.get(
+            '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
+        self.assertEqual(released.status, 404)
+        self.daemon.note_append_failure(meeting_id, handoff_id, 'again')
+        self.assertEqual(
+            [event.type for event in self.daemon.events.replay(meeting_id)].count(
+                'handoff.append_failed'),
+            1,
+        )
+
+    async def test_prepare_finalization_settles_active_turn(self):
+        created = await self.create()
+        session = await created.json()
+        meeting_id = session['id']
+        record = self.daemon.meetings.get(meeting_id)
+        self.daemon.leases.start_turn('codex', 'thread-origin-1', record.lease_token, 'turn-1')
+        self.daemon.prepare_finalization(meeting_id)
+        lease = self.daemon.leases.get('codex', 'thread-origin-1')
+        self.assertIsNone(lease.active_delegated_turn)
+        self.assertEqual(lease.state, 'finalizing')
+        stored = self.daemon.store_handoff(
+            handoff_payload(meetingId=meeting_id, startedAt=session['startedAt']))
+        self.assertEqual(stored.meeting_id, meeting_id)
+        self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
+
 
 def _once_fail(original, predicate, error):
     state = {'fired': False}

@@ -3,7 +3,7 @@ const form = $('#meeting-form');
 const views = {
   meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
   context: ['Reference context', 'Give your colleague the documents and details behind the discussion.'],
-  history: ['Transcripts', 'Return to the conversations and decisions from your meetings.'],
+  history: ['Transcripts and handoffs', 'Return to the conversations, decisions, and structured handoffs from your meetings.'],
 };
 function selectView(view) {
   if (!views[view]) view = 'meeting';
@@ -132,16 +132,26 @@ function renderStatus(status) {
   renderSessions(status.sessions || []);
 }
 
+function handoffStatusLabel(session) {
+  const status = session.handoffStatus || 'none';
+  if (status === 'ready') return session.partial ? 'Handoff ready (partial)' : 'Handoff ready';
+  if (status === 'pending') return 'Handoff pending';
+  if (status === 'failed') return 'Handoff failed — retry available';
+  return session.hasTranscript ? 'Transcript only' : 'Meeting session';
+}
+
 function renderSessions(sessions) {
   const list = $('#session-list');
-  if (!sessions.length) { list.innerHTML = '<p class="empty">Completed meeting transcripts will appear here.</p>'; return; }
+  if (!sessions.length) { list.innerHTML = '<p class="empty">Completed meeting transcripts and handoffs will appear here.</p>'; return; }
   list.replaceChildren(...sessions.map(session => {
     const button = document.createElement('button');
     button.className = `session-card ${selectedSession === session.id ? 'selected' : ''}`;
     button.type = 'button';
-    const title = document.createElement('b'); title.textContent = session.hasTranscript ? 'Meeting transcript' : 'Meeting session';
+    const title = document.createElement('b'); title.textContent = handoffStatusLabel(session);
     const time = document.createElement('span'); time.textContent = new Date(session.updatedAt).toLocaleString();
-    button.append(title, time);
+    const status = document.createElement('em');
+    status.textContent = session.endReason ? `Ended: ${session.endReason}` : session.id;
+    button.append(title, time, status);
     button.addEventListener('click', () => openTranscript(session.id, button));
     return button;
   }));
@@ -220,7 +230,52 @@ async function openTranscript(id, button) {
     document.querySelectorAll('.session-card').forEach(node => node.classList.remove('selected'));
     button.classList.add('selected');
     $('#transcript-view h3').textContent = new Date(id.slice(0, 15).replace(/(\d{8})T(\d{6})Z/, '$1T$2Z')).toString() === 'Invalid Date' ? id : id;
-    $('#transcript-view pre').textContent = result.transcript.trim() || 'This meeting has no transcript content.';
+    const status = result.handoffStatus || 'none';
+    const statusNode = $('#handoff-status');
+    statusNode.hidden = false;
+    statusNode.textContent = status === 'ready'
+      ? (result.partial ? 'Structured handoff is ready. This record is marked partial.' : 'Structured handoff is ready.')
+      : status === 'pending'
+        ? 'Handoff is stored locally and still pending Codex append or daemon release.'
+        : status === 'failed'
+          ? 'Codex append failed. The local handoff is kept; retry without releasing the lease.'
+          : 'No structured handoff is available yet.';
+    $('#transcript-body').textContent = (result.transcript || '').trim() || 'This meeting has no transcript content.';
+    const actions = $('#handoff-actions');
+    const handoffView = $('#handoff-view');
+    const retry = $('#retry-handoff');
+    if (result.handoff) {
+      actions.hidden = false;
+      handoffView.hidden = false;
+      $('#handoff-body').textContent = JSON.stringify(result.handoff, null, 2);
+      retry.hidden = status !== 'failed';
+      retry.onclick = async () => {
+        retry.disabled = true;
+        try {
+          await request(`/api/sessions/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
+          announce('Codex append retry succeeded.');
+          await openTranscript(id, button);
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          await openTranscript(id, button);
+        } finally {
+          retry.disabled = false;
+        }
+      };
+      $('#download-handoff').onclick = () => {
+        const blob = new Blob([JSON.stringify(result.handoff, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${result.handoffId || id}-handoff.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      };
+    } else {
+      actions.hidden = true;
+      handoffView.hidden = true;
+      retry.hidden = true;
+    }
   } catch (error) { announce(error.message, true); }
 }
 

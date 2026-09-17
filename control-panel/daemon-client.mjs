@@ -187,6 +187,12 @@ export function createDaemonClient(options = {}) {
     cancelMeeting(meetingId) {
       return send('POST', `/v1/meetings/${meetingId}/cancel`, {}, { startIfNeeded: true });
     },
+    getHandoff(meetingId, { startIfNeeded = false } = {}) {
+      return send('GET', `/v1/meetings/${meetingId}/handoff`, undefined, { startIfNeeded });
+    },
+    retryHandoff(meetingId) {
+      return send('POST', `/v1/meetings/${meetingId}/handoff/retry`, {}, { startIfNeeded: true });
+    },
     leaseStatus(provider, sessionId) {
       return send('GET', `/v1/agent-sessions/${provider}/${sessionId}/status`, undefined, { startIfNeeded: false });
     },

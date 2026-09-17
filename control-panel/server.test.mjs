@@ -178,6 +178,37 @@ function createFakeDaemon() {
     async leaseStatus() {
       return { state: 'in_meeting' };
     },
+    async getHandoff(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/handoff` });
+      const handoff = this.handoffs.get(id);
+      if (!handoff) {
+        const error = new Error('handoff is not ready');
+        error.status = 404;
+        error.code = 'not_found';
+        throw error;
+      }
+      return handoff;
+    },
+    async retryHandoff(id) {
+      calls.push({ method: 'POST', path: `/v1/meetings/${id}/handoff/retry`, body: {} });
+      if (this.failRetry) {
+        const error = new Error('exact append still failed');
+        error.status = 409;
+        error.code = 'handoff_append_failed';
+        throw error;
+      }
+      const handoff = {
+        version: 1,
+        meetingId: id,
+        summary: 'Meeting ended.',
+        handoffId: `hnd-${id}`,
+        partial: false,
+      };
+      this.handoffs.set(id, handoff);
+      return handoff;
+    },
+    handoffs: new Map(),
+    failRetry: false,
   };
 }
 
@@ -373,5 +404,67 @@ test('daemon unavailability is truthful and Teams auth cannot race a live meetin
     });
     assert.equal(teams.status, 409);
     assert.equal(panel.accountSpawns.length, 0);
+  });
+});
+
+test('history lists and downloads structured handoff status without secrets', async () => {
+  await withPanel(async panel => {
+    const meetingId = 'mtg-portal00000001';
+    const directory = path.join(panel.runtimeRoot, 'recordings', meetingId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, 'transcript.txt'), 'Meeting: Ship Friday.');
+    fs.writeFileSync(path.join(directory, 'handoff.json'), JSON.stringify({
+      version: 1,
+      meetingId,
+      summary: 'Meeting ended (cancelled) with 1 transcript entries (partial).',
+      handoffId: `hnd-${meetingId}`,
+      partial: true,
+      endReason: 'cancelled',
+      apiKey: 'sk-should-be-stripped',
+    }));
+    fs.writeFileSync(path.join(directory, 'finalization.json'), JSON.stringify({
+      status: 'append_failed',
+      handoffId: `hnd-${meetingId}`,
+      partial: true,
+      endReason: 'cancelled',
+      meetingId,
+    }));
+    const status = await (await fetch(`${panel.base}/api/status`)).json();
+    const listed = status.sessions.find(item => item.id === meetingId);
+    assert.equal(listed.handoffStatus, 'failed');
+    assert.equal(listed.partial, true);
+    assert.equal(listed.hasHandoff, true);
+    const detail = await (await fetch(`${panel.base}/api/sessions/${meetingId}`)).json();
+    assert.match(detail.transcript, /Ship Friday/);
+    assert.equal(detail.handoffStatus, 'failed');
+    assert.equal(detail.handoff.handoffId, `hnd-${meetingId}`);
+    assert.equal('apiKey' in detail.handoff, false);
+    const denied = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(denied.status, 403);
+    const traversal = await fetch(`${panel.base}/api/sessions/not.valid`);
+    assert.equal(traversal.status, 400);
+    const bootstrap = await panel.bootstrap();
+    panel.daemon.failRetry = true;
+    const failed = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal(failed.status, 409);
+    panel.daemon.failRetry = false;
+    const retried = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal(retried.status, 200);
+    const body = await retried.json();
+    assert.equal(body.handoffStatus, 'ready');
+    assert.equal(body.handoff.handoffId, `hnd-${meetingId}`);
+    assert.equal(JSON.stringify(body).includes('sk-should-be-stripped'), false);
   });
 });

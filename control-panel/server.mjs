@@ -108,13 +108,81 @@ export function createServer({
   function sessions() {
     if (!fs.existsSync(recordings)) return [];
     return fs.readdirSync(recordings, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && /^[\w-]+$/.test(entry.name))
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && /^[\w-]+$/.test(entry.name))
       .map(entry => {
         const directory = path.join(recordings, entry.name);
         const transcript = path.join(directory, 'transcript.txt');
         const stat = fs.statSync(fs.existsSync(transcript) ? transcript : directory);
-        return { id: entry.name, updatedAt: stat.mtime.toISOString(), hasTranscript: fs.existsSync(transcript) };
+        const archive = archiveStatus(directory);
+        return {
+          id: entry.name,
+          updatedAt: stat.mtime.toISOString(),
+          hasTranscript: fs.existsSync(transcript),
+          hasHandoff: archive.hasHandoff,
+          handoffStatus: archive.status,
+          partial: archive.partial,
+          endReason: archive.endReason,
+        };
       }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 30);
+  }
+
+  function secretField(name) {
+    return /api[_-]?key|token|secret|password|passwd|authorization|credential|cookie|private[_-]?key|bearer|leaseid/i.test(String(name || ''));
+  }
+
+  function stripSecrets(value) {
+    if (Array.isArray(value)) return value.map(stripSecrets);
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (secretField(key)) continue;
+        out[key] = stripSecrets(item);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  function readJsonFile(file) {
+    try {
+      if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink()) return null;
+      const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+      return stripSecrets(payload);
+    } catch {
+      return null;
+    }
+  }
+
+  function archiveStatus(directory) {
+    const finalization = readJsonFile(path.join(directory, 'finalization.json')) || {};
+    const handoff = readJsonFile(path.join(directory, 'handoff.json'));
+    let status = 'none';
+    if (finalization.status === 'ready') status = 'ready';
+    else if (finalization.status === 'append_failed') status = 'failed';
+    else if (finalization.status === 'local' || finalization.status === 'appended') status = 'pending';
+    else if (handoff) status = 'pending';
+    return {
+      status,
+      hasHandoff: Boolean(handoff),
+      partial: Boolean(finalization.partial ?? handoff?.partial),
+      endReason: finalization.endReason || handoff?.endReason || null,
+      handoffId: finalization.handoffId || handoff?.handoffId || null,
+      handoff,
+    };
+  }
+
+  function sessionDirectory(id) {
+    if (!/^[\w-]+$/.test(id)) return null;
+    const root = path.resolve(recordings);
+    const directory = path.resolve(recordings, id);
+    if (directory !== root && !directory.startsWith(root + path.sep)) return null;
+    try {
+      if (!fs.lstatSync(directory).isDirectory() || fs.lstatSync(directory).isSymbolicLink()) return null;
+    } catch {
+      return null;
+    }
+    return directory;
   }
 
   async function loadMeeting() {
@@ -212,11 +280,35 @@ export function createServer({
     }
     if (request.method === 'GET' && pathname === '/api/status') return json(response, 200, await status());
     if (request.method === 'GET' && pathname.startsWith('/api/sessions/')) {
-      const id = pathname.slice('/api/sessions/'.length);
-      if (!/^[\w-]+$/.test(id)) return json(response, 400, { error: 'Invalid session.' });
-      const transcript = path.join(recordings, id, 'transcript.txt');
-      if (!fs.existsSync(transcript)) return json(response, 404, { error: 'Transcript is not available.' });
-      return json(response, 200, { id, transcript: fs.readFileSync(transcript, 'utf8').slice(-200_000) });
+      const rest = pathname.slice('/api/sessions/'.length);
+      if (rest.endsWith('/retry')) {
+        return json(response, 405, { error: 'Use POST to retry finalization.' });
+      }
+      const id = rest;
+      const directory = sessionDirectory(id);
+      if (!directory) return json(response, 400, { error: 'Invalid session.' });
+      const transcriptPath = path.join(directory, 'transcript.txt');
+      const archive = archiveStatus(directory);
+      if (!fs.existsSync(transcriptPath) && !archive.hasHandoff) {
+        return json(response, 404, { error: 'Transcript is not available.' });
+      }
+      let transcript = '';
+      try {
+        if (fs.existsSync(transcriptPath) && !fs.lstatSync(transcriptPath).isSymbolicLink()) {
+          transcript = fs.readFileSync(transcriptPath, 'utf8').slice(-200_000);
+        }
+      } catch {
+        transcript = '';
+      }
+      return json(response, 200, {
+        id,
+        transcript,
+        handoff: archive.handoff,
+        handoffStatus: archive.status,
+        partial: archive.partial,
+        endReason: archive.endReason,
+        handoffId: archive.handoffId,
+      });
     }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
     if (request.method === 'POST' && pathname === '/api/context/add') {
@@ -300,6 +392,30 @@ export function createServer({
         });
       } finally {
         startInFlight = false;
+      }
+    }
+    if (request.method === 'POST' && pathname.startsWith('/api/sessions/') && pathname.endsWith('/retry')) {
+      const id = pathname.slice('/api/sessions/'.length, pathname.length - '/retry'.length).replace(/\/$/, '');
+      const directory = sessionDirectory(id);
+      if (!directory) return json(response, 400, { error: 'Invalid session.' });
+      try {
+        const handoff = await daemonClient.retryHandoff(id);
+        return json(response, 200, {
+          id,
+          handoff,
+          handoffStatus: 'ready',
+        });
+      } catch (error) {
+        const archive = archiveStatus(directory);
+        return json(response, error.status || 503, {
+          error: error.message,
+          code: error.code,
+          id,
+          handoff: archive.handoff,
+          handoffStatus: archive.status === 'none' ? 'failed' : archive.status,
+          partial: archive.partial,
+          endReason: archive.endReason,
+        });
       }
     }
     if (request.method === 'POST' && pathname === '/api/stop') {

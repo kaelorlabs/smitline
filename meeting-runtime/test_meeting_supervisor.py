@@ -131,6 +131,9 @@ class FakeDaemon:
         self.transitions = []
         self.heartbeats = []
         self.failures = []
+        self.handoffs = []
+        self.prepared = []
+        self.append_failures = []
         self.meetings = FakeMeetings()
         self.leases = FakeLeases()
 
@@ -145,6 +148,23 @@ class FakeDaemon:
         self.failures.append((meeting_id, reason))
         return None
 
+    def prepare_finalization(self, meeting_id):
+        self.prepared.append(meeting_id)
+        return None
+
+    def note_append_failure(self, meeting_id, handoff_id, reason):
+        self.append_failures.append((meeting_id, handoff_id, reason))
+        return None
+
+    def store_handoff(self, handoff):
+        self.handoffs.append(handoff)
+        record = self.meetings.records.get(handoff.meeting_id)
+        if record is None:
+            record = FakeRecord(session(id=handoff.meeting_id), lease_token=None)
+            self.meetings.records[handoff.meeting_id] = record
+        record.handoff = handoff
+        return handoff
+
 
 class SupervisorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -156,12 +176,19 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.health = FakeHealth()
         self.host_worker = FakeHostWorker()
         self.daemon = FakeDaemon()
+        self.appended = []
+
+        async def append(_session, handoff):
+            self.appended.append(handoff)
+            return {'ok': True, 'idempotent': False}
+
         self.supervisor = ProductionMeetingSupervisor(
             self.root,
             runtime_root=self.runtime,
             launcher=self.launcher,
             health=self.health,
             host_worker=self.host_worker,
+            append_handoff=append,
             poll_interval=0.02,
             start_timeout=0.4,
             stop_timeout=0.4,
@@ -213,6 +240,8 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(handle.terminated)
         self.assertTrue(handle.waited)
         self.assertIsNone(self.supervisor._worker)
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'cancelled')
+        self.assertTrue(self.daemon.handoffs[-1].partial)
         await self.supervisor.cancel(meeting.id)
         self.assertFalse(self.launcher.running)
         self.assertEqual(len(self.host_worker.handles), 1)
@@ -263,24 +292,28 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.supervisor._active_id)
         self.assertEqual(self.host_worker.starts, [])
 
-    async def test_unexpected_exit_records_finalization_failure(self):
+    async def test_unexpected_exit_persists_partial_handoff(self):
         meeting = session()
         await self.supervisor.start(meeting)
         self.launcher.running = False
         await asyncio.sleep(0.08)
-        self.assertEqual(self.daemon.failures[0][0], meeting.id)
-        self.assertEqual(self.daemon.failures[0][1], 'container_exited')
+        self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.handoffs[0].meeting_id, meeting.id)
+        self.assertTrue(self.daemon.handoffs[0].partial)
+        self.assertEqual(self.daemon.handoffs[0].end_reason, 'container_exited')
         handle = self.host_worker.handles[0]
         self.assertTrue(handle.terminated)
         self.assertTrue(handle.waited)
         self.assertIsNone(self.supervisor._worker)
 
-    async def test_finished_without_handoff_is_finalization_failure(self):
+    async def test_finished_without_handoff_still_builds_handoff(self):
         meeting = session()
         await self.supervisor.start(meeting)
         self.health.payload = {'stage': 'finished'}
         await asyncio.sleep(0.08)
-        self.assertEqual(self.daemon.failures[-1][1], 'runtime_ended_before_handoff')
+        self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'finished')
+        self.assertFalse(self.daemon.handoffs[-1].partial)
         handle = self.host_worker.handles[0]
         self.assertTrue(handle.terminated)
         self.assertTrue(handle.waited)
@@ -290,12 +323,15 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         meeting = session()
         self.daemon.meetings.records[meeting.id] = FakeRecord(meeting)
         await self.supervisor.reconcile(self.daemon)
-        self.assertEqual(self.daemon.failures[-1][1], 'runtime_unavailable_on_restart')
+        self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.handoffs[-1].meeting_id, meeting.id)
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'runtime_unavailable_on_restart')
 
-        self.daemon.failures.clear()
+        self.daemon.handoffs.clear()
         self.launcher.unknown = True
         await self.supervisor.reconcile(self.daemon)
         self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.handoffs, [])
 
         self.launcher.unknown = False
         self.launcher.running = True
@@ -305,9 +341,9 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.reconcile(self.daemon)
         self.assertEqual(self.supervisor._active_id, meeting.id)
         self.assertTrue(self.supervisor._watch_task)
-        self.assertEqual(len(self.host_worker.starts), 1)
+        self.assertEqual(len(self.host_worker.starts), 2)
         await self.supervisor.reconcile(self.daemon)
-        self.assertEqual(len(self.host_worker.starts), 1)
+        self.assertEqual(len(self.host_worker.starts), 2)
 
     async def test_uncertain_running_container_is_not_taken_over(self):
         meeting = session()
@@ -375,16 +411,35 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         handle = self.host_worker.handles[0]
         self.assertTrue(handle.waited)
 
-    async def test_worker_death_records_finalization_and_stops(self):
+    async def test_worker_death_records_handoff_and_stops(self):
         meeting = session()
         await self.supervisor.start(meeting)
         handle = self.host_worker.handles[0]
         handle.exit_code = 1
         await asyncio.sleep(0.08)
-        self.assertEqual(self.daemon.failures[-1][1], 'codex_worker_exited')
+        self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'codex_worker_exited')
         self.assertTrue(handle.waited)
         self.assertIsNone(self.supervisor._worker)
         self.assertFalse(self.launcher.running)
+
+    async def test_exact_append_failure_keeps_local_handoff(self):
+        async def fail(_session, _handoff):
+            return {'error': 'codex unavailable'}
+
+        self.supervisor.append_handoff = fail
+        meeting = session()
+        await self.supervisor.start(meeting)
+        await self.supervisor.cancel(meeting.id)
+        self.assertEqual(self.daemon.handoffs, [])
+        self.assertEqual(self.daemon.failures, [])
+        self.assertEqual(self.daemon.append_failures[-1][0], meeting.id)
+        payload = json.loads(
+            (self.runtime / 'recordings' / meeting.id / 'finalization.json').read_text())
+        self.assertEqual(payload['status'], 'append_failed')
+        stored = json.loads((self.runtime / 'recordings' / meeting.id / 'handoff.json').read_text())
+        self.assertEqual(stored['handoffId'], 'hnd-' + meeting.id)
+        self.assertNotIn('leaseId', json.dumps(stored))
 
     async def test_shutdown_and_reconcile_await_worker(self):
         meeting = session()

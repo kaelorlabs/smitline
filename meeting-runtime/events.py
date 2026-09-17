@@ -5,7 +5,7 @@ from types import MappingProxyType
 from meeting_handoff import MeetingHandoff
 from schema_validation import (
     omit_none, optional_bool, optional_field, optional_int, optional_string,
-    reject_unknown_fields, require_enum, require_field, require_id, require_mapping,
+    reject_unknown_fields, require_bool, require_enum, require_field, require_id, require_mapping,
     require_meeting_id, require_string, require_timestamp, require_version,
 )
 
@@ -26,6 +26,7 @@ EVENT_TYPES = (
     'approval.required',
     'artifact.created',
     'handoff.ready',
+    'handoff.append_failed',
 )
 PAYLOAD_FIELDS = {
     'meeting.joining': (),
@@ -42,6 +43,7 @@ PAYLOAD_FIELDS = {
     'approval.required': ('request',),
     'artifact.created': ('artifact',),
     'handoff.ready': ('handoff',),
+    'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
 }
 ENVELOPE_FIELDS = ('version', 'id', 'meetingId', 'timestamp', 'type')
 TRANSCRIPT_SOURCES = ('input', 'output', 'platform')
@@ -202,6 +204,13 @@ def _payload_from_dict(event_type, payload):
         return {'artifact': Artifact.from_dict(require_field(payload, 'artifact', 'event'))}
     if event_type == 'handoff.ready':
         return {'handoff': MeetingHandoff.from_dict(require_field(payload, 'handoff', 'event'))}
+    if event_type == 'handoff.append_failed':
+        return {
+            'reason': require_string(require_field(payload, 'reason', 'event'), 'reason'),
+            'handoffId': require_id(require_field(payload, 'handoffId', 'event'), 'handoffId',
+                                    max_length=256),
+            'retryable': require_bool(require_field(payload, 'retryable', 'event'), 'retryable'),
+        }
     return {}
 
 

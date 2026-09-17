@@ -61,6 +61,9 @@ class UnconfiguredMeetingSupervisor:
     async def cancel(self, meeting_id):
         raise RuntimeError('meeting supervisor is not configured')
 
+    async def retry_handoff(self, meeting_id):
+        raise RuntimeError('meeting supervisor is not configured')
+
 
 def require_loopback_bind(host):
     try:
@@ -118,8 +121,9 @@ class RuntimeDaemon:
     """Loopback meeting daemon.
 
     Threading contract: the aiohttp event loop owns async entry points
-    (create, context, cancel). Synchronous supervisor callbacks
-    (transition, store_handoff, record_finalization_failure) may run on
+        (create, context, cancel, retry_handoff). Synchronous supervisor callbacks
+        (transition, store_handoff, prepare_finalization, note_append_failure,
+        record_finalization_failure) may run on
     that loop or on a worker thread. Each meeting_id has an asyncio.Lock
     that serializes async entry points, including supervisor I/O, and a
     threading.RLock used only around durable local writes — never across
@@ -514,6 +518,80 @@ class RuntimeDaemon:
         self._complete_release_after_handoff(session, token)
         return handoff
 
+    def prepare_finalization(self, meeting_id):
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            agent = record.session.agent_session
+            token = record.lease_token
+            if not token:
+                return record.session
+            lease = self.leases.get(agent.provider, agent.session_id)
+            if lease is None:
+                return record.session
+            if lease.token != token:
+                raise DaemonError(409, 'conflict', 'meeting lease token does not match')
+            if lease.active_delegated_turn:
+                try:
+                    self.leases.finish_turn(
+                        agent.provider, agent.session_id, token, lease.active_delegated_turn)
+                except (LeaseStateError, LeaseConflictError) as error:
+                    raise DaemonError(409, 'conflict', str(error)) from error
+                lease = self.leases.get(agent.provider, agent.session_id)
+                if lease is None:
+                    return record.session
+            if lease.state == 'in_meeting':
+                try:
+                    self.leases.begin_finalization(agent.provider, agent.session_id, token)
+                except (LeaseConflictError, LeaseStateError) as error:
+                    raise DaemonError(409, 'conflict', str(error)) from error
+            elif lease.state == 'finalizing':
+                try:
+                    self.leases.heartbeat(agent.provider, agent.session_id, token)
+                except (LeaseConflictError, LeaseStateError):
+                    pass
+            return record.session
+
+    def note_append_failure(self, meeting_id, handoff_id, reason):
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            session = record.session
+            if session.state != 'ended':
+                session = self._replace_session(session, state='ended')
+                self._persist(session, record.lease_token)
+                self._append_once(meeting_id, 'meeting.ended', reason='handoff_append_failed')
+            self._append_once(
+                meeting_id,
+                'handoff.append_failed',
+                reason=str(reason or 'exact append failed')[:240],
+                handoffId=handoff_id,
+                retryable=True,
+            )
+            if record.lease_token:
+                agent = session.agent_session
+                try:
+                    self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
+                except (LeaseConflictError, LeaseStateError, DaemonError):
+                    pass
+            return session
+
+    async def retry_handoff_append(self, meeting_id):
+        async with self._async_lock(meeting_id):
+            record = self._record(meeting_id)
+            if record.handoff is not None:
+                return record.handoff
+            try:
+                await self.supervisor.retry_handoff(meeting_id)
+            except DaemonError:
+                raise
+            except Exception as error:
+                raise DaemonError(
+                    503, 'supervisor_retry_failed',
+                    'meeting supervisor failed to retry handoff') from error
+            record = self._record(meeting_id)
+            if record.handoff is not None:
+                return record.handoff
+            raise DaemonError(409, 'handoff_append_failed', 'exact append still failed')
+
     def _require_handoff_event_order(self, meeting_id):
         types = [event.type for event in self.events.replay(meeting_id)]
         if 'meeting.ended' not in types or 'handoff.ready' not in types:
@@ -722,6 +800,11 @@ def create_app(
         handoff = await daemon.get_handoff(request.match_info['meetingId'])
         return _public_json(handoff.to_dict())
 
+    async def retry_handoff(request):
+        await read_json(request, allow_empty=True)
+        handoff = await daemon.retry_handoff_append(request.match_info['meetingId'])
+        return _public_json(handoff.to_dict())
+
     async def get_events(request):
         meeting_id = request.match_info['meetingId']
         daemon._record(meeting_id)
@@ -805,6 +888,7 @@ def create_app(
     app.router.add_post('/v1/meetings/{meetingId}/cancel', cancel_meeting)
     app.router.add_get('/v1/meetings/{meetingId}/events', get_events)
     app.router.add_get('/v1/meetings/{meetingId}/handoff', get_handoff)
+    app.router.add_post('/v1/meetings/{meetingId}/handoff/retry', retry_handoff)
     app.router.add_post('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_heartbeat)
     app.router.add_delete('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_release)
     app.router.add_get('/v1/agent-sessions/{provider}/{sessionId}/status', lease_status)

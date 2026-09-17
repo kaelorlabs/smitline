@@ -164,15 +164,24 @@
 
       <section class="panel history-panel" aria-labelledby="history-title">
         <div class="panel-heading">
-          <div><p class="kicker">Meeting archive</p><h2 id="history-title">Transcripts</h2></div>
+          <div><p class="kicker">Meeting archive</p><h2 id="history-title">Transcripts and handoffs</h2></div>
 
         </div>
         <div class="history-layout">
-          <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts will appear here.</p></div>
+          <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts and handoffs will appear here.</p></div>
           <article class="transcript" id="transcript-view">
-            <p class="transcript-eyebrow">Transcript</p>
+            <p class="transcript-eyebrow">Meeting record</p>
             <h3>Select a meeting</h3>
-            <pre>Your local transcript will open here.</pre>
+            <p id="handoff-status" class="hint" hidden></p>
+            <div id="handoff-actions" class="transcript-actions" hidden>
+              <button class="button" type="button" id="download-handoff">Download handoff</button>
+              <button class="button" type="button" id="retry-handoff" hidden>Retry Codex append</button>
+            </div>
+            <pre id="transcript-body">Your local transcript will open here.</pre>
+            <div id="handoff-view" class="handoff-view" hidden>
+              <p class="transcript-eyebrow">Handoff</p>
+              <pre id="handoff-body"></pre>
+            </div>
           </article>
         </div>
       </section>

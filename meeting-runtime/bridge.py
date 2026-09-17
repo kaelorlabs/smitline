@@ -219,8 +219,21 @@ async def main():
     state['codex']['continuity'] = continuity
     state['codex']['session_id'] = meeting_state.get('sessionId')
     state['codex']['session_scope'] = 'originating' if continuity == 'exact' else 'meeting'
-    record = CallRecord(os.path.join(os.path.dirname(__file__), 'recordings'))
+    meeting_id = meeting_state.get('meetingId')
+    try:
+        record = CallRecord(
+            os.path.join(os.path.dirname(__file__), 'recordings'), meeting_id=meeting_id)
+    except (TypeError, ValueError):
+        record = CallRecord(os.path.join(os.path.dirname(__file__), 'recordings'))
     state['recording'] = str(record.directory)
+    state['archive'] = {
+        'meetingId': record.meeting_id,
+        'name': record.directory.name,
+        'closed': False,
+        'handoffStatus': 'recording',
+    }
+    state['acceptingDelegations'] = True
+    state['delegationsOpen'] = True
     record.event('started')
     api_key = os.environ['OPENAI_API_KEY']
     url = resolve_meeting_url()
@@ -267,6 +280,16 @@ async def main():
             viewer.terminate()
             await viewer.wait()
             await runner.cleanup()
+            if record:
+                record.close(
+                    usage={'usageSeconds': state.get('usage_seconds', 0)},
+                    end_reason=state.get('stage'),
+                    stage=state.get('stage'),
+                )
+                archive = state.get('archive')
+                if isinstance(archive, dict):
+                    archive['closed'] = True
+                    archive['handoffStatus'] = 'local'
 
 
 if __name__ == '__main__':

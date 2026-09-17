@@ -156,7 +156,15 @@ class SchemaValidationTests(unittest.TestCase):
             MeetingSession.from_dict(meeting_session_payload(startedAt='2026-09-16T17:00:00'))
 
     def test_handoff_and_event_vocabulary_round_trip(self):
-        self.assert_round_trip(MeetingHandoff, handoff_payload())
+        parsed = self.assert_round_trip(MeetingHandoff, handoff_payload())
+        extra = self.assert_round_trip(MeetingHandoff, handoff_payload(
+            handoffId='hnd-mtg-abc123', partial=True, endReason='cancelled',
+            archivePath='mtg-abc123',
+            git={'branch': 'agent/zoom-teams-adapters', 'commit': '0aa7121', 'dirty': True},
+        ))
+        self.assertTrue(extra.partial)
+        self.assertEqual(extra.handoff_id, 'hnd-mtg-abc123')
+        self.assertEqual(extra.git.branch, 'agent/zoom-teams-adapters')
         samples = [
             event_payload('meeting.joining'),
             event_payload('meeting.waiting_for_admission', id='evt-2'),
@@ -183,6 +191,8 @@ class SchemaValidationTests(unittest.TestCase):
                 'createdAt': TIMESTAMP,
             }),
             event_payload('handoff.ready', id='evt-14', handoff=handoff_payload()),
+            event_payload('handoff.append_failed', id='evt-15', reason='codex unavailable',
+                          handoffId='hnd-mtg-abc123', retryable=True),
         ]
         for sample in samples:
             with self.subTest(sample['type']):

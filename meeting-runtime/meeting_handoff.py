@@ -1,8 +1,9 @@
 """Version 1 structured meeting handoff returned to the originating conversation."""
 from dataclasses import dataclass
 
+from context_handoff import GitState
 from schema_validation import (
-    omit_none, optional_field, optional_int, optional_string, reject_unknown_fields,
+    omit_none, optional_bool, optional_field, optional_int, optional_string, reject_unknown_fields,
     require_enum, require_field, require_id, require_mapping, require_meeting_id,
     require_object_list, require_string, require_string_list, require_timestamp,
     require_version,
@@ -18,7 +19,8 @@ ARTIFACT_REFERENCE_FIELDS = ('artifactId', 'path')
 HANDOFF_FIELDS = (
     'version', 'meetingId', 'startedAt', 'endedAt', 'summary', 'decisions', 'requirements',
     'actionItems', 'unresolvedQuestions', 'filesDiscussed', 'workPerformed', 'artifacts',
-    'transcriptPath', 'recommendedNextAction',
+    'transcriptPath', 'recommendedNextAction', 'handoffId', 'partial', 'endReason',
+    'archivePath', 'git',
 )
 
 
@@ -162,9 +164,14 @@ class MeetingHandoff:
     artifacts: tuple
     transcript_path: str
     recommended_next_action: str
+    handoff_id: str = None
+    partial: bool = None
+    end_reason: str = None
+    archive_path: str = None
+    git: GitState = None
 
     def to_dict(self):
-        return {
+        return omit_none({
             'version': self.version,
             'meetingId': self.meeting_id,
             'startedAt': self.started_at,
@@ -179,7 +186,12 @@ class MeetingHandoff:
             'artifacts': [item.to_dict() for item in self.artifacts],
             'transcriptPath': self.transcript_path,
             'recommendedNextAction': self.recommended_next_action,
-        }
+            'handoffId': self.handoff_id,
+            'partial': self.partial,
+            'endReason': self.end_reason,
+            'archivePath': self.archive_path,
+            'git': None if self.git is None else self.git.to_dict(),
+        })
 
     @classmethod
     def from_dict(cls, data):
@@ -211,4 +223,13 @@ class MeetingHandoff:
             recommended_next_action=require_string(
                 require_field(payload, 'recommendedNextAction', 'handoff'),
                 'recommendedNextAction', allow_empty=True, allow_newlines=True),
+            handoff_id=optional_string(optional_field(payload, 'handoffId'), 'handoffId',
+                                       max_length=256),
+            partial=optional_bool(optional_field(payload, 'partial'), 'partial'),
+            end_reason=optional_string(optional_field(payload, 'endReason'), 'endReason',
+                                       max_length=256),
+            archive_path=optional_string(optional_field(payload, 'archivePath'), 'archivePath',
+                                         max_length=4096),
+            git=None if optional_field(payload, 'git') is None else GitState.from_dict(
+                payload['git']),
         )
