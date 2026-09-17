@@ -286,4 +286,28 @@ test('approvals commands require explicit meeting and approval ids', async (t) =
   const providers = await runColleague(['providers', '--root', root, '--port', String(daemon.port)], { cwd: root });
   assert.equal(providers.code, 0, providers.stderr);
   assert.equal(JSON.parse(providers.stdout).providers[0].id, 'codex');
+  const idleRunner = await runColleague(['runner', 'status', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(idleRunner.code, 0, idleRunner.stderr);
+  assert.equal(JSON.parse(idleRunner.stdout).paired, false);
+  const startedPair = await runColleague(['runner', 'pair', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(startedPair.code, 0, startedPair.stderr);
+  const pairing = JSON.parse(startedPair.stdout);
+  const completedPair = await runColleague([
+    'runner', 'complete', '--pairing-id', pairing.pairingId, '--pairing-code', pairing.pairingCode,
+    '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(completedPair.code, 0, completedPair.stderr);
+  assert.equal(JSON.parse(completedPair.stdout).deviceEnrollment, 'enroll-once-value');
+  const replayPair = await runColleague([
+    'runner', 'complete', '--pairing-id', pairing.pairingId, '--pairing-code', pairing.pairingCode,
+    '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.notEqual(replayPair.code, 0);
+  const paired = await runColleague(['runner', 'status', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  const pairedBody = JSON.parse(paired.stdout);
+  assert.equal(pairedBody.paired, true);
+  assert.equal(JSON.stringify(pairedBody).includes(pairing.pairingCode), false);
+  assert.equal(JSON.stringify(pairedBody).includes('enroll-once-value'), false);
+  const unpaired = await runColleague(['runner', 'unpair', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(JSON.parse(unpaired.stdout).paired, false);
 });

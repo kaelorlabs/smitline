@@ -29,6 +29,7 @@ from session_continuity import validate_agent_session
 from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
 from git_actions import CommitRequest, GitOperation, PushRequest, build_result
 from git_broker import GitBroker
+from hosted_runtime import HostedRuntime, HostedRuntimeError
 from workspace_isolation import IsolationError
 
 
@@ -195,6 +196,7 @@ class RuntimeDaemon:
             artifacts=self.artifacts,
             analyzer=visual_analyzer or UnavailableVisualAnalysisProvider(),
             now=lambda: _iso(self._now()))
+        self.hosted = HostedRuntime(self.root / 'hosted', clock=self._clock)
         if provider_registry is None:
             from providers.registry import ProviderRegistry
             provider_registry = ProviderRegistry()
@@ -211,6 +213,39 @@ class RuntimeDaemon:
         payload = {'providers': registry.capabilities()}
         ensure_public(payload)
         return payload
+
+    def runner_status(self):
+        return self.hosted.status()
+
+    def start_runner_pair(self, payload=None):
+        body = payload or {}
+        reject_unknown_fields(body, ('tenantId', 'userId'), 'runner pair')
+        try:
+            return self.hosted.start_pair(
+                tenant_id=body.get('tenantId') or 'ten-local',
+                user_id=body.get('userId') or 'usr-local',
+            )
+        except HostedRuntimeError as error:
+            raise DaemonError(error.status, error.code, error.message) from error
+
+    def complete_runner_pair(self, payload):
+        if not isinstance(payload, dict):
+            raise DaemonError(422, 'invalid_request', 'pairing completion must be an object')
+        reject_unknown_fields(payload, ('pairingId', 'pairingCode'), 'runner pair complete')
+        pairing_id = payload.get('pairingId')
+        pairing_code = payload.get('pairingCode')
+        if not pairing_id or not pairing_code:
+            raise DaemonError(422, 'invalid_request', 'pairingId and pairingCode are required')
+        try:
+            return self.hosted.complete_pair(pairing_id, pairing_code)
+        except HostedRuntimeError as error:
+            raise DaemonError(error.status, error.code, error.message) from error
+
+    def unpair_runner(self):
+        try:
+            return self.hosted.unpair()
+        except HostedRuntimeError as error:
+            raise DaemonError(error.status, error.code, error.message) from error
 
     def public_meeting(self, session):
         payload = session.to_dict()
@@ -1927,6 +1962,21 @@ def create_app(
     async def list_providers(request):
         return _public_json(daemon.list_providers())
 
+    async def runner_status(request):
+        return _public_json(daemon.runner_status())
+
+    async def start_runner_pair(request):
+        payload = await read_json(request, allow_empty=True)
+        return web.json_response(daemon.start_runner_pair(payload or {}), status=201)
+
+    async def complete_runner_pair(request):
+        payload = await read_json(request)
+        return web.json_response(daemon.complete_runner_pair(payload), status=201)
+
+    async def unpair_runner(request):
+        await read_json(request, allow_empty=True)
+        return _public_json(daemon.unpair_runner())
+
     app = web.Application(
         middlewares=(auth_middleware, error_middleware),
         client_max_size=max_body_bytes,
@@ -1935,6 +1985,10 @@ def create_app(
     app.bind_host = bind_host
     app.router.add_post('/v1/meetings', create_meeting)
     app.router.add_get('/v1/providers', list_providers)
+    app.router.add_get('/v1/runner', runner_status)
+    app.router.add_post('/v1/runner/pair', start_runner_pair)
+    app.router.add_post('/v1/runner/pair/complete', complete_runner_pair)
+    app.router.add_post('/v1/runner/unpair', unpair_runner)
     app.router.add_get('/v1/meetings/{meetingId}', get_meeting)
     app.router.add_post('/v1/meetings/{meetingId}/context', update_context)
     app.router.add_post('/v1/meetings/{meetingId}/cancel', cancel_meeting)

@@ -659,6 +659,18 @@ class LoopbackTransport:
     def list_providers(self):
         return self._http('GET', '/v1/providers')
 
+    def runner_status(self):
+        return self._http('GET', '/v1/runner')
+
+    def pair_runner(self, payload=None):
+        return self._http('POST', '/v1/runner/pair', payload or {})
+
+    def complete_runner_pair(self, payload):
+        return self._http('POST', '/v1/runner/pair/complete', payload)
+
+    def unpair_runner(self):
+        return self._http('POST', '/v1/runner/unpair', {})
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -999,6 +1011,18 @@ class Colleague:
 
     async def list_providers(self):
         return self._transport.list_providers()
+
+    async def runner_status(self):
+        return self._transport.runner_status()
+
+    async def pair_runner(self, payload=None):
+        return self._transport.pair_runner(payload)
+
+    async def complete_runner_pair(self, payload):
+        return self._transport.complete_runner_pair(payload)
+
+    async def unpair_runner(self):
+        return self._transport.unpair_runner()
 
     async def join_meeting(self, request):
         payload = validate_join_request(request)

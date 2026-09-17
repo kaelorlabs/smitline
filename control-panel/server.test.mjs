@@ -233,6 +233,53 @@ function createFakeDaemon() {
         ],
       };
     },
+    runner: { paired: false, pending: null },
+    async runnerStatus() {
+      calls.push({ method: 'GET', path: '/v1/runner' });
+      return {
+        paired: Boolean(this.runner.paired),
+        mode: 'loopback',
+        protocolVersion: 1,
+        controlPlane: this.runner.paired ? 'mock-remote' : 'local',
+      };
+    },
+    async pairRunner(payload = {}) {
+      calls.push({ method: 'POST', path: '/v1/runner/pair', body: payload });
+      this.runner.pending = { pairingId: 'pair-test1', pairingCode: 'ABCD2345', used: false };
+      return {
+        pairingId: 'pair-test1',
+        pairingCode: 'ABCD2345',
+        expiresAt: '2026-09-17T12:02:00Z',
+      };
+    },
+    async completeRunnerPair(payload) {
+      calls.push({ method: 'POST', path: '/v1/runner/pair/complete', body: payload });
+      if (!this.runner.pending || this.runner.pending.used) {
+        const error = new Error('pairing code was already used');
+        error.status = 409;
+        error.code = 'pairing_replay';
+        throw error;
+      }
+      if (payload.pairingId !== this.runner.pending.pairingId || payload.pairingCode !== this.runner.pending.pairingCode) {
+        const error = new Error('pairing code is invalid');
+        error.status = 401;
+        error.code = 'pairing_mismatch';
+        throw error;
+      }
+      this.runner.pending.used = true;
+      this.runner.paired = true;
+      return {
+        deviceId: 'dev-test1',
+        deviceEnrollment: 'enroll-once-value',
+        tenantId: 'ten-local',
+        userId: 'usr-local',
+      };
+    },
+    async unpairRunner() {
+      calls.push({ method: 'POST', path: '/v1/runner/unpair', body: {} });
+      this.runner = { paired: false, pending: null };
+      return { paired: false, mode: 'loopback', controlPlane: 'local' };
+    },
     async getArtifactContent(id, artifactId) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
       const found = (this.artifacts.get(id) || []).find((item) => item.id === artifactId);
@@ -634,5 +681,48 @@ test('history lists and downloads structured handoff status without secrets', as
     assert.equal(body.handoffStatus, 'ready');
     assert.equal(body.handoff.handoffId, `hnd-${meetingId}`);
     assert.equal(JSON.stringify(body).includes('sk-should-be-stripped'), false);
+  });
+});
+
+test('runner pairing reveals the code once and omits enrollment from status', async () => {
+  await withPanel(async panel => {
+    const html = await (await fetch(`${panel.base}/`)).text();
+    assert.match(html, /Pair runner/);
+    assert.match(html, /shown once/);
+    const bootstrap = await panel.bootstrap();
+    assert.equal(bootstrap.status.runner.paired, false);
+    assert.equal('pairingCode' in bootstrap.status.runner, false);
+    const started = await fetch(`${panel.base}/api/runner/pair`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal(started.status, 201);
+    const pairing = await started.json();
+    assert.equal(typeof pairing.pairingCode, 'string');
+    const completed = await fetch(`${panel.base}/api/runner/pair/complete`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ pairingId: pairing.pairingId, pairingCode: pairing.pairingCode }),
+    });
+    assert.equal(completed.status, 201);
+    const enrollment = await completed.json();
+    assert.equal('deviceEnrollment' in enrollment, false);
+    const replay = await fetch(`${panel.base}/api/runner/pair/complete`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ pairingId: pairing.pairingId, pairingCode: pairing.pairingCode }),
+    });
+    assert.equal(replay.status, 409);
+    const status = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(status.runner.paired, true);
+    const dumped = JSON.stringify({ pairing, enrollment, status });
+    assert.equal(dumped.includes('enroll-once-value'), false);
+    const unpaired = await fetch(`${panel.base}/api/runner/unpair`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: '{}',
+    });
+    assert.equal((await unpaired.json()).paired, false);
   });
 });

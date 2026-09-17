@@ -680,6 +680,18 @@ export function createLoopbackTransport(options = {}) {
     listProviders() {
       return json('GET', '/v1/providers');
     },
+    runnerStatus() {
+      return json('GET', '/v1/runner');
+    },
+    pairRunner(payload = {}) {
+      return json('POST', '/v1/runner/pair', payload);
+    },
+    completeRunnerPair(payload) {
+      return json('POST', '/v1/runner/pair/complete', payload);
+    },
+    unpairRunner() {
+      return json('POST', '/v1/runner/unpair', {});
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -1016,6 +1028,22 @@ export class Colleague {
 
   async listProviders() {
     return this._transport.listProviders();
+  }
+
+  async runnerStatus() {
+    return this._transport.runnerStatus();
+  }
+
+  async pairRunner(payload = {}) {
+    return this._transport.pairRunner(payload);
+  }
+
+  async completeRunnerPair(payload) {
+    return this._transport.completeRunnerPair(payload);
+  }
+
+  async unpairRunner() {
+    return this._transport.unpairRunner();
   }
 
   async _join(payload, key) {

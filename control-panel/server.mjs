@@ -41,6 +41,16 @@ function json(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function publicRunner(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
+  }
+  const {
+    pairingCode, deviceEnrollment, pairingSecret, enrollment, ...rest
+  } = payload;
+  return rest;
+}
+
 function run(command, args, options = {}) {
   return new Promise(resolve => {
     const child = spawn(command, args, { cwd: options.cwd || ROOT, ...options });
@@ -243,11 +253,17 @@ export function createServer({
     let gitOperations = [];
     let screenShare = null;
     let providers = [];
+    let runner = { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
     try {
       const listed = await daemonClient.listProviders();
       providers = listed.providers || [];
     } catch {
       providers = [];
+    }
+    try {
+      runner = publicRunner(await daemonClient.runnerStatus());
+    } catch {
+      runner = { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
     }
     if (running && meetingId) {
       try {
@@ -279,6 +295,7 @@ export function createServer({
       gitOperations,
       screenShare,
       providers,
+      runner,
       provider: session?.agentSession?.provider,
     };
   }
@@ -339,6 +356,13 @@ export function createServer({
     }
     if (request.method === 'GET' && pathname === '/api/platforms/google/status') {
       return json(response, 200, { connected: fs.existsSync(path.join(profileRoot, 'google-connected')) });
+    }
+    if (request.method === 'GET' && pathname === '/api/runner') {
+      try {
+        return json(response, 200, publicRunner(await daemonClient.runnerStatus()));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
     }
     if (request.method === 'GET' && pathname === '/api/status') return json(response, 200, await status());
     if (request.method === 'GET' && pathname.startsWith('/api/sessions/')) {
@@ -482,6 +506,36 @@ export function createServer({
       fs.rmSync(path.join(profileRoot, 'google'), { recursive: true, force: true });
       fs.rmSync(path.join(profileRoot, 'google-connected'), { force: true });
       return json(response, 200, { connected: false });
+    }
+    if (request.method === 'POST' && pathname === '/api/runner/pair') {
+      try {
+        const started = await daemonClient.pairRunner(body || {});
+        return json(response, 201, {
+          pairingId: started.pairingId,
+          pairingCode: started.pairingCode,
+          expiresAt: started.expiresAt,
+        });
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    if (request.method === 'POST' && pathname === '/api/runner/pair/complete') {
+      try {
+        const completed = await daemonClient.completeRunnerPair({
+          pairingId: body.pairingId,
+          pairingCode: body.pairingCode,
+        });
+        return json(response, 201, publicRunner(completed));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    if (request.method === 'POST' && pathname === '/api/runner/unpair') {
+      try {
+        return json(response, 200, publicRunner(await daemonClient.unpairRunner()));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
     }
     if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));
     if (request.method === 'POST' && pathname === '/api/start') {

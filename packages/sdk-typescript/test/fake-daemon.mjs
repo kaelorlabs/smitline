@@ -38,6 +38,7 @@ export async function startFakeDaemon(options = {}) {
     meetings: new Map(),
     handoffs: new Map(),
     events: new Map(),
+    runner: { paired: false, pending: null },
     approvals: new Map(),
     artifacts: new Map(),
     commits: new Map(),
@@ -96,6 +97,53 @@ export async function startFakeDaemon(options = {}) {
             { id: 'claude-code', installed: false, usable: false, exactSessionResume: false, contextContinuity: false, structuredProgress: false, cancellation: true, handoffAppend: false, workspaceRead: true, workspaceActions: false, supportedModels: [], reasonUnavailable: 'missing_binary' },
           ],
         });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/runner') {
+        json(response, 200, {
+          paired: Boolean(state.runner.paired),
+          mode: 'loopback',
+          protocolVersion: 1,
+          controlPlane: state.runner.paired ? 'mock-remote' : 'local',
+        });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/runner/pair') {
+        await readBody(request);
+        state.runner.pending = { pairingId: 'pair-test1', pairingCode: 'ABCD2345', used: false };
+        json(response, 201, {
+          pairingId: 'pair-test1',
+          pairingCode: 'ABCD2345',
+          expiresAt: '2026-09-17T12:02:00Z',
+          tenantId: 'ten-local',
+          userId: 'usr-local',
+        });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/runner/pair/complete') {
+        const body = JSON.parse((await readBody(request)) || '{}');
+        if (!state.runner.pending || state.runner.pending.used) {
+          json(response, 409, { error: { code: 'pairing_replay', message: 'pairing code was already used' } });
+          return;
+        }
+        if (body.pairingId !== state.runner.pending.pairingId || body.pairingCode !== state.runner.pending.pairingCode) {
+          json(response, 401, { error: { code: 'pairing_mismatch', message: 'pairing code is invalid' } });
+          return;
+        }
+        state.runner.pending.used = true;
+        state.runner.paired = true;
+        json(response, 201, {
+          deviceId: 'dev-test1',
+          deviceEnrollment: 'enroll-once-value',
+          tenantId: 'ten-local',
+          userId: 'usr-local',
+        });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/runner/unpair') {
+        await readBody(request);
+        state.runner = { paired: false, pending: null };
+        json(response, 200, { paired: false, mode: 'loopback', controlPlane: 'local' });
         return;
       }
       if (request.method === 'POST' && url.pathname === '/v1/meetings') {

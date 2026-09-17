@@ -418,6 +418,27 @@ test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, asy
     assert.deepEqual(observations.observations, []);
     const providers = await colleague.listProviders();
     assert.equal(providers.providers[0].id, 'codex');
+    const idleRunner = await colleague.runnerStatus();
+    assert.equal(idleRunner.paired, false);
+    const startedPair = await colleague.pairRunner();
+    assert.equal(typeof startedPair.pairingCode, 'string');
+    const completedPair = await colleague.completeRunnerPair({
+      pairingId: startedPair.pairingId,
+      pairingCode: startedPair.pairingCode,
+    });
+    assert.equal(typeof completedPair.deviceEnrollment, 'string');
+    await assert.rejects(() => colleague.completeRunnerPair({
+      pairingId: startedPair.pairingId,
+      pairingCode: startedPair.pairingCode,
+    }));
+    const paired = await colleague.runnerStatus();
+    assert.equal(paired.paired, true);
+    assert.equal('pairingCode' in paired, false);
+    assert.equal('deviceEnrollment' in paired, false);
+    assert.equal(JSON.stringify(paired).includes(startedPair.pairingCode), false);
+    assert.equal(JSON.stringify(paired).includes(completedPair.deviceEnrollment), false);
+    const unpaired = await colleague.unpairRunner();
+    assert.equal(unpaired.paired, false);
     const dumped = JSON.stringify({ created, listed, decided, token: daemon.token, commit, push, share });
     assert.equal(dumped.includes('secret meeting speech'), false);
     await meeting.cancel();

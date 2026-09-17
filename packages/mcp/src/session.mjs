@@ -338,6 +338,49 @@ export const TOOL_DEFINITIONS = [
       properties: {},
     },
   },
+  {
+    name: 'get_runner_status',
+    description: 'Show local-loopback runner pairing status. Does not return pairing codes, enrollments, transcripts, or credentials.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: 'pair_runner',
+    description: 'Start a short-lived single-use runner pairing. The pairing code is revealed once. Local loopback remains the supported mode.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tenantId: { type: 'string' },
+        userId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'complete_runner_pair',
+    description: 'Complete runner pairing with the one-time code. Device enrollment is returned once and is never shown again.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['pairingId', 'pairingCode'],
+      properties: {
+        pairingId: { type: 'string' },
+        pairingCode: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'unpair_runner',
+    description: 'Revoke the paired runner identity. Local loopback remains available.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
 ];
 
 function nowIso() {
@@ -852,6 +895,37 @@ export function createMcpSession(options = {}) {
       const payload = colleague.listProviders
         ? await colleague.listProviders()
         : await transport.listProviders();
+      return toolResult(payload);
+    }
+    if (name === 'get_runner_status') {
+      const transport = colleague._transport || {};
+      const payload = colleague.runnerStatus
+        ? await colleague.runnerStatus()
+        : await transport.runnerStatus();
+      return toolResult(payload);
+    }
+    if (name === 'pair_runner') {
+      const transport = colleague._transport || {};
+      const payload = colleague.pairRunner
+        ? await colleague.pairRunner(args || {})
+        : await transport.pairRunner(args || {});
+      return toolResult(payload);
+    }
+    if (name === 'complete_runner_pair') {
+      if (!args?.pairingId || !args?.pairingCode) {
+        throw new ValidationError('pairingId and pairingCode are required');
+      }
+      const transport = colleague._transport || {};
+      const payload = colleague.completeRunnerPair
+        ? await colleague.completeRunnerPair(args)
+        : await transport.completeRunnerPair(args);
+      return toolResult(payload);
+    }
+    if (name === 'unpair_runner') {
+      const transport = colleague._transport || {};
+      const payload = colleague.unpairRunner
+        ? await colleague.unpairRunner()
+        : await transport.unpairRunner();
       return toolResult(payload);
     }
     throw new ValidationError(`unknown tool: ${name}`);

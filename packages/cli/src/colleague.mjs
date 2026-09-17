@@ -47,6 +47,10 @@ const USAGE = `Usage:
   colleague screen-share resume --meeting-id <id>
   colleague screen-share observations --meeting-id <id>
   colleague providers
+  colleague runner status
+  colleague runner pair
+  colleague runner complete --pairing-id <id> --pairing-code <code>
+  colleague runner unpair
 `;
 
 function parseArgs(argv) {
@@ -392,6 +396,37 @@ async function main(argv = process.argv.slice(2)) {
       const result = await client.listProviders();
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return EXIT.ok;
+    }
+    if (command === 'runner') {
+      const { client } = colleagueFromArgs(args);
+      const action = args._[1] || 'status';
+      if (action === 'status') {
+        const result = await client.runnerStatus();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'pair') {
+        const result = await client.pairRunner();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'complete') {
+        if (!args['pairing-id'] || !args['pairing-code']) {
+          throw new ValidationError('runner complete requires --pairing-id and --pairing-code');
+        }
+        const result = await client.completeRunnerPair({
+          pairingId: args['pairing-id'],
+          pairingCode: args['pairing-code'],
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'unpair') {
+        const result = await client.unpairRunner();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown runner command');
     }
     throw new ValidationError(`unknown command: ${command}`);
   } catch (error) {

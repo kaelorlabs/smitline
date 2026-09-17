@@ -230,6 +230,18 @@ export function createDaemonClient(options = {}) {
     listProviders() {
       return send('GET', '/v1/providers', undefined, { startIfNeeded: false });
     },
+    runnerStatus() {
+      return send('GET', '/v1/runner', undefined, { startIfNeeded: false });
+    },
+    pairRunner(payload = {}) {
+      return send('POST', '/v1/runner/pair', payload, { startIfNeeded: true });
+    },
+    completeRunnerPair(payload) {
+      return send('POST', '/v1/runner/pair/complete', payload, { startIfNeeded: true });
+    },
+    unpairRunner() {
+      return send('POST', '/v1/runner/unpair', {}, { startIfNeeded: true });
+    },
     async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
       let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
       if (!token) {

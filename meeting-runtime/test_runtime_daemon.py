@@ -200,6 +200,37 @@ Usage: fake-agent
         self.assertFalse(cursor_meeting['providerCapabilities']['exactSessionResume'])
         self.assertTrue(cursor_meeting['providerCapabilities']['contextContinuity'])
 
+    async def test_runner_pairing_is_single_use_and_omits_enrollment_from_status(self):
+        idle = await self.client.get('/v1/runner', headers=self.headers())
+        self.assertEqual(idle.status, 200)
+        body = await idle.json()
+        self.assertFalse(body['paired'])
+        self.assertEqual(body['mode'], 'loopback')
+        started = await self.client.post('/v1/runner/pair', json={}, headers=self.headers())
+        self.assertEqual(started.status, 201)
+        pairing = await started.json()
+        self.assertIn('pairingCode', pairing)
+        completed = await self.client.post(
+            '/v1/runner/pair/complete',
+            json={'pairingId': pairing['pairingId'], 'pairingCode': pairing['pairingCode']},
+            headers=self.headers())
+        self.assertEqual(completed.status, 201)
+        enrollment = (await completed.json())['deviceEnrollment']
+        replay = await self.client.post(
+            '/v1/runner/pair/complete',
+            json={'pairingId': pairing['pairingId'], 'pairingCode': pairing['pairingCode']},
+            headers=self.headers())
+        self.assertEqual(replay.status, 409)
+        status = await (await self.client.get('/v1/runner', headers=self.headers())).json()
+        dumped = json.dumps(status)
+        self.assertTrue(status['paired'])
+        self.assertNotIn(pairing['pairingCode'], dumped)
+        self.assertNotIn(enrollment, dumped)
+        self.assertNotIn('deviceEnrollment', dumped)
+        unpaired = await self.client.post('/v1/runner/unpair', json={}, headers=self.headers())
+        self.assertEqual(unpaired.status, 200)
+        self.assertFalse((await unpaired.json())['paired'])
+
     async def test_non_loopback_bind_is_rejected(self):
         with self.assertRaises(ValueError):
             require_loopback_bind('8.8.8.8')

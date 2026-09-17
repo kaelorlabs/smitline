@@ -225,6 +225,32 @@ function createFakeColleague({ autoHandoff = true } = {}) {
           { id: 'cursor', installed: false, usable: false, reasonUnavailable: 'missing_binary', supportedModels: [] },
         ],
       }),
+      runnerStatus: async () => ({
+        paired: Boolean(colleague._paired),
+        mode: 'loopback',
+        protocolVersion: 1,
+        controlPlane: colleague._paired ? 'mock-remote' : 'local',
+      }),
+      pairRunner: async () => {
+        colleague._pendingPair = { pairingId: 'pair-1', pairingCode: 'ABCD2345' };
+        return { pairingId: 'pair-1', pairingCode: 'ABCD2345', expiresAt: '2026-09-17T12:02:00Z' };
+      },
+      completeRunnerPair: async (payload) => {
+        if (!colleague._pendingPair || colleague._pendingPair.used) {
+          throw new ColleagueError('pairing code was already used', { code: 'pairing_replay', status: 409 });
+        }
+        if (payload.pairingId !== colleague._pendingPair.pairingId || payload.pairingCode !== colleague._pendingPair.pairingCode) {
+          throw new ColleagueError('pairing code is invalid', { code: 'pairing_mismatch', status: 401 });
+        }
+        colleague._pendingPair.used = true;
+        colleague._paired = true;
+        return { deviceId: 'dev-1', deviceEnrollment: 'enroll-once', tenantId: 'ten-local', userId: 'usr-local' };
+      },
+      unpairRunner: async () => {
+        colleague._paired = false;
+        colleague._pendingPair = null;
+        return { paired: false, mode: 'loopback', controlPlane: 'local' };
+      },
     },
   };
   colleague.approvals = new Map();
@@ -232,6 +258,10 @@ function createFakeColleague({ autoHandoff = true } = {}) {
   colleague.commits = new Map();
   colleague.pushes = new Map();
   colleague.screenShare = new Map();
+  colleague.runnerStatus = colleague._transport.runnerStatus;
+  colleague.pairRunner = colleague._transport.pairRunner;
+  colleague.completeRunnerPair = colleague._transport.completeRunnerPair;
+  colleague.unpairRunner = colleague._transport.unpairRunner;
   return colleague;
 }
 
@@ -269,6 +299,7 @@ test('initialize advertises tools and the tasks extension', async () => {
     'list_meeting_pushes', 'get_meeting_push', 'create_meeting_push',
     'get_meeting_screen_share', 'pause_meeting_screen_share', 'resume_meeting_screen_share',
     'list_meeting_screen_share_observations', 'list_coding_providers',
+    'get_runner_status', 'pair_runner', 'complete_runner_pair', 'unpair_runner',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -334,6 +365,26 @@ test('approval tools require explicit meeting and approval ids', async () => {
   assert.equal(missingShare.result.isError, true);
   const providers = await callTool(session, 'list_coding_providers', {});
   assert.equal(providers.result.structuredContent.providers[0].id, 'codex');
+  const idleRunner = await callTool(session, 'get_runner_status', {});
+  assert.equal(idleRunner.result.structuredContent.paired, false);
+  const startedPair = await callTool(session, 'pair_runner', {});
+  assert.equal(startedPair.result.structuredContent.pairingCode, 'ABCD2345');
+  const completedPair = await callTool(session, 'complete_runner_pair', {
+    pairingId: startedPair.result.structuredContent.pairingId,
+    pairingCode: startedPair.result.structuredContent.pairingCode,
+  });
+  assert.equal(completedPair.result.structuredContent.deviceEnrollment, 'enroll-once');
+  const replayPair = await callTool(session, 'complete_runner_pair', {
+    pairingId: startedPair.result.structuredContent.pairingId,
+    pairingCode: startedPair.result.structuredContent.pairingCode,
+  });
+  assert.equal(replayPair.result.isError, true);
+  const pairedStatus = await callTool(session, 'get_runner_status', {});
+  assert.equal(pairedStatus.result.structuredContent.paired, true);
+  assert.equal('pairingCode' in pairedStatus.result.structuredContent, false);
+  assert.equal('deviceEnrollment' in pairedStatus.result.structuredContent, false);
+  const unpaired = await callTool(session, 'unpair_runner', {});
+  assert.equal(unpaired.result.structuredContent.paired, false);
 });
 
 test('rejects last/latest and does not invent a session', async () => {

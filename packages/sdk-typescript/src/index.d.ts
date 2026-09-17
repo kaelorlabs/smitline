@@ -145,6 +145,10 @@ export interface DaemonTransport {
   resumeScreenShare(meetingId: string): Promise<Record<string, unknown>>;
   listScreenShareObservations(meetingId: string): Promise<{ observations: Array<Record<string, unknown>> }>;
   listProviders(): Promise<{ providers: Array<Record<string, unknown>> }>;
+  runnerStatus(): Promise<Record<string, unknown>>;
+  pairRunner(payload?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  completeRunnerPair(payload: { pairingId: string; pairingCode: string }): Promise<Record<string, unknown>>;
+  unpairRunner(): Promise<Record<string, unknown>>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -198,6 +202,10 @@ export class Colleague {
   constructor(options?: ColleagueOptions);
   joinMeeting(request: JoinMeetingRequest): Promise<MeetingHandle>;
   listProviders(): Promise<{ providers: Array<Record<string, unknown>> }>;
+  runnerStatus(): Promise<Record<string, unknown>>;
+  pairRunner(payload?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  completeRunnerPair(payload: { pairingId: string; pairingCode: string }): Promise<Record<string, unknown>>;
+  unpairRunner(): Promise<Record<string, unknown>>;
 }
 
 export function createLoopbackTransport(options?: {

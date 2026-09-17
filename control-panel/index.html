@@ -56,6 +56,17 @@
               </div>
               <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
             </div>
+            <div class="field full" id="runner-pair">
+              <label>Hosted runner <span>foundation pairing; local loopback stays supported</span></label>
+              <p class="hint" id="runner-state">Checking pairing…</p>
+              <p class="hint" id="pairing-code" hidden></p>
+              <div class="actions">
+                <button class="button secondary" type="button" id="pair-runner">Pair runner</button>
+                <button class="button secondary" type="button" id="complete-runner-pair" hidden>Confirm pairing</button>
+                <button class="button ghost" type="button" id="unpair-runner">Unpair</button>
+              </div>
+              <small class="hint">The pairing code is shown once. This computer keeps profiles, microphone, workspace, and credentials.</small>
+            </div>
             <div class="field-row">
               <div class="field">
                 <label for="passcode">Passcode</label>

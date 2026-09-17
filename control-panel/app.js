@@ -35,6 +35,7 @@ let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
 let previewUrls = [];
+let pendingPairing = null;
 
 let selectedAvatar = null;
 
@@ -419,6 +420,23 @@ function renderStatus(status) {
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
   $('#runtime-log').textContent = log || 'No activity yet.';
   renderSessions(status.sessions || []);
+  const runner = status.runner || {};
+  const runnerState = $('#runner-state');
+  if (runnerState) {
+    runnerState.textContent = runner.paired
+      ? 'Paired. This computer still owns profiles, microphone, workspace, and credentials.'
+      : 'Not paired. Local loopback is active.';
+  }
+  if (runner.paired) {
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = true;
+  }
 }
 
 function handoffStatusLabel(session) {
@@ -738,3 +756,56 @@ for (const [kind, noun] of [['teams', 'Microsoft'], ['google', 'Google']]) {
     });
   }
 }
+$('#pair-runner')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    const started = await request('/api/runner/pair', { method: 'POST', body: '{}' });
+    pendingPairing = { pairingId: started.pairingId, pairingCode: started.pairingCode };
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = false;
+      codeEl.textContent = `Pairing code (shown once): ${started.pairingCode}`;
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = false;
+    announce('Pairing code is shown once. Confirm pairing, then it will not be shown again.');
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});
+$('#complete-runner-pair')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    if (!pendingPairing?.pairingId || !pendingPairing?.pairingCode) {
+      throw new Error('Start pairing before confirming.');
+    }
+    const payload = { pairingId: pendingPairing.pairingId, pairingCode: pendingPairing.pairingCode };
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    event.target.hidden = true;
+    await request('/api/runner/pair/complete', { method: 'POST', body: JSON.stringify(payload) });
+    announce('Runner paired. The pairing code will not be shown again.');
+    await refresh();
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});
+$('#unpair-runner')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = true;
+    await request('/api/runner/unpair', { method: 'POST', body: '{}' });
+    announce('Runner unpaired. Local loopback remains active.');
+    await refresh();
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});

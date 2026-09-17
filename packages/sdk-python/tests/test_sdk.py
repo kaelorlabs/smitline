@@ -54,6 +54,8 @@ class FakeTransport:
         self.commits = {}
         self.pushes = {}
         self.screen_share = {}
+        self._paired = False
+        self._pending_pair = None
 
     def create_meeting(self, payload):
         if self.fail_create:
@@ -246,6 +248,42 @@ class FakeTransport:
             {'id': 'claude-code', 'installed': False, 'usable': False, 'reasonUnavailable': 'missing_binary',
              'supportedModels': []},
         ]}
+
+    def runner_status(self):
+        return {
+            'paired': bool(self._paired),
+            'mode': 'loopback',
+            'protocolVersion': 1,
+            'controlPlane': 'mock-remote' if self._paired else 'local',
+        }
+
+    def pair_runner(self, payload=None):
+        self._pending_pair = {'pairingId': 'pair-1', 'pairingCode': 'ABCD2345'}
+        return {
+            'pairingId': 'pair-1',
+            'pairingCode': 'ABCD2345',
+            'expiresAt': '2026-09-17T12:02:00Z',
+        }
+
+    def complete_runner_pair(self, payload):
+        pending = getattr(self, '_pending_pair', None)
+        if pending is None or pending.get('used'):
+            raise ColleagueError('pairing code was already used', code='pairing_replay', status=409)
+        if payload.get('pairingId') != pending['pairingId'] or payload.get('pairingCode') != pending['pairingCode']:
+            raise ColleagueError('pairing code is invalid', code='pairing_mismatch', status=401)
+        pending['used'] = True
+        self._paired = True
+        return {
+            'deviceId': 'dev-1',
+            'deviceEnrollment': 'enroll-once',
+            'tenantId': 'ten-local',
+            'userId': 'usr-local',
+        }
+
+    def unpair_runner(self):
+        self._paired = False
+        self._pending_pair = None
+        return {'paired': False, 'mode': 'loopback', 'controlPlane': 'local'}
 
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
@@ -481,6 +519,25 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observations['observations'], [])
         providers = await colleague.list_providers()
         self.assertEqual(providers['providers'][0]['id'], 'codex')
+        idle = await colleague.runner_status()
+        self.assertFalse(idle['paired'])
+        started = await colleague.pair_runner()
+        completed = await colleague.complete_runner_pair({
+            'pairingId': started['pairingId'],
+            'pairingCode': started['pairingCode'],
+        })
+        self.assertEqual(completed['deviceEnrollment'], 'enroll-once')
+        with self.assertRaises(ColleagueError):
+            await colleague.complete_runner_pair({
+                'pairingId': started['pairingId'],
+                'pairingCode': started['pairingCode'],
+            })
+        paired = await colleague.runner_status()
+        self.assertTrue(paired['paired'])
+        self.assertNotIn('pairingCode', paired)
+        self.assertNotIn('deviceEnrollment', paired)
+        unpaired = await colleague.unpair_runner()
+        self.assertFalse(unpaired['paired'])
         await meeting.cancel()
 
 
