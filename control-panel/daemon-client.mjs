@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1';
 export const DEFAULT_DAEMON_PORT = 8765;
+export const DEFAULT_DAEMON_READY_MS = 60_000;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -62,14 +63,21 @@ export function createDaemonClient(options = {}) {
   const tokenPath = options.tokenPath || path.join(root, '.colleague', 'daemon.auth');
   const fetchImpl = options.fetchImpl || fetch;
   const isPortOpen = options.isPortOpen || (() => portOpen(host, port));
-  const spawnDaemon = options.spawnDaemon || (() => spawn('/bin/bash', ['start-runtime-daemon.sh'], {
-    cwd: root,
-    detached: true,
-    stdio: 'ignore',
-    env: process.env,
-  }));
+  const spawnDaemon = options.spawnDaemon || (() => {
+    const logDir = path.join(root, '.colleague');
+    fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    const log = fs.openSync(path.join(logDir, 'daemon.log'), 'a');
+    const child = spawn('/bin/bash', ['start-runtime-daemon.sh'], {
+      cwd: root,
+      detached: true,
+      stdio: ['ignore', log, log],
+      env: process.env,
+    });
+    fs.closeSync(log);
+    return child;
+  });
   const wait = options.wait || sleep;
-  const timeoutMs = options.timeoutMs || 10_000;
+  const timeoutMs = options.timeoutMs || DEFAULT_DAEMON_READY_MS;
   const pollMs = options.pollMs || 50;
   const owned = { child: null };
   let ensuring = null;
@@ -78,11 +86,17 @@ export function createDaemonClient(options = {}) {
     return `http://${host}:${port}`;
   }
 
-  async function waitForToken() {
+  async function waitForToken(child) {
     const deadline = Date.now() + timeoutMs;
+    let exitCode = child != null && child.exitCode != null ? child.exitCode : null;
+    child?.on?.('exit', (code) => { exitCode = code ?? 1; });
+    child?.on?.('error', () => { exitCode = -1; });
     while (Date.now() < deadline) {
       const token = readTokenFile(tokenPath);
       if (token) return token;
+      if (exitCode !== null) {
+        throw daemonError('Runtime daemon failed to start. Check .colleague/daemon.log.');
+      }
       await wait(pollMs);
     }
     throw daemonError('Runtime daemon did not become ready.');
@@ -92,8 +106,7 @@ export function createDaemonClient(options = {}) {
     const child = spawnDaemon();
     owned.child = child;
     child?.unref?.();
-    child?.on?.('error', () => {});
-    return waitForToken();
+    return waitForToken(child);
   }
 
   async function doEnsure() {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createDaemonClient } from './daemon-client.mjs';
+import { createDaemonClient, DEFAULT_DAEMON_READY_MS } from './daemon-client.mjs';
 
 function tempRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-client-'));
@@ -37,6 +37,74 @@ test('starts the daemon when the port is closed and waits for the auth token', a
   assert.equal(created.id, 'mtg-1');
   assert.equal(spawns.length, 1);
   assert.equal(client.child.unrefed, true);
+});
+
+test('fails fast when the daemon process exits before writing an auth token', async () => {
+  const root = tempRoot();
+  const listeners = {};
+  const client = createDaemonClient({
+    root,
+    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    isPortOpen: async () => false,
+    spawnDaemon() {
+      return {
+        unref() {},
+        on(event, fn) { listeners[event] = fn; },
+      };
+    },
+    timeoutMs: 2000,
+    pollMs: 5,
+  });
+  const pending = client.ensure();
+  await Promise.resolve();
+  listeners.exit?.(1);
+  await assert.rejects(pending, /failed to start/);
+});
+
+test('fails fast when the daemon child has already exited', async () => {
+  const root = tempRoot();
+  const client = createDaemonClient({
+    root,
+    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    isPortOpen: async () => false,
+    spawnDaemon() {
+      return { exitCode: 1, unref() {}, on() {} };
+    },
+    timeoutMs: 2000,
+    pollMs: 5,
+  });
+  await assert.rejects(client.ensure(), /failed to start/);
+});
+
+test('times out when the daemon never writes an auth token', async () => {
+  const root = tempRoot();
+  const started = Date.now();
+  const client = createDaemonClient({
+    root,
+    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    isPortOpen: async () => false,
+    spawnDaemon() { return { unref() {}, on() {} }; },
+    timeoutMs: 40,
+    pollMs: 5,
+  });
+  await assert.rejects(client.ensure(), /did not become ready/);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(DEFAULT_DAEMON_READY_MS, 60_000);
+});
+
+test('default spawn writes daemon.log when the launcher is missing', async () => {
+  const root = tempRoot();
+  const client = createDaemonClient({
+    root,
+    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    isPortOpen: async () => false,
+    timeoutMs: 800,
+    pollMs: 10,
+  });
+  await assert.rejects(client.ensure(), /failed to start|did not become ready/);
+  const logPath = path.join(root, '.colleague', 'daemon.log');
+  assert.equal(fs.existsSync(logPath), true);
+  assert.equal(fs.statSync(path.join(root, '.colleague')).mode & 0o777, 0o700);
 });
 
 test('does not spawn when a healthy daemon is already listening', async () => {

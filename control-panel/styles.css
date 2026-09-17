@@ -36,6 +36,7 @@ h2 { font-size:16px; letter-spacing:-.25px; margin:0; font-weight:600}
 .field-row { display:grid; grid-template-columns:1fr 1fr; gap:20px}
 label,legend { display:block; font-size:13px; font-weight:500; margin-bottom:8px}
 label span { font-weight:400; color:var(--muted)}
+label .req { color:#b03140; font-weight:500}
 input,select,textarea { width:100%; border:1px solid #dcdde4; background:#fff; color:var(--ink); border-radius:6px; padding:10px 12px; outline:none; transition:border-color .15s,box-shadow .15s}
 input,select { height:42px}
 textarea { min-height:96px; resize:vertical; line-height:1.6}
@@ -45,6 +46,7 @@ input:disabled { background:var(--soft)}
 .hint,.error { display:block; font-size:12px; line-height:1.5; color:var(--muted); margin-top:6px}
 .error { color:#b03140}
 .error:empty { display:none}
+.field:has(.error:not(:empty)) input { border-color:#efcbcf}
 fieldset { border:0; padding:20px 0 0; margin:28px 0 24px; border-top:1px solid var(--line)}
 legend { float:left; width:100%; margin-bottom:12px}
 .tool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; clear:both}

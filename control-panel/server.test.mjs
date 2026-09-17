@@ -25,7 +25,33 @@ test('serves the console with local security headers', async () => {
     const response = await fetch(`${base}/`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
-    assert.match(await response.text(), /Meeting details/);
+    const html = await response.text();
+    assert.match(html, /Meeting details/);
+    assert.match(html, /<span class="req">Required<\/span>/);
+    assert.match(html, /aria-required="true"/);
+    assert.match(html, /id="meetingUrl-error"/);
+    assert.match(html, /id="participantName-error"/);
+    assert.match(html, /id="start-button" type="button"/);
+  });
+});
+
+test('serves app.js and its visual-preview module', async () => {
+  await withServer(async base => {
+    const app = await fetch(`${base}/app.js`);
+    const preview = await fetch(`${base}/visual-preview.mjs`);
+    const validation = await fetch(`${base}/client-validation.mjs`);
+    assert.equal(app.status, 200);
+    assert.equal(preview.status, 200);
+    assert.equal(validation.status, 200);
+    assert.match(app.headers.get('content-type'), /javascript/);
+    assert.match(preview.headers.get('content-type'), /javascript/);
+    const appText = await app.text();
+    assert.match(appText, /visual-preview\.mjs/);
+    assert.match(appText, /client-validation\.mjs/);
+    assert.match(appText, /createStartLock/);
+    assert.match(appText, /if \(!startLock\.begin\(\)\) return/);
+    assert.match(await preview.text(), /drawPresencePreview/);
+    assert.match(await validation.text(), /clientMeetingErrors/);
   });
 });
 
@@ -51,7 +77,18 @@ test('bootstrap excludes API credentials and mutations require a session token',
 test('adds private context without returning its extracted text in bootstrap', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-context-'));
   const contextIndex = path.join(directory, 'index.json');
-  const server = createServer({ contextIndex });
+  const server = createServer({
+    root: directory,
+    contextIndex,
+    daemon: {
+      async getMeeting() {
+        const error = new Error('Runtime daemon is not running.');
+        error.code = 'daemon_offline';
+        error.status = 503;
+        throw error;
+      },
+    },
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   try {
@@ -339,13 +376,13 @@ function createFakeDaemon() {
   };
 }
 
-async function withPanel(run) {
+async function withPanel(run, extra = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-panel-'));
   fs.writeFileSync(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\n', { mode: 0o600 });
   const workspace = path.join(root, 'project');
   fs.mkdirSync(workspace);
   const runtimeRoot = path.join(root, 'meeting-runtime');
-  const daemon = createFakeDaemon();
+  const daemon = extra.daemon || createFakeDaemon();
   const accountSpawns = [];
   const server = createServer({
     root,
@@ -358,6 +395,11 @@ async function withPanel(run) {
       return { stdout: { on() {} }, stderr: { on() {} }, on() {}, exitCode: null, signalCode: null };
     },
     runCommand: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    ...extra,
+    daemon,
+    root,
+    runtimeRoot,
+    meetingEnv: path.join(root, '.env.meeting'),
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -521,6 +563,65 @@ test('duplicate start is rejected and stop/cancel is idempotent', async () => {
     assert.equal((await stop()).status, 200);
     const status = await (await fetch(`${panel.base}/api/status`)).json();
     assert.equal(status.running, false);
+  });
+});
+
+test('concurrent starts during a slow Docker preflight create one meeting', async () => {
+  let releaseDocker;
+  const dockerGate = new Promise((resolve) => { releaseDocker = resolve; });
+  let dockerCalls = 0;
+  try {
+    await withPanel(async panel => {
+      const bootstrap = await panel.bootstrap();
+      const start = () => fetch(`${panel.base}/api/start`, {
+        method: 'POST',
+        headers: panel.headers(bootstrap.token),
+        body: JSON.stringify(panel.settings),
+      });
+      const first = start();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const second = start();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(dockerCalls, 1);
+      releaseDocker();
+      const statuses = [(await first).status, (await second).status].sort();
+      assert.deepEqual(statuses, [202, 409]);
+      assert.equal(panel.daemon.calls.filter(call => call.path === '/v1/meetings').length, 1);
+    }, {
+      dockerTimeoutMs: 2000,
+      runCommand: async (command) => {
+        if (command === 'docker') {
+          dockerCalls += 1;
+          await dockerGate;
+        }
+        return { code: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+  } finally {
+    releaseDocker();
+  }
+});
+
+test('preflight reports Docker unavailable when docker info never returns', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const started = Date.now();
+    const response = await fetch(`${panel.base}/api/preflight`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.ready, false);
+    assert.match(body.errors.docker, /Docker is unavailable/);
+    assert.ok(Date.now() - started < 1500);
+  }, {
+    dockerTimeoutMs: 40,
+    runCommand: (command) => {
+      if (command === 'docker') return new Promise(() => {});
+      return Promise.resolve({ code: 0, stdout: 'ok', stderr: '' });
+    },
   });
 });
 

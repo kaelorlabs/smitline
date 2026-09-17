@@ -25,6 +25,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
 const CONTEXT_INDEX = path.join(ROOT, 'meeting-runtime', 'context', 'index.json');
 const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
+export const DOCKER_INFO_TIMEOUT_MS = 8000;
 
 function headers(type = 'application/json; charset=utf-8') {
   return {
@@ -52,14 +53,39 @@ function publicRunner(payload) {
 }
 
 function run(command, args, options = {}) {
+  const { timeoutMs, cwd = ROOT, ...spawnOptions } = options;
   return new Promise(resolve => {
-    const child = spawn(command, args, { cwd: options.cwd || ROOT, ...options });
+    const child = spawn(command, args, { cwd, ...spawnOptions });
     let stdout = '', stderr = '';
+    let settled = false;
+    let timer;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
     child.stdout?.on('data', chunk => { stdout += chunk; });
     child.stderr?.on('data', chunk => { stderr += chunk; });
-    child.on('error', error => resolve({ code: -1, stdout, stderr: error.message }));
-    child.on('exit', code => resolve({ code: code ?? -1, stdout, stderr }));
+    child.on('error', error => finish({ code: -1, stdout, stderr: error.message }));
+    child.on('exit', code => finish({ code: code ?? -1, stdout, stderr }));
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        finish({ code: -1, stdout, stderr: stderr || 'timed out' });
+      }, timeoutMs);
+    }
   });
+}
+
+function withTimeout(promise, timeoutMs, fallback) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]);
 }
 
 async function readBody(request, maximumBytes = 64 * 1024) {
@@ -87,6 +113,7 @@ export function createServer({
   daemon = null,
   spawnAccount = null,
   runCommand = run,
+  dockerTimeoutMs = DOCKER_INFO_TIMEOUT_MS,
 } = {}) {
   const token = crypto.randomBytes(24).toString('base64url');
   const logs = [];
@@ -307,7 +334,14 @@ export function createServer({
     try { secrets = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch { errors.credentials = 'Create .env with your OpenAI and Tavily keys.'; }
     if (!secrets.OPENAI_API_KEY || /replace_with|your_/i.test(secrets.OPENAI_API_KEY)) errors.credentials = 'Configure OPENAI_API_KEY in .env.';
     if (settings.tools?.webSearch && (!secrets.TAVILY_API_KEY || /replace_with|your_/i.test(secrets.TAVILY_API_KEY))) errors.webSearch = 'Configure TAVILY_API_KEY in .env or disable web search.';
-    const docker = await runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], { cwd: root });
+    const docker = await withTimeout(
+      runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], {
+        cwd: root,
+        timeoutMs: dockerTimeoutMs,
+      }),
+      dockerTimeoutMs,
+      { code: -1, stdout: '', stderr: 'timed out' },
+    );
     if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker Desktop and try again.';
     const codex = await runCommand('/bin/bash', ['-lc', 'if command -v codex >/dev/null 2>&1; then codex login status; elif [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then /Applications/ChatGPT.app/Contents/Resources/codex login status; else exit 127; fi'], { cwd: root });
     if (settings.tools?.codex && codex.code !== 0) errors.codex = 'Codex is unavailable or signed out. Run codex login.';
@@ -539,13 +573,16 @@ export function createServer({
     }
     if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));
     if (request.method === 'POST' && pathname === '/api/start') {
-      if (startInFlight || launcherActive(accountLauncher) || await meetingActive()) {
+      if (startInFlight || launcherActive(accountLauncher)) {
         return json(response, 409, { error: 'An agent is already connected or starting.' });
       }
-      const check = await preflight(body);
-      if (!check.ready) return json(response, 422, check);
       startInFlight = true;
       try {
+        if (await meetingActive()) {
+          return json(response, 409, { error: 'An agent is already connected or starting.' });
+        }
+        const check = await preflight(body);
+        if (!check.ready) return json(response, 422, check);
         const workspace = String(body.workspace || '').trim() || ensureDefaultWorkspace(root);
         const payload = buildMeetingCreatePayload(body, {
           sources: readContext(contextIndex).sources,
@@ -647,6 +684,8 @@ export function createServer({
       const assets = {
         '/': ['index.html', 'text/html; charset=utf-8'],
         '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+        '/client-validation.mjs': ['client-validation.mjs', 'text/javascript; charset=utf-8'],
+        '/visual-preview.mjs': ['visual-preview.mjs', 'text/javascript; charset=utf-8'],
         '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
         '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
       };

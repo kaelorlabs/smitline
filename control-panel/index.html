@@ -32,10 +32,10 @@
 
           <form id="meeting-form" novalidate>
             <div class="field full">
-              <label for="meeting-url">Meeting invitation</label>
-              <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="Paste a Zoom, Teams, or Google Meet invitation">
+              <label for="meeting-url">Meeting invitation <span class="req">Required</span></label>
+              <input id="meeting-url" name="meetingUrl" type="url" required aria-required="true" autocomplete="off" placeholder="Paste a Zoom, Teams, or Google Meet invitation">
               <small class="hint">Paste the invitation link shared by your host.</small>
-              <small class="error" data-error="meetingUrl"></small>
+              <small class="error" id="meetingUrl-error" data-error="meetingUrl"></small>
             </div>
 
             <div class="field full" id="teams-account" hidden>
@@ -74,9 +74,9 @@
                 <small class="hint" id="passcode-hint">Leave blank to keep the saved passcode.</small>
               </div>
               <div class="field">
-                <label for="participant-name">Name in the meeting</label>
-                <input id="participant-name" name="participantName" required maxlength="80">
-                <small class="error" data-error="participantName"></small>
+                <label for="participant-name">Name in the meeting <span class="req">Required</span></label>
+                <input id="participant-name" name="participantName" required aria-required="true" maxlength="80" placeholder="Colleague AI">
+                <small class="error" id="participantName-error" data-error="participantName"></small>
               </div>
             </div>
 
@@ -186,7 +186,7 @@
 
             <div class="actions">
               <button class="button secondary" id="check-button" type="button">Run checks</button>
-              <button class="button primary" id="start-button" type="submit">Start colleague <span>↗</span></button>
+              <button class="button primary" id="start-button" type="button">Start colleague <span>↗</span></button>
             </div>
           </form>
         </section>

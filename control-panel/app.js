@@ -1,5 +1,7 @@
-import { drawPresencePreview, readAvatarFile } from './visual-preview.mjs';
+import { clientMeetingErrors, createStartLock } from './client-validation.mjs';
+
 const $ = (sel) => document.querySelector(sel);
+const startLock = createStartLock();
 const form = $('#meeting-form');
 const views = {
   meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
@@ -76,7 +78,19 @@ async function request(url, options = {}) {
 }
 
 function showErrors(errors = {}) {
-  document.querySelectorAll('[data-error]').forEach(node => { node.textContent = errors[node.dataset.error] || ''; });
+  document.querySelectorAll('[data-error]').forEach(node => {
+    const message = errors[node.dataset.error] || '';
+    node.textContent = message;
+    const field = form?.querySelector(`[name="${node.dataset.error}"]`);
+    if (field) {
+      field.setAttribute('aria-invalid', message ? 'true' : 'false');
+      field.setAttribute('aria-describedby', node.id || `${node.dataset.error}-error`);
+    }
+  });
+}
+
+function clientErrors() {
+  return clientMeetingErrors(payload());
 }
 
 function setBusy(busy, label) {
@@ -594,8 +608,19 @@ function announce(text, failure = false) {
 }
 
 async function runChecks() {
-  showErrors(); setBusy(true, 'Checking…');
+  showErrors();
   const box = $('#preflight-results'); box.className = 'preflight';
+  const local = clientErrors();
+  if (Object.keys(local).length) {
+    showErrors(local);
+    box.className = 'preflight failed';
+    box.querySelector('p').textContent = Object.values(local).join(' ');
+    announce('Fill the required fields marked below.', true);
+    const first = form.querySelector(`[name="${Object.keys(local)[0]}"]`);
+    first?.focus();
+    return false;
+  }
+  setBusy(true, 'Checking…');
   box.querySelector('p').textContent = 'Checking local services and meeting configuration…';
   try {
     await addPendingContext(false);
@@ -603,26 +628,46 @@ async function runChecks() {
     showErrors(result.errors);
     box.className = `preflight ${result.ready ? 'ready' : 'failed'}`;
     box.querySelector('p').textContent = result.ready ? 'Ready to join. Credentials, Docker, Codex, and meeting settings passed.' : Object.values(result.errors).join(' ');
+    if (result.ready) announce('');
+    else announce(Object.values(result.errors)[0] || 'Checks failed.', true);
     return result.ready;
-  } catch (error) { box.className = 'preflight failed'; box.querySelector('p').textContent = error.message; return false; }
+  } catch (error) { box.className = 'preflight failed'; box.querySelector('p').textContent = error.message; announce(error.message, true); return false; }
   finally { setBusy(false); }
 }
 
-form.addEventListener('submit', async event => {
-  event.preventDefault(); announce('');
-  if (!await runChecks()) return;
-  setBusy(true, 'Starting…');
+async function startColleague(event) {
+  event?.preventDefault();
+  if (!startLock.begin()) return;
+  announce('');
   try {
+    if (!await runChecks()) return;
+    setBusy(true, 'Starting…');
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
     announce('Colleague AI is starting. Admit it when it reaches the meeting lobby.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
-  finally { setBusy(false); }
-});
+  finally {
+    startLock.end();
+    setBusy(false);
+  }
+}
 
+form.addEventListener('submit', startColleague);
+$('#start-button').addEventListener('click', startColleague);
 $('#check-button').addEventListener('click', runChecks);
+['meeting-url', 'participant-name'].forEach((id) => {
+  $(`#${id}`)?.addEventListener('input', () => {
+    const key = id === 'meeting-url' ? 'meetingUrl' : 'participantName';
+    const node = document.querySelector(`[data-error="${key}"]`);
+    if (node?.textContent) {
+      const next = clientErrors();
+      node.textContent = next[key] || '';
+      $(`#${id}`)?.setAttribute('aria-invalid', next[key] ? 'true' : 'false');
+    }
+  });
+});
 $('#context-files').addEventListener('change', renderPendingFiles);
 $('#add-context-button').addEventListener('click', async () => {
   try { await addPendingContext(); } catch (error) { announce(error.message, true); }
@@ -687,10 +732,21 @@ async function init() {
 
 init();
 
-function paintPreview() {
+let previewApi = null;
+async function loadPreview() {
+  if (previewApi) return previewApi;
+  try {
+    previewApi = await import('./visual-preview.mjs');
+  } catch {
+    previewApi = { drawPresencePreview() {}, async readAvatarFile() { throw new Error('Camera preview is unavailable.'); } };
+  }
+  return previewApi;
+}
+async function paintPreview() {
   const canvas = $('#camera-preview');
   if (!canvas) return;
-  drawPresencePreview(canvas, { visualState: $('#camera-preview-state')?.value || 'listening' });
+  const preview = await loadPreview();
+  preview.drawPresencePreview(canvas, { visualState: $('#camera-preview-state')?.value || 'listening' });
 }
 paintPreview();
 $('#camera-preview-state')?.addEventListener('change', paintPreview);
@@ -698,7 +754,8 @@ $('#camera-avatar')?.addEventListener('change', async event => {
   const file = event.target.files?.[0];
   const errorNode = document.querySelector('[data-error="camera"]');
   try {
-    selectedAvatar = file ? await readAvatarFile(file) : null;
+    const preview = await loadPreview();
+    selectedAvatar = file ? await preview.readAvatarFile(file) : null;
     if (errorNode) errorNode.textContent = '';
     $('#remove-avatar-button').hidden = !selectedAvatar;
   } catch (error) {
