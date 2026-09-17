@@ -578,6 +578,26 @@ class LoopbackTransport:
             raw=True,
         )
 
+    def create_commit(self, meeting_id, payload):
+        return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/commits', payload)
+
+    def list_commits(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/commits')
+
+    def get_commit(self, meeting_id, operation_id):
+        return self._http(
+            'GET', f'/v1/meetings/{quote(meeting_id)}/commits/{quote(operation_id)}')
+
+    def create_push(self, meeting_id, payload):
+        return self._http('POST', f'/v1/meetings/{quote(meeting_id)}/pushes', payload)
+
+    def list_pushes(self, meeting_id):
+        return self._http('GET', f'/v1/meetings/{quote(meeting_id)}/pushes')
+
+    def get_push(self, meeting_id, operation_id):
+        return self._http(
+            'GET', f'/v1/meetings/{quote(meeting_id)}/pushes/{quote(operation_id)}')
+
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
@@ -719,6 +739,28 @@ class MeetingHandle:
             raise ValidationError('artifactId is required')
         return self._transport.get_artifact_content(self.id, artifact_id)
 
+    async def create_commit(self, payload):
+        return self._transport.create_commit(self.id, payload)
+
+    async def list_commits(self):
+        return self._transport.list_commits(self.id)
+
+    async def get_commit(self, operation_id):
+        if not operation_id:
+            raise ValidationError('operationId is required')
+        return self._transport.get_commit(self.id, operation_id)
+
+    async def create_push(self, payload):
+        return self._transport.create_push(self.id, payload)
+
+    async def list_pushes(self):
+        return self._transport.list_pushes(self.id)
+
+    async def get_push(self, operation_id):
+        if not operation_id:
+            raise ValidationError('operationId is required')
+        return self._transport.get_push(self.id, operation_id)
+
     def on(self, name: str, handler: Callable[[Any], None]):
         if not callable(handler):
             raise ValidationError('event handler must be a function')
@@ -737,6 +779,7 @@ class MeetingHandle:
                 'approval': list(self._listeners.get('approval', ())),
                 'approval_required': list(self._listeners.get('approval_required', ())),
                 'workspace': list(self._listeners.get('workspace', ())),
+                'git': list(self._listeners.get('git', ())),
                 'artifact': list(self._listeners.get('artifact', ())),
             }
         for handler in listeners['event']:
@@ -758,6 +801,9 @@ class MeetingHandle:
                 handler(event)
         if kind.startswith('workspace.action.'):
             for handler in listeners.get('workspace', ()):
+                handler(event)
+        if kind.startswith('git.action.'):
+            for handler in listeners.get('git', ()):
                 handler(event)
         if kind == 'artifact.created':
             for handler in listeners.get('artifact', ()):

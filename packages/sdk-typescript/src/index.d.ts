@@ -111,7 +111,7 @@ export interface JoinMeetingRequest {
   };
 }
 
-export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'workspace' | 'artifact' | 'event';
+export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval' | 'approval_required' | 'workspace' | 'git' | 'artifact' | 'event';
 
 export interface DaemonTransport {
   createMeeting(payload: Record<string, unknown>): Promise<MeetingSession>;
@@ -126,6 +126,12 @@ export interface DaemonTransport {
   listArtifacts(meetingId: string): Promise<{ artifacts: Array<Record<string, unknown>> }>;
   getArtifact(meetingId: string, artifactId: string): Promise<Record<string, unknown>>;
   getArtifactContent(meetingId: string, artifactId: string): Promise<{ mediaType: string; body: Buffer }>;
+  createCommit(meetingId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listCommits(meetingId: string): Promise<{ commits: Array<Record<string, unknown>> }>;
+  getCommit(meetingId: string, operationId: string): Promise<Record<string, unknown>>;
+  createPush(meetingId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listPushes(meetingId: string): Promise<{ pushes: Array<Record<string, unknown>> }>;
+  getPush(meetingId: string, operationId: string): Promise<Record<string, unknown>>;
   events(meetingId: string, options?: { lastEventId?: string; signal?: AbortSignal }): AsyncIterable<ColleagueEvent>;
 }
 
@@ -154,6 +160,12 @@ export interface MeetingHandle {
   listArtifacts(): Promise<{ artifacts: Array<Record<string, unknown>> }>;
   getArtifact(artifactId: string): Promise<Record<string, unknown>>;
   getArtifactContent(artifactId: string): Promise<{ mediaType: string; body: Buffer }>;
+  createCommit(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listCommits(): Promise<{ commits: Array<Record<string, unknown>> }>;
+  getCommit(operationId: string): Promise<Record<string, unknown>>;
+  createPush(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listPushes(): Promise<{ pushes: Array<Record<string, unknown>> }>;
+  getPush(operationId: string): Promise<Record<string, unknown>>;
   on(event: MeetingEventName, handler: (payload: unknown) => void): () => void;
   events(): AsyncIterable<ColleagueEvent>;
 }

@@ -69,7 +69,8 @@ def _work_from_events(events):
         )
         if kind == 'delegation.started' and isinstance(delegation_id, str):
             started[delegation_id] = event
-        elif kind in ('delegation.completed', 'delegation.cancelled', 'workspace.action.completed') and isinstance(delegation_id, str):
+        elif kind in ('delegation.completed', 'delegation.cancelled', 'workspace.action.completed',
+                      'git.action.completed') and isinstance(delegation_id, str):
             completed[delegation_id] = event
     records = []
     for delegation_id, event in list(completed.items())[:50]:
@@ -85,7 +86,26 @@ def _work_from_events(events):
             started_at=None,
             ended_at=None,
         ))
-    return tuple(records)
+    for event in events:
+        kind = event.get('type')
+        if kind not in ('git.action.completed', 'git.action.failed', 'git.action.cancelled'):
+            continue
+        result = event.get('result') if isinstance(event.get('result'), dict) else {}
+        operation_id = result.get('operationId') or event.get('operationId')
+        if not isinstance(operation_id, str):
+            continue
+        if kind == 'git.action.completed':
+            status = 'completed'
+        elif kind == 'git.action.cancelled':
+            status = 'cancelled'
+        else:
+            status = 'failed'
+        records.append(AgentWorkRecord(
+            task_id=operation_id[:128],
+            summary=_clip(result.get('summary') or 'Recorded reviewed files'),
+            status=status,
+        ))
+    return tuple(records[:50])
 
 
 def _artifacts_from_events(events, directory):

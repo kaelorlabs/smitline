@@ -202,6 +202,92 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'list_meeting_commits',
+    description: 'List typed commit operations for a meeting. Requires an explicit meetingId. Never accepts raw git argv.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'get_meeting_commit',
+    description: 'Get one typed commit operation. Requires explicit meetingId and operationId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'operationId'],
+      properties: {
+        meetingId: { type: 'string' },
+        operationId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'create_meeting_commit',
+    description: 'Request an approved commit of an exact file manifest. Requires meetingId, expectedHead, message, and files. Never accepts raw git argv, force, or hooks. Voice cannot grant permission.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'expectedHead', 'message', 'files'],
+      properties: {
+        meetingId: { type: 'string' },
+        id: { type: 'string' },
+        expectedHead: { type: 'string' },
+        message: { type: 'string' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['path', 'sha256'],
+            properties: { path: { type: 'string' }, sha256: { type: 'string' } },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'list_meeting_pushes',
+    description: 'List typed push operations for a meeting. Requires an explicit meetingId. Never accepts raw git argv or remote URLs.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId'],
+      properties: { meetingId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'get_meeting_push',
+    description: 'Get one typed push operation. Requires explicit meetingId and operationId.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'operationId'],
+      properties: {
+        meetingId: { type: 'string' },
+        operationId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'create_meeting_push',
+    description: 'Request an approved push of an exact local branch to a configured remote name. Requires meetingId, commitSha, remote, and branch. Never force, delete, tags, or URLs. Voice cannot grant permission.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['meetingId', 'commitSha', 'remote', 'branch'],
+      properties: {
+        meetingId: { type: 'string' },
+        id: { type: 'string' },
+        commitSha: { type: 'string' },
+        remote: { type: 'string' },
+        branch: { type: 'string' },
+      },
+    },
+  },
 ];
 
 function nowIso() {
@@ -610,6 +696,68 @@ export function createMcpSession(options = {}) {
         ? await handle.getArtifact(args.artifactId)
         : await transport.getArtifact(args.meetingId, args.artifactId);
       return toolResult({ meetingId: args.meetingId, artifact });
+    }
+    if (name === 'list_meeting_commits') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.listCommits
+        ? await handle.listCommits()
+        : await transport.listCommits(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'get_meeting_commit') {
+      if (!args?.meetingId || !args?.operationId) {
+        throw new ValidationError('meetingId and operationId are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const commit = handle.getCommit
+        ? await handle.getCommit(args.operationId)
+        : await transport.getCommit(args.meetingId, args.operationId);
+      return toolResult({ meetingId: args.meetingId, commit });
+    }
+    if (name === 'create_meeting_commit') {
+      if (!args?.meetingId || !args?.expectedHead || !args?.message || !args?.files) {
+        throw new ValidationError('meetingId, expectedHead, message, and files are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const commit = handle.createCommit
+        ? await handle.createCommit(args)
+        : await transport.createCommit(args.meetingId, args);
+      return toolResult({ meetingId: args.meetingId, commit });
+    }
+    if (name === 'list_meeting_pushes') {
+      if (!args?.meetingId) throw new ValidationError('meetingId is required');
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const payload = handle.listPushes
+        ? await handle.listPushes()
+        : await transport.listPushes(args.meetingId);
+      return toolResult({ meetingId: args.meetingId, ...payload });
+    }
+    if (name === 'get_meeting_push') {
+      if (!args?.meetingId || !args?.operationId) {
+        throw new ValidationError('meetingId and operationId are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const push = handle.getPush
+        ? await handle.getPush(args.operationId)
+        : await transport.getPush(args.meetingId, args.operationId);
+      return toolResult({ meetingId: args.meetingId, push });
+    }
+    if (name === 'create_meeting_push') {
+      if (!args?.meetingId || !args?.commitSha || !args?.remote || !args?.branch) {
+        throw new ValidationError('meetingId, commitSha, remote, and branch are required');
+      }
+      const handle = await resolveHandle(args.meetingId);
+      const transport = colleague._transport;
+      const push = handle.createPush
+        ? await handle.createPush(args)
+        : await transport.createPush(args.meetingId, args);
+      return toolResult({ meetingId: args.meetingId, push });
     }
     throw new ValidationError(`unknown tool: ${name}`);
   }

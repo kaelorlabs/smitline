@@ -209,6 +209,12 @@ export function createDaemonClient(options = {}) {
     getArtifact(meetingId, artifactId) {
       return send('GET', `/v1/meetings/${meetingId}/artifacts/${artifactId}`, undefined, { startIfNeeded: false });
     },
+    listCommits(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/commits`, undefined, { startIfNeeded: false });
+    },
+    listPushes(meetingId) {
+      return send('GET', `/v1/meetings/${meetingId}/pushes`, undefined, { startIfNeeded: false });
+    },
     async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
       let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
       if (!token) {

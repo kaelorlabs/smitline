@@ -596,6 +596,24 @@ export function createLoopbackTransport(options = {}) {
         body: Buffer.from(await response.arrayBuffer()),
       };
     },
+    createCommit(meetingId, payload) {
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/commits`, payload);
+    },
+    listCommits(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/commits`);
+    },
+    getCommit(meetingId, operationId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/commits/${encodeURIComponent(operationId)}`);
+    },
+    createPush(meetingId, payload) {
+      return json('POST', `/v1/meetings/${encodeURIComponent(meetingId)}/pushes`, payload);
+    },
+    listPushes(meetingId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/pushes`);
+    },
+    getPush(meetingId, operationId) {
+      return json('GET', `/v1/meetings/${encodeURIComponent(meetingId)}/pushes/${encodeURIComponent(operationId)}`);
+    },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
       let cursor = lastEventId;
@@ -731,6 +749,32 @@ class MeetingHandleImpl {
     return this._transport.getArtifactContent(this.id, artifactId);
   }
 
+  async createCommit(payload) {
+    return this._transport.createCommit(this.id, payload);
+  }
+
+  async listCommits() {
+    return this._transport.listCommits(this.id);
+  }
+
+  async getCommit(operationId) {
+    if (!operationId) throw new ValidationError('operationId is required');
+    return this._transport.getCommit(this.id, operationId);
+  }
+
+  async createPush(payload) {
+    return this._transport.createPush(this.id, payload);
+  }
+
+  async listPushes() {
+    return this._transport.listPushes(this.id);
+  }
+
+  async getPush(operationId) {
+    if (!operationId) throw new ValidationError('operationId is required');
+    return this._transport.getPush(this.id, operationId);
+  }
+
   on(name, handler) {
     if (typeof handler !== 'function') throw new ValidationError('event handler must be a function');
     const bucket = this._listeners.get(name) || new Set();
@@ -778,6 +822,7 @@ class MeetingHandleImpl {
     if (type.startsWith('approval.')) fire('approval', event);
     if (type === 'approval.required' || type === 'approval_required') fire('approval_required', event);
     if (type.startsWith('workspace.action.')) fire('workspace', event);
+    if (type.startsWith('git.action.')) fire('git', event);
     if (type === 'artifact.created') fire('artifact', event);
   }
 

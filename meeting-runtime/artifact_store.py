@@ -9,6 +9,7 @@ from schema_validation import omit_none, reject_secrets, require_id, require_mee
 
 ARTIFACT_KINDS = (
     'plan', 'patch', 'manifest', 'command-log', 'workspace-result', 'file',
+    'git-commit', 'git-push',
 )
 SAFE_MEDIA = {
     'plan': 'application/json',
@@ -17,6 +18,8 @@ SAFE_MEDIA = {
     'command-log': 'text/plain',
     'workspace-result': 'application/json',
     'file': 'application/octet-stream',
+    'git-commit': 'application/json',
+    'git-push': 'application/json',
 }
 MAX_BODY = 1_000_000
 

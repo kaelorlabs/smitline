@@ -40,6 +40,8 @@ export async function startFakeDaemon(options = {}) {
     events: new Map(),
     approvals: new Map(),
     artifacts: new Map(),
+    commits: new Map(),
+    pushes: new Map(),
     sseClients: [],
     requireAuth: options.requireAuth !== false,
     readyDelayMs: options.readyDelayMs || 0,
@@ -352,9 +354,89 @@ export async function startFakeDaemon(options = {}) {
               type: decision === 'approved' ? 'approval.approved' : 'approval.denied',
               decision: { approvalId: found.id, decision, decidedAt: found.resolvedAt },
             });
-            json(response, 200, found);
+          json(response, 200, found);
             return;
           }
+        }
+        const commitMatch = rest.match(/^commits(?:\/([^/]+))?$/);
+        if (commitMatch) {
+          const operationId = commitMatch[1];
+          if (!state.commits.has(meetingId)) state.commits.set(meetingId, []);
+          const commits = state.commits.get(meetingId);
+          if (request.method === 'GET' && !operationId) {
+            json(response, 200, { commits });
+            return;
+          }
+          if (request.method === 'POST' && !operationId) {
+            const body = JSON.parse((await readBody(request)) || '{}');
+            if (body.argv || body.url || body.force || body.command) {
+              json(response, 422, { error: { code: 'invalid_request', message: 'raw git is not allowed' } });
+              return;
+            }
+            const existing = commits.find((item) => item.id === body.id);
+            if (existing && existing.status === 'completed') {
+              json(response, 200, existing);
+              return;
+            }
+            const created = {
+              id: body.id || `cmt-${commits.length + 1}`,
+              kind: 'commit',
+              meetingId,
+              status: 'requested',
+              request: body,
+              approvalId: `appr-commit-${commits.length + 1}`,
+            };
+            commits.push(created);
+            json(response, 201, created);
+            return;
+          }
+          const found = commits.find((item) => item.id === operationId);
+          if (!found) {
+            json(response, 404, { error: { code: 'not_found', message: 'git operation not found' } });
+            return;
+          }
+          json(response, 200, found);
+          return;
+        }
+        const pushMatch = rest.match(/^pushes(?:\/([^/]+))?$/);
+        if (pushMatch) {
+          const operationId = pushMatch[1];
+          if (!state.pushes.has(meetingId)) state.pushes.set(meetingId, []);
+          const pushes = state.pushes.get(meetingId);
+          if (request.method === 'GET' && !operationId) {
+            json(response, 200, { pushes });
+            return;
+          }
+          if (request.method === 'POST' && !operationId) {
+            const body = JSON.parse((await readBody(request)) || '{}');
+            if (body.argv || body.url || body.force || body.refspec) {
+              json(response, 422, { error: { code: 'invalid_request', message: 'raw git is not allowed' } });
+              return;
+            }
+            const existing = pushes.find((item) => item.id === body.id);
+            if (existing && existing.status === 'completed') {
+              json(response, 200, existing);
+              return;
+            }
+            const created = {
+              id: body.id || `psh-${pushes.length + 1}`,
+              kind: 'push',
+              meetingId,
+              status: 'requested',
+              request: body,
+              approvalId: `appr-push-${pushes.length + 1}`,
+            };
+            pushes.push(created);
+            json(response, 201, created);
+            return;
+          }
+          const found = pushes.find((item) => item.id === operationId);
+          if (!found) {
+            json(response, 404, { error: { code: 'not_found', message: 'git operation not found' } });
+            return;
+          }
+          json(response, 200, found);
+          return;
         }
         const artifactMatch = rest.match(/^artifacts(?:\/([^/]+))?(?:\/(content))?$/);
         if (artifactMatch && request.method === 'GET') {

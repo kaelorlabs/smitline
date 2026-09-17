@@ -180,6 +180,8 @@ function createFakeDaemon() {
     },
     approvals: new Map(),
     artifacts: new Map(),
+    commits: new Map(),
+    pushes: new Map(),
     async listApprovals(id) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/approvals` });
       return { approvals: this.approvals.get(id) || [] };
@@ -187,6 +189,14 @@ function createFakeDaemon() {
     async listArtifacts(id) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts` });
       return { artifacts: this.artifacts.get(id) || [] };
+    },
+    async listCommits(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/commits` });
+      return { commits: this.commits.get(id) || [] };
+    },
+    async listPushes(id) {
+      calls.push({ method: 'GET', path: `/v1/meetings/${id}/pushes` });
+      return { pushes: this.pushes.get(id) || [] };
     },
     async getArtifactContent(id, artifactId) {
       calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
@@ -360,6 +370,13 @@ test('status lists pending approvals and decide posts a single decision', async 
     assert.equal(workspaceStatus.workspaceArtifacts[0].id, 'art-1');
     const workspaceHtml = await (await fetch(`${panel.base}/`)).text();
     assert.match(workspaceHtml, /Workspace activity/);
+    panel.daemon.commits.set(meetingId, [{
+      id: 'cmt-1', kind: 'commit', status: 'requested', meetingId,
+    }]);
+    const gitStatus = await (await fetch(`${panel.base}/api/status`)).json();
+    assert.equal(gitStatus.gitOperations[0].id, 'cmt-1');
+    const gitHtml = await (await fetch(`${panel.base}/`)).text();
+    assert.match(gitHtml, /Git operations/);
     const downloaded = await fetch(`${panel.base}/api/meetings/${meetingId}/artifacts/art-1/content`, {
       headers: panel.headers(bootstrap.token),
     });

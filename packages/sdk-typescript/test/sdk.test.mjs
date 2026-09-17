@@ -386,7 +386,22 @@ test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, asy
     const artifacts = await meeting.listArtifacts();
     assert.equal(artifacts.artifacts[0].id, 'art-1');
     await assert.rejects(() => meeting.getArtifact(''));
-    const dumped = JSON.stringify({ created, listed, decided, token: daemon.token });
+    const commit = await meeting.createCommit({
+      expectedHead: 'a'.repeat(40),
+      message: 'Record reviewed helper changes',
+      files: [{ path: 'helper.py', sha256: 'b'.repeat(64) }],
+    });
+    assert.equal(commit.kind, 'commit');
+    const commits = await meeting.listCommits();
+    assert.equal(commits.commits[0].id, commit.id);
+    await assert.rejects(() => meeting.getCommit(''));
+    const push = await meeting.createPush({
+      commitSha: 'a'.repeat(40),
+      remote: 'origin',
+      branch: 'colleague-work',
+    });
+    assert.equal(push.kind, 'push');
+    const dumped = JSON.stringify({ created, listed, decided, token: daemon.token, commit, push });
     assert.equal(dumped.includes('secret meeting speech'), false);
     await meeting.cancel();
   });

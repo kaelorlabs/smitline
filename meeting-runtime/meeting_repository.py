@@ -19,8 +19,10 @@ _SNAPSHOT_NAME = 'snapshot.json'
 _LEASE_NAME = 'lease.json'
 _HANDOFF_NAME = 'handoff.json'
 _APPROVALS_NAME = 'approvals.json'
+_GIT_OPS_NAME = 'git-ops.json'
 _OWNER_FIELDS = ('leaseId',)
 _APPROVAL_FILE_FIELDS = ('version', 'approvals')
+_GIT_OPS_FILE_FIELDS = ('version', 'operations')
 
 
 class MeetingRepositoryError(Exception):
@@ -379,6 +381,63 @@ class MeetingRepository:
                 payload = {'version': 1, 'approvals': updated}
                 reject_secrets(payload, 'meeting approvals')
                 self._atomic_write(dir_fd, _APPROVALS_NAME, payload)
+                return updated
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
+
+    def _read_git_ops(self, dir_fd):
+        from git_actions import GitOperation
+        raw = self._read_named(dir_fd, _GIT_OPS_NAME)
+        if raw is None:
+            return []
+        payload = self._parse_object(raw, 'meeting git operations')
+        extra = set(payload) - set(_GIT_OPS_FILE_FIELDS)
+        if extra:
+            raise MeetingCorruptionError('meeting git operations do not match the schema')
+        items = payload.get('operations')
+        if items is None:
+            return []
+        if not isinstance(items, list):
+            raise MeetingCorruptionError('meeting git operations do not match the schema')
+        try:
+            reject_secrets(payload, 'meeting git operations')
+            return [GitOperation.from_dict(item).to_dict() for item in items]
+        except (TypeError, ValueError) as error:
+            raise MeetingCorruptionError('meeting git operations do not match the schema') from error
+
+    def list_git_ops(self, meeting_id):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                return None
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_SH)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    return None
+                return self._read_git_ops(dir_fd)
+            finally:
+                fcntl.flock(dir_fd, fcntl.LOCK_UN)
+                os.close(dir_fd)
+
+    def update_git_ops(self, meeting_id, mutator):
+        meeting_id = require_meeting_id(meeting_id)
+        with self._lock(meeting_id):
+            dir_fd = self._open_meeting_dir(meeting_id, create=False)
+            if dir_fd is None:
+                raise FileNotFoundError('meeting does not exist')
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_EX)
+                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
+                    raise FileNotFoundError('meeting does not exist')
+                current = list(self._read_git_ops(dir_fd))
+                updated = list(mutator(list(current)))
+                if updated == current:
+                    return updated
+                payload = {'version': 1, 'operations': updated}
+                reject_secrets(payload, 'meeting git operations')
+                self._atomic_write(dir_fd, _GIT_OPS_NAME, payload)
                 return updated
             finally:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)

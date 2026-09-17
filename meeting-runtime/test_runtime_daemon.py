@@ -1344,5 +1344,227 @@ class ApprovalDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b'sk-', body)
 
 
+def git_permissions():
+    return permissions_payload(
+        workspace='workspace-write',
+        edits='approval-required',
+        commits='approval-required',
+        pushes='approval-required',
+    )
+
+
+class FakeGitBroker:
+    def __init__(self):
+        self.commits = []
+        self.pushes = []
+        self.fail = None
+        self.commit_calls = 0
+        self.push_calls = 0
+
+    def commit(self, request, *, workspace, cancel=None):
+        from workspace_isolation import IsolationError
+        self.commit_calls += 1
+        payload = request.to_dict() if hasattr(request, 'to_dict') else dict(request)
+        self.commits.append(payload)
+        if self.fail:
+            raise IsolationError(self.fail)
+        return {
+            'commitSha': 'c' * 40,
+            'parentSha': payload['expectedHead'],
+            'treeSha': 'd' * 40,
+            'files': [item['path'] for item in payload['files']],
+        }
+
+    def push(self, request, *, workspace, cancel=None):
+        from workspace_isolation import IsolationError
+        self.push_calls += 1
+        payload = request.to_dict() if hasattr(request, 'to_dict') else dict(request)
+        self.pushes.append(payload)
+        if self.fail:
+            raise IsolationError(self.fail)
+        return {
+            'commitSha': payload['commitSha'],
+            'remote': payload['remote'],
+            'branch': payload['branch'],
+        }
+
+
+@unittest.skipUnless(HAS_AIOHTTP, 'aiohttp is required')
+class GitDaemonTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.clock = FakeClock()
+        self.supervisor = FakeSupervisor()
+        self.auth = 'test-daemon-token'
+        self.app = create_app(
+            root=self.temporary.name,
+            auth_token=self.auth,
+            supervisor=self.supervisor,
+            clock=self.clock,
+            sse_poll_interval=0.02,
+            sse_heartbeat_interval=0.05,
+            max_body_bytes=4096,
+        )
+        self.daemon = self.app.runtime_daemon
+        self.broker = FakeGitBroker()
+        self.daemon.git_broker = self.broker
+        self.client = TestClient(TestServer(self.app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    def headers(self, **extra):
+        return {'Authorization': 'Bearer ' + self.auth, **extra}
+
+    async def create(self, **overrides):
+        response = await self.client.post(
+            '/v1/meetings', json=create_payload(**overrides), headers=self.headers())
+        return response
+
+    def commit_body(self, **overrides):
+        payload = {
+            'id': 'cmt-1',
+            'expectedHead': 'a' * 40,
+            'message': 'Record reviewed helper changes',
+            'files': [{'path': 'helper.py', 'sha256': 'b' * 64}],
+        }
+        payload.update(overrides)
+        return payload
+
+    def push_body(self, **overrides):
+        payload = {
+            'id': 'psh-1',
+            'commitSha': 'c' * 40,
+            'remote': 'origin',
+            'branch': 'colleague-work',
+        }
+        payload.update(overrides)
+        return payload
+
+    async def wait_status(self, meeting_id, kind, operation_id, wanted):
+        for _ in range(50):
+            path = '/v1/meetings/' + meeting_id + '/' + kind + '/' + operation_id
+            response = await self.client.get(path, headers=self.headers())
+            body = await response.json()
+            if body.get('status') == wanted:
+                return body
+            await asyncio.sleep(0.05)
+        self.fail('operation did not reach ' + wanted)
+
+    async def test_commits_require_own_approval_and_are_idempotent(self):
+        created = await self.create(permissions=git_permissions())
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        denied = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/commits',
+            json=self.commit_body(argv=['commit', '-m', 'x']),
+            headers=self.headers())
+        self.assertEqual(denied.status, 422)
+        disabled = await self.create(
+            agentSession=agent_session_payload(sessionId='thread-origin-disabled'))
+        self.assertEqual(disabled.status, 201)
+        disabled_id = (await disabled.json())['id']
+        blocked = await self.client.post(
+            '/v1/meetings/' + disabled_id + '/commits',
+            json=self.commit_body(),
+            headers=self.headers())
+        self.assertEqual(blocked.status, 422)
+        self.assertEqual(self.broker.commit_calls, 0)
+        edits = self.daemon.create_approval(meeting_id, {
+            'category': 'edits', 'summary': 'Update the helper',
+        })
+        requested = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/commits',
+            json=self.commit_body(),
+            headers=self.headers())
+        self.assertEqual(requested.status, 201)
+        commit = await requested.json()
+        self.assertEqual(commit['status'], 'requested')
+        self.assertNotEqual(commit['approvalId'], edits['id'])
+        self.daemon.decide_approval(meeting_id, edits['id'], {'decision': 'approved'})
+        await asyncio.sleep(0.1)
+        still = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/commits/cmt-1', headers=self.headers())
+        self.assertEqual((await still.json())['status'], 'requested')
+        self.assertEqual(self.broker.commit_calls, 0)
+        self.daemon.decide_approval(meeting_id, commit['approvalId'], {'decision': 'approved'})
+        finished = await self.wait_status(meeting_id, 'commits', 'cmt-1', 'completed')
+        self.assertEqual(self.broker.commit_calls, 1)
+        self.assertEqual(finished['result']['commitSha'], 'c' * 40)
+        replay = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/commits',
+            json=self.commit_body(),
+            headers=self.headers())
+        self.assertEqual(replay.status, 201)
+        self.assertEqual((await replay.json())['status'], 'completed')
+        self.assertEqual(self.broker.commit_calls, 1)
+        types = [event.type for event in self.daemon.events.replay(meeting_id)]
+        self.assertIn('git.action.requested', types)
+        self.assertIn('git.action.completed', types)
+        self.assertIn('artifact.created', types)
+        self.assertIn('approval.required', types)
+        listed = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/commits', headers=self.headers())
+        self.assertEqual((await listed.json())['commits'][0]['id'], 'cmt-1')
+        artifacts = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/artifacts', headers=self.headers())
+        self.assertEqual((await artifacts.json())['artifacts'][0]['kind'], 'git-commit')
+
+    async def test_push_uses_separate_approval_and_never_returns_urls(self):
+        created = await self.create(permissions=git_permissions())
+        meeting_id = (await created.json())['id']
+        rejected = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/pushes',
+            json=self.push_body(remote='https://example.com/repo.git'),
+            headers=self.headers())
+        self.assertEqual(rejected.status, 422)
+        requested = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/pushes',
+            json=self.push_body(),
+            headers=self.headers())
+        self.assertEqual(requested.status, 201)
+        push = await requested.json()
+        self.daemon.decide_approval(meeting_id, push['approvalId'], {'decision': 'approved'})
+        finished = await self.wait_status(meeting_id, 'pushes', 'psh-1', 'completed')
+        dumped = json.dumps(finished)
+        self.assertNotIn('https://', dumped)
+        self.assertNotIn('git@', dumped)
+        self.assertEqual(finished['result']['remote'], 'origin')
+        self.assertEqual(self.broker.push_calls, 1)
+        replay = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/pushes',
+            json=self.push_body(),
+            headers=self.headers())
+        self.assertEqual((await replay.json())['status'], 'completed')
+        self.assertEqual(self.broker.push_calls, 1)
+
+    async def test_conflict_and_auth_and_handoff(self):
+        created = await self.create(permissions=git_permissions())
+        meeting = await created.json()
+        meeting_id = meeting['id']
+        self.broker.fail = 'working tree HEAD does not match expectedHead'
+        requested = await self.client.post(
+            '/v1/meetings/' + meeting_id + '/commits',
+            json=self.commit_body(id='cmt-2'),
+            headers=self.headers())
+        commit = await requested.json()
+        self.daemon.decide_approval(meeting_id, commit['approvalId'], {'decision': 'approved'})
+        failed = await self.wait_status(meeting_id, 'commits', 'cmt-2', 'conflict')
+        self.assertTrue(failed['result']['conflict'])
+        missing = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/commits',
+            headers={'Authorization': 'Bearer other'})
+        self.assertEqual(missing.status, 401)
+        self.daemon.store_handoff(handoff_payload(
+            meetingId=meeting_id, startedAt=meeting['startedAt']))
+        handoff = await self.client.get(
+            '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
+        payload = await handoff.json()
+        self.assertTrue(any(item['taskId'] == 'cmt-2' for item in payload['workPerformed']))
+
+
 if __name__ == '__main__':
     unittest.main()
+

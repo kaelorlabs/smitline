@@ -35,6 +35,12 @@ const USAGE = `Usage:
   colleague approvals decide --meeting-id <id> --approval-id <id> --decision approved|denied
   colleague artifacts list --meeting-id <id>
   colleague artifacts get --meeting-id <id> --artifact-id <id>
+  colleague commits list --meeting-id <id>
+  colleague commits get --meeting-id <id> --operation-id <id>
+  colleague commits create --meeting-id <id> --expected-head <sha> --message <text> --file <path:sha256>
+  colleague pushes list --meeting-id <id>
+  colleague pushes get --meeting-id <id> --operation-id <id>
+  colleague pushes create --meeting-id <id> --commit-sha <sha> --remote <name> --branch <name>
 `;
 
 function parseArgs(argv) {
@@ -296,6 +302,55 @@ async function main(argv = process.argv.slice(2)) {
         return EXIT.ok;
       }
       throw new ValidationError('unknown artifacts command');
+    }
+    if (command === 'commits' || command === 'pushes') {
+      if (!args['meeting-id']) throw new ValidationError(`${command} commands require --meeting-id`);
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      const methods = command === 'commits'
+        ? { list: 'listCommits', get: 'getCommit', create: 'createCommit' }
+        : { list: 'listPushes', get: 'getPush', create: 'createPush' };
+      if (args._[1] === 'list') {
+        const result = await transport[methods.list](meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'get') {
+        if (!args['operation-id']) throw new ValidationError('this command requires --operation-id');
+        const result = await transport[methods.get](meetingId, args['operation-id']);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'create') {
+        if (command === 'commits') {
+          if (!args['expected-head'] || !args.message || !args.file) {
+            throw new ValidationError('commits create requires --expected-head, --message, and --file');
+          }
+          const [filePath, digest] = String(args.file).split(':');
+          if (!filePath || !digest) throw new ValidationError('--file must be path:sha256');
+          const result = await transport[methods.create](meetingId, {
+            expectedHead: args['expected-head'],
+            message: args.message,
+            files: [{ path: filePath, sha256: digest }],
+            id: args['operation-id'],
+          });
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return EXIT.ok;
+        }
+        if (!args['commit-sha'] || !args.remote || !args.branch) {
+          throw new ValidationError('pushes create requires --commit-sha, --remote, and --branch');
+        }
+        const result = await transport[methods.create](meetingId, {
+          commitSha: args['commit-sha'],
+          remote: args.remote,
+          branch: args.branch,
+          id: args['operation-id'],
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError(`unknown ${command} command`);
     }
     throw new ValidationError(`unknown command: ${command}`);
   } catch (error) {

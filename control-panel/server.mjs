@@ -240,6 +240,16 @@ export function createServer({
     const lease = running ? await leaseSnapshot(session) : null;
     const approvals = running ? await pendingApprovals(meetingId, session) : [];
     const workspace = running ? await workspaceSnapshot(meetingId, session) : { artifacts: [] };
+    let gitOperations = [];
+    if (running && meetingId) {
+      try {
+        const commits = await daemonClient.listCommits(meetingId);
+        const pushes = await daemonClient.listPushes(meetingId);
+        gitOperations = [...(commits.commits || []), ...(pushes.pushes || [])];
+      } catch {
+        gitOperations = [];
+      }
+    }
     return {
       phase,
       running,
@@ -253,6 +263,7 @@ export function createServer({
       daemonError: daemonError ? daemonError.message : undefined,
       pendingApprovals: approvals,
       workspaceArtifacts: workspace.artifacts,
+      gitOperations,
     };
   }
 

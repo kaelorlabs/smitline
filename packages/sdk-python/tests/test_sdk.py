@@ -51,6 +51,8 @@ class FakeTransport:
         self.partial = False
         self.fail_create = None
         self.ready_delay = 0.02
+        self.commits = {}
+        self.pushes = {}
 
     def create_meeting(self, payload):
         if self.fail_create:
@@ -175,6 +177,44 @@ class FakeTransport:
             'mediaType': item.get('mediaType') or 'application/json',
             'body': json.dumps(item).encode('utf-8'),
         }
+
+    def create_commit(self, meeting_id, payload):
+        items = self.commits.setdefault(meeting_id, [])
+        created = dict(payload)
+        created.setdefault('id', 'cmt-1')
+        created['meetingId'] = meeting_id
+        created['kind'] = 'commit'
+        created['status'] = 'requested'
+        items.append(created)
+        return created
+
+    def list_commits(self, meeting_id):
+        return {'commits': list(self.commits.get(meeting_id, []))}
+
+    def get_commit(self, meeting_id, operation_id):
+        for item in self.commits.get(meeting_id, []):
+            if item['id'] == operation_id:
+                return item
+        raise ColleagueError('commit not found', code='not_found', status=404)
+
+    def create_push(self, meeting_id, payload):
+        items = self.pushes.setdefault(meeting_id, [])
+        created = dict(payload)
+        created.setdefault('id', 'psh-1')
+        created['meetingId'] = meeting_id
+        created['kind'] = 'push'
+        created['status'] = 'requested'
+        items.append(created)
+        return created
+
+    def list_pushes(self, meeting_id):
+        return {'pushes': list(self.pushes.get(meeting_id, []))}
+
+    def get_push(self, meeting_id, operation_id):
+        for item in self.pushes.get(meeting_id, []):
+            if item['id'] == operation_id:
+                return item
+        raise ColleagueError('push not found', code='not_found', status=404)
 
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
@@ -367,6 +407,22 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed_artifacts['artifacts'][0]['id'], 'art-1')
         with self.assertRaises(ValidationError):
             await meeting.get_artifact('')
+        commit = await meeting.create_commit({
+            'expectedHead': 'a' * 40,
+            'message': 'Record reviewed helper changes',
+            'files': [{'path': 'helper.py', 'sha256': 'b' * 64}],
+        })
+        self.assertEqual(commit['kind'], 'commit')
+        listed_commits = await meeting.list_commits()
+        self.assertEqual(listed_commits['commits'][0]['id'], commit['id'])
+        with self.assertRaises(ValidationError):
+            await meeting.get_commit('')
+        push = await meeting.create_push({
+            'commitSha': 'a' * 40,
+            'remote': 'origin',
+            'branch': 'colleague-work',
+        })
+        self.assertEqual(push['kind'], 'push')
         await meeting.cancel()
 
 

@@ -27,6 +27,9 @@ from permissions import DEFAULT_PERMISSIONS, bound_requested_permissions, permis
 from schema_validation import reject_secrets, reject_unknown_fields, require_enum, require_id
 from session_continuity import validate_agent_session
 from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
+from git_actions import CommitRequest, GitOperation, PushRequest, build_result
+from git_broker import GitBroker
+from workspace_isolation import IsolationError
 
 
 CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions', 'camera')
@@ -34,6 +37,13 @@ CREATE_APPROVAL_FIELDS = (
     'category', 'permission', 'summary', 'scope', 'delegationId', 'ttlSeconds', 'action',
 )
 DECIDE_APPROVAL_FIELDS = ('decision', 'approvalId', 'decidedAt')
+CREATE_COMMIT_FIELDS = (
+    'version', 'id', 'meetingId', 'delegationId', 'expectedHead', 'message', 'files',
+    'artifactId',
+)
+CREATE_PUSH_FIELDS = (
+    'version', 'id', 'meetingId', 'delegationId', 'commitSha', 'remote', 'branch',
+)
 LIFECYCLE_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 FORWARD_TRANSITIONS = {
     'joining': frozenset({'waiting_for_admission', 'live', 'ended'}),
@@ -152,6 +162,7 @@ class RuntimeDaemon:
         event_store=None,
         lease_store=None,
         meeting_store=None,
+        git_broker=None,
         sse_poll_interval=DEFAULT_SSE_POLL,
         sse_heartbeat_interval=DEFAULT_SSE_HEARTBEAT,
     ):
@@ -171,6 +182,9 @@ class RuntimeDaemon:
         self._approval_waiters = {}
         from artifact_store import ArtifactStore
         self.artifacts = ArtifactStore(self.root / '.colleague' / 'artifacts')
+        self.git_broker = git_broker or GitBroker(artifacts=self.artifacts)
+        self._git_runners = {}
+        self._git_cancels = {}
 
     def close(self):
         for store in (self.meetings, self.events, self.leases):
@@ -625,12 +639,13 @@ class RuntimeDaemon:
             self.meetings.update_approvals(
                 meeting_id, mutate, workspace=self._approval_workspace(meeting_id))
         except FileNotFoundError:
-            return
+            changed = []
         for item in changed:
             self._append(meeting_id, 'approval.cancelled', approvalId=item['id'], reason=label)
             self._signal_approval(item['id'])
         if changed:
             self._sync_approval_presence_locked(meeting_id)
+        self._cancel_git_ops_locked(meeting_id, label)
 
     def _enrich_handoff(self, handoff, session):
         payload = handoff.to_dict()
@@ -640,6 +655,29 @@ class RuntimeDaemon:
             stored = self.meetings.list_approvals(
                 session.id, workspace=session.agent_session.workspace) or []
             payload['approvals'] = self._public_approval_list(stored)
+        work = list(payload.get('workPerformed') or [])
+        artifacts = list(payload.get('artifacts') or [])
+        existing_tasks = {item.get('taskId') for item in work}
+        existing_arts = {item.get('artifactId') for item in artifacts}
+        for op in self.meetings.list_git_ops(session.id) or []:
+            result = op.get('result') or {}
+            status = result.get('status') or op.get('status')
+            if status in ('requested', 'approved', 'running'):
+                continue
+            work_status = 'completed' if status == 'completed' else (
+                'cancelled' if status == 'cancelled' else 'failed')
+            if op.get('id') not in existing_tasks:
+                work.append({
+                    'taskId': op['id'],
+                    'summary': result.get('summary') or 'Recorded reviewed files',
+                    'status': work_status,
+                })
+            for artifact_id in result.get('artifactIds') or []:
+                if artifact_id not in existing_arts:
+                    artifacts.append({'artifactId': artifact_id, 'path': artifact_id})
+                    existing_arts.add(artifact_id)
+        payload['workPerformed'] = work
+        payload['artifacts'] = artifacts
         return MeetingHandoff.from_dict(payload)
 
     def _find_approval(self, records, approval_id):
@@ -801,6 +839,315 @@ class RuntimeDaemon:
                     return self.get_approval(meeting_id, approval_id)
             await asyncio.to_thread(waiter.wait, remaining)
             waiter.clear()
+
+    def _public_git_op(self, payload):
+        return GitOperation.from_dict(payload).public_dict()
+
+    def _find_git_op(self, meeting_id, operation_id):
+        for item in self.meetings.list_git_ops(meeting_id) or []:
+            if item.get('id') == operation_id:
+                return item
+        return None
+
+    def _git_approval_summary(self, kind, request):
+        if kind == 'commit':
+            count = len(request.get('files') or [])
+            label = 'file' if count == 1 else 'files'
+            return 'Record {0} reviewed {1}'.format(count, label)
+        return 'Send the approved snapshot to the configured remote'
+
+    def _git_approval_scope(self, kind, request):
+        if kind == 'commit':
+            names = ','.join(item['path'] for item in request.get('files') or [])[:128]
+            return {
+                'host': 'workspace',
+                'files': names or 'reviewed',
+                'head': request['expectedHead'],
+            }
+        return {
+            'host': 'workspace',
+            'remote': request['remote'],
+            'branch': request['branch'][:128],
+            'commit': request['commitSha'],
+        }
+
+    def _replace_git_op(self, meeting_id, operation):
+        payload = GitOperation.from_dict(operation).to_dict()
+
+        def mutate(current):
+            out = [item for item in current if item.get('id') != payload['id']]
+            out.append(payload)
+            return out
+
+        self.meetings.update_git_ops(meeting_id, mutate)
+        return payload
+
+    def _cancel_git_ops_locked(self, meeting_id, reason):
+        label = str(reason or 'meeting_ended')[:64]
+        changed = []
+
+        def mutate(ops):
+            updated = []
+            for raw in ops:
+                if raw.get('status') in ('requested', 'approved', 'running'):
+                    item = dict(raw)
+                    item['status'] = 'cancelled'
+                    item['updatedAt'] = _iso(self._now())
+                    item['result'] = build_result(
+                        operation_id=item['id'], meeting_id=meeting_id, kind=item['kind'],
+                        status='cancelled', summary='Git operation was cancelled',
+                    ).to_dict()
+                    changed.append(item)
+                    updated.append(item)
+                else:
+                    updated.append(raw)
+            return updated
+
+        try:
+            self.meetings.update_git_ops(meeting_id, mutate)
+        except FileNotFoundError:
+            return
+        for item in changed:
+            self._append(
+                meeting_id, 'git.action.cancelled', operationId=item['id'], reason=label)
+            cancel = self._git_cancels.get(meeting_id + ':' + item['id'])
+            if cancel is not None:
+                cancel.set()
+
+    def _ensure_git_runner(self, meeting_id, operation_id):
+        key = meeting_id + ':' + operation_id
+        with self._lock_guard:
+            if self._git_runners.get(key):
+                return
+            self._git_runners[key] = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            with self._lock_guard:
+                self._git_runners.pop(key, None)
+            return
+
+        def _clear(_task):
+            with self._lock_guard:
+                self._git_runners.pop(key, None)
+
+        loop.create_task(self._run_git_op(meeting_id, operation_id)).add_done_callback(_clear)
+
+    def _finish_git_op(self, meeting_id, operation, *, status, summary, outcome=None,
+                       artifact_ids=None, conflict=False):
+        outcome = outcome or {}
+        kind = operation['kind']
+        result = build_result(
+            operation_id=operation['id'], meeting_id=meeting_id, kind=kind, status=status,
+            summary=summary, commit_sha=outcome.get('commitSha'),
+            parent_sha=outcome.get('parentSha'), tree_sha=outcome.get('treeSha'),
+            remote=outcome.get('remote'), branch=outcome.get('branch'),
+            artifact_ids=artifact_ids, conflict=conflict,
+        ).to_dict()
+        stored = dict(operation)
+        stored['status'] = status
+        stored['updatedAt'] = _iso(self._now())
+        stored['result'] = result
+        self._replace_git_op(meeting_id, stored)
+        event = 'git.action.completed' if status == 'completed' else (
+            'git.action.cancelled' if status == 'cancelled' else 'git.action.failed')
+        if event == 'git.action.cancelled':
+            self._append(meeting_id, event, operationId=operation['id'], reason='cancelled')
+        else:
+            self._append(meeting_id, event, result=result)
+        return self._public_git_op(stored)
+
+    async def _run_git_op(self, meeting_id, operation_id):
+        operation = self._find_git_op(meeting_id, operation_id)
+        if operation is None or operation.get('status') == 'completed':
+            return
+        approval_id = operation.get('approvalId')
+        if not approval_id:
+            self._finish_git_op(
+                meeting_id, operation, status='failed', summary='Git operation is missing approval')
+            return
+        decision = await self.wait_for_decision(meeting_id, approval_id)
+        expected = 'commits' if operation['kind'] == 'commit' else 'pushes'
+        if decision.get('status') != 'approved' or decision.get('category') != expected:
+            mapped = 'cancelled' if decision.get('status') == 'cancelled' else (
+                'denied' if decision.get('status') == 'denied' else 'failed')
+            self._finish_git_op(
+                meeting_id, operation, status=mapped, summary='Git operation was not approved')
+            return
+        stored = dict(operation)
+        stored['status'] = 'running'
+        stored['updatedAt'] = _iso(self._now())
+        self._replace_git_op(meeting_id, stored)
+        record = self._record(meeting_id)
+        workspace = record.session.agent_session.workspace
+        key = meeting_id + ':' + operation_id
+        cancel = threading.Event()
+        self._git_cancels[key] = cancel
+        try:
+            if cancel.is_set():
+                raise IsolationError('cancelled')
+            if operation['kind'] == 'commit':
+                request = CommitRequest.from_dict(operation['request'])
+                outcome = await asyncio.to_thread(
+                    self.git_broker.commit, request, workspace=workspace, cancel=cancel)
+                meta = self.artifacts.put(
+                    meeting_id, kind='git-commit',
+                    body={
+                        'commitSha': outcome['commitSha'],
+                        'parentSha': outcome['parentSha'],
+                        'treeSha': outcome['treeSha'],
+                        'files': outcome.get('files') or [],
+                    },
+                    description='Recorded reviewed files')
+                self._append(meeting_id, 'artifact.created', artifact={
+                    'id': meta['id'], 'kind': 'git-commit', 'path': meta['path'],
+                    'createdAt': _iso(self._now()), 'mediaType': meta.get('mediaType'),
+                    'description': 'Recorded reviewed files',
+                })
+                count = len(outcome.get('files') or [])
+                label = 'file' if count == 1 else 'files'
+                self._finish_git_op(
+                    meeting_id, stored, status='completed',
+                    summary='Recorded {0} reviewed {1}'.format(count, label),
+                    outcome=outcome, artifact_ids=[meta['id']])
+                return
+            request = PushRequest.from_dict(operation['request'])
+            outcome = await asyncio.to_thread(
+                self.git_broker.push, request, workspace=workspace, cancel=cancel)
+            meta = self.artifacts.put(
+                meeting_id, kind='git-push',
+                body={
+                    'commitSha': outcome['commitSha'],
+                    'remote': outcome['remote'],
+                    'branch': outcome['branch'],
+                },
+                description='Sent the approved snapshot to the configured remote')
+            self._append(meeting_id, 'artifact.created', artifact={
+                'id': meta['id'], 'kind': 'git-push', 'path': meta['path'],
+                'createdAt': _iso(self._now()), 'mediaType': meta.get('mediaType'),
+                'description': 'Sent the approved snapshot to the configured remote',
+            })
+            self._finish_git_op(
+                meeting_id, stored, status='completed',
+                summary='Sent the approved snapshot to the configured remote',
+                outcome=outcome, artifact_ids=[meta['id']])
+        except IsolationError as error:
+            text = str(error)
+            if 'cancelled' in text:
+                status = 'cancelled'
+                summary = 'Git operation was cancelled'
+                conflict = False
+            elif any(token in text for token in (
+                    'expectedHead', 'hash', 'staged', 'HEAD', 'tip', 'ancestor')):
+                status = 'conflict'
+                summary = 'The workspace changed before the git operation'
+                conflict = True
+            else:
+                status = 'failed'
+                summary = 'Git operation failed'
+                conflict = False
+            self._finish_git_op(
+                meeting_id, stored, status=status, summary=summary, conflict=conflict)
+        except (TypeError, ValueError, OSError):
+            self._finish_git_op(
+                meeting_id, stored, status='failed', summary='Git operation failed')
+        finally:
+            self._git_cancels.pop(key, None)
+
+    async def create_commit(self, meeting_id, payload):
+        return await self._create_git_op(meeting_id, 'commit', payload)
+
+    async def create_push(self, meeting_id, payload):
+        return await self._create_git_op(meeting_id, 'push', payload)
+
+    async def _create_git_op(self, meeting_id, kind, payload):
+        fields = CREATE_COMMIT_FIELDS if kind == 'commit' else CREATE_PUSH_FIELDS
+        reject_unknown_fields(payload, fields, kind + ' request')
+        reject_secrets(payload, kind + ' request')
+        body = dict(payload)
+        if body.get('meetingId') not in (None, meeting_id):
+            raise DaemonError(409, 'conflict', 'meetingId does not match the request')
+        body['meetingId'] = meeting_id
+        if not body.get('id'):
+            body['id'] = _new_id('cmt-' if kind == 'commit' else 'psh-')
+        try:
+            request = (
+                CommitRequest.from_dict(body) if kind == 'commit' else PushRequest.from_dict(body))
+        except (TypeError, ValueError) as error:
+            raise DaemonError(422, 'invalid_request', str(error)) from error
+        request_payload = request.to_dict()
+        operation_id = request_payload['id']
+        created = False
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            if record.session.state == 'ended':
+                raise DaemonError(
+                    409, 'conflict', 'cannot create git operations after the meeting has ended')
+            existing = self._find_git_op(meeting_id, operation_id)
+            if existing is not None and existing.get('status') == 'completed':
+                return self._public_git_op(existing)
+            if existing is not None and existing.get('status') in (
+                    'requested', 'approved', 'running'):
+                self._ensure_git_runner(meeting_id, operation_id)
+                return self._public_git_op(existing)
+            category = 'commits' if kind == 'commit' else 'pushes'
+            mode = permission_mode(record.session.permissions, category)
+            if mode != 'approval-required':
+                raise DaemonError(
+                    422, 'invalid_request', 'this action is not configured for approval')
+            approval = self.create_approval(meeting_id, {
+                'category': category,
+                'summary': self._git_approval_summary(kind, request_payload),
+                'scope': self._git_approval_scope(kind, request_payload),
+                'delegationId': request_payload.get('delegationId'),
+            })
+            now = _iso(self._now())
+            stored = {
+                'id': operation_id,
+                'kind': kind,
+                'meetingId': meeting_id,
+                'status': 'requested',
+                'request': request_payload,
+                'approvalId': approval['id'],
+                'createdAt': now,
+                'updatedAt': now,
+            }
+            stored = GitOperation.from_dict(stored).to_dict()
+            self._replace_git_op(meeting_id, stored)
+            self._append(
+                meeting_id, 'git.action.requested',
+                operation=GitOperation.from_dict(stored).public_dict())
+            created = True
+        self._ensure_git_runner(meeting_id, operation_id)
+        return self._public_git_op(stored)
+
+    def list_commits(self, meeting_id):
+        self._record(meeting_id)
+        ops = [item for item in (self.meetings.list_git_ops(meeting_id) or [])
+               if item.get('kind') == 'commit']
+        return {'commits': [self._public_git_op(item) for item in ops]}
+
+    def list_pushes(self, meeting_id):
+        self._record(meeting_id)
+        ops = [item for item in (self.meetings.list_git_ops(meeting_id) or [])
+               if item.get('kind') == 'push']
+        return {'pushes': [self._public_git_op(item) for item in ops]}
+
+    async def get_commit(self, meeting_id, operation_id):
+        return await self._get_git_op(meeting_id, operation_id, 'commit')
+
+    async def get_push(self, meeting_id, operation_id):
+        return await self._get_git_op(meeting_id, operation_id, 'push')
+
+    async def _get_git_op(self, meeting_id, operation_id, kind):
+        require_id(operation_id, 'operationId')
+        self._record(meeting_id)
+        found = self._find_git_op(meeting_id, operation_id)
+        if found is None or found.get('kind') != kind:
+            raise DaemonError(404, 'not_found', 'git operation not found')
+        if found.get('status') in ('requested', 'approved', 'running'):
+            self._ensure_git_runner(meeting_id, operation_id)
+        return self._public_git_op(found)
 
     def list_artifacts(self, meeting_id):
         self._record(meeting_id)
@@ -1217,6 +1564,32 @@ def create_app(
             request.match_info['meetingId'], request.match_info['approvalId'], payload)
         return _public_json(approval)
 
+    async def create_commit(request):
+        payload = await read_json(request)
+        result = await daemon.create_commit(request.match_info['meetingId'], payload)
+        return _public_json(result, status=201)
+
+    async def list_commits(request):
+        return _public_json(daemon.list_commits(request.match_info['meetingId']))
+
+    async def get_commit(request):
+        result = await daemon.get_commit(
+            request.match_info['meetingId'], request.match_info['operationId'])
+        return _public_json(result)
+
+    async def create_push(request):
+        payload = await read_json(request)
+        result = await daemon.create_push(request.match_info['meetingId'], payload)
+        return _public_json(result, status=201)
+
+    async def list_pushes(request):
+        return _public_json(daemon.list_pushes(request.match_info['meetingId']))
+
+    async def get_push(request):
+        result = await daemon.get_push(
+            request.match_info['meetingId'], request.match_info['operationId'])
+        return _public_json(result)
+
     async def get_events(request):
         meeting_id = request.match_info['meetingId']
         daemon._record(meeting_id)
@@ -1305,6 +1678,12 @@ def create_app(
     app.router.add_get('/v1/meetings/{meetingId}/approvals/{approvalId}', get_approval)
     app.router.add_post('/v1/meetings/{meetingId}/approvals', create_approval)
     app.router.add_get('/v1/meetings/{meetingId}/approvals', list_approvals)
+    app.router.add_get('/v1/meetings/{meetingId}/commits/{operationId}', get_commit)
+    app.router.add_post('/v1/meetings/{meetingId}/commits', create_commit)
+    app.router.add_get('/v1/meetings/{meetingId}/commits', list_commits)
+    app.router.add_get('/v1/meetings/{meetingId}/pushes/{operationId}', get_push)
+    app.router.add_post('/v1/meetings/{meetingId}/pushes', create_push)
+    app.router.add_get('/v1/meetings/{meetingId}/pushes', list_pushes)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}/content', get_artifact_content)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts/{artifactId}', get_artifact)
     app.router.add_get('/v1/meetings/{meetingId}/artifacts', list_artifacts)

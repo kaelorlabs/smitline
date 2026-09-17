@@ -180,10 +180,34 @@ function createFakeColleague({ autoHandoff = true } = {}) {
         if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
         return found;
       },
+      listCommits: async (id) => ({ commits: colleague.commits?.get(id) || [] }),
+      getCommit: async (id, operationId) => {
+        const found = (colleague.commits?.get(id) || []).find((item) => item.id === operationId);
+        if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
+        return found;
+      },
+      createCommit: async (id, payload) => {
+        const created = { id: payload.id || 'cmt-1', meetingId: id, kind: 'commit', status: 'requested', request: payload };
+        colleague.commits.set(id, [...(colleague.commits.get(id) || []), created]);
+        return created;
+      },
+      listPushes: async (id) => ({ pushes: colleague.pushes?.get(id) || [] }),
+      getPush: async (id, operationId) => {
+        const found = (colleague.pushes?.get(id) || []).find((item) => item.id === operationId);
+        if (!found) throw new ColleagueError('not found', { code: 'not_found', status: 404 });
+        return found;
+      },
+      createPush: async (id, payload) => {
+        const created = { id: payload.id || 'psh-1', meetingId: id, kind: 'push', status: 'requested', request: payload };
+        colleague.pushes.set(id, [...(colleague.pushes.get(id) || []), created]);
+        return created;
+      },
     },
   };
   colleague.approvals = new Map();
   colleague.artifacts = new Map();
+  colleague.commits = new Map();
+  colleague.pushes = new Map();
   return colleague;
 }
 
@@ -217,6 +241,8 @@ test('initialize advertises tools and the tasks extension', async () => {
     'cancel_meeting', 'get_meeting_handoff', 'retry_meeting_handoff',
     'list_meeting_approvals', 'get_meeting_approval', 'decide_meeting_approval',
     'list_meeting_artifacts', 'get_meeting_artifact',
+    'list_meeting_commits', 'get_meeting_commit', 'create_meeting_commit',
+    'list_meeting_pushes', 'get_meeting_push', 'create_meeting_push',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
 });
@@ -258,6 +284,24 @@ test('approval tools require explicit meeting and approval ids', async () => {
   assert.equal(artifacts.result.structuredContent.artifacts[0].id, 'art-1');
   const missingArtifact = await callTool(session, 'get_meeting_artifact', { meetingId: 'mtg-1' });
   assert.equal(missingArtifact.result.isError, true);
+  const missingCommit = await callTool(session, 'create_meeting_commit', { expectedHead: 'a'.repeat(40) });
+  assert.equal(missingCommit.result.isError, true);
+  const createdCommit = await callTool(session, 'create_meeting_commit', {
+    meetingId: 'mtg-1',
+    expectedHead: 'a'.repeat(40),
+    message: 'Record reviewed helper changes',
+    files: [{ path: 'helper.py', sha256: 'b'.repeat(64) }],
+  });
+  assert.equal(createdCommit.result.structuredContent.commit.status, 'requested');
+  const listedCommits = await callTool(session, 'list_meeting_commits', { meetingId: 'mtg-1' });
+  assert.equal(listedCommits.result.structuredContent.commits[0].id, 'cmt-1');
+  const createdPush = await callTool(session, 'create_meeting_push', {
+    meetingId: 'mtg-1',
+    commitSha: 'a'.repeat(40),
+    remote: 'origin',
+    branch: 'colleague-work',
+  });
+  assert.equal(createdPush.result.structuredContent.push.kind, 'push');
 });
 
 test('rejects last/latest and does not invent a session', async () => {

@@ -216,6 +216,37 @@ function renderWorkspace(artifacts, meetingId) {
   }));
 }
 
+function renderGit(operations) {
+  const panel = $('#git-panel');
+  const list = $('#git-list');
+  if (!panel || !list) return;
+  const items = operations || [];
+  if (!items.length) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...items.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.kind || 'git';
+    const summary = document.createElement('p');
+    const result = item.result || {};
+    summary.textContent = result.summary || 'Waiting for a separate approval.';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const status = document.createElement('span');
+    status.textContent = item.status || 'requested';
+    const detail = document.createElement('span');
+    detail.textContent = result.commitSha || item.approvalId || '';
+    meta.append(status, detail);
+    card.append(title, summary, meta);
+    return card;
+  }));
+}
+
 function renderStatus(status) {
   latestStatus = status;
   const health = status.health || {};
@@ -249,6 +280,7 @@ function renderStatus(status) {
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   renderApprovals(pending, status.meetingId);
   renderWorkspace(status.workspaceArtifacts || [], status.meetingId);
+  renderGit(status.gitOperations || []);
   $('#stop-button').disabled = !meetingBusy(status);
   $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');

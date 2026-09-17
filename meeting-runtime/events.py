@@ -35,6 +35,10 @@ EVENT_TYPES = (
     'workspace.action.completed',
     'workspace.action.failed',
     'workspace.action.cancelled',
+    'git.action.requested',
+    'git.action.completed',
+    'git.action.failed',
+    'git.action.cancelled',
     'handoff.ready',
     'handoff.append_failed',
     'presence.updated',
@@ -62,6 +66,10 @@ PAYLOAD_FIELDS = {
     'workspace.action.completed': ('result',),
     'workspace.action.failed': ('result',),
     'workspace.action.cancelled': ('planId', 'reason'),
+    'git.action.requested': ('operation',),
+    'git.action.completed': ('result',),
+    'git.action.failed': ('result',),
+    'git.action.cancelled': ('operationId', 'reason'),
     'handoff.ready': ('handoff',),
     'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
     'presence.updated': ('cameraEnabled', 'cameraState', 'visualState', 'degradedReason'),
@@ -305,6 +313,18 @@ def _payload_from_dict(event_type, payload):
     if event_type == 'workspace.action.cancelled':
         return {
             'planId': require_id(require_field(payload, 'planId', 'event'), 'planId'),
+            'reason': require_string(require_field(payload, 'reason', 'event'), 'reason',
+                                     max_length=64),
+        }
+    if event_type == 'git.action.requested':
+        from git_actions import GitOperation
+        return {'operation': GitOperation.from_dict(require_field(payload, 'operation', 'event'))}
+    if event_type in ('git.action.completed', 'git.action.failed'):
+        from git_actions import GitActionResult
+        return {'result': GitActionResult.from_dict(require_field(payload, 'result', 'event'))}
+    if event_type == 'git.action.cancelled':
+        return {
+            'operationId': require_id(require_field(payload, 'operationId', 'event'), 'operationId'),
             'reason': require_string(require_field(payload, 'reason', 'event'), 'reason',
                                      max_length=64),
         }

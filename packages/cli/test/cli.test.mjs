@@ -254,4 +254,24 @@ test('approvals commands require explicit meeting and approval ids', async (t) =
   ], { cwd: root });
   assert.equal(artifacts.code, 0, artifacts.stderr);
   assert.equal(JSON.parse(artifacts.stdout).artifacts[0].id, 'art-1');
+  const missingCommits = await runColleague(['commits', 'list', '--root', root, '--port', String(daemon.port)], { cwd: root });
+  assert.equal(missingCommits.code, 2);
+  const createdCommit = await runColleague([
+    'commits', 'create', '--meeting-id', 'mtg-1', '--expected-head', 'a'.repeat(40),
+    '--message', 'Record reviewed helper changes', '--file', `helper.py:${'b'.repeat(64)}`,
+    '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(createdCommit.code, 0, createdCommit.stderr);
+  assert.equal(JSON.parse(createdCommit.stdout).kind, 'commit');
+  const listedCommits = await runColleague([
+    'commits', 'list', '--meeting-id', 'mtg-1', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(JSON.parse(listedCommits.stdout).commits[0].kind, 'commit');
+  const createdPush = await runColleague([
+    'pushes', 'create', '--meeting-id', 'mtg-1', '--commit-sha', 'a'.repeat(40),
+    '--remote', 'origin', '--branch', 'colleague-work',
+    '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(createdPush.code, 0, createdPush.stderr);
+  assert.equal(JSON.parse(createdPush.stdout).kind, 'push');
 });
