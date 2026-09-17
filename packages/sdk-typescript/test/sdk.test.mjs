@@ -12,6 +12,7 @@ import {
   createLoopbackTransport,
   parseSseBlock,
   iterateSse,
+  validateJoinRequest,
 } from '../src/index.mjs';
 import { startFakeDaemon, sseFrame } from './fake-daemon.mjs';
 
@@ -71,6 +72,12 @@ test('client-side validation rejects secrets, placeholders, and relative workspa
     url: 'http://zoom.us/j/1',
     agentSession: agentSession(),
   }), ValidationError);
+  const disabled = validateJoinRequest({
+    url: ZOOM,
+    agentSession: agentSession(),
+    camera: { enabled: false },
+  });
+  assert.equal(disabled.camera.enabled, false);
 });
 
 test('create preserves explicit agentSession fields and does not start duplicate meetings', { timeout: 8000 }, async (t) => {

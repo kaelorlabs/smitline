@@ -65,6 +65,28 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(adapter.state, 'open')
             self.assertTrue(participation.gate.muted)
             self.assertTrue(state['muted'])
+            self.assertEqual(state['floorState'], 'listening')
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_playback_drives_speaking_presence_then_restores_listening(self):
+        adapter, microphone, state = Adapter(), Mic(), {}
+        seen = []
+        participation = Participation(
+            adapter, microphone, state, quiet_seconds=.03,
+            on_presence=lambda: seen.append(state.get('floorState')))
+        task = asyncio.create_task(participation.run())
+        try:
+            participation.offer(struct.pack('<120h', *([500] * 120)))
+            for _ in range(40):
+                if 'speaking' in seen:
+                    break
+                await asyncio.sleep(.01)
+            self.assertIn('speaking', seen)
+            await asyncio.sleep(.15)
+            self.assertEqual(state['floorState'], 'listening')
+            self.assertEqual(seen[-1], 'listening')
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

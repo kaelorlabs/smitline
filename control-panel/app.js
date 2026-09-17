@@ -1,4 +1,4 @@
-const $ = selector => document.querySelector(selector);
+import { drawPresencePreview, readAvatarFile } from './visual-preview.mjs';
 const form = $('#meeting-form');
 const views = {
   meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
@@ -34,6 +34,8 @@ let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
 
+let selectedAvatar = null;
+
 function payload() {
   const data = new FormData(form);
   return {
@@ -47,6 +49,11 @@ function payload() {
     tools: {
       webSearch: data.has('webSearch'), codex: data.has('codex'),
       charts: data.has('charts'),
+    },
+    camera: {
+      enabled: data.has('cameraEnabled'),
+      defaultOn: data.has('cameraDefaultOn'),
+      ...(selectedAvatar ? { avatarDataUri: selectedAvatar } : {}),
     },
   };
 }
@@ -115,6 +122,11 @@ function renderStatus(status) {
   $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
   $('#mic-state').textContent = health.microphoneState || '—';
   $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
+  const cameraState = health.cameraState || (health.cameraEnabled === false ? 'off' : '—');
+  $('#camera-state').textContent = health.degradedReason
+    ? `${String(cameraState).replaceAll('_', ' ')} (${String(health.degradedReason).replaceAll('_', ' ')})`
+    : String(cameraState).replaceAll('_', ' ');
+  $('#visual-state').textContent = (health.visualState || '—').replaceAll('_', ' ');
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
   $('#tool-state').textContent = health.backend_status || '—';
   const continuity = status.continuity || health.codex?.continuity;
@@ -366,6 +378,35 @@ async function init() {
 }
 
 init();
+
+function paintPreview() {
+  const canvas = $('#camera-preview');
+  if (!canvas) return;
+  drawPresencePreview(canvas, { visualState: $('#camera-preview-state')?.value || 'listening' });
+}
+paintPreview();
+$('#camera-preview-state')?.addEventListener('change', paintPreview);
+$('#camera-avatar')?.addEventListener('change', async event => {
+  const file = event.target.files?.[0];
+  const errorNode = document.querySelector('[data-error="camera"]');
+  try {
+    selectedAvatar = file ? await readAvatarFile(file) : null;
+    if (errorNode) errorNode.textContent = '';
+    $('#remove-avatar-button').hidden = !selectedAvatar;
+  } catch (error) {
+    selectedAvatar = null;
+    event.target.value = '';
+    if (errorNode) errorNode.textContent = error.message;
+    $('#remove-avatar-button').hidden = true;
+  }
+});
+$('#remove-avatar-button')?.addEventListener('click', () => {
+  selectedAvatar = null;
+  $('#camera-avatar').value = '';
+  $('#remove-avatar-button').hidden = true;
+  const errorNode = document.querySelector('[data-error="camera"]');
+  if (errorNode) errorNode.textContent = '';
+});
 
 function updatePlatform() {
   let platform = null;

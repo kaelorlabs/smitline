@@ -60,6 +60,12 @@ export function validateSettings(input, { isDirectory = value => fs.existsSync(v
   if (meetingInstructions.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(meetingInstructions)) {
     errors.meetingInstructions = 'Use at most 2,000 printable characters.';
   }
+  const camera = input.camera;
+  if (camera && camera.avatarDataUri) {
+    const uri = String(camera.avatarDataUri);
+    if (!uri.startsWith('data:image/')) errors.camera = 'Use a PNG, JPEG, WebP, or SVG image.';
+    else if (uri.length > 120000) errors.camera = 'Choose an image smaller than 80 KB.';
+  }
   return { valid: Object.keys(errors).length === 0, errors };
 }
 

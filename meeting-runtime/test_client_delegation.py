@@ -201,6 +201,21 @@ class ClientDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('stopped', speakable_result({'error': 'cancelled'}).lower())
         self.assertLessEqual(len(speakable_result({'text': 'word ' * 5000}).split()), 600)
 
+    async def test_presence_tracks_work_then_idle_without_task_text(self):
+        seen = []
+        self.session.on_presence = lambda: seen.append(self.state['backend_status'])
+        self.session.note_transcript({
+            'type': 'session.input_transcript.delta',
+            'delta': 'What does the worker lock do?',
+            'start_ms': 100, 'end_ms': 900, 'event_id': 'tr-presence',
+        })
+        await self.session.submit(created('item_presence'))
+        self.assertIn('working', seen)
+        self.assertEqual(self.state['backend_status'], 'idle')
+        self.assertEqual(seen[-1], 'idle')
+        dumped = ' '.join(seen)
+        self.assertNotIn('worker lock', dumped)
+
 
 class CodexProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_job_payload_omits_control_secrets_and_uses_spoken_request(self):

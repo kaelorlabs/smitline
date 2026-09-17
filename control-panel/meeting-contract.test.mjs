@@ -34,6 +34,9 @@ test('builds a local portal meeting payload with least-privilege permissions', (
   assert.equal(payload.context.objective, 'Stay brief.');
   assert.equal(payload.context.importantFiles[0], 'notes.txt');
   assert.equal(payload.context.recentConversation[0].role, 'user');
+  assert.equal(payload.camera.enabled, true);
+  assert.equal(payload.camera.defaultOn, true);
+  assert.equal('avatarPath' in payload.camera, false);
 });
 
 test('disables workspace and network when those tools are off', () => {

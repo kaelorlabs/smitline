@@ -14,11 +14,13 @@ def audible_pcm(data, threshold=160):
 
 
 class Participation:
-    def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic):
+    def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic,
+                 on_presence=None):
         self.adapter, self.state = adapter, state
         self.gate = SpeechGate(microphone)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
+        self.on_presence = on_presence
         self.last_output_audio = float('-inf')
         self.queue = asyncio.Queue(maxsize=500)
         self.lock = asyncio.Lock()
@@ -64,6 +66,8 @@ class Participation:
             self.platform_ready = False
             self.state.update(microphoneState='blocked', floorState='platform_muted')
             self.state['error'] = 'Microphone unavailable. Check the meeting microphone permissions.'
+            if self.on_presence:
+                self.on_presence()
 
     async def platform_microphone_changed(self, actual):
         """Respect a host or participant mute instead of reopening it automatically."""
@@ -74,6 +78,8 @@ class Participation:
                 await self.gate.set_muted(True)
                 self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
             self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+            if self.on_presence:
+                self.on_presence()
             return True
         return False
 
@@ -107,6 +113,8 @@ class Participation:
                                     self.clock() - self.last_output_audio > self.quiet_seconds):
                                 await self.gate.set_muted(True)
                                 self.state.update(muted=True, floorState='listening')
+                                if self.on_presence:
+                                    self.on_presence()
                     continue
                 async with self.lock:
                     if not self.platform_ready:
@@ -118,10 +126,14 @@ class Participation:
                         self.state['discarded_audio_bytes'] += len(data)
                         self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
                         self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+                        if self.on_presence:
+                            self.on_presence()
                         continue
                     if self.gate.muted:
                         await self.gate.set_muted(False)
                         self.state.update(muted=False, floorState='speaking')
+                        if self.on_presence:
+                            self.on_presence()
                     self.gate.offer(data)
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:

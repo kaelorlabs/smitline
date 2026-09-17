@@ -66,6 +66,10 @@ export interface MeetingSession {
   permissions: MeetingPermissions;
   state: MeetingState;
   startedAt: string;
+  cameraEnabled?: boolean;
+  cameraState?: 'off' | 'starting' | 'on' | 'blocked' | 'degraded';
+  visualState?: 'joining' | 'listening' | 'working' | 'speaking' | 'finalizing' | 'needs_attention' | 'ended';
+  degradedReason?: string;
 }
 
 export interface ColleagueEvent {
@@ -82,6 +86,11 @@ export interface JoinMeetingRequest {
   agentSession: AgentSessionRef;
   context?: ContextHandoff;
   permissions?: MeetingPermissions;
+  camera?: {
+    enabled?: boolean;
+    defaultOn?: boolean;
+    avatarDataUri?: string;
+  };
 }
 
 export type MeetingEventName = 'state' | 'transcript' | 'delegation' | 'approval_required' | 'event';

@@ -253,12 +253,37 @@ export function validateJoinRequest(request) {
   const url = requireString(request.url, 'url');
   platformForUrl(url);
   const agentSession = validateAgentSession(request.agentSession);
-  return {
+  const out = {
     meetingUrl: url,
     agentSession,
     context: validateContext(request.context, { required: false }),
     permissions: validatePermissions(request.permissions),
   };
+  if (request.camera !== undefined) out.camera = validateCamera(request.camera);
+  return out;
+}
+
+function validateCamera(value) {
+  if (!isPlainObject(value)) throw new ValidationError('camera must be an object');
+  const known = new Set(['enabled', 'defaultOn', 'avatarDataUri']);
+  for (const key of Object.keys(value)) {
+    if (!known.has(key)) throw new ValidationError(`camera.${key} is not allowed`);
+  }
+  const out = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') throw new ValidationError('camera.enabled must be a boolean');
+    out.enabled = value.enabled;
+  }
+  if (value.defaultOn !== undefined) {
+    if (typeof value.defaultOn !== 'boolean') throw new ValidationError('camera.defaultOn must be a boolean');
+    out.defaultOn = value.defaultOn;
+  }
+  if (value.avatarDataUri !== undefined) {
+    const uri = requireString(value.avatarDataUri, 'camera.avatarDataUri', { maxLength: 120000 });
+    if (!uri.startsWith('data:image/')) throw new ValidationError('camera.avatarDataUri must be an image data URI');
+    out.avatarDataUri = uri;
+  }
+  return out;
 }
 
 function joinKey(payload) {

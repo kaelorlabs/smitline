@@ -85,6 +85,7 @@ export const TOOL_DEFINITIONS = [
         permissions: PERMISSIONS_SCHEMA,
         continuity: { enum: ['exact', 'context'], description: 'Defaults to exact when sessionId is a real thread id.' },
         waitUntilHandoff: { type: 'boolean', description: 'If true and the request advertises MCP Tasks, wait for the durable handoff as a task. Otherwise poll get_meeting_handoff.' },
+        cameraEnabled: { type: 'boolean', description: 'When false, join audio-only. Default true.' },
       },
     },
   },
@@ -157,6 +158,7 @@ function describeEvent(event) {
   if (String(type).startsWith('meeting.')) return `state ${type.replace('meeting.', '')}`;
   if (type === 'handoff.ready') return 'handoff ready';
   if (type === 'handoff.append_failed') return 'handoff append failed';
+  if (type === 'presence.updated') return `presence ${event.visualState || 'updated'}`;
   return String(type);
 }
 
@@ -395,6 +397,7 @@ export function createMcpSession(options = {}) {
       },
       context: args.context,
       permissions: args.permissions,
+      ...(args.cameraEnabled === false ? { camera: { enabled: false } } : {}),
     });
     attachHandle(handle);
     const progressToken = message?.params?._meta?.progressToken;

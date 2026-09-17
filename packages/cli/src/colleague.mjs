@@ -24,7 +24,7 @@ function requestInterrupt() {
 const USAGE = `Usage:
   colleague join --meeting <url> --agent <provider> --workspace <path>
                [--thread <id>] [--model <name>] [--context-file <path>]
-               [--context-text <json>] [--context-continuity] [--wait]
+               [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
   colleague status [--meeting-id <id>]
   colleague cancel [--meeting-id <id>]
   colleague context add --file <path> | --text <json> [--meeting-id <id>]
@@ -128,6 +128,7 @@ function describeEvent(event) {
     return `delegation ${type.replace('delegation.', '')}${task ? ` ${task}` : ''}`;
   }
   if (type.startsWith('meeting.')) return `state ${type.replace('meeting.', '')}`;
+  if (type === 'presence.updated') return `presence ${event.visualState || 'updated'}`;
   if (type === 'handoff.ready') return 'handoff ready';
   if (type === 'handoff.append_failed') return 'handoff append failed';
   return type;
@@ -164,6 +165,7 @@ async function joinCommand(args) {
       ...(args.model ? { model: args.model } : {}),
     },
     context,
+    ...(args['no-camera'] ? { camera: { enabled: false } } : {}),
   });
   await saveMeetingId(root, meeting.id);
   progress(`joined ${meeting.id}`);

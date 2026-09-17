@@ -48,6 +48,10 @@ input:disabled { background:var(--soft)}
 fieldset { border:0; padding:20px 0 0; margin:28px 0 24px; border-top:1px solid var(--line)}
 legend { float:left; width:100%; margin-bottom:12px}
 .tool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; clear:both}
+.camera-grid { grid-template-columns:1fr 1fr}
+.camera-setup { align-items:start}
+.camera-preview-field canvas { width:100%; height:auto; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:#30323b; display:block}
+.camera-setup .text-button { margin-top:8px}
 .tool-card { position:relative; margin:0; display:flex; align-items:flex-start; gap:8px; border:1px solid var(--line); border-radius:6px; padding:14px 10px; min-height:76px; cursor:pointer}
 .tool-card:has(input:checked) { background:#f7f7fc; border-color:#c8cae6}
 .tool-card input { width:14px; height:14px; margin:2px 0 0; accent-color:var(--accent); flex-shrink:0}

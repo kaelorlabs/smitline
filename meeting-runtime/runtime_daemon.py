@@ -24,7 +24,7 @@ from session_continuity import validate_agent_session
 from session_leases import LeaseConflictError, LeaseCorruptionError, LeaseStateError, SessionLeaseStore
 
 
-CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions')
+CREATE_FIELDS = ('meetingUrl', 'agentSession', 'context', 'permissions', 'camera')
 LIFECYCLE_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 FORWARD_TRANSITIONS = {
     'joining': frozenset({'waiting_for_admission', 'live', 'ended'}),
@@ -52,7 +52,7 @@ class DaemonError(Exception):
 
 
 class UnconfiguredMeetingSupervisor:
-    async def start(self, meeting):
+    async def start(self, meeting, camera_settings=None):
         raise RuntimeError('meeting supervisor is not configured')
 
     async def add_context(self, meeting_id, context):
@@ -334,6 +334,8 @@ class RuntimeDaemon:
         meeting_id = _new_id('mtg-')
         started_at = _iso(self._now())
         try:
+            from visual_presence import parse_camera_settings
+            camera = parse_camera_settings(payload.get('camera'))
             session = MeetingSession.from_dict({
                 'id': meeting_id,
                 'platform': platform,
@@ -343,10 +345,18 @@ class RuntimeDaemon:
                 'permissions': payload.get('permissions'),
                 'state': 'joining',
                 'startedAt': started_at,
+                'cameraEnabled': camera['enabled'],
+                'cameraState': 'off' if not camera['enabled'] else 'starting',
+                'visualState': 'joining',
             })
             validate_agent_session(session.agent_session)
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
+        camera_settings = {
+            'cameraEnabled': camera['enabled'],
+            'cameraDefaultOn': camera['defaultOn'],
+            'cameraAvatarDataUri': camera['avatarDataUri'],
+        }
         agent = session.agent_session
         try:
             lease = self.leases.acquire(agent, meeting_id)
@@ -363,9 +373,13 @@ class RuntimeDaemon:
                     self._append(meeting_id, 'agent_session.locked', sessionId=agent.session_id)
                     phase = 'joining_event'
                     self._append(meeting_id, 'meeting.joining')
+                    self._append(meeting_id, 'presence.updated',
+                                 cameraEnabled=session.camera_enabled,
+                                 cameraState=session.camera_state,
+                                 visualState=session.visual_state)
                 phase = 'start'
                 started = True
-                await self.supervisor.start(session)
+                await self.supervisor.start(session, camera_settings=camera_settings)
                 phase = 'enter_meeting'
                 with self._serialize_writes(meeting_id):
                     self.leases.enter_meeting(agent.provider, agent.session_id, lease.token)
@@ -458,6 +472,50 @@ class RuntimeDaemon:
             if record.lease_token:
                 agent = updated.agent_session
                 self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
+            return updated
+
+    def apply_presence(self, meeting_id, **fields):
+        from schema_validation import omit_none
+        from agent_sessions import CAMERA_STATES, DEGRADED_REASONS, VISUAL_STATES
+        allowed = {
+            'cameraEnabled': fields.get('cameraEnabled'),
+            'cameraState': fields.get('cameraState'),
+            'visualState': fields.get('visualState'),
+            'degradedReason': fields.get('degradedReason'),
+        }
+        if allowed['cameraState'] not in CAMERA_STATES and allowed['cameraState'] is not None:
+            return self._record(meeting_id).session
+        if allowed['visualState'] not in VISUAL_STATES and allowed['visualState'] is not None:
+            return self._record(meeting_id).session
+        if allowed['degradedReason'] not in DEGRADED_REASONS and allowed['degradedReason'] is not None:
+            return self._record(meeting_id).session
+        with self._serialize_writes(meeting_id):
+            record = self._record(meeting_id)
+            payload = record.session.to_dict()
+            changed = False
+            for key, value in allowed.items():
+                if value is None and key != 'degradedReason':
+                    continue
+                if key == 'degradedReason' and 'degradedReason' not in fields:
+                    continue
+                if payload.get(key) != value:
+                    if value is None:
+                        payload.pop(key, None)
+                    else:
+                        payload[key] = value
+                    changed = True
+            if not changed:
+                return record.session
+            updated = MeetingSession.from_dict(payload)
+            self._persist(updated, record.lease_token)
+            public = omit_none({
+                'cameraEnabled': updated.camera_enabled,
+                'cameraState': updated.camera_state,
+                'visualState': updated.visual_state,
+                'degradedReason': updated.degraded_reason,
+            })
+            if 'cameraEnabled' in public and 'cameraState' in public and 'visualState' in public:
+                self._append(meeting_id, 'presence.updated', **public)
             return updated
 
     def heartbeat_lease(self, provider, session_id):

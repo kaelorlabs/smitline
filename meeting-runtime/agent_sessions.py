@@ -5,9 +5,9 @@ from types import MappingProxyType
 from context_handoff import ContextHandoff
 from meeting_urls import platform_for_url
 from schema_validation import (
-    omit_none, optional_field, reject_unknown_fields, require_enum, require_field,
-    require_id, require_mapping, require_meeting_id, require_string, require_timestamp,
-    require_workspace,
+    omit_none, optional_bool, optional_field, reject_unknown_fields,
+    require_enum, require_field, require_id, require_mapping, require_meeting_id,
+    require_string, require_timestamp, require_workspace,
 )
 
 
@@ -21,7 +21,19 @@ AGENT_SESSION_FIELDS = ('provider', 'sessionId', 'workspace', 'model', 'metadata
 PERMISSION_FIELDS = ('workspace', 'commands', 'edits', 'network', 'commits', 'pushes')
 MEETING_SESSION_FIELDS = (
     'id', 'platform', 'meetingUrl', 'agentSession', 'context', 'permissions', 'state', 'startedAt',
+    'cameraEnabled', 'cameraState', 'visualState', 'degradedReason',
 )
+CAMERA_STATES = ('off', 'starting', 'on', 'blocked', 'degraded')
+VISUAL_STATES = (
+    'joining', 'listening', 'working', 'speaking', 'finalizing', 'needs_attention', 'ended',
+)
+DEGRADED_REASONS = ('platform_blocked', 'unsupported', 'unconfirmed', 'policy')
+
+
+def _optional_enum(value, name, allowed):
+    if value is None:
+        return None
+    return require_enum(value, name, allowed)
 
 
 def _string_metadata(value):
@@ -122,9 +134,13 @@ class MeetingSession:
     permissions: MeetingPermissions
     state: str
     started_at: str
+    camera_enabled: bool = None
+    camera_state: str = None
+    visual_state: str = None
+    degraded_reason: str = None
 
     def to_dict(self):
-        return {
+        return omit_none({
             'id': self.id,
             'platform': self.platform,
             'meetingUrl': self.meeting_url,
@@ -133,7 +149,11 @@ class MeetingSession:
             'permissions': self.permissions.to_dict(),
             'state': self.state,
             'startedAt': self.started_at,
-        }
+            'cameraEnabled': self.camera_enabled,
+            'cameraState': self.camera_state,
+            'visualState': self.visual_state,
+            'degradedReason': self.degraded_reason,
+        })
 
     @classmethod
     def from_dict(cls, data):
@@ -159,4 +179,11 @@ class MeetingSession:
                                'state', MEETING_STATES),
             started_at=require_timestamp(require_field(payload, 'startedAt', 'meetingSession'),
                                          'startedAt'),
+            camera_enabled=optional_bool(optional_field(payload, 'cameraEnabled'), 'cameraEnabled'),
+            camera_state=_optional_enum(optional_field(payload, 'cameraState'), 'cameraState',
+                                        CAMERA_STATES),
+            visual_state=_optional_enum(optional_field(payload, 'visualState'), 'visualState',
+                                        VISUAL_STATES),
+            degraded_reason=_optional_enum(optional_field(payload, 'degradedReason'),
+                                           'degradedReason', DEGRADED_REASONS),
         )

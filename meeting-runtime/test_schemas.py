@@ -154,6 +154,18 @@ class SchemaValidationTests(unittest.TestCase):
             MeetingSession.from_dict(meeting_session_payload(id='../etc'))
         with self.assertRaises(ValueError):
             MeetingSession.from_dict(meeting_session_payload(startedAt='2026-09-16T17:00:00'))
+        camera = self.assert_round_trip(MeetingSession, meeting_session_payload(
+            cameraEnabled=False, cameraState='off', visualState='ended'))
+        self.assertFalse(camera.camera_enabled)
+        self.assertEqual(camera.camera_state, 'off')
+        with self.assertRaises(ValueError):
+            MeetingSession.from_dict(meeting_session_payload(cameraState='streaming'))
+        with self.assertRaises(ValueError):
+            MeetingSession.from_dict(meeting_session_payload(degradedReason='customer transcript'))
+        degraded = self.assert_round_trip(MeetingSession, meeting_session_payload(
+            cameraEnabled=True, cameraState='degraded', visualState='listening',
+            degradedReason='platform_blocked'))
+        self.assertEqual(degraded.degraded_reason, 'platform_blocked')
 
     def test_handoff_and_event_vocabulary_round_trip(self):
         parsed = self.assert_round_trip(MeetingHandoff, handoff_payload())
@@ -193,6 +205,8 @@ class SchemaValidationTests(unittest.TestCase):
             event_payload('handoff.ready', id='evt-14', handoff=handoff_payload()),
             event_payload('handoff.append_failed', id='evt-15', reason='codex unavailable',
                           handoffId='hnd-mtg-abc123', retryable=True),
+            event_payload('presence.updated', id='evt-16', cameraEnabled=True,
+                          cameraState='on', visualState='listening'),
         ]
         for sample in samples:
             with self.subTest(sample['type']):

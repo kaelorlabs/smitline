@@ -47,10 +47,12 @@ class FakeSupervisor:
         self.context_error = RuntimeError('context failed')
         self.cancel_error = RuntimeError('cancel failed')
 
-    async def start(self, meeting):
+    async def start(self, meeting, camera_settings=None):
         if self.fail_start:
             raise self.start_error
         self.started.append(meeting.id)
+        self.cameras = getattr(self, 'cameras', [])
+        self.cameras.append(camera_settings)
 
     async def add_context(self, meeting_id, context):
         if self.fail_context:
@@ -203,6 +205,24 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(teams.status, 201)
         self.assertEqual((await teams.json())['platform'], 'teams')
 
+    async def test_camera_settings_are_optional_and_presence_is_public(self):
+        created = await self.create(camera={'enabled': False, 'defaultOn': False})
+        self.assertEqual(created.status, 201)
+        body = await created.json()
+        self.assertEqual(body['cameraEnabled'], False)
+        self.assertEqual(body['cameraState'], 'off')
+        self.assertEqual(body['visualState'], 'joining')
+        self.assertNotIn('cameraAvatarDataUri', body)
+        types = [event.type for event in self.daemon.events.replay(body['id'])]
+        self.assertIn('presence.updated', types)
+        extra = await self.create(camera={'unknown': True}, agentSession=agent_session_payload(sessionId='thread-cam-2'))
+        self.assertEqual(extra.status, 422)
+        updated = self.daemon.apply_presence(
+            body['id'], cameraEnabled=False, cameraState='off', visualState='ended')
+        self.assertEqual(updated.visual_state, 'ended')
+        dumped = json.dumps(updated.to_dict())
+        self.assertNotIn('transcript', dumped.lower())
+
     async def test_exact_continuity_rejects_last_before_join(self):
         response = await self.create(agentSession=agent_session_payload(sessionId='--last'))
         self.assertEqual(response.status, 422)
@@ -268,7 +288,7 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         captured = []
 
         class CaptureSupervisor(FakeSupervisor):
-            async def start(inner, meeting):
+            async def start(inner, meeting, camera_settings=None):
                 captured.append(meeting.id)
                 raise RuntimeError('admission denied')
 
@@ -882,7 +902,7 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         ids = self._track_acquired_ids()
         original = self.supervisor.start
 
-        async def fail_before(_meeting):
+        async def fail_before(_meeting, camera_settings=None):
             raise RuntimeError('start before write')
 
         self.supervisor.start = fail_before
@@ -897,8 +917,8 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.supervisor.started = []
         self.supervisor.cancelled = []
 
-        async def fail_after(meeting):
-            await original(meeting)
+        async def fail_after(meeting, camera_settings=None):
+            await original(meeting, camera_settings=camera_settings)
             raise RuntimeError('start after write')
 
         self.supervisor.start = fail_after
@@ -985,10 +1005,10 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         original_start = self.supervisor.start
 
-        async def blocked_start(meeting):
+        async def blocked_start(meeting, camera_settings=None):
             if meeting.agent_session.session_id == 'thread-origin-1':
                 await gate.wait()
-            await original_start(meeting)
+            await original_start(meeting, camera_settings=camera_settings)
 
         self.supervisor.start = blocked_start
         slow = asyncio.create_task(self.create())

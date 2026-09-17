@@ -11,6 +11,7 @@ class Capabilities:
     file_delivery: bool = False
     screen_sharing: bool = False
     participant_discovery: bool = False
+    camera: bool = False
     def public(self):
         return asdict(self)
 
@@ -50,4 +51,16 @@ class MeetingPlatformAdapter(ABC):
 
     async def get_participant_count(self):
         """Confirmed in-call count including self, or None when unavailable."""
+        return None
+
+    async def get_camera_state(self):
+        """Return on, off, blocked, or unknown without raising."""
+        return 'unknown'
+
+    async def enable_camera(self):
+        """Turn the meeting camera on after admission. May raise if the control is missing."""
+        return None
+
+    async def disable_camera(self):
+        """Turn the meeting camera off. May raise if the control is missing."""
         return None

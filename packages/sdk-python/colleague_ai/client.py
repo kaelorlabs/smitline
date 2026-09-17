@@ -260,12 +260,39 @@ def validate_join_request(request):
     _reject_secrets(request)
     url = _require_string(request.get('url'), 'url')
     platform_for_url(url)
-    return {
+    payload = {
         'meetingUrl': url,
         'agentSession': validate_agent_session(request.get('agentSession')),
         'context': validate_context(request.get('context'), required=False),
         'permissions': validate_permissions(request.get('permissions')),
     }
+    if 'camera' in request:
+        payload['camera'] = _validate_camera(request.get('camera'))
+    return payload
+
+
+def _validate_camera(value):
+    if not _is_mapping(value):
+        raise ValidationError('camera must be an object')
+    known = {'enabled', 'defaultOn', 'avatarDataUri'}
+    extra = set(value) - known
+    if extra:
+        raise ValidationError(f'camera.{next(iter(extra))} is not allowed')
+    out = {}
+    if 'enabled' in value:
+        if not isinstance(value['enabled'], bool):
+            raise ValidationError('camera.enabled must be a boolean')
+        out['enabled'] = value['enabled']
+    if 'defaultOn' in value:
+        if not isinstance(value['defaultOn'], bool):
+            raise ValidationError('camera.defaultOn must be a boolean')
+        out['defaultOn'] = value['defaultOn']
+    if 'avatarDataUri' in value:
+        uri = _require_string(value['avatarDataUri'], 'camera.avatarDataUri', max_length=120000)
+        if not uri.startswith('data:image/'):
+            raise ValidationError('camera.avatarDataUri must be an image data URI')
+        out['avatarDataUri'] = uri
+    return out
 
 
 def join_key(payload):
@@ -567,6 +594,7 @@ class MeetingHandle:
         self._session = session
         self._transport = transport
         self._listeners: Dict[str, set] = {}
+        self._emitted = []
         self._seen = set()
         self._stop = threading.Event()
         self._cancelled = False
@@ -612,26 +640,33 @@ class MeetingHandle:
 
     def _emit(self, event):
         kind = event.get('type') or ''
-        for handler in list(self._listeners.get('event', ())):
+        with self._lock:
+            self._emitted.append(event)
+            listeners = {
+                'event': list(self._listeners.get('event', ())),
+                'state': list(self._listeners.get('state', ())),
+                'transcript': list(self._listeners.get('transcript', ())),
+                'delegation': list(self._listeners.get('delegation', ())),
+                'approval_required': list(self._listeners.get('approval_required', ())),
+            }
+        for handler in listeners['event']:
             handler(event)
         if kind.startswith('meeting.'):
-            for handler in list(self._listeners.get('state', ())):
+            for handler in listeners['state']:
                 handler(event)
         if kind.startswith('transcript.'):
-            for handler in list(self._listeners.get('transcript', ())):
+            for handler in listeners['transcript']:
                 handler(event)
         if kind.startswith('delegation.'):
-            for handler in list(self._listeners.get('delegation', ())):
+            for handler in listeners['delegation']:
                 handler(event)
         if kind in {'approval.required', 'approval_required'}:
-            for handler in list(self._listeners.get('approval_required', ())):
+            for handler in listeners['approval_required']:
                 handler(event)
 
     def _run_pump(self):
         try:
             for event in self._transport.events(self.id, seen=self._seen, stop=self._stop):
-                if self._stop.is_set():
-                    return
                 self._emit(event)
                 if event.get('type') == 'handoff.ready' and event.get('handoff'):
                     self._resolve(event['handoff'])
@@ -700,17 +735,27 @@ class MeetingHandle:
     async def events(self) -> AsyncIterator[dict]:
         import asyncio
         pending: queue.Queue = queue.Queue()
+        delivered = set()
 
         def push(event):
+            event_id = event.get('id')
+            if event_id:
+                if event_id in delivered:
+                    return
+                delivered.add(event_id)
             pending.put(event)
 
         off = self.on('event', push)
         try:
+            with self._lock:
+                snapshot = list(self._emitted)
+            for event in snapshot:
+                push(event)
             while True:
                 try:
                     event = pending.get_nowait()
                 except queue.Empty:
-                    if self._done.is_set():
+                    if self._done.is_set() and not self._pump.is_alive():
                         try:
                             event = pending.get_nowait()
                         except queue.Empty:

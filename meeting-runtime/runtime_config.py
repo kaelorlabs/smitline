@@ -27,13 +27,18 @@ class RuntimeConfig:
     charts_enabled: bool
     workspace: str
     meeting_instructions: str
+    camera_enabled: bool = True
+    camera_default_on: bool = True
+    camera_logo_data_uri: str = ''
 
     @classmethod
     def from_environ(cls, environ=None):
         env = dict(os.environ if environ is None else environ)
         state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+        state = {}
         if state_path:
-            overlay = environ_from_state(read_json(state_path) or {})
+            state = read_json(state_path) or {}
+            overlay = environ_from_state(state)
             env.update(overlay)
         name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Colleague AI').strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
@@ -54,7 +59,27 @@ class RuntimeConfig:
         meeting_instructions = env.get('COLLEAGUE_MEETING_INSTRUCTIONS', '').strip()
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
-        return cls(name, model, web_search, codex, charts, workspace, meeting_instructions)
+        camera_enabled = True
+        camera_default_on = True
+        camera_logo = ''
+        if 'cameraEnabled' in state:
+            if not isinstance(state['cameraEnabled'], bool):
+                raise ValueError('cameraEnabled must be a boolean')
+            camera_enabled = state['cameraEnabled']
+        if 'cameraDefaultOn' in state:
+            if not isinstance(state['cameraDefaultOn'], bool):
+                raise ValueError('cameraDefaultOn must be a boolean')
+            camera_default_on = state['cameraDefaultOn']
+        raw_avatar = state.get('cameraAvatarDataUri')
+        if raw_avatar:
+            try:
+                from visual_presence import parse_avatar_data_uri
+                camera_logo = parse_avatar_data_uri(raw_avatar)
+            except ValueError:
+                camera_logo = ''
+        # Never interpret a host filesystem path inside the meeting container.
+        return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
+                   camera_enabled, camera_default_on, camera_logo)
 
 
 def meeting_state_from_environ(environ=None):

@@ -105,7 +105,6 @@ class FakeTransport:
             'archivePath': f'recordings/{meeting_id}',
             'partial': self.partial if partial is None else partial,
         }
-        self.handoffs[meeting_id] = handoff
         self.event_log[meeting_id].extend([
             {'version': 1, 'id': 'evt-live', 'meetingId': meeting_id, 'timestamp': session['startedAt'], 'type': 'meeting.live'},
             {
@@ -114,6 +113,7 @@ class FakeTransport:
             },
             {'version': 1, 'id': 'evt-ready', 'meetingId': meeting_id, 'timestamp': handoff['endedAt'], 'type': 'handoff.ready', 'handoff': handoff},
         ])
+        self.handoffs[meeting_id] = handoff
 
     def get_meeting(self, meeting_id):
         return self.meetings[meeting_id]
@@ -147,7 +147,7 @@ class FakeTransport:
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
         cursor = last_event_id
-        while stop is None or not stop.is_set():
+        while True:
             for event in list(self.event_log.get(meeting_id, ())):
                 event_id = event.get('id')
                 if event_id:
@@ -157,6 +157,8 @@ class FakeTransport:
                     cursor = event_id
                 yield event
             if self.close_stream:
+                return
+            if stop is not None and stop.is_set():
                 return
             time.sleep(0.02)
 
@@ -171,6 +173,12 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
             validate_join_request({'url': ZOOM, 'agentSession': agent_session(workspace='relative')})
         with self.assertRaises(ValidationError):
             validate_join_request({'url': 'http://zoom.us/j/1', 'agentSession': agent_session()})
+        disabled = validate_join_request({
+            'url': ZOOM,
+            'agentSession': agent_session(),
+            'camera': {'enabled': False},
+        })
+        self.assertEqual(disabled['camera']['enabled'], False)
 
     async def test_join_preserves_session_and_dedupes_consumers(self):
         transport = FakeTransport()
@@ -199,17 +207,28 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session['agentSession']['sessionId'], 'thread-exact')
         self.assertEqual(session['agentSession']['metadata'], {'source': 'codex'})
         self.assertEqual(session['agentSession']['model'], 'gpt-5.6-terra')
-        types = []
+        seen = []
+        streamed = []
+
+        def collect(event):
+            seen.append(event['type'])
+
+        first.on('event', collect)
+        with first._lock:
+            for event in list(first._emitted):
+                collect(event)
+
         async def consume():
             async for event in first.events():
-                types.append(event['type'])
+                streamed.append(event['type'])
                 if event['type'] == 'handoff.ready':
                     break
+
         consumer = asyncio.create_task(consume())
         handoff = await first.finished()
-        await consumer
+        await asyncio.wait_for(consumer, timeout=2)
         self.assertEqual(handoff['handoffId'], f'hnd-{first.id}')
-        self.assertIn('handoff.ready', types)
+        self.assertIn('handoff.ready', seen + streamed)
 
     async def test_startup_error_is_prompt(self):
         transport = FakeTransport()

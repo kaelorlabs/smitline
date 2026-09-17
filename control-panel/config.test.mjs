@@ -32,6 +32,8 @@ test('serializes only runtime settings and preserves a hidden passcode', () => {
   assert.equal(parseEnv(text).MEETING_PASSCODE, 'existing');
   assert.ok(!text.includes('OPENAI_API_KEY'));
   assert.equal(publicSettings(parseEnv(text)).tools.webSearch, true);
+  assert.equal(text.includes('COLLEAGUE_CAMERA'), false);
+  assert.equal(text.includes('avatar'), false);
 });
 
 test('Teams invites validate while lookalike hosts and credentials fail', () => {

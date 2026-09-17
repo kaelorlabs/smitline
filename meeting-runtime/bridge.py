@@ -28,6 +28,8 @@ from joinly.providers.browser.devices.pulse_server import PulseServer
 from joinly.providers.browser.devices.virtual_display import VirtualDisplay
 from joinly.providers.browser.devices.virtual_speaker import VirtualSpeaker
 from joinly.providers.browser.devices.virtual_microphone import VirtualMicrophone
+from joinly.providers.browser.camera_feed import CameraFeed
+from visual_presence import Presence, apply_platform_camera, presence_public_fields
 
 state = {'stage': 'starting', 'model': 'gpt-live-1', 'input_bytes': 0, 'output_bytes': 0,
          'muted': True, 'listening': False, 'admissionState': 'pending', 'authenticationState': 'guest', 'microphoneState': 'muted', 'captions': [], 'usage_seconds': 0, 'finalized': False,
@@ -37,8 +39,15 @@ state['codex'] = {'enabled': True, 'implementation': 'host_codex_cli', 'models':
                   'session_active': False, 'worker_connected': False, 'started': 0, 'completed': 0}
 state['context'] = {'enabled': False, 'implementation': 'local_retrieval', 'source_count': 0,
                     'started': 0, 'completed': 0, 'last_sources': []}
+state.update(cameraEnabled=True, cameraState='starting', visualState='joining')
 stop = asyncio.Event()
 record = None
+presence = None
+
+
+def _sync_presence():
+    if presence is not None:
+        presence.sync()
 
 
 def stage(value):
@@ -49,6 +58,8 @@ def stage(value):
         if record:
             record.event('stage', stage=value)
         print(value, flush=True)
+    if presence is not None:
+        presence.sync()
 
 
 def build_session_config(runtime, meeting_state=None):
@@ -87,12 +98,12 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
             await ws.send_json({'type': 'session.start', 'session': config})
             ready = asyncio.Event()
             finished = asyncio.Event()
-            participation = Participation(adapter, microphone, state)
+            participation = Participation(adapter, microphone, state, on_presence=_sync_presence)
             gate = participation
             delegations = ClientDelegation(
                 send=ws.send_json, record=record, state=state, runtime=runtime,
                 meeting_state=meeting_state, router=router, page=page, adapter=adapter,
-                stop_event=stop)
+                stop_event=stop, on_presence=_sync_presence)
             codex_client = CodexJobClient()
 
             async def send_audio():
@@ -137,6 +148,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
             async def closer():
                 await stop.wait()
+                state['finalizing'] = True
+                _sync_presence()
                 await delegations.close()
                 await ws.send_json({'type': 'session.close'})
                 try:
@@ -202,11 +215,14 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
 
 async def main():
-    global record
+    global record, presence
     runtime = RuntimeConfig.from_environ()
     meeting_state = meeting_state_from_environ()
     state['participant_name'] = runtime.participant_name
     state['meeting_guidance_configured'] = bool(runtime.meeting_instructions)
+    state['cameraEnabled'] = runtime.camera_enabled
+    state['cameraState'] = 'off' if not runtime.camera_enabled else 'starting'
+    state['visualState'] = 'joining'
     sources = load_context()
     state['context']['enabled'] = bool(sources)
     state['context']['source_count'] = len(sources)
@@ -243,7 +259,9 @@ async def main():
         loop.add_signal_handler(sig, stop.set)
     app = web.Application()
     async def status(_request):
-        return web.json_response(state, headers={'Cache-Control': 'no-store'})
+        payload = dict(state)
+        payload.update(presence_public_fields(state))
+        return web.json_response(payload, headers={'Cache-Control': 'no-store'})
     app.router.add_get('/health', status)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -255,6 +273,13 @@ async def main():
         await stack.enter_async_context(VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900))
         speaker = await stack.enter_async_context(VirtualSpeaker(env=env, sample_rate=24000, byte_depth=2, frames_per_chunk=480))
         microphone = await stack.enter_async_context(VirtualMicrophone(env=env, sample_rate=24000, byte_depth=2))
+        camera_feed = CameraFeed(
+            microphone,
+            enabled=runtime.camera_enabled,
+            logo_src=runtime.camera_logo_data_uri or None,
+        )
+        presence = Presence(state, camera_feed)
+        presence.sync()
         viewer = await asyncio.create_subprocess_exec('/usr/bin/websockify', '--web=/usr/share/novnc', '6080', '127.0.0.1:5900', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         # Drain the speaker while waiting for admission, before starting billed audio.
         async def drain():
@@ -262,14 +287,21 @@ async def main():
                 await speaker.read()
         drain_task = asyncio.create_task(drain())
         try:
-            async with joined_meeting(url, runtime.participant_name, os.environ.get('MEETING_PASSCODE', ''), env, stop, stage, state) as (page, adapter):
+            async with joined_meeting(url, runtime.participant_name, os.environ.get('MEETING_PASSCODE', ''), env, stop, stage, state, camera_feed=camera_feed) as (page, adapter):
                 state['admissionState'] = 'admitted'
+                await apply_platform_camera(
+                    adapter,
+                    enabled=runtime.camera_enabled,
+                    default_on=runtime.camera_default_on,
+                    state=state,
+                )
+                presence.sync()
                 stage('connecting_audio')
                 await adapter.connect_audio()
                 state['chatAvailable'] = await adapter.chat_available()
                 drain_task.cancel()
                 await asyncio.gather(drain_task, return_exceptions=True)
-                await run_voice(speaker, microphone, page, api_key, runtime, adapter, meeting_state)
+                await run_voice(speaker, camera_feed.audio_writer, page, api_key, runtime, adapter, meeting_state)
         except Exception as exc:
             state['error'] = type(exc).__name__ + ': ' + str(exc).split('Call log:')[0][:300]
             stage('authentication_required' if isinstance(exc, AuthenticationRequired) else 'needs_attention')

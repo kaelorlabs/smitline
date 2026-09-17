@@ -158,6 +158,8 @@ def state_from_session(session):
     }
     if metadata.get('source'):
         payload['source'] = metadata['source']
+    if session.camera_enabled is not None:
+        payload['cameraEnabled'] = bool(session.camera_enabled)
     return payload
 
 

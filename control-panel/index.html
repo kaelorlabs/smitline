@@ -76,6 +76,36 @@
               <small class="error" data-error="charts"></small>
             </fieldset>
 
+            <fieldset>
+              <legend>Meeting camera</legend>
+              <div class="tool-grid camera-grid">
+                <label class="tool-card"><input type="checkbox" name="cameraEnabled" checked><span><b>Show in the meeting</b><small>Colleague AI appears as a virtual camera tile</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="cameraDefaultOn" checked><span><b>Turn camera on after joining</b><small>Audio continues if the host blocks video</small></span></label>
+              </div>
+              <div class="field-row camera-setup">
+                <div class="field">
+                  <label for="camera-avatar">Avatar or logo <span>optional</span></label>
+                  <input id="camera-avatar" name="cameraAvatar" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg">
+                  <small class="hint">PNG, JPEG, WebP, or SVG up to 80 KB. A bundled Colleague AI mark is used when none is chosen.</small>
+                  <small class="error" data-error="camera"></small>
+                  <button class="text-button" id="remove-avatar-button" type="button" hidden>Remove custom avatar</button>
+                </div>
+                <div class="field camera-preview-field">
+                  <label for="camera-preview-state">Local preview</label>
+                  <select id="camera-preview-state" aria-label="Preview presence state">
+                    <option value="joining">Joining</option>
+                    <option value="listening" selected>Listening</option>
+                    <option value="working">Working</option>
+                    <option value="speaking">Speaking</option>
+                    <option value="finalizing">Finalizing</option>
+                    <option value="needs_attention">Needs attention</option>
+                    <option value="ended">Ended</option>
+                  </select>
+                  <canvas id="camera-preview" width="320" height="180" aria-label="Virtual camera preview"></canvas>
+                </div>
+              </div>
+            </fieldset>
+
             <div class="field full" id="workspace-field">
               <label for="workspace">Codex workspace <span>optional</span></label>
               <input id="workspace" name="workspace" autocomplete="off" placeholder="/Users/you/Projects/product">
@@ -144,6 +174,8 @@
           <dl class="telemetry">
             <div><dt>Microphone</dt><dd id="mic-state">—</dd></div>
             <div><dt>Voice output</dt><dd id="floor-state">—</dd></div>
+            <div><dt>Camera</dt><dd id="camera-state">—</dd></div>
+            <div><dt>Presence</dt><dd id="visual-state">—</dd></div>
             <div><dt>Listening</dt><dd id="listening-state">—</dd></div>
             <div><dt>Tool activity</dt><dd id="tool-state">—</dd></div>
             <div><dt>Codex session</dt><dd id="continuity-state">—</dd></div>

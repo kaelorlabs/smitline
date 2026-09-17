@@ -11,13 +11,15 @@ always uses our virtual feed regardless of platform behavior.
 Patches ``enumerateDevices`` to include a virtual camera so
 platforms that check for camera hardware still show a video toggle.
 
-The camera canvas renders the Joinly logo directly (no CDP
-screencast, no JPEG compression).  Audio amplitude drives an
-equalizer effect that reacts to speech in real time.
+The camera canvas renders the Colleague AI mark (or a validated
+local avatar) directly. Audio amplitude drives an equalizer that
+reacts to speech in real time. Presence uses ``set_visual_state``.
 """
 
 import asyncio
+import json
 from collections.abc import Callable
+from urllib.parse import quote
 
 import numpy as np
 from playwright.async_api import Page
@@ -29,50 +31,34 @@ _CAM_HEIGHT = 720
 _BAND_THROTTLE_S = 0.05
 _NUM_BANDS = 7
 
-# Logo SVG as a data URI — loaded as an Image on the canvas.
-_LOGO_SVG = (
-    "data:image/svg+xml,"
-    "%3Csvg viewBox='0 0 509 508' xmlns='http://www.w3.org/2000/svg'"
-    " style='fill-rule:evenodd;clip-rule:evenodd;"
-    "stroke-linejoin:round;stroke-miterlimit:2'%3E"
-    "%3Cg transform='matrix(0.198828,0,0,1,0,0)'%3E"
-    "%3Crect x='0' y='0' width='2560' height='507.274'"
-    " style='fill:none'/%3E"
-    "%3Cg%3E%3Cg transform="
-    "'matrix(18.9194,0,0,3.74809,-1607.95,-6354.86)'%3E"
-    "%3Cg transform='matrix(6.03591e-17,-0.985739,0.986051,"
-    "6.03782e-17,-102.185,1960.59)'%3E"
-    "%3Cpath d='M268.936,224.012C268.936,205.142 253.555,189.822 "
-    "234.611,189.822L165.961,189.822C147.016,189.822 131.636,"
-    "205.142 131.636,224.012L131.636,292.846C131.636,311.716 "
-    "147.016,327.036 165.961,327.036L234.611,327.036C253.555,"
-    "327.036 268.936,311.716 268.936,292.846L268.936,224.012Z'/%3E"
-    "%3C/g%3E%3Cg%3E%3Cg transform='matrix(-1.66394e-16,0.905807,"
-    "-0.905807,-1.66394e-16,618.204,708.95)'%3E"
-    "%3Cpath d='M1147.84,552.057C1159.51,552.057 1168.44,547.024 "
-    "1173.91,539.258L1173.91,544.701C1173.91,546.155 1174.49,"
-    "547.55 1175.52,548.579C1176.55,549.607 1177.94,550.185 "
-    "1179.4,550.185C1183.66,550.185 1188.87,550.185 1188.87,"
-    "550.185L1188.87,477.771L1179.46,477.771C1177.99,477.771 "
-    "1176.58,478.355 1175.54,479.395C1174.5,480.436 1173.91,"
-    "481.847 1173.91,483.318L1173.91,488.698C1168.44,480.932 "
-    "1159.51,475.899 1147.84,475.899C1127.38,475.899 1111.85,"
-    "492.154 1111.85,513.906C1111.85,535.802 1127.38,552.057 "
-    "1147.84,552.057ZM1150.29,538.539C1136.46,538.539 1126.66,"
-    "528.167 1126.66,513.906C1126.66,499.645 1136.46,489.417 "
-    "1150.29,489.417C1163.54,489.417 1174.2,499.789 1174.2,"
-    "513.906C1174.2,528.167 1163.54,538.539 1150.29,538.539Z'"
-    " style='fill:white;fill-rule:nonzero'/%3E%3C/g%3E"
-    "%3Cg transform='matrix(1.6197e-16,0.905807,0.712479,"
-    "-1.35305e-16,-204.864,701.281)'%3E"
-    "%3Crect x='1209.34' y='477.771' width='14.958' height='72.414'"
-    " style='fill:white;fill-rule:nonzero'/%3E%3C/g%3E"
-    "%3Cg transform='matrix(-0.901226,0,0,0.901226,"
-    "439.829,1382.51)'%3E"
-    "%3Ccircle cx='349.421' cy='467.11' r='7.517'"
-    " style='fill:white'/%3E%3C/g%3E%3C/g%3E%3C/g%3E"
-    "%3C/g%3E%3C/g%3E%3C/svg%3E"
+_COLLEAGUE_MARK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">'
+    '<rect width="128" height="128" rx="28" fill="#30323b"/>'
+    '<rect x="34" y="44" width="12" height="40" rx="4" fill="#fff"/>'
+    '<rect x="58" y="28" width="12" height="72" rx="4" fill="#fff"/>'
+    '<rect x="82" y="44" width="12" height="40" rx="4" fill="#fff"/>'
+    "</svg>"
 )
+_LOGO_SVG = "data:image/svg+xml," + quote(_COLLEAGUE_MARK_SVG, safe="")
+_VISUAL_STATES = (
+    "joining",
+    "listening",
+    "working",
+    "speaking",
+    "finalizing",
+    "needs_attention",
+    "ended",
+)
+_JOINLY_EFFECT_TO_VISUAL = {
+    "typing": "working",
+    "reading": "working",
+    "interrupted": "needs_attention",
+    "sharing": "working",
+    "thinking": "joining",
+    "busy": "working",
+    "speaking": "speaking",
+    "listening": "listening",
+}
 
 # ---------------------------------------------------------------------------
 # Status effect functions — each draws a small animation below the logo.
@@ -288,17 +274,32 @@ function fxReading(ctx, cx, y, t, alpha) {
     }
 }"""
 
+# Listening: restrained breathing ring around the mark
+_FX_LISTENING = """\
+function fxListening(ctx, cx, cy, logoW, logoH, t, alpha) {
+    const r = Math.max(logoW, logoH) * 0.62;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 1.15);
+    ctx.globalAlpha = (0.05 + pulse * 0.08) * alpha;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = H * 0.008;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + H * 0.004 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+}"""
+
 # The init script only patches API methods (no DOM access).
 # All canvas/Image/rAF work is deferred to _initCanvas which
 # runs on the first getUserMedia call (DOM is guaranteed ready).
 _CAMERA_OVERRIDE_TEMPLATE = """\
 (() => {{
     const W = {w}, H = {h};
-    const LOGO_SRC = "{logo_svg}";
+    const LOGO_SRC = __LOGO_SRC__;
+    const VISUAL_STATES = new Set(__VISUAL_STATES__);
 
     if (window.__camOrigGUM) return;
 
     let camTrack = null;
+    window.__visualState = 'joining';
 
     {fx_speaking}
     {fx_typing}
@@ -307,6 +308,7 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
     {fx_interrupted}
     {fx_thinking}
     {fx_busy}
+    {fx_listening}
 
     const FX = {{
         typing: fxTyping,
@@ -318,6 +320,17 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
     const FX_BG = {{
         thinking: fxThinking,
         sharing: fxShare,
+        listening: fxListening,
+    }};
+
+    const VISUAL_TO_STATUS = {{
+        joining: 'thinking',
+        listening: 'listening',
+        working: 'typing',
+        speaking: '',
+        finalizing: 'reading',
+        needs_attention: 'interrupted',
+        ended: '',
     }};
 
     function _initCanvas() {{
@@ -360,11 +373,17 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                 }}
             }}
         }};
+        window.__setVisualState = (name) => {{
+            if (!VISUAL_STATES.has(name)) return;
+            window.__visualState = name;
+            const mapped = VISUAL_TO_STATUS[name] || '';
+            window.__setStatus(mapped);
+        }};
 
         function draw() {{
             t += 0.02;
 
-            ctx.fillStyle = '#121220';
+            ctx.fillStyle = '#30323b';
             ctx.fillRect(0, 0, W, H);
 
             if (logoImg) {{
@@ -373,6 +392,8 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                 const cx = W / 2;
                 const cy = H / 2;
                 const logoBot = cy + logoH / 2;
+                const ended = window.__visualState === 'ended';
+                const markAlpha = ended ? 0.38 : 1;
 
                 // Action status (compute alpha for all effects)
                 const wantAlpha = status ? 1 : 0;
@@ -405,11 +426,13 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                     ctx.restore();
                 }}
 
+                ctx.globalAlpha = markAlpha;
                 ctx.drawImage(
                     logoImg,
                     cx - logoW / 2, cy - logoH / 2,
                     logoW, logoH
                 );
+                ctx.globalAlpha = 1;
 
                 // Foreground effects — below the logo
                 if (statusAlpha > 0.02) {{
@@ -470,7 +493,7 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                 deviceId: 'virtual-camera',
                 groupId: 'virtual',
                 kind: 'videoinput',
-                label: 'Virtual Camera',
+                label: 'Colleague AI',
                 toJSON() {{ return this; }},
             }});
         }}
@@ -479,49 +502,83 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
 }})();"""
 
 
+def build_camera_override_script(*, logo_src: str | None = None) -> str:
+    """Build the getUserMedia override script without interpolating untrusted braces."""
+    script = _CAMERA_OVERRIDE_TEMPLATE.format(
+        w=_CAM_WIDTH,
+        h=_CAM_HEIGHT,
+        n_bands=_NUM_BANDS,
+        fx_speaking=_FX_SPEAKING,
+        fx_typing=_FX_TYPING,
+        fx_share=_FX_SHARE,
+        fx_reading=_FX_READING,
+        fx_interrupted=_FX_INTERRUPTED,
+        fx_thinking=_FX_THINKING,
+        fx_busy=_FX_BUSY,
+        fx_listening=_FX_LISTENING,
+    )
+    return (
+        script.replace("__LOGO_SRC__", json.dumps(logo_src or _LOGO_SVG))
+        .replace("__VISUAL_STATES__", json.dumps(list(_VISUAL_STATES)))
+    )
+
+
 class CameraFeed:
     """Manages the virtual camera canvas and amplitude-driven glow.
 
-    Draws the Joinly logo directly on the camera canvas (no CDP
-    screencast).  Wraps an ``AudioWriter`` to extract amplitude and
-    push it to the canvas render loop.
+    Draws the Colleague AI mark (or a validated avatar data URI) on the
+    camera canvas. Wraps an ``AudioWriter`` to extract amplitude and
+    push it to the canvas render loop. Presence states use
+    ``set_visual_state``.
     """
 
-    def __init__(self, writer: AudioWriter) -> None:
+    def __init__(
+        self,
+        writer: AudioWriter,
+        *,
+        enabled: bool = True,
+        logo_src: str | None = None,
+    ) -> None:
         """Initialize with the underlying audio writer."""
+        self.enabled = enabled
+        self._logo_src = logo_src or _LOGO_SVG
         self._meeting_page: Page | None = None
         self._last_band_time: float = 0
-        self.audio_writer = _AmplitudeAudioWriter(writer, self._on_bands)
+        if enabled:
+            self.audio_writer = _AmplitudeAudioWriter(writer, self._on_bands)
+        else:
+            self.audio_writer = writer
 
     async def install(self, meeting_page: Page) -> None:
         """Install the getUserMedia override on the meeting page."""
         self._meeting_page = meeting_page
-        script = _CAMERA_OVERRIDE_TEMPLATE.format(
-            w=_CAM_WIDTH,
-            h=_CAM_HEIGHT,
-            n_bands=_NUM_BANDS,
-            logo_svg=_LOGO_SVG,
-            fx_speaking=_FX_SPEAKING,
-            fx_typing=_FX_TYPING,
-            fx_share=_FX_SHARE,
-            fx_reading=_FX_READING,
-            fx_interrupted=_FX_INTERRUPTED,
-            fx_thinking=_FX_THINKING,
-            fx_busy=_FX_BUSY,
+        if not self.enabled:
+            return
+        await meeting_page.add_init_script(
+            build_camera_override_script(logo_src=self._logo_src)
         )
-        await meeting_page.add_init_script(script)
 
-    def set_effect(self, name: str | None) -> None:
-        """Set the active visual effect, or None to clear."""
+    def set_visual_state(self, name: str | None) -> None:
+        """Set a Colleague presence state, or listening when cleared."""
+        if not self.enabled:
+            return
+        visual = name if name in _VISUAL_STATES else "listening"
         page = self._meeting_page
         if page and not page.is_closed():
-            safe = (name or "").replace("'", "\\'")
+            payload = json.dumps(visual)
             task = asyncio.ensure_future(
-                page.evaluate(f"window.__setStatus?.('{safe}')")
+                page.evaluate(f"window.__setVisualState?.({payload})")
             )
             task.add_done_callback(
                 lambda t: t.exception() if not t.cancelled() else None
             )
+
+    def set_effect(self, name: str | None) -> None:
+        """Map a Joinly action animation onto Colleague visual presence."""
+        if not name:
+            self.set_visual_state("listening")
+            return
+        self.set_visual_state(_JOINLY_EFFECT_TO_VISUAL.get(name, "working"))
 
     async def stop(self) -> None:
         """Clean up references."""

@@ -12,7 +12,7 @@ async def visible(locator):
 
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
-    capabilities = Capabilities(file_delivery=True)
+    capabilities = Capabilities(file_delivery=True, camera=True)
     async def join(self, url, name, passcode=''):
         await join_zoom(self.page, self.normalize_url(url), passcode, self.stop, self.stage, name)
     async def connect_audio(self):
@@ -43,6 +43,34 @@ class ZoomAdapter(MeetingPlatformAdapter):
         raise RuntimeError(f'Zoom microphone could not be confirmed {desired}')
     async def mute(self): await self._set_mute(True)
     async def unmute(self): await self._set_mute(False)
+    async def get_camera_state(self):
+        return await _camera_state(self.page, zoom=True)
+    async def enable_camera(self):
+        await self._set_camera(True)
+    async def disable_camera(self):
+        await self._set_camera(False)
+    async def _set_camera(self, enabled):
+        desired = 'on' if enabled else 'off'
+        if await self.get_camera_state() == desired:
+            return
+        await self.page.mouse.move(80, 680)
+        label = (
+            r'^(?:start video|start my video)(?:\s*\([^)]*\))?$' if enabled
+            else r'^(?:stop video|stop my video)(?:\s*\([^)]*\))?$'
+        )
+        button = self.page.get_by_role('button', name=re.compile(label, re.I), include_hidden=True).first
+        try:
+            await button.click(timeout=1500)
+        except Exception:
+            await self.page.keyboard.press('Alt+V')
+        for _ in range(20):
+            actual = await self.get_camera_state()
+            if actual == desired:
+                return
+            if actual == 'blocked':
+                raise RuntimeError('Zoom camera is blocked by meeting policy')
+            await asyncio.sleep(.1)
+        raise RuntimeError(f'Zoom camera could not be confirmed {desired}')
     async def chat_available(self):
         return await self.page.get_by_role('button', name=re.compile(r'^(open|close) the chat panel$', re.I)).count() > 0
     async def send_chat_message(self, text):
@@ -64,7 +92,7 @@ class ZoomAdapter(MeetingPlatformAdapter):
 
 class TeamsAdapter(MeetingPlatformAdapter):
     platform_id = 'teams'
-    capabilities = Capabilities(participant_discovery=True)
+    capabilities = Capabilities(participant_discovery=True, camera=True)
     def __init__(self, *args):
         super().__init__(*args)
         from joinly.providers.browser.platforms.teams import TeamsBrowserPlatformController
@@ -136,6 +164,41 @@ class TeamsAdapter(MeetingPlatformAdapter):
         raise RuntimeError('Teams microphone is unavailable or blocked by meeting policy')
     async def mute(self): await self._set_mute(True)
     async def unmute(self): await self._set_mute(False)
+    async def get_camera_state(self):
+        return await _camera_state(self.page, zoom=False)
+    async def enable_camera(self):
+        await self._set_camera(True)
+    async def disable_camera(self):
+        await self._set_camera(False)
+    async def _set_camera(self, enabled):
+        desired = 'on' if enabled else 'off'
+        if await self.get_camera_state() == desired:
+            return
+        switch = self.page.get_by_role('switch', name=re.compile(r'camera|video', re.I))
+        if await visible(switch):
+            checked = await switch.first.is_checked()
+            if checked != enabled:
+                await switch.first.click(timeout=2000)
+        else:
+            label = (
+                r'^turn (?:camera|video) on(?:\s*\([^)]*\))?$' if enabled
+                else r'^turn (?:camera|video) off(?:\s*\([^)]*\))?$'
+            )
+            button = self.page.get_by_role('button', name=re.compile(label, re.I)).first
+            if await visible(button):
+                await button.click(timeout=2000)
+            elif await button.count() and not await button.is_enabled():
+                raise RuntimeError('Teams camera is blocked by meeting policy')
+            else:
+                raise RuntimeError('Teams camera control is missing')
+        for _ in range(20):
+            actual = await self.get_camera_state()
+            if actual == desired:
+                return
+            if actual == 'blocked':
+                raise RuntimeError('Teams camera is blocked by meeting policy')
+            await asyncio.sleep(.1)
+        raise RuntimeError(f'Teams camera could not be confirmed {desired}')
     async def connect_audio(self):
         await self.mute()
     async def chat_available(self):
@@ -165,3 +228,46 @@ REGISTRY = {'zoom': ZoomAdapter, 'teams': TeamsAdapter}
 
 def create_adapter(url, page, stop, stage):
     return REGISTRY[platform_for_url(url)](page, stop, stage)
+
+
+async def _camera_state(page, *, zoom):
+    if zoom:
+        pairs = (
+            ('off', r'^(?:start video|start my video)(?:\s*\([^)]*\))?$'),
+            ('on', r'^(?:stop video|stop my video)(?:\s*\([^)]*\))?$'),
+        )
+    else:
+        pairs = (
+            ('off', r'^turn (?:camera|video) on(?:\s*\([^)]*\))?$'),
+            ('on', r'^turn (?:camera|video) off(?:\s*\([^)]*\))?$'),
+        )
+        switch = page.get_by_role('switch', name=re.compile(r'camera|video', re.I))
+        if await visible(switch):
+            try:
+                checked = await switch.first.is_checked()
+            except Exception:
+                return 'unknown'
+            enabled = await switch.first.is_enabled()
+            if not enabled:
+                return 'blocked'
+            return 'on' if checked else 'off'
+    for state, label in pairs:
+        buttons = page.get_by_role('button', name=re.compile(label, re.I), include_hidden=zoom)
+        for button in await buttons.all():
+            try:
+                if zoom:
+                    name = (await button.get_attribute('aria-label') or await button.inner_text()).lower()
+                    if 'all' in name:
+                        continue
+                else:
+                    if not await button.is_visible():
+                        continue
+                    name = (await button.get_attribute('aria-label') or await button.inner_text()).lower()
+                    if 'all' in name:
+                        continue
+                if not await button.is_enabled():
+                    return 'blocked'
+                return state
+            except Exception:
+                continue
+    return 'unknown'

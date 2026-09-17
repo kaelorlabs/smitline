@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from agent_sessions import CAMERA_STATES, DEGRADED_REASONS, VISUAL_STATES
 from meeting_handoff import MeetingHandoff
 from schema_validation import (
     omit_none, optional_bool, optional_field, optional_int, optional_string,
@@ -27,6 +28,7 @@ EVENT_TYPES = (
     'artifact.created',
     'handoff.ready',
     'handoff.append_failed',
+    'presence.updated',
 )
 PAYLOAD_FIELDS = {
     'meeting.joining': (),
@@ -44,6 +46,7 @@ PAYLOAD_FIELDS = {
     'artifact.created': ('artifact',),
     'handoff.ready': ('handoff',),
     'handoff.append_failed': ('reason', 'handoffId', 'retryable'),
+    'presence.updated': ('cameraEnabled', 'cameraState', 'visualState', 'degradedReason'),
 }
 ENVELOPE_FIELDS = ('version', 'id', 'meetingId', 'timestamp', 'type')
 TRANSCRIPT_SOURCES = ('input', 'output', 'platform')
@@ -211,6 +214,18 @@ def _payload_from_dict(event_type, payload):
                                     max_length=256),
             'retryable': require_bool(require_field(payload, 'retryable', 'event'), 'retryable'),
         }
+    if event_type == 'presence.updated':
+        return omit_none({
+            'cameraEnabled': require_bool(require_field(payload, 'cameraEnabled', 'event'),
+                                          'cameraEnabled'),
+            'cameraState': require_enum(require_field(payload, 'cameraState', 'event'),
+                                        'cameraState', CAMERA_STATES),
+            'visualState': require_enum(require_field(payload, 'visualState', 'event'),
+                                        'visualState', VISUAL_STATES),
+            'degradedReason': None if optional_field(payload, 'degradedReason') is None else (
+                require_enum(payload['degradedReason'], 'degradedReason', DEGRADED_REASONS)
+            ),
+        })
     return {}
 
 

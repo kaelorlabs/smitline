@@ -97,6 +97,11 @@ export function buildMeetingCreatePayload(settings, { sources = [], workspace, r
       meetingInstructions: settings.meetingInstructions,
     }),
     permissions: permissionsForTools(tools),
+    camera: {
+      enabled: settings.camera?.enabled !== false,
+      defaultOn: settings.camera?.defaultOn !== false,
+      ...(settings.camera?.avatarDataUri ? { avatarDataUri: settings.camera.avatarDataUri } : {}),
+    },
   };
 }
 

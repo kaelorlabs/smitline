@@ -273,8 +273,17 @@ class ProductionMeetingSupervisor:
             'COLLEAGUE_HOST_RUNTIME_STATE': str(state_path),
         }
 
-    def _write_session_files(self, session):
+    def _write_session_files(self, session, camera_settings=None):
         payload = state_from_session(session)
+        if camera_settings:
+            if 'cameraEnabled' in camera_settings:
+                payload['cameraEnabled'] = bool(camera_settings['cameraEnabled'])
+            if 'cameraDefaultOn' in camera_settings:
+                payload['cameraDefaultOn'] = bool(camera_settings['cameraDefaultOn'])
+            avatar = camera_settings.get('cameraAvatarDataUri')
+            if avatar:
+                payload['cameraAvatarDataUri'] = avatar
+            payload.pop('cameraAvatarPath', None)
         write_private_json(meeting_state_path(self.runtime_root, session.id), payload)
         index = context_index_from_handoff(session.context)
         write_private_json(context_index_path(self.runtime_root, session.id), index)
@@ -282,7 +291,7 @@ class ProductionMeetingSupervisor:
         write_private_json(active_meeting_path(self.project_root), {'meetingId': session.id})
         return payload
 
-    async def start(self, session):
+    async def start(self, session, camera_settings=None):
         async with self._lock:
             status = await self.launcher.inspect()
             if status.get('unknown'):
@@ -294,7 +303,7 @@ class ProductionMeetingSupervisor:
                 return
             if status.get('running') or (self._active_id not in (None, session.id)):
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
-            self._write_session_files(session)
+            self._write_session_files(session, camera_settings=camera_settings)
             try:
                 self._preflight_codex(session)
                 await self.launcher.up(self._container_env(session))
@@ -481,6 +490,18 @@ class ProductionMeetingSupervisor:
             try:
                 self.daemon.transition(session.id, mapped)
             except DaemonError:
+                pass
+        if self.daemon is not None and hasattr(self.daemon, 'apply_presence'):
+            from visual_presence import map_visual_state
+            fields = {}
+            for key in ('cameraEnabled', 'cameraState', 'visualState', 'degradedReason'):
+                if key in health:
+                    fields[key] = health[key]
+            if 'visualState' not in fields:
+                fields['visualState'] = map_visual_state(health)
+            try:
+                self.daemon.apply_presence(session.id, **fields)
+            except Exception:
                 pass
         if stage in TERMINAL_STAGES:
             await self._complete_handoff(

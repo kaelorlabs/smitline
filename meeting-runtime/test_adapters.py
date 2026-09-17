@@ -67,6 +67,31 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         await self.page.set_content('<p>The meeting has been ended</p>')
         self.assertTrue(await a.has_ended())
 
+    async def test_zoom_and_teams_camera_controls(self):
+        await self.page.set_content(
+            '''<button aria-label="Start video" onclick="this.setAttribute('aria-label',this.getAttribute('aria-label').startsWith('Start')?'Stop video':'Start video')">cam</button>'''
+        )
+        zoom = self.adapter(False)
+        self.assertTrue(zoom.capabilities.camera)
+        self.assertEqual(await zoom.get_camera_state(), 'off')
+        await zoom.enable_camera()
+        self.assertEqual(await zoom.get_camera_state(), 'on')
+        await zoom.disable_camera()
+        self.assertEqual(await zoom.get_camera_state(), 'off')
+        await self.page.set_content(
+            '''<button aria-label="Turn camera on" onclick="this.setAttribute('aria-label',this.getAttribute('aria-label').includes('on')?'Turn camera off':'Turn camera on')">cam</button>'''
+        )
+        teams = self.adapter()
+        self.assertTrue(teams.capabilities.camera)
+        self.assertEqual(await teams.get_camera_state(), 'off')
+        await teams.enable_camera()
+        self.assertEqual(await teams.get_camera_state(), 'on')
+
+    async def test_blocked_camera_is_reported_without_join(self):
+        await self.page.set_content('<button aria-label="Turn camera on" disabled>cam</button>')
+        teams = self.adapter()
+        self.assertEqual(await teams.get_camera_state(), 'blocked')
+
     async def test_zoom_reveals_hidden_toolbar_before_remuting(self):
         await self.page.set_content('''
           <style>#mic { display: none }</style>

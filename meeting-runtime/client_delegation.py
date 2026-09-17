@@ -62,7 +62,8 @@ def speakable_result(result, plot_share=None):
 
 class ClientDelegation:
     def __init__(self, *, send, record, state, runtime, meeting_state=None, assembler=None,
-                 router=None, page=None, adapter=None, stop_event=None, progress_interval=8.0):
+                 router=None, page=None, adapter=None, stop_event=None, progress_interval=8.0,
+                 on_presence=None):
         self.send = send
         self.record = record
         self.state = state
@@ -73,6 +74,7 @@ class ClientDelegation:
         self.adapter = adapter
         self.stop_event = stop_event
         self.progress_interval = progress_interval
+        self.on_presence = on_presence
         self._closed = False
         self._seen = set()
         self._cancels = {}
@@ -99,6 +101,8 @@ class ClientDelegation:
         elif event_type in ('delegation.completed', 'delegation.cancelled'):
             if not self._open_work():
                 self.state['backend_status'] = 'idle'
+        if self.on_presence:
+            self.on_presence()
 
     def _open_work(self):
         return any(not task.done() for task in self._tasks)
@@ -171,6 +175,8 @@ class ClientDelegation:
         self._tasks.discard(task)
         if not self._open_work() and self.state.get('backend_status') == 'working':
             self.state['backend_status'] = 'idle'
+            if self.on_presence:
+                self.on_presence()
 
     def _request(self, event, delegation_id):
         offset = event.get('offset_ms')

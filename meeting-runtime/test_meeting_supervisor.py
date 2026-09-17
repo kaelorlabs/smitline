@@ -198,6 +198,22 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.shutdown()
         self.temporary.cleanup()
 
+    async def test_camera_settings_are_written_to_runtime_state_without_host_paths(self):
+        meeting = session()
+        await self.supervisor.start(meeting, camera_settings={
+            'cameraEnabled': True,
+            'cameraDefaultOn': False,
+            'cameraAvatarDataUri': 'data:image/png;base64,abc',
+            'cameraAvatarPath': '/Users/Taylor/secret.png',
+        })
+        stored = read_json(meeting_state_path(self.runtime, meeting.id))
+        self.assertTrue(stored['cameraEnabled'])
+        self.assertFalse(stored['cameraDefaultOn'])
+        self.assertEqual(stored['cameraAvatarDataUri'], 'data:image/png;base64,abc')
+        self.assertNotIn('cameraAvatarPath', stored)
+        self.assertNotIn('/Users/Taylor/secret.png', json.dumps(stored))
+        await self.supervisor.cancel(meeting.id)
+
     async def test_launch_to_live_context_cancel_and_heartbeat(self):
         meeting = session()
         await self.supervisor.start(meeting)

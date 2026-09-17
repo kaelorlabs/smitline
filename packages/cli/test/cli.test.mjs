@@ -45,9 +45,11 @@ test('parseArgs and privacy-safe event rendering', () => {
   const args = parseArgs(['join', '--meeting', ZOOM, '--wait', '--thread', 'thread-1']);
   assert.equal(args.meeting, ZOOM);
   assert.equal(args.wait, true);
+  assert.equal(parseArgs(['join', '--meeting', ZOOM, '--no-camera'])['no-camera'], true);
   assert.equal(describeEvent({ type: 'transcript.final', text: 'secret meeting speech' }), 'transcript transcript.final');
   assert.equal(describeEvent({ type: 'delegation.started', taskId: 'task-9' }), 'delegation started task-9');
   assert.ok(!describeEvent({ type: 'transcript.final', text: 'secret meeting speech' }).includes('secret'));
+  assert.equal(describeEvent({ type: 'presence.updated', visualState: 'working' }), 'presence working');
 });
 
 test('join --wait prints final JSON, never transcript text, and uses exit 0', async (t) => {
