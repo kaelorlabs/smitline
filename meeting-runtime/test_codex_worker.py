@@ -139,7 +139,12 @@ class CodexWorkerInheritanceTests(unittest.TestCase):
         }, 'exact.txt')
         argv = self._argv()
         self.assertEqual(argv[1], 'exec')
-        self.assertEqual(argv[2:5], ['resume', 'thread-origin-1', '-'])
+        resume = argv.index('resume')
+        self.assertEqual(argv[resume:resume + 3], ['resume', 'thread-origin-1', '-'])
+        self.assertLess(argv.index('--sandbox'), resume)
+        self.assertLess(argv.index('-C'), resume)
+        self.assertLess(argv.index('--json'), resume)
+        self.assertLess(argv.index('-o'), resume)
         self.assertNotIn('--last', argv)
         self.assertNotIn('last', argv)
         self.assertEqual(argv[argv.index('--sandbox') + 1], 'read-only')
@@ -175,7 +180,7 @@ class CodexWorkerInheritanceTests(unittest.TestCase):
             'meeting_id': 'mtg-portal00000001',
         }, through_handle=True)
         argv = self._argv()
-        self.assertEqual(argv[2], '-')
+        self.assertEqual(argv[-1], '-')
         self.assertNotIn('resume', argv)
         self.assertNotIn('--last', argv)
         self.assertFalse(result['session_reused'])
@@ -300,7 +305,8 @@ class CodexWorkerInheritanceTests(unittest.TestCase):
         self.assertTrue(second.get('idempotent'))
         self.assertFalse(second.get('appended'))
         argv = self._argv()
-        self.assertEqual(argv[2:5], ['resume', 'thread-origin-1', '-'])
+        resume = argv.index('resume')
+        self.assertEqual(argv[resume:resume + 3], ['resume', 'thread-origin-1', '-'])
         released = handle_job(
             str(self.executable),
             {'op': 'release', 'session_id': 'thread-origin-1'},
@@ -328,8 +334,9 @@ class CodexWorkerInheritanceTests(unittest.TestCase):
             sessions=sessions,
         )
         argv = self._argv()
-        self.assertEqual(argv[3], 'thread-origin-1')
-        self.assertNotEqual(argv[3], 'thread-from-url-hash')
+        resume = argv.index('resume')
+        self.assertEqual(argv[resume + 1], 'thread-origin-1')
+        self.assertNotEqual(argv[resume + 1], 'thread-from-url-hash')
         self.assertEqual(result['session_id'], 'thread-origin-1')
 
 

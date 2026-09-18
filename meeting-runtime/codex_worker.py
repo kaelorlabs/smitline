@@ -127,7 +127,19 @@ def build_exec_command(codex, data, output_path, resume_id=None):
     continuity = continuity_of(data)
     workspace = str(Path(data.get('workspace') or os.environ.get('COLLEAGUE_WORKSPACE') or WORKSPACE
                          ).expanduser())
-    command = [codex, 'exec']
+    # `resume` is an `exec` subcommand. Options owned by `exec` must precede
+    # that subcommand; recent Codex CLIs reject them after SESSION_ID/PROMPT.
+    command = [
+        codex, 'exec',
+        '--sandbox', 'read-only',
+        '--skip-git-repo-check',
+        '-C', workspace,
+        '--json',
+        '-o', str(output_path),
+    ]
+    model = data.get('model')
+    if data.get('authorize_model') and model in CODEX_MODELS:
+        command.extend(['-m', model])
     if continuity == EXACT:
         if is_forbidden_session_id(session_id) or session_id in CONTEXT_SESSION_IDS:
             return None, {'error': 'exact Codex session continuity requires a real sessionId'}
@@ -138,16 +150,6 @@ def build_exec_command(codex, data, output_path, resume_id=None):
         command.extend(['resume', session_id, '-'])
     else:
         command.append('-')
-    command.extend([
-        '--sandbox', 'read-only',
-        '--skip-git-repo-check',
-        '-C', workspace,
-        '--json',
-        '-o', str(output_path),
-    ])
-    model = data.get('model')
-    if data.get('authorize_model') and model in CODEX_MODELS:
-        command.extend(['-m', model])
     if '--last' in command or any(part == 'last' for part in command):
         return None, {'error': 'Codex session id must be an explicit originating thread id'}
     return command, None
