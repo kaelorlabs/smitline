@@ -305,6 +305,33 @@ class FakeTransport:
 
 
 class SdkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context_git_schema_matches_runtime(self):
+        context = {
+            'version': 1,
+            'objective': 'support meeting',
+            'currentTask': 'review implementation',
+            'summary': '',
+            'decisions': [],
+            'constraints': [],
+            'openQuestions': [],
+            'importantFiles': [],
+            'recentConversation': [],
+            'git': {'branch': 'developer-platform', 'commit': 'abc123', 'dirty': False},
+        }
+        validated = validate_join_request({
+            'url': ZOOM,
+            'agentSession': agent_session(),
+            'context': context,
+        })
+        self.assertEqual(validated['context']['git'], context['git'])
+        context['git'] = {'statusShort': ['?? private-file']}
+        with self.assertRaisesRegex(ValidationError, r'context\.git\.statusShort'):
+            validate_join_request({
+                'url': ZOOM,
+                'agentSession': agent_session(),
+                'context': context,
+            })
+
     def test_validation_rejects_secrets_and_placeholders(self):
         with self.assertRaises(ValidationError):
             validate_join_request({'url': ZOOM, 'agentSession': {**agent_session(), 'token': 'nope'}})

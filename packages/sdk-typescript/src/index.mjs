@@ -265,7 +265,17 @@ export function validateContext(value, { required = true } = {}) {
   };
   if (value.git !== undefined) {
     if (!isPlainObject(value.git)) throw new ValidationError('context.git must be an object');
-    out.git = { ...value.git };
+    const knownGitFields = new Set(['branch', 'commit', 'dirty']);
+    for (const key of Object.keys(value.git)) {
+      if (!knownGitFields.has(key)) throw new ValidationError(`context.git.${key} is not allowed`);
+    }
+    out.git = {};
+    if (value.git.branch !== undefined) out.git.branch = requireString(value.git.branch, 'context.git.branch', { maxLength: 256 });
+    if (value.git.commit !== undefined) out.git.commit = requireString(value.git.commit, 'context.git.commit', { maxLength: 64 });
+    if (value.git.dirty !== undefined) {
+      if (typeof value.git.dirty !== 'boolean') throw new ValidationError('context.git.dirty must be a boolean');
+      out.git.dirty = value.git.dirty;
+    }
   }
   return out;
 }
@@ -474,13 +484,22 @@ async function waitForPort(host, port, timeoutMs, isPortOpen) {
 }
 
 function defaultIsPortOpen(host, port) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const socket = net.connect({ host, port });
     socket.once('connect', () => {
       socket.end();
       resolve(true);
     });
-    socket.once('error', () => resolve(false));
+    socket.once('error', (error) => {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+        reject(new StartupError(
+          `local loopback access to ${host}:${port} was blocked; allow the command to access the Colleague AI daemon and retry`,
+          { code: 'loopback_access_denied' },
+        ));
+        return;
+      }
+      resolve(false);
+    });
     socket.setTimeout(300, () => {
       socket.destroy();
       resolve(false);

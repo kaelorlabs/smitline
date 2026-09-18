@@ -52,6 +52,7 @@ const CONTEXT_SCHEMA = {
     },
     git: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         branch: { type: 'string' },
         commit: { type: 'string' },

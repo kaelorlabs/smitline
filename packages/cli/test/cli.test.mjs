@@ -117,6 +117,44 @@ test('exact continuity without --thread is validation exit 2', async () => {
   assert.match(result.stderr, /--thread|CODEX_THREAD_ID/);
 });
 
+test('context validate checks the complete handoff locally without a daemon', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-context-validate-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const valid = path.join(root, 'valid.json');
+  await fs.writeFile(valid, JSON.stringify({
+    version: 1,
+    objective: 'Support the meeting',
+    currentTask: 'Review the implementation',
+    summary: '',
+    decisions: [],
+    constraints: [],
+    openQuestions: [],
+    importantFiles: ['src/example.mjs'],
+    recentConversation: [{ role: 'user', text: 'Please join.' }],
+    git: { branch: 'developer-platform', commit: 'abc123', dirty: false },
+  }));
+  const accepted = await runColleague(['context', 'validate', '--file', valid], { cwd: root });
+  assert.equal(accepted.code, 0, accepted.stderr);
+  assert.deepEqual(JSON.parse(accepted.stdout), { valid: true, version: 1 });
+
+  const invalid = path.join(root, 'invalid.json');
+  await fs.writeFile(invalid, JSON.stringify({
+    version: 1,
+    objective: 'Support the meeting',
+    currentTask: { workspace: '/private/project' },
+    summary: '',
+    decisions: [],
+    constraints: [],
+    openQuestions: [],
+    importantFiles: [],
+    recentConversation: [{ role: 'user', content: 'wrong field' }],
+    git: { statusShort: ['?? private-file'] },
+  }));
+  const rejected = await runColleague(['context', 'validate', '--file', invalid], { cwd: root });
+  assert.equal(rejected.code, 2);
+  assert.match(rejected.stderr, /currentTask must be a string/);
+});
+
 test('Codex-native CLI defaults to the host thread and current workspace', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-current-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -155,6 +193,58 @@ test('context continuity permits local-portal without a thread', async (t) => {
   const created = [...daemon.state.meetings.values()][0];
   assert.equal(created.agentSession.sessionId, 'local-portal');
   assert.equal(created.agentSession.provider, 'cursor');
+});
+
+test('join reports the active meeting and --replace cancels it before joining', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-replace-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const daemon = await startFakeDaemon({ root, autoHandoff: false, readyDelayMs: 5 });
+  t.after(() => daemon.close());
+  const common = [
+    '--agent', 'codex', '--thread', 'thread-cli', '--workspace', root,
+    '--root', root, '--port', String(daemon.port),
+  ];
+  const first = await runColleague(['join', '--meeting', ZOOM, ...common], { cwd: root });
+  assert.equal(first.code, 0, first.stderr);
+
+  const blocked = await runColleague([
+    'join', '--meeting', 'https://zoom.us/j/999888777', ...common,
+  ], { cwd: root });
+  assert.equal(blocked.code, 4);
+  assert.match(blocked.stderr, /meeting agent mtg-1 is already running/);
+  assert.match(blocked.stderr, /--replace/);
+  assert.equal(daemon.state.created, 1);
+
+  const replaced = await runColleague([
+    'join', '--meeting', 'https://zoom.us/j/999888777', '--replace', ...common,
+  ], { cwd: root });
+  assert.equal(replaced.code, 0, replaced.stderr);
+  assert.equal(daemon.state.cancels, 1);
+  assert.equal(daemon.state.created, 2);
+  assert.equal(JSON.parse(replaced.stdout).meetingId, 'mtg-2');
+});
+
+test('status discovers a portal-owned active meeting when CLI state is absent', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-active-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const daemon = await startFakeDaemon({ root, autoHandoff: false, readyDelayMs: 5 });
+  t.after(() => daemon.close());
+  const joined = await runColleague([
+    'join', '--meeting', ZOOM, '--agent', 'codex', '--thread', 'thread-cli',
+    '--workspace', root, '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(joined.code, 0, joined.stderr);
+  await fs.rm(path.join(root, '.colleague', 'cli-meeting.json'));
+  await fs.writeFile(
+    path.join(root, '.colleague', 'active-meeting.json'),
+    `${JSON.stringify({ meetingId: 'mtg-1' })}\n`,
+    { mode: 0o600 },
+  );
+  const status = await runColleague([
+    'status', '--root', root, '--port', String(daemon.port),
+  ], { cwd: root });
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).id, 'mtg-1');
 });
 
 test('startup failure is exit 3', async (t) => {

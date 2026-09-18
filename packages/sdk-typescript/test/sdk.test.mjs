@@ -87,6 +87,27 @@ test('client-side validation rejects secrets, placeholders, and relative workspa
     camera: { enabled: false },
   });
   assert.equal(disabled.camera.enabled, false);
+  const context = {
+    version: 1,
+    objective: 'support meeting',
+    currentTask: 'review implementation',
+    summary: '',
+    decisions: [],
+    constraints: [],
+    openQuestions: [],
+    importantFiles: [],
+    recentConversation: [],
+  };
+  assert.throws(() => validateJoinRequest({
+    url: ZOOM,
+    agentSession: agentSession(),
+    context: { ...context, git: { statusShort: ['?? private-file'] } },
+  }), /context\.git\.statusShort/);
+  assert.deepEqual(validateJoinRequest({
+    url: ZOOM,
+    agentSession: agentSession(),
+    context: { ...context, git: { branch: 'developer-platform', commit: 'abc123', dirty: false } },
+  }).context.git, { branch: 'developer-platform', commit: 'abc123', dirty: false });
   await assert.rejects(() => colleague.joinMeeting({
     url: ZOOM,
     agentSession: agentSession(),

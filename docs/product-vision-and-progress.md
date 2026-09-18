@@ -397,3 +397,4 @@ When updating this file, use these rules:
 - Recorded live cross-platform acceptance, distribution, meeting output delivery, enterprise context connectors, and hosted multi-user operation as unfinished work.
 - Retained the Codex-native `join_current_meeting` MCP entry point for compatibility and controls, while moving identity-critical launch to the task-local CLI.
 - Added an idempotent Codex integration installer, safe CLI defaults for the current Codex thread/workspace and installation root, and a local diagnostic command.
+- Hardened the agent-native join workflow after a cross-task usability test: added offline handoff validation, an exact schema example and privacy-minimized skill instructions, active-meeting discovery, actionable conflict errors, `join --replace`, aligned TypeScript/Python/runtime `git` validation, and truthful loopback-permission errors. The microphone policy remains selective automatic speech rather than an always-unmuted mode.

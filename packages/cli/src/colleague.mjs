@@ -27,10 +27,11 @@ const USAGE = `Usage:
   colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
-               [--screen-share]
+               [--screen-share] [--replace]
   colleague status [--meeting-id <id>]
   colleague cancel [--meeting-id <id>]
   colleague context add --file <path> | --text <json> [--meeting-id <id>]
+  colleague context validate --file <path> | --text <json>
   colleague handoff get [--meeting-id <id>]
   colleague handoff retry [--meeting-id <id>]
   colleague approvals list --meeting-id <id>
@@ -114,21 +115,54 @@ function stateFile(root) {
   return path.join(root, '.colleague', 'cli-meeting.json');
 }
 
+function activeMeetingFile(root) {
+  return path.join(root, '.colleague', 'active-meeting.json');
+}
+
 async function saveMeetingId(root, meetingId) {
   const file = stateFile(root);
   await fs.mkdir(path.dirname(file), { mode: 0o700, recursive: true });
   await fs.writeFile(file, `${JSON.stringify({ meetingId })}\n`, { mode: 0o600 });
 }
 
+async function readMeetingId(file) {
+  try {
+    const payload = JSON.parse(await fs.readFile(file, 'utf8'));
+    return typeof payload?.meetingId === 'string' && payload.meetingId ? payload.meetingId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function meetingIdCandidates(root) {
+  const ids = await Promise.all([
+    readMeetingId(activeMeetingFile(root)),
+    readMeetingId(stateFile(root)),
+  ]);
+  return [...new Set(ids.filter(Boolean))];
+}
+
 async function loadMeetingId(root, explicit) {
   if (explicit) return explicit;
-  try {
-    const payload = JSON.parse(await fs.readFile(stateFile(root), 'utf8'));
-    if (payload?.meetingId) return payload.meetingId;
-  } catch {
-    // No previous meeting.
-  }
+  const [meetingId] = await meetingIdCandidates(root);
+  if (meetingId) return meetingId;
   throw new ValidationError('no meeting id; pass --meeting-id or run join first');
+}
+
+async function findActiveMeeting(root, client) {
+  for (const meetingId of await meetingIdCandidates(root)) {
+    try {
+      const meeting = await client._transport.getMeeting(meetingId);
+      if (!new Set(['ended', 'cancelled', 'failed']).has(meeting?.state)) return meeting;
+    } catch (error) {
+      if (error?.code !== 'not_found') throw error;
+    }
+  }
+  return null;
+}
+
+function activeMeetingMessage(meetingId) {
+  return `meeting agent ${meetingId} is already running; run colleague cancel --meeting-id ${meetingId} or retry join with --replace`;
 }
 
 async function readContext(args) {
@@ -189,18 +223,35 @@ async function joinCommand(args) {
   }
   const context = await readContext(args);
   const { root, client } = colleagueFromArgs(args);
-  const meeting = await client.joinMeeting({
-    url: args.meeting,
-    agentSession: {
-      provider,
-      sessionId: thread || 'local-portal',
-      workspace,
-      ...(args.model ? { model: args.model } : {}),
-    },
-    context,
-    ...(args['no-camera'] ? { camera: { enabled: false } } : {}),
-    ...(args['screen-share'] ? { screenShare: { enabled: true } } : {}),
-  });
+  const active = await findActiveMeeting(root, client);
+  if (active && !args.replace) {
+    throw new RuntimeError(activeMeetingMessage(active.id), { code: 'capacity_exceeded' });
+  }
+  if (active) {
+    progress(`replacing active meeting ${active.id}`);
+    await client._transport.cancelMeeting(active.id);
+  }
+  let meeting;
+  try {
+    meeting = await client.joinMeeting({
+      url: args.meeting,
+      agentSession: {
+        provider,
+        sessionId: thread || 'local-portal',
+        workspace,
+        ...(args.model ? { model: args.model } : {}),
+      },
+      context,
+      ...(args['no-camera'] ? { camera: { enabled: false } } : {}),
+      ...(args['screen-share'] ? { screenShare: { enabled: true } } : {}),
+    });
+  } catch (error) {
+    if (error?.code === 'capacity_exceeded') {
+      const known = await findActiveMeeting(root, client);
+      if (known?.id) throw new RuntimeError(activeMeetingMessage(known.id), { code: error.code });
+    }
+    throw error;
+  }
   await saveMeetingId(root, meeting.id);
   progress(`joined ${meeting.id}`);
   if (!args.wait) {
@@ -244,6 +295,15 @@ async function main(argv = process.argv.slice(2)) {
     return command ? EXIT.ok : EXIT.validation;
   }
   try {
+    if (command === 'context' && args._[1] === 'validate') {
+      if (!args.file && !args.text) throw new ValidationError('context validate requires --file or --text');
+      const context = await readContext({
+        'context-file': args.file,
+        'context-text': args.text,
+      });
+      process.stdout.write(`${JSON.stringify({ valid: true, version: context.version }, null, 2)}\n`);
+      return EXIT.ok;
+    }
     if (command === 'join') return await joinCommand(args);
     if (command === 'status') {
       const { result } = await daemonCall(args, 'getMeeting');

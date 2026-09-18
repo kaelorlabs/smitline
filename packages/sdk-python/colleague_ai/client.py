@@ -265,7 +265,19 @@ def validate_context(value, *, required=True):
     if 'git' in value:
         if not _is_mapping(value['git']):
             raise ValidationError('context.git must be an object')
-        out['git'] = dict(value['git'])
+        git = value['git']
+        extra = set(git) - {'branch', 'commit', 'dirty'}
+        if extra:
+            raise ValidationError(f'context.git.{next(iter(extra))} is not allowed')
+        out['git'] = {}
+        if 'branch' in git:
+            out['git']['branch'] = _require_string(git['branch'], 'context.git.branch')
+        if 'commit' in git:
+            out['git']['commit'] = _require_string(git['commit'], 'context.git.commit')
+        if 'dirty' in git:
+            if not isinstance(git['dirty'], bool):
+                raise ValidationError('context.git.dirty must be a boolean')
+            out['git']['dirty'] = git['dirty']
     return out
 
 
