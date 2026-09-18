@@ -80,13 +80,14 @@ class RuntimeConfig:
             except ValueError:
                 camera_logo = ''
         # Never interpret a host filesystem path inside the meeting container.
-        screen_share = {'enabled': False}
+        # Keep the complete default settings shape even when capture is disabled.
+        # bridge.py publishes retention details for every meeting state.
+        from screen_share import parse_screen_share_settings
+        screen_share = parse_screen_share_settings({'enabled': False})
         raw_share = state.get('screenShare')
         if isinstance(raw_share, dict):
-            from screen_share import parse_screen_share_settings
             screen_share = parse_screen_share_settings(raw_share)
         elif state.get('screenShareEnabled') is True:
-            from screen_share import parse_screen_share_settings
             screen_share = parse_screen_share_settings({'enabled': True})
         return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
                    camera_enabled, camera_default_on, camera_logo,
