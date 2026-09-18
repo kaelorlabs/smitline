@@ -5,5 +5,5 @@
 
 [mcp_servers.colleague-ai]
 command = "node"
-args = ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"]
-cwd = "/absolute/path/to/colleague-ai-private"
+args = ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
+cwd = "/absolute/path/to/colleague-ai"

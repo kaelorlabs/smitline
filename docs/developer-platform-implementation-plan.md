@@ -2,7 +2,7 @@
 
 Status: historical implementation design; the platform foundation is implemented
 
-Repository: `colleague-ai-private`
+Repository: `colleague-ai`
 
 Current implementation branch: `developer-platform`
 Prerequisite: retain the Zoom/Teams adapter work in commits `fa4fb33`, `3eaec75`, and `0aa7121` (PR #3) when choosing the implementation base.

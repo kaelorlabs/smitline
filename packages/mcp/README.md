@@ -39,8 +39,8 @@ Example `~/.codex/config.toml` mcp_servers fragment:
 ```toml
 [mcp_servers.colleague-ai]
 command = "node"
-args = ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"]
-cwd = "/absolute/path/to/colleague-ai-private"
+args = ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
+cwd = "/absolute/path/to/colleague-ai"
 ```
 
 See `examples/codex.mcp.toml`. Restart Codex after changing MCP configuration. Use `start_meeting` with an explicit session id only for non-Codex hosts or integration testing.
@@ -54,7 +54,7 @@ Cursor MCP config (`mcp.json`):
   "mcpServers": {
     "colleague-ai": {
       "command": "node",
-      "args": ["/absolute/path/to/colleague-ai-private/packages/mcp/src/server.mjs"]
+      "args": ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
     }
   }
 }

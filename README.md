@@ -92,8 +92,8 @@ npm run doctor
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/ankitluthra/colleague-ai-private.git
-cd colleague-ai-private
+git clone https://github.com/kaelorlabs/colleague-ai.git
+cd colleague-ai
 cp .env.example .env
 cp meeting-runtime/meeting.env.example .env.meeting
 chmod 600 .env .env.meeting
