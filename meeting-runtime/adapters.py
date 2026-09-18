@@ -29,14 +29,25 @@ class ZoomAdapter(MeetingPlatformAdapter):
         # Zoom hides its meeting toolbar after a short idle period. The button
         # remains in the accessibility tree, but Playwright cannot click it
         # until pointer movement reveals the controls.
-        await self.page.mouse.move(80, 680)
-        button = self.page.get_by_role('button', name=re.compile(label, re.I), include_hidden=True).first
-        try:
-            await button.click(timeout=1500)
-        except Exception:
-            # Zoom's documented in-meeting shortcut is more reliable when the
-            # toolbar animation or an overlay prevents a pointer click.
-            await self.page.keyboard.press('Alt+A')
+        viewport = self.page.viewport_size or {'width': 1280, 'height': 720}
+        await self.page.mouse.move(viewport['width'] / 2, max(1, viewport['height'] - 8))
+        buttons = self.page.get_by_role(
+            'button', name=re.compile(label, re.I), include_hidden=True)
+        for button in await buttons.all():
+            if await button.is_visible() and await button.is_enabled():
+                try:
+                    await button.click(timeout=1500)
+                    break
+                except Exception:
+                    continue
+        for _ in range(8):
+            if await self.get_microphone_state() == desired:
+                return
+            await asyncio.sleep(.1)
+        # A click can return successfully against a stale Zoom toolbar node
+        # without changing the microphone. Verify the state and use Zoom's
+        # in-meeting shortcut whenever the click was absent or ineffective.
+        await self.page.keyboard.press('Alt+A')
         for _ in range(20):
             if await self.get_microphone_state() == desired:
                 return

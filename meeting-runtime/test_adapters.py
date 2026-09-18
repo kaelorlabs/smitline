@@ -134,6 +134,32 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         await a.mute()
         self.assertEqual(await a.get_microphone_state(), 'muted')
 
+    async def test_zoom_ignores_stale_hidden_microphone_control(self):
+        await self.page.set_content('''
+          <button hidden aria-label="Unmute my microphone">stale</button>
+          <button id="mic" aria-label="Mute my microphone"
+            onclick="this.setAttribute('aria-label','Unmute my microphone')">mic</button>
+        ''')
+        a = self.adapter(False)
+        self.assertEqual(await a.get_microphone_state(), 'open')
+        await a.mute()
+        self.assertEqual(await a.get_microphone_state(), 'muted')
+
+    async def test_zoom_uses_shortcut_when_visible_click_does_not_change_state(self):
+        await self.page.set_content('''
+          <button aria-label="Unmute my microphone">mic</button>
+          <script>
+            document.addEventListener('keydown', event => {
+              if (event.altKey && event.key.toLowerCase() === 'a') {
+                document.querySelector('button').setAttribute('aria-label','Mute my microphone');
+              }
+            });
+          </script>
+        ''')
+        a = self.adapter(False)
+        await a.unmute()
+        self.assertEqual(await a.get_microphone_state(), 'open')
+
     async def test_teams_participant_count_is_explicit(self):
         a = self.adapter()
         for label in ('People (1)', 'Participants 1', 'Show participants (1)'):
