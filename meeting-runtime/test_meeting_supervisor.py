@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent_sessions import MeetingSession
 from meeting_supervisor import DaemonError, ProductionMeetingSupervisor
@@ -360,6 +361,27 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(handle.waited)
         self.assertIsNone(self.supervisor._worker)
 
+    async def test_default_codex_handoff_uses_host_jobs_directory(self):
+        captured = {}
+
+        class Client:
+            def __init__(self, jobs=None, **_kwargs):
+                captured['jobs'] = Path(jobs)
+
+            async def append_handoff(self, handoff, **fields):
+                captured['handoff'] = handoff
+                captured['fields'] = fields
+                return {'ok': True}
+
+        self.supervisor.append_handoff = None
+        meeting = session()
+        with mock.patch('codex_tool.CodexJobClient', Client):
+            result = await self.supervisor._provider_append(
+                meeting, {'meetingId': meeting.id, 'summary': 'Done.'})
+        self.assertTrue(result['ok'])
+        self.assertEqual(captured['jobs'], self.runtime / 'jobs')
+        self.assertEqual(captured['fields']['session_id'], meeting.agent_session.session_id)
+
     async def test_restart_reconciliation(self):
         meeting = session()
         self.daemon.meetings.records[meeting.id] = FakeRecord(meeting)
@@ -481,6 +503,31 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         stored = json.loads((self.runtime / 'recordings' / meeting.id / 'handoff.json').read_text())
         self.assertEqual(stored['handoffId'], 'hnd-' + meeting.id)
         self.assertNotIn('leaseId', json.dumps(stored))
+
+    async def test_natural_end_with_append_failure_releases_agent_capacity(self):
+        async def fail(_session, _handoff):
+            return {'error': 'codex unavailable'}
+
+        self.supervisor.append_handoff = fail
+        first = session()
+        await self.supervisor.start(first)
+        self.health.payload = {'stage': 'meeting_ended'}
+        await asyncio.sleep(0.08)
+
+        self.assertIsNone(self.supervisor._active_id)
+        self.assertFalse(self.launcher.running)
+        self.assertEqual(read_json(active_meeting_path(self.root)), {})
+        payload = json.loads(
+            (self.runtime / 'recordings' / first.id / 'finalization.json').read_text())
+        self.assertEqual(payload['status'], 'append_failed')
+
+        self.health.payload = {'stage': 'starting'}
+        second = session(id='mtg-nextmeeting001', agentSession={
+            **meeting_session_payload()['agentSession'], 'sessionId': 'thread-next-1',
+        })
+        await self.supervisor.start(second)
+        self.assertEqual(self.supervisor._active_id, second.id)
+        self.assertTrue(self.launcher.running)
 
     async def test_shutdown_and_reconcile_await_worker(self):
         meeting = session()

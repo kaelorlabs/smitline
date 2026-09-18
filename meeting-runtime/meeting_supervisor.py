@@ -616,10 +616,11 @@ class ProductionMeetingSupervisor:
 
     async def _complete_handoff_body(self, session, reason, *, partial):
         if self._handoff_ready(session.id):
-            if self._active_id == session.id:
-                self._active_id = None
-                self._active_session = None
-            await self._stop_worker()
+            try:
+                await self._stop_worker()
+                await self._stop_container()
+            finally:
+                self._release_active_claim(session.id)
             return {'status': 'ready', 'idempotent': True}
         if continuity_mode(session.agent_session) == EXACT:
             try:
@@ -629,15 +630,28 @@ class ProductionMeetingSupervisor:
         finalizer = MeetingFinalizer(
             self.runtime_root, daemon=self.daemon, append=self._provider_append)
         try:
-            result = await finalizer.complete(session, reason=reason, partial=partial)
-        except DaemonError as error:
-            result = {'status': 'error', 'error': error.message}
-        if result.get('status') == 'ready' and self._active_id == session.id:
+            try:
+                return await finalizer.complete(session, reason=reason, partial=partial)
+            except DaemonError as error:
+                return {'status': 'error', 'error': error.message}
+        finally:
+            try:
+                await self._stop_worker()
+            finally:
+                try:
+                    await self._stop_container()
+                finally:
+                    # A failed transcript handoff remains retryable, but it is
+                    # not a live meeting and must never consume agent capacity.
+                    self._release_active_claim(session.id)
+
+    def _release_active_claim(self, meeting_id):
+        if self._active_id == meeting_id:
             self._active_id = None
             self._active_session = None
-        await self._stop_worker()
-        await self._stop_container()
-        return result
+        active = read_json(active_meeting_path(self.project_root)) or {}
+        if active.get('meetingId') == meeting_id:
+            write_private_json(active_meeting_path(self.project_root), {})
 
     async def _provider_append(self, session, handoff):
         if self.append_handoff is not None:
@@ -660,9 +674,23 @@ class ProductionMeetingSupervisor:
             model=agent.model,
             source=metadata.get('source'),
         )
-        adapter = ProviderRegistry().get(agent.provider)
+        registry = ProviderRegistry()
+        adapter = registry.get(agent.provider)
         if adapter is None:
             return {'error': 'unknown_provider'}
+        # Finalization runs on the host. Default provider clients use the
+        # container path `/meeting-runtime/jobs`, which makes a healthy host
+        # worker appear disconnected here. Bind the adapter to the mounted
+        # host-side job directory used by the supervisor.
+        if agent.provider == 'codex':
+            from codex_tool import CodexJobClient
+            adapter.client = CodexJobClient(jobs=self.runtime_root / 'jobs')
+        elif agent.provider in ('cursor', 'claude-code'):
+            from provider_jobs import ProviderJobClient, provider_jobs_dir
+            adapter.client = ProviderJobClient(
+                agent.provider,
+                jobs=provider_jobs_dir(agent.provider, self.runtime_root / 'jobs'),
+            )
         return await adapter.append_handoff(request, handoff)
 
     async def shutdown(self):

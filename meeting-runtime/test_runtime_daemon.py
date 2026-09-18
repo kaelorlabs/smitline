@@ -1120,7 +1120,7 @@ Usage: fake-agent
         self.assertEqual(types.count('agent_session.released'), 1)
         self.assertIsNone(self.daemon.leases.get('codex', 'thread-origin-1'))
 
-    async def test_exact_append_failure_retains_lease_and_retry_releases(self):
+    async def test_exact_append_failure_releases_lease_and_retry_still_succeeds(self):
         created = await self.create()
         meeting = await created.json()
         meeting_id = meeting['id']
@@ -1129,15 +1129,14 @@ Usage: fake-agent
         self.daemon.note_append_failure(meeting_id, handoff_id, 'codex unavailable')
         lease = await self.client.get(
             '/v1/agent-sessions/codex/thread-origin-1/status', headers=self.headers())
-        self.assertEqual(lease.status, 200)
-        self.assertEqual((await lease.json())['state'], 'finalizing')
+        self.assertEqual(lease.status, 404)
         missing = await self.client.get(
             '/v1/meetings/' + meeting_id + '/handoff', headers=self.headers())
         self.assertEqual(missing.status, 404)
         types = [event.type for event in self.daemon.events.replay(meeting_id)]
         self.assertIn('handoff.append_failed', types)
         self.assertNotIn('handoff.ready', types)
-        self.assertNotIn('agent_session.released', types)
+        self.assertIn('agent_session.released', types)
 
         async def retry(_meeting_id):
             ready = handoff_payload(meetingId=meeting_id, startedAt=meeting['startedAt'])

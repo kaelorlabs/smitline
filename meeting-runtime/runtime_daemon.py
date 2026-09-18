@@ -1564,11 +1564,10 @@ class RuntimeDaemon:
                 retryable=True,
             )
             if record.lease_token:
-                agent = session.agent_session
-                try:
-                    self.leases.heartbeat(agent.provider, agent.session_id, record.lease_token)
-                except (LeaseConflictError, LeaseStateError, DaemonError):
-                    pass
+                # The local handoff can still be retried without retaining an
+                # exclusive lease. Once the meeting has ended, release the
+                # originating coding session so a later meeting can start.
+                self._fail_lease(record, 'handoff_append_failed')
             return session
 
     async def retry_handoff_append(self, meeting_id):
