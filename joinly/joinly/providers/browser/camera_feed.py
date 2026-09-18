@@ -631,3 +631,15 @@ class _AmplitudeAudioWriter(AudioWriter):
         ]
         self._on_bands(bands)
         await self._writer.write(data)
+
+    async def drain(self) -> None:
+        """Wait for the wrapped output device to finish queued playback."""
+        drain = getattr(self._writer, "drain", None)
+        if drain is not None:
+            await drain()
+
+    def discard_pending(self) -> None:
+        """Discard queued playback in the wrapped output device."""
+        discard = getattr(self._writer, "discard_pending", None)
+        if discard is not None:
+            discard()

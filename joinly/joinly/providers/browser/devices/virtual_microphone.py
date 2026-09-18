@@ -209,6 +209,19 @@ class VirtualMicrophone(PulseModuleManager, AudioWriter):
             pad_len = self.chunk_size - len(view)
             await self._queue.put(bytes(view) + b"\x00" * pad_len)
 
+    async def drain(self) -> None:
+        """Wait until every queued audio chunk has reached the PulseAudio pipe."""
+        if self._queue is not None:
+            await self._queue.join()
+
+    def discard_pending(self) -> None:
+        """Drop audio that has not yet reached the PulseAudio pipe."""
+        if self._queue is None:
+            return
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            self._queue.task_done()
+
     async def _pace_loop(self) -> None:
         """Pace the audio stream."""
         if self._writer is None or self._queue is None:

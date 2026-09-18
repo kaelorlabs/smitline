@@ -12,6 +12,12 @@ class Mic:
         self.started.set()
         await self.release.wait()
         self.played.append(data)
+    async def drain(self):
+        await self._queue.join()
+    def discard_pending(self):
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            self._queue.task_done()
 
 class SpeechGateTests(unittest.IsolatedAsyncioTestCase):
     async def test_muted_audio_is_discarded_and_unmute_accepts_fresh_audio(self):

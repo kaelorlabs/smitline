@@ -17,6 +17,22 @@ class Mic:
         self.data.append(data)
 
 
+class WrappedMic:
+    """Matches Joinly's amplitude writer: no private queue on the wrapper."""
+    def __init__(self):
+        self.data = []
+        self.drains = 0
+
+    async def write(self, data):
+        self.data.append(data)
+
+    async def drain(self):
+        self.drains += 1
+
+    def discard_pending(self):
+        pass
+
+
 class Adapter:
     def __init__(self):
         self.state = 'muted'
@@ -52,6 +68,23 @@ class Adapter:
 
 
 class ParticipationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wrapped_microphone_drains_without_private_queue_access(self):
+        adapter, microphone, state = Adapter(), WrappedMic(), {}
+        participation = Participation(adapter, microphone, state, quiet_seconds=.03)
+        task = asyncio.create_task(participation.run())
+        try:
+            voice = struct.pack('<120h', *([500] * 120))
+            participation.offer(voice)
+            await asyncio.sleep(.15)
+            self.assertFalse(task.done())
+            self.assertEqual(microphone.data, [voice])
+            self.assertGreaterEqual(microphone.drains, 1)
+            self.assertTrue(participation.gate.muted)
+            self.assertEqual(state['floorState'], 'listening')
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_reply_uses_stable_platform_connection_and_virtual_gate(self):
         adapter, microphone, state = Adapter(), Mic(), {}
         participation = Participation(adapter, microphone, state, quiet_seconds=.03)

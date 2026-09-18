@@ -115,9 +115,8 @@ class Participation:
                     if (self.clock() - self.last_output_audio > self.quiet_seconds and
                             self.gate.queue.empty() and not self.gate.writing and not self.gate.muted):
                         async with self.lock:
-                            pending = self.gate.microphone._queue
-                            if pending is not None:
-                                await pending.join()
+                            await self.gate.drain()
+                            self.state['output_bytes'] = self.gate.output_bytes
                             await asyncio.sleep(.04)
                             if (self.queue.empty() and
                                     self.clock() - self.last_output_audio > self.quiet_seconds):
@@ -150,5 +149,6 @@ class Participation:
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:
             await self.stop_output(mute_platform=True)
+            self.state['output_bytes'] = self.gate.output_bytes
             writer.cancel()
             await asyncio.gather(writer, return_exceptions=True)
