@@ -13,6 +13,15 @@ test('validates a product meeting configuration', () => {
   assert.deepEqual(validateSettings(valid, { isDirectory: value => value === '/work/product' }), { valid: true, errors: {} });
 });
 
+test('rejects two coding agents at once', () => {
+  const result = validateSettings({
+    ...valid,
+    tools: { codex: true, cursor: true, charts: false },
+  }, { isDirectory: () => true });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.codex);
+});
+
 test('rejects unsafe or contradictory meeting settings', () => {
   const result = validateSettings({ ...valid, meetingUrl: 'http://example.com/x', participantName: '', tools: { codex: false, charts: true } });
   assert.equal(result.valid, false);
@@ -32,6 +41,8 @@ test('serializes only runtime settings and preserves a hidden passcode', () => {
   assert.equal(parseEnv(text).MEETING_PASSCODE, 'existing');
   assert.ok(!text.includes('OPENAI_API_KEY'));
   assert.equal(publicSettings(parseEnv(text)).tools.webSearch, true);
+  assert.equal(text.includes('COLLEAGUE_CAMERA'), false);
+  assert.equal(text.includes('avatar'), false);
 });
 
 test('Teams invites validate while lookalike hosts and credentials fail', () => {
@@ -39,6 +50,21 @@ test('Teams invites validate while lookalike hosts and credentials fail', () => 
     assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, true);
   }
   for (const meetingUrl of ['https://teams.microsoft.com.evil.org/meet/123', 'https://user:pass@zoom.us/j/123', 'https://zoom.us:8443/j/123', 'https://zoom.us/j/123/extra']) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, false);
+  }
+});
+
+test('Google Meet invites validate while malformed codes and lookalikes fail', () => {
+  for (const meetingUrl of ['https://meet.google.com/aaa-bbbb-ccc', 'https://meet.google.com/abc-defg-hij?authuser=0']) {
+    assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, true);
+  }
+  for (const meetingUrl of [
+    'https://meet.google.com/abc',
+    'https://meet.google.com/landing',
+    'https://meet.google.com.evil.org/aaa-bbbb-ccc',
+    'https://www.meet.google.com/aaa-bbbb-ccc',
+    'http://meet.google.com/aaa-bbbb-ccc',
+  ]) {
     assert.equal(validateSettings({ ...valid, meetingUrl }, { isDirectory: () => true }).valid, false);
   }
 });

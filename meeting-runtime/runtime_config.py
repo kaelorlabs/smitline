@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from codex_tool import CODEX_MODELS
+from runtime_state import environ_from_state, read_json
 
 
 def _boolean(value, default=False):
@@ -26,10 +27,21 @@ class RuntimeConfig:
     charts_enabled: bool
     workspace: str
     meeting_instructions: str
+    camera_enabled: bool = True
+    camera_default_on: bool = True
+    camera_logo_data_uri: str = ''
+    screen_share_enabled: bool = False
+    screen_share_settings: dict = None
 
     @classmethod
     def from_environ(cls, environ=None):
-        env = os.environ if environ is None else environ
+        env = dict(os.environ if environ is None else environ)
+        state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+        state = {}
+        if state_path:
+            state = read_json(state_path) or {}
+            overlay = environ_from_state(state)
+            env.update(overlay)
         name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Colleague AI').strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError('COLLEAGUE_PARTICIPANT_NAME must contain 1–80 printable characters')
@@ -49,4 +61,55 @@ class RuntimeConfig:
         meeting_instructions = env.get('COLLEAGUE_MEETING_INSTRUCTIONS', '').strip()
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
-        return cls(name, model, web_search, codex, charts, workspace, meeting_instructions)
+        camera_enabled = True
+        camera_default_on = True
+        camera_logo = ''
+        if 'cameraEnabled' in state:
+            if not isinstance(state['cameraEnabled'], bool):
+                raise ValueError('cameraEnabled must be a boolean')
+            camera_enabled = state['cameraEnabled']
+        if 'cameraDefaultOn' in state:
+            if not isinstance(state['cameraDefaultOn'], bool):
+                raise ValueError('cameraDefaultOn must be a boolean')
+            camera_default_on = state['cameraDefaultOn']
+        raw_avatar = state.get('cameraAvatarDataUri')
+        if raw_avatar:
+            try:
+                from visual_presence import parse_avatar_data_uri
+                camera_logo = parse_avatar_data_uri(raw_avatar)
+            except ValueError:
+                camera_logo = ''
+        # Never interpret a host filesystem path inside the meeting container.
+        # Keep the complete default settings shape even when capture is disabled.
+        # bridge.py publishes retention details for every meeting state.
+        from screen_share import parse_screen_share_settings
+        screen_share = parse_screen_share_settings({'enabled': False})
+        raw_share = state.get('screenShare')
+        if isinstance(raw_share, dict):
+            screen_share = parse_screen_share_settings(raw_share)
+        elif state.get('screenShareEnabled') is True:
+            screen_share = parse_screen_share_settings({'enabled': True})
+        return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
+                   camera_enabled, camera_default_on, camera_logo,
+                   screen_share['enabled'], screen_share)
+
+
+def meeting_state_from_environ(environ=None):
+    env = dict(os.environ if environ is None else environ)
+    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    if not state_path:
+        return {}
+    return read_json(state_path) or {}
+
+
+def resolve_meeting_url(environ=None):
+    env = dict(os.environ if environ is None else environ)
+    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    if state_path:
+        overlay = environ_from_state(read_json(state_path) or {})
+        if overlay.get('MEETING_URL'):
+            return overlay['MEETING_URL']
+    url = env.get('MEETING_URL')
+    if not url:
+        raise KeyError('MEETING_URL')
+    return url

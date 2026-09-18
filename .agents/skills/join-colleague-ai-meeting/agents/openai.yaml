@@ -1,0 +1,4 @@
+interface:
+  display_name: "Join Colleague AI Meeting"
+  short_description: "Bring the current Codex task into a live meeting"
+  default_prompt: "Join this meeting with exact continuity from my current Codex task."

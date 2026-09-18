@@ -34,7 +34,7 @@ class PreflightTests(unittest.TestCase):
             message = str(caught.exception)
             self.assertIn('OPENAI_API_KEY', message)
             self.assertIn('TAVILY_API_KEY', message)
-            self.assertIn('HTTPS Zoom or Teams', message)
+            self.assertIn('HTTPS Zoom, Teams, or Google Meet', message)
             self.assertIn('COLLEAGUE_MEETING_INSTRUCTIONS', message)
             self.assertNotIn('replace_with_your_project_api_key', message)
 

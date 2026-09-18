@@ -15,6 +15,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             async def get_page(self): return self.env
         class Adapter:
             platform_id='teams'; capabilities=Capabilities()
+            signed_in_profile=('teams-connected','teams')
             def __init__(self, url,page,stop,stage): self.env=page
             async def join(self, *args):
                 if 'JOINLY_BROWSER_PROFILE_DIR' not in self.env: raise AuthenticationRequired()
@@ -28,3 +29,89 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(trace[2][1]['JOINLY_BROWSER_PROFILE_DIR'],str(root/'teams'))
                 self.assertEqual(state['authenticationState'],'signed_in')
             self.assertEqual([t[0] for t in trace][-2:],['leave','close'])
+
+    async def test_camera_feed_installs_before_join_and_does_not_fail_join(self):
+        order = []
+        class Browser:
+            def __init__(self, env): self.env = env
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def get_page(self): return 'page'
+        class Adapter:
+            platform_id = 'zoom'
+            capabilities = Capabilities(camera=True)
+            def __init__(self, url, page, stop, stage):
+                pass
+            async def join(self, *args):
+                order.append('join')
+            async def leave(self):
+                return None
+        class Feed:
+            async def install(self, page):
+                order.append(('install', page))
+        state = {}
+        async with joined_meeting(
+            'https://zoom.us/j/123', 'Colleague', '', {}, asyncio.Event(),
+            lambda _: None, state, browser_factory=Browser, adapter_factory=Adapter,
+            camera_feed=Feed(),
+        ):
+            self.assertEqual(order, [('install', 'page'), 'join'])
+
+        class BrokenFeed:
+            async def install(self, page):
+                raise RuntimeError('getUserMedia patch failed')
+        state = {}
+        async with joined_meeting(
+            'https://zoom.us/j/123', 'Colleague', '', {}, asyncio.Event(),
+            lambda _: None, state, browser_factory=Browser, adapter_factory=Adapter,
+            camera_feed=BrokenFeed(),
+        ):
+            self.assertEqual(state.get('cameraState'), 'degraded')
+            self.assertEqual(state.get('degradedReason'), 'unconfirmed')
+
+    async def test_google_profile_retry_uses_meet_directory_not_teams(self):
+        trace=[]
+        class Browser:
+            def __init__(self, env): self.env=env; trace.append(('create',env.copy()))
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): trace.append(('close', self.env.copy()))
+            async def get_page(self): return self.env
+        class Adapter:
+            platform_id='meet'; capabilities=Capabilities()
+            signed_in_profile=('google-connected','google')
+            def __init__(self, url,page,stop,stage): self.env=page
+            async def join(self, *args):
+                if 'JOINLY_BROWSER_PROFILE_DIR' not in self.env: raise AuthenticationRequired()
+            async def leave(self): trace.append(('leave', {}))
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root/'google-connected').touch(); (root/'teams-connected').touch()
+            state={}
+            async with joined_meeting('https://meet.google.com/aaa-bbbb-ccc','Colleague','',{'JOINLY_BROWSER_PROFILE_DIR':'must-not-use'},asyncio.Event(),lambda _:None,state,profile_root=root,browser_factory=Browser,adapter_factory=Adapter):
+                self.assertEqual([t[0] for t in trace],['create','close','create'])
+                self.assertNotIn('JOINLY_BROWSER_PROFILE_DIR',trace[0][1])
+                self.assertEqual(trace[2][1]['JOINLY_BROWSER_PROFILE_DIR'],str(root/'google'))
+                self.assertEqual(state['authenticationState'],'signed_in')
+            self.assertEqual([t[0] for t in trace][-2:],['leave','close'])
+
+    async def test_guest_denied_without_google_profile_stays_required(self):
+        class Browser:
+            def __init__(self, env): self.env=env
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def get_page(self): return self.env
+        class Adapter:
+            platform_id='meet'; capabilities=Capabilities()
+            signed_in_profile=('google-connected','google')
+            def __init__(self, url,page,stop,stage): pass
+            async def join(self, *args): raise AuthenticationRequired()
+            async def leave(self): return None
+        with tempfile.TemporaryDirectory() as directory:
+            state={}
+            with self.assertRaises(AuthenticationRequired):
+                async with joined_meeting(
+                    'https://meet.google.com/aaa-bbbb-ccc','Colleague','',{},asyncio.Event(),
+                    lambda _: None, state, profile_root=Path(directory),
+                    browser_factory=Browser, adapter_factory=Adapter,
+                ):
+                    pass
+            self.assertEqual(state['authenticationState'], 'required')

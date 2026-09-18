@@ -14,11 +14,13 @@ def audible_pcm(data, threshold=160):
 
 
 class Participation:
-    def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic):
+    def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic,
+                 on_presence=None):
         self.adapter, self.state = adapter, state
         self.gate = SpeechGate(microphone)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
+        self.on_presence = on_presence
         self.last_output_audio = float('-inf')
         self.queue = asyncio.Queue(maxsize=500)
         self.lock = asyncio.Lock()
@@ -52,30 +54,44 @@ class Participation:
             data = self.queue.get_nowait()
             self.state['discarded_audio_bytes'] += len(data)
 
+    def _arm_platform_microphone(self):
+        self.platform_ready = True
+        self.state['microphoneState'] = 'open'
+        self.state.pop('error', None)
+
     async def _open_platform_microphone(self):
         try:
             await self.adapter.unmute()
             if await self.adapter.get_microphone_state() != 'open':
                 raise RuntimeError('Microphone opening could not be confirmed')
-            self.platform_ready = True
-            self.state['microphoneState'] = 'open'
-            self.state.pop('error', None)
+            self._arm_platform_microphone()
         except Exception:
             self.platform_ready = False
             self.state.update(microphoneState='blocked', floorState='platform_muted')
             self.state['error'] = 'Microphone unavailable. Check the meeting microphone permissions.'
+            if self.on_presence:
+                self.on_presence()
 
     async def platform_microphone_changed(self, actual):
-        """Respect a host or participant mute instead of reopening it automatically."""
-        if self.platform_ready and actual != 'open':
-            self.platform_ready = False
-            async with self.lock:
-                self._discard_pending()
-                await self.gate.set_muted(True)
-                self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
-            self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+        """Respect a host mute. Resume playback only after the operator unmutes."""
+        if actual == 'open':
+            if self.platform_ready:
+                return False
+            self._arm_platform_microphone()
+            if self.on_presence:
+                self.on_presence()
             return True
-        return False
+        if not self.platform_ready:
+            return False
+        self.platform_ready = False
+        async with self.lock:
+            self._discard_pending()
+            await self.gate.set_muted(True)
+            self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
+        self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+        if self.on_presence:
+            self.on_presence()
+        return True
 
     async def stop_output(self, mute_platform=False):
         async with self.lock:
@@ -99,32 +115,40 @@ class Participation:
                     if (self.clock() - self.last_output_audio > self.quiet_seconds and
                             self.gate.queue.empty() and not self.gate.writing and not self.gate.muted):
                         async with self.lock:
-                            pending = self.gate.microphone._queue
-                            if pending is not None:
-                                await pending.join()
+                            await self.gate.drain()
+                            self.state['output_bytes'] = self.gate.output_bytes
                             await asyncio.sleep(.04)
                             if (self.queue.empty() and
                                     self.clock() - self.last_output_audio > self.quiet_seconds):
                                 await self.gate.set_muted(True)
                                 self.state.update(muted=True, floorState='listening')
+                                if self.on_presence:
+                                    self.on_presence()
                     continue
                 async with self.lock:
+                    actual = await self.adapter.get_microphone_state()
+                    if actual == 'open' and not self.platform_ready:
+                        self._arm_platform_microphone()
                     if not self.platform_ready:
                         self.state['discarded_audio_bytes'] += len(data)
                         continue
-                    actual = await self.adapter.get_microphone_state()
                     if actual != 'open':
                         self.platform_ready = False
                         self.state['discarded_audio_bytes'] += len(data)
                         self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
                         self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+                        if self.on_presence:
+                            self.on_presence()
                         continue
                     if self.gate.muted:
                         await self.gate.set_muted(False)
                         self.state.update(muted=False, floorState='speaking')
+                        if self.on_presence:
+                            self.on_presence()
                     self.gate.offer(data)
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:
             await self.stop_output(mute_platform=True)
+            self.state['output_bytes'] = self.gate.output_bytes
             writer.cancel()
             await asyncio.gather(writer, return_exceptions=True)

@@ -36,6 +36,7 @@ h2 { font-size:16px; letter-spacing:-.25px; margin:0; font-weight:600}
 .field-row { display:grid; grid-template-columns:1fr 1fr; gap:20px}
 label,legend { display:block; font-size:13px; font-weight:500; margin-bottom:8px}
 label span { font-weight:400; color:var(--muted)}
+label .req { color:#b03140; font-weight:500}
 input,select,textarea { width:100%; border:1px solid #dcdde4; background:#fff; color:var(--ink); border-radius:6px; padding:10px 12px; outline:none; transition:border-color .15s,box-shadow .15s}
 input,select { height:42px}
 textarea { min-height:96px; resize:vertical; line-height:1.6}
@@ -45,9 +46,14 @@ input:disabled { background:var(--soft)}
 .hint,.error { display:block; font-size:12px; line-height:1.5; color:var(--muted); margin-top:6px}
 .error { color:#b03140}
 .error:empty { display:none}
+.field:has(.error:not(:empty)) input { border-color:#efcbcf}
 fieldset { border:0; padding:20px 0 0; margin:28px 0 24px; border-top:1px solid var(--line)}
 legend { float:left; width:100%; margin-bottom:12px}
 .tool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; clear:both}
+.camera-grid { grid-template-columns:1fr 1fr}
+.camera-setup { align-items:start}
+.camera-preview-field canvas { width:100%; height:auto; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:#30323b; display:block}
+.camera-setup .text-button { margin-top:8px}
 .tool-card { position:relative; margin:0; display:flex; align-items:flex-start; gap:8px; border:1px solid var(--line); border-radius:6px; padding:14px 10px; min-height:76px; cursor:pointer}
 .tool-card:has(input:checked) { background:#f7f7fc; border-color:#c8cae6}
 .tool-card input { width:14px; height:14px; margin:2px 0 0; accent-color:var(--accent); flex-shrink:0}
@@ -77,6 +83,26 @@ legend { float:left; width:100%; margin-bottom:12px}
 .signal-stage h3 { font-size:15px; font-weight:500; letter-spacing:-.15px; margin:0 0 8px}
 .signal-stage>p:last-child { font-size:12px; color:var(--muted); line-height:1.6; margin:0}
 .signal-stage.error h3 { color:#b33846}
+.signal-stage.waiting h3 { color:#8a5a12}
+.signal-stage.waiting .participant-avatar span { color:#b36b00}
+.approvals { margin:0 0 20px; padding:16px 0 0; border-top:1px solid var(--line)}
+.approvals h3 { font-size:13px; font-weight:600; margin:0 0 6px}
+.approvals .hint { margin:0 0 12px}
+#approval-list { list-style:none; margin:0; padding:0; display:grid; gap:12px}
+.approval-card { border:1px solid var(--line); border-radius:6px; padding:12px; background:#fff; display:grid; gap:8px}
+.approval-card b { font-size:12px; font-weight:600; text-transform:capitalize}
+.approval-card p { margin:0; font-size:12px; color:var(--muted); line-height:1.5}
+.approval-meta { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,monospace}
+.approval-actions { display:flex; gap:8px; justify-content:flex-end}
+#workspace-list { list-style:none; margin:0; padding:0; display:grid; gap:12px}
+.workspace-card { border:1px solid var(--line); border-radius:6px; padding:12px; background:#fff; display:grid; gap:8px}
+.workspace-card b { font-size:12px; font-weight:600; text-transform:capitalize}
+.workspace-card p { margin:0; font-size:12px; color:var(--muted); line-height:1.5}
+.workspace-files { margin:0; padding-left:16px; font-size:11px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,monospace}
+.workspace-card a { font-size:12px; color:var(--accent)}
+#git-list,#screen-share-list { list-style:none; margin:0; padding:0; display:grid; gap:12px}
+.share-preview { width:100%; max-height:140px; object-fit:contain; border:1px solid var(--line); border-radius:6px; background:#fff}
+#screen-share-actions { margin:0 0 12px}
 .telemetry { margin:18px 0 24px}
 .telemetry>div { display:flex; justify-content:space-between; gap:12px; margin:14px 0; font-size:12px}
 .telemetry dt { color:var(--muted)}
@@ -110,6 +136,9 @@ legend { float:left; width:100%; margin-bottom:12px}
 .session-card { display:grid; gap:7px; text-align:left; border:1px solid transparent; border-radius:5px; width:100%; padding:14px 12px; background:transparent; color:var(--ink)}
 .session-card b { font-size:13px; font-weight:500}
 .session-card span { font-size:12px; color:var(--muted)}
+.session-card em { font-style:normal; font-size:11px; color:var(--muted); overflow-wrap:anywhere}
+.transcript-actions { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 16px}
+.handoff-view { margin-top:24px; padding-top:20px; border-top:1px solid var(--line)}
 .session-card.selected,.session-card:hover { background:#eeeef5; border-color:#e2e2ed}
 .transcript { padding:28px; min-width:0}
 .transcript-eyebrow { font-size:12px; color:var(--muted)}

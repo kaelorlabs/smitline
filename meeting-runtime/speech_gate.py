@@ -27,13 +27,18 @@ class SpeechGate:
                 await self.writing
         while not self.queue.empty():
             self.queue.get_nowait()
-        # Joinly's virtual microphone has a two-chunk paced queue. Clear it
-        # while output is muted so those chunks cannot play on the next unmute.
-        pending = self.microphone._queue
-        if pending is not None:
-            while not pending.empty():
-                pending.get_nowait()
-                pending.task_done()
+        # Clear paced output while muted so old chunks cannot play on the next
+        # unmute. Writers that buffer audio expose this explicitly; simple test
+        # or third-party writers may write synchronously and need no cleanup.
+        discard = getattr(self.microphone, 'discard_pending', None)
+        if discard is not None:
+            discard()
+
+    async def drain(self):
+        """Wait until accepted audio has reached the output device."""
+        drain = getattr(self.microphone, 'drain', None)
+        if drain is not None:
+            await drain()
 
     async def run(self):
         try:

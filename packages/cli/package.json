@@ -1,0 +1,17 @@
+{
+  "name": "colleague",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Blocking Colleague AI CLI for joining Zoom, Teams, and Google Meet meetings.",
+  "bin": {
+    "colleague": "./src/colleague.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -27,15 +27,15 @@
         <section class="panel setup-panel" aria-labelledby="setup-title">
           <div class="panel-heading">
             <div><p class="kicker">Connection</p><h2 id="setup-title">Meeting details</h2></div>
-            <span class="section-tag" id="platform-badge">Zoom / Teams</span>
+            <span class="section-tag" id="platform-badge">Zoom / Teams / Meet</span>
           </div>
 
           <form id="meeting-form" novalidate>
             <div class="field full">
-              <label for="meeting-url">Meeting invitation</label>
-              <input id="meeting-url" name="meetingUrl" type="url" required autocomplete="off" placeholder="Paste a Zoom or Teams invitation">
+              <label for="meeting-url">Meeting invitation <span class="req">Required</span></label>
+              <input id="meeting-url" name="meetingUrl" type="url" required aria-required="true" autocomplete="off" placeholder="Paste a Zoom, Teams, or Google Meet invitation">
               <small class="hint">Paste the invitation link shared by your host.</small>
-              <small class="error" data-error="meetingUrl"></small>
+              <small class="error" id="meetingUrl-error" data-error="meetingUrl"></small>
             </div>
 
             <div class="field full" id="teams-account" hidden>
@@ -47,6 +47,26 @@
               </div>
               <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
             </div>
+            <div class="field full" id="google-account" hidden>
+              <label>Google account <span>fallback when guest entry is blocked</span></label>
+              <p class="hint" id="google-account-state">Checking connection…</p>
+              <div class="actions">
+                <button class="button secondary" type="button" id="connect-google">Connect Google account</button>
+                <button class="button ghost" type="button" id="disconnect-google">Disconnect</button>
+              </div>
+              <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
+            </div>
+            <div class="field full" id="runner-pair">
+              <label>Hosted runner <span>foundation pairing; local loopback stays supported</span></label>
+              <p class="hint" id="runner-state">Checking pairing…</p>
+              <p class="hint" id="pairing-code" hidden></p>
+              <div class="actions">
+                <button class="button secondary" type="button" id="pair-runner">Pair runner</button>
+                <button class="button secondary" type="button" id="complete-runner-pair" hidden>Confirm pairing</button>
+                <button class="button ghost" type="button" id="unpair-runner">Unpair</button>
+              </div>
+              <small class="hint">The pairing code is shown once. This computer keeps profiles, microphone, workspace, and credentials.</small>
+            </div>
             <div class="field-row">
               <div class="field">
                 <label for="passcode">Passcode</label>
@@ -54,9 +74,9 @@
                 <small class="hint" id="passcode-hint">Leave blank to keep the saved passcode.</small>
               </div>
               <div class="field">
-                <label for="participant-name">Name in the meeting</label>
-                <input id="participant-name" name="participantName" required maxlength="80">
-                <small class="error" data-error="participantName"></small>
+                <label for="participant-name">Name in the meeting <span class="req">Required</span></label>
+                <input id="participant-name" name="participantName" required aria-required="true" maxlength="80" placeholder="Colleague AI">
+                <small class="error" id="participantName-error" data-error="participantName"></small>
               </div>
             </div>
 
@@ -71,9 +91,52 @@
               <div class="tool-grid">
                 <label class="tool-card"><input type="checkbox" name="webSearch"><span class="tool-icon" aria-hidden="true">↗</span><span><b>Web search</b><small>Current facts and sources</small></span></label>
                 <label class="tool-card"><input type="checkbox" name="codex"><span class="tool-icon">›_</span><span><b>Codex</b><small>Read-only project analysis</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="cursor"><span class="tool-icon">›_</span><span><b>Cursor</b><small>Host Cursor CLI, context or exact session</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="claudeCode"><span class="tool-icon">›_</span><span><b>Claude Code</b><small>Host Claude CLI, context or exact session</small></span></label>
                 <label class="tool-card"><input type="checkbox" name="charts"><span class="tool-icon" aria-hidden="true">▤</span><span><b>Charts</b><small>Local PNG artifacts</small></span></label>
               </div>
               <small class="error" data-error="charts"></small>
+              <small class="error" data-error="codex"></small>
+              <small class="error" data-error="cursor"></small>
+              <small class="error" data-error="claudeCode"></small>
+            </fieldset>
+
+            <fieldset>
+              <legend>Meeting camera</legend>
+              <div class="tool-grid camera-grid">
+                <label class="tool-card"><input type="checkbox" name="cameraEnabled" checked><span><b>Show in the meeting</b><small>Colleague AI appears as a virtual camera tile</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="cameraDefaultOn" checked><span><b>Turn camera on after joining</b><small>Audio continues if the host blocks video</small></span></label>
+              </div>
+              <div class="field-row camera-setup">
+                <div class="field">
+                  <label for="camera-avatar">Avatar or logo <span>optional</span></label>
+                  <input id="camera-avatar" name="cameraAvatar" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg">
+                  <small class="hint">PNG, JPEG, WebP, or SVG up to 80 KB. A bundled Colleague AI mark is used when none is chosen.</small>
+                  <small class="error" data-error="camera"></small>
+                  <button class="text-button" id="remove-avatar-button" type="button" hidden>Remove custom avatar</button>
+                </div>
+                <div class="field camera-preview-field">
+                  <label for="camera-preview-state">Local preview</label>
+                  <select id="camera-preview-state" aria-label="Preview presence state">
+                    <option value="joining">Joining</option>
+                    <option value="listening" selected>Listening</option>
+                    <option value="working">Working</option>
+                    <option value="speaking">Speaking</option>
+                    <option value="finalizing">Finalizing</option>
+                    <option value="needs_attention">Needs attention</option>
+                    <option value="ended">Ended</option>
+                  </select>
+                  <canvas id="camera-preview" width="320" height="180" aria-label="Virtual camera preview"></canvas>
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Screen-share understanding</legend>
+              <div class="tool-grid camera-grid">
+                <label class="tool-card"><input type="checkbox" name="screenShareEnabled"><span><b>Understand shared content</b><small>Capture the meeting share surface at a low rate. Off by default. Voice cannot enable this.</small></span></label>
+              </div>
+              <small class="hint">This setting locks after the meeting starts. Pause and resume stay available. Colleague AI never shares this computer's desktop.</small>
             </fieldset>
 
             <div class="field full" id="workspace-field">
@@ -118,12 +181,12 @@
 
             <div class="preflight" id="preflight-results" aria-live="polite">
               <span class="preflight-mark">i</span>
-              <p>Run checks before joining. We’ll verify credentials, Docker, Codex, and the meeting configuration.</p>
+              <p>Run checks before joining. We’ll verify credentials, Docker, Codex, and meeting settings. Start and stop go through the local runtime daemon.</p>
             </div>
 
             <div class="actions">
               <button class="button secondary" id="check-button" type="button">Run checks</button>
-              <button class="button primary" id="start-button" type="submit">Start colleague <span>↗</span></button>
+              <button class="button primary" id="start-button" type="button">Start colleague <span>↗</span></button>
             </div>
           </form>
         </section>
@@ -144,10 +207,39 @@
           <dl class="telemetry">
             <div><dt>Microphone</dt><dd id="mic-state">—</dd></div>
             <div><dt>Voice output</dt><dd id="floor-state">—</dd></div>
+            <div><dt>Camera</dt><dd id="camera-state">—</dd></div>
+            <div><dt>Shared content</dt><dd id="share-state">—</dd></div>
+            <div><dt>Presence</dt><dd id="visual-state">—</dd></div>
             <div><dt>Listening</dt><dd id="listening-state">—</dd></div>
             <div><dt>Tool activity</dt><dd id="tool-state">—</dd></div>
+            <div><dt>Codex session</dt><dd id="continuity-state">—</dd></div>
             <div><dt>Session time</dt><dd id="session-time">0:00</dd></div>
           </dl>
+
+          <section class="approvals" id="approvals-panel" hidden>
+            <h3>Pending approvals</h3>
+            <p class="hint">Approve or deny each action. Voice cannot grant permission.</p>
+            <ul id="approval-list"></ul>
+          </section>
+
+          <section class="approvals" id="workspace-panel" hidden>
+            <h3>Workspace activity</h3>
+            <p class="hint">Planned edits, test results, and downloadable artifacts. Each action is approved separately.</p>
+            <ul id="workspace-list"></ul>
+          </section>
+
+          <section class="approvals" id="git-panel" hidden>
+            <h3>Git operations</h3>
+            <p class="hint">Commits and pushes stay disabled until you approve each one. Voice cannot grant permission.</p>
+            <ul id="git-list"></ul>
+          </section>
+
+          <section class="approvals" id="screen-share-panel" hidden>
+            <h3>Shared content</h3>
+            <p class="hint">Concise observations from the shared surface. Voice cannot enable capture.</p>
+            <div class="approval-actions" id="screen-share-actions"></div>
+            <ul id="screen-share-list"></ul>
+          </section>
 
           <div class="live-actions">
             <a class="button ghost" href="http://127.0.0.1:6082/vnc.html?autoconnect=true" target="_blank" rel="noreferrer">Open meeting view</a>
@@ -163,15 +255,24 @@
 
       <section class="panel history-panel" aria-labelledby="history-title">
         <div class="panel-heading">
-          <div><p class="kicker">Meeting archive</p><h2 id="history-title">Transcripts</h2></div>
+          <div><p class="kicker">Meeting archive</p><h2 id="history-title">Transcripts and handoffs</h2></div>
 
         </div>
         <div class="history-layout">
-          <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts will appear here.</p></div>
+          <div id="session-list" class="session-list"><p class="empty">Completed meeting transcripts and handoffs will appear here.</p></div>
           <article class="transcript" id="transcript-view">
-            <p class="transcript-eyebrow">Transcript</p>
+            <p class="transcript-eyebrow">Meeting record</p>
             <h3>Select a meeting</h3>
-            <pre>Your local transcript will open here.</pre>
+            <p id="handoff-status" class="hint" hidden></p>
+            <div id="handoff-actions" class="transcript-actions" hidden>
+              <button class="button" type="button" id="download-handoff">Download handoff</button>
+              <button class="button" type="button" id="retry-handoff" hidden>Retry Codex append</button>
+            </div>
+            <pre id="transcript-body">Your local transcript will open here.</pre>
+            <div id="handoff-view" class="handoff-view" hidden>
+              <p class="transcript-eyebrow">Handoff</p>
+              <pre id="handoff-body"></pre>
+            </div>
           </article>
         </div>
       </section>

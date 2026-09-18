@@ -2,6 +2,9 @@
 import re
 from urllib.parse import urlsplit, urlunsplit
 
+INVITE_ERROR = 'Use a supported HTTPS Zoom, Teams, or Google Meet meeting invite.'
+MEET_CODE = re.compile(r'^/[a-z]{3}-[a-z]{4}-[a-z]{3}/?$', re.I)
+
 def platform_for_url(value):
     try:
         url = urlsplit(value)
@@ -12,9 +15,11 @@ def platform_for_url(value):
             return 'zoom'
         if host in ('teams.microsoft.com', 'teams.live.com') and re.match(r'^/(?:l/meetup-join/[^/]+|meet/[^/]+)', url.path):
             return 'teams'
+        if host == 'meet.google.com' and MEET_CODE.fullmatch(url.path):
+            return 'meet'
     except (ValueError, TypeError):
         pass
-    raise ValueError('Use a supported HTTPS Zoom or Teams meeting invite.')
+    raise ValueError(INVITE_ERROR)
 
 def normalize_url(value):
     platform = platform_for_url(value)

@@ -20,10 +20,17 @@ async def accept_host_unmute(page):
 
 async def microphone_is_muted(page):
     # Zoom auto-hides its toolbar. Its accessible labels still track the
-    # microphone state; visibility is not a reliable mute signal.
+    # microphone state. Prefer a visible control because Zoom can leave stale
+    # hidden toolbar copies in the DOM during responsive layout changes.
     for muted, label in [(True, r'^unmute(?: my microphone)?(?:\s*\([^)]*\))?$'),
                          (False, r'^mute(?: my microphone)?(?:\s*\([^)]*\))?$')]:
         buttons = page.get_by_role('button', name=re.compile(label, re.I), include_hidden=True)
-        if await buttons.count():
+        for button in await buttons.all():
+            if await button.is_visible():
+                return muted
+    for muted, label in [(True, r'^unmute(?: my microphone)?(?:\s*\([^)]*\))?$'),
+                         (False, r'^mute(?: my microphone)?(?:\s*\([^)]*\))?$')]:
+        if await page.get_by_role(
+                'button', name=re.compile(label, re.I), include_hidden=True).count():
             return muted
     return None

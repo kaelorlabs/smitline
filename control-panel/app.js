@@ -1,9 +1,12 @@
-const $ = selector => document.querySelector(selector);
+import { clientMeetingErrors, createStartLock } from './client-validation.mjs';
+
+const $ = (sel) => document.querySelector(sel);
+const startLock = createStartLock();
 const form = $('#meeting-form');
 const views = {
   meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
   context: ['Reference context', 'Give your colleague the documents and details behind the discussion.'],
-  history: ['Transcripts', 'Return to the conversations and decisions from your meetings.'],
+  history: ['Transcripts and handoffs', 'Return to the conversations, decisions, and structured handoffs from your meetings.'],
 };
 function selectView(view) {
   if (!views[view]) view = 'meeting';
@@ -23,9 +26,20 @@ window.addEventListener('hashchange', () => selectView(location.hash.slice(1)));
 selectView(location.hash.slice(1));
 let operationBusy = false;
 let latestStatus = {};
+const ACTIVE_PHASES = new Set([
+  'starting', 'opening_meeting', 'joining', 'waiting_for_admission', 'admitted',
+  'connecting_audio', 'live',
+]);
+function meetingBusy(status = {}) {
+  return Boolean(status.running) || ACTIVE_PHASES.has(status.phase);
+}
 let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
+let previewUrls = [];
+let pendingPairing = null;
+
+let selectedAvatar = null;
 
 function payload() {
   const data = new FormData(form);
@@ -39,7 +53,16 @@ function payload() {
     meetingInstructions: data.get('meetingInstructions')?.trim(),
     tools: {
       webSearch: data.has('webSearch'), codex: data.has('codex'),
+      cursor: data.has('cursor'), claudeCode: data.has('claudeCode'),
       charts: data.has('charts'),
+    },
+    camera: {
+      enabled: data.has('cameraEnabled'),
+      defaultOn: data.has('cameraDefaultOn'),
+      ...(selectedAvatar ? { avatarDataUri: selectedAvatar } : {}),
+    },
+    screenShare: {
+      enabled: data.has('screenShareEnabled'),
     },
   };
 }
@@ -55,18 +78,33 @@ async function request(url, options = {}) {
 }
 
 function showErrors(errors = {}) {
-  document.querySelectorAll('[data-error]').forEach(node => { node.textContent = errors[node.dataset.error] || ''; });
+  document.querySelectorAll('[data-error]').forEach(node => {
+    const message = errors[node.dataset.error] || '';
+    node.textContent = message;
+    const field = form?.querySelector(`[name="${node.dataset.error}"]`);
+    if (field) {
+      field.setAttribute('aria-invalid', message ? 'true' : 'false');
+      field.setAttribute('aria-describedby', node.id || `${node.dataset.error}-error`);
+    }
+  });
+}
+
+function clientErrors() {
+  return clientMeetingErrors(payload());
 }
 
 function setBusy(busy, label) {
   operationBusy = busy;
   $('#check-button').disabled = busy;
-  $('#start-button').disabled = busy || Boolean(latestStatus.running) || latestStatus.phase === 'starting';
+  $('#start-button').disabled = busy || meetingBusy(latestStatus);
   if (label) $('#start-button').firstChild.textContent = `${label} `;
   else $('#start-button').firstChild.textContent = 'Start colleague ';
 }
 
-function describePhase(phase, health) {
+function describePhase(phase, health, status = {}) {
+  if ((status.pendingApprovals || []).length && (status.running || phase === 'live')) {
+    return ['Waiting for approval.', 'A workspace action is paused until you approve or deny it.'];
+  }
   const states = {
     stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
@@ -76,14 +114,280 @@ function describePhase(phase, health) {
     admitted: ['Admitted.', 'Connecting meeting audio.'],
     connecting_audio: ['Connecting audio…', 'Preparing the virtual microphone for GPT-Live output.'],
     live: ['Ready to contribute.', 'Listening continuously and waiting for a direct request or a useful factual correction.'],
-    authentication_required: ['Sign-in required.', 'Connect a Microsoft account for Teams, or inspect the meeting view.'],
-    connecting_account: ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
-    account_connected: ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
+    authentication_required: ['Sign-in required.', 'Connect a Microsoft account for Teams or a Google account for Meet, or inspect the meeting view.'],
+    connecting_account: health?.mode === 'google_account'
+      ? ['Sign in to Google.', 'Open meeting view and complete the Google sign-in.']
+      : ['Sign in to Microsoft.', 'Open meeting view and complete the Microsoft sign-in.'],
+    account_connected: health?.mode === 'google_account'
+      ? ['Google account connected.', 'Stop the account browser, then start your meeting.']
+      : ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
     meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
-    needs_attention: ['The agent needs attention.', health?.error || 'Open the runtime log for details.'],
+    needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
   };
-  return states[phase] || ['Working…', 'The current stage is shown above.'];
+  const [message, detail] = states[phase] || ['Working…', 'The current stage is shown above.'];
+  const continuity = status.continuity || health?.codex?.continuity;
+  const provider = status.provider || health?.provider || 'codex';
+  const agent = provider === 'cursor' ? 'Cursor' : provider === 'claude-code' ? 'Claude Code' : 'Codex';
+  if (continuity === 'context') {
+    return [message, detail + ` ${agent} is using context continuity, not the originating thread.`];
+  }
+  if (continuity === 'exact') {
+    return [message, detail + ` ${agent} is resuming the originating session.`];
+  }
+  return [message, detail];
+}
+
+function renderApprovals(pending, meetingId) {
+  const panel = $('#approvals-panel');
+  const list = $('#approval-list');
+  if (!panel || !list) return;
+  if (!pending.length || !meetingId) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...pending.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'approval-card';
+    const title = document.createElement('b');
+    title.textContent = item.category || item.permission || 'action';
+    const summary = document.createElement('p');
+    summary.textContent = item.summary || 'Requested action needs approval.';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const scope = document.createElement('span');
+    const keys = Object.keys(item.scope || {});
+    scope.textContent = keys.length ? keys.map((key) => `${key}: ${item.scope[key]}`).join(' · ') : 'meeting scope';
+    const expiry = document.createElement('span');
+    expiry.textContent = item.expiresAt ? `expires ${item.expiresAt}` : '';
+    meta.append(scope, expiry);
+    const actions = document.createElement('div');
+    actions.className = 'approval-actions';
+    for (const [decision, label] of [['approved', 'Approve'], ['denied', 'Deny']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = decision === 'denied' ? 'button danger compact' : 'button primary compact';
+      button.textContent = label;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await request(`/api/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(item.id)}/decision`, {
+            method: 'POST',
+            body: JSON.stringify({ decision }),
+          });
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+    card.append(title, summary, meta, actions);
+    return card;
+  }));
+}
+
+function renderWorkspace(artifacts, meetingId) {
+  const panel = $('#workspace-panel');
+  const list = $('#workspace-list');
+  if (!panel || !list) return;
+  const items = artifacts || [];
+  if (!items.length || !meetingId) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...items.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.kind || 'artifact';
+    const summary = document.createElement('p');
+    summary.textContent = item.description || item.summary || 'Workspace artifact';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const size = document.createElement('span');
+    size.textContent = item.bytes != null ? `${item.bytes} bytes` : '';
+    const files = document.createElement('span');
+    const changed = (item.changedFiles || []).map((file) => file.path || file).filter(Boolean);
+    files.textContent = changed.length ? changed.join(', ') : (item.status || '');
+    meta.append(size, files);
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'button ghost compact';
+    link.textContent = 'Download';
+    link.addEventListener('click', async () => {
+      try {
+        const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(item.id)}/content`, {
+          headers: { 'X-Colleague-Token': csrf },
+        });
+        if (!response.ok) throw new Error('Download failed.');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = item.id || 'artifact';
+        anchor.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        announce(error.message, true);
+      }
+    });
+    card.append(title, summary, meta, link);
+    return card;
+  }));
+}
+
+function renderGit(operations) {
+  const panel = $('#git-panel');
+  const list = $('#git-list');
+  if (!panel || !list) return;
+  const items = operations || [];
+  if (!items.length) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  list.replaceChildren(...items.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.kind || 'git';
+    const summary = document.createElement('p');
+    const result = item.result || {};
+    summary.textContent = result.summary || 'Waiting for a separate approval.';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const status = document.createElement('span');
+    status.textContent = item.status || 'requested';
+    const detail = document.createElement('span');
+    detail.textContent = result.commitSha || item.approvalId || '';
+    meta.append(status, detail);
+    card.append(title, summary, meta);
+    return card;
+  }));
+}
+
+function revokePreviews() {
+  for (const url of previewUrls) URL.revokeObjectURL(url);
+  previewUrls = [];
+}
+
+function shareStateLabel(share, health) {
+  const status = (share && share.status) || health.screenShare || {};
+  if (!status.enabled) return 'off';
+  if (status.paused) return 'paused';
+  if (status.capturing) return 'capturing';
+  if (status.active) return 'shared content';
+  if (status.available) return 'available';
+  const reason = status.degradedReason;
+  return reason ? String(reason).replaceAll('_', ' ') : 'idle';
+}
+
+function renderScreenShare(share, meetingId) {
+  const panel = $('#screen-share-panel');
+  const list = $('#screen-share-list');
+  const actions = $('#screen-share-actions');
+  if (!panel || !list || !actions) return;
+  revokePreviews();
+  const status = share?.status || {};
+  const observations = share?.observations || [];
+  if (!meetingId || (!status.enabled && !observations.length)) {
+    panel.hidden = true;
+    list.replaceChildren();
+    actions.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  actions.replaceChildren();
+  if (status.enabled) {
+    for (const [action, label] of [['pause', 'Pause capture'], ['resume', 'Resume capture']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'resume' ? 'button primary compact' : 'button ghost compact';
+      button.textContent = label;
+      button.disabled = action === 'pause' ? Boolean(status.paused) : !status.paused;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await request(`/api/meetings/${encodeURIComponent(meetingId)}/screen-share/${action}`, {
+            method: 'POST',
+            body: '{}',
+          });
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+  }
+  if (!observations.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = status.paused ? 'Capture is paused.' : 'No shared-content observations yet.';
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...observations.map((item) => {
+    const card = document.createElement('li');
+    card.className = 'workspace-card';
+    const title = document.createElement('b');
+    title.textContent = item.summary || 'Shared content';
+    const meta = document.createElement('div');
+    meta.className = 'approval-meta';
+    const confidence = document.createElement('span');
+    confidence.textContent = item.confidence != null ? `confidence ${item.confidence}` : '';
+    const when = document.createElement('span');
+    when.textContent = item.timestamp || '';
+    meta.append(confidence, when);
+    card.append(title, meta);
+    const artifactId = item.frameArtifactId;
+    if (artifactId) {
+      const preview = document.createElement('img');
+      preview.className = 'share-preview';
+      preview.alt = 'Shared content frame';
+      card.append(preview);
+      fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
+        headers: { 'X-Colleague-Token': csrf },
+      }).then(async (response) => {
+        if (!response.ok) return;
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        previewUrls.push(url);
+        preview.src = url;
+      }).catch(() => {});
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'button ghost compact';
+      link.textContent = 'Download frame';
+      link.addEventListener('click', async () => {
+        try {
+          const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
+            headers: { 'X-Colleague-Token': csrf },
+          });
+          if (!response.ok) throw new Error('Download failed.');
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${artifactId}.png`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          announce(error.message, true);
+        }
+      });
+      card.append(link);
+    }
+    return card;
+  }));
 }
 
 function renderStatus(status) {
@@ -91,36 +395,84 @@ function renderStatus(status) {
   const health = status.health || {};
   const live = Boolean(status.running);
   const phase = status.phase || 'stopped';
-  const [message, detail] = describePhase(phase, health);
-  $('#connection-label').textContent = live ? 'Local agent connected' : (phase === 'starting' ? 'Agent starting' : 'Local console ready');
+  const [message, detail] = describePhase(phase, health, status);
+  $('#connection-label').textContent = live ? 'Local agent connected' : (meetingBusy(status) ? 'Agent starting' : 'Local console ready');
   $('.connection').classList.toggle('live', live);
   $('#phase-label').textContent = phase.replaceAll('_', ' ');
   $('#signal-message').textContent = message;
   $('#signal-detail').textContent = detail;
-  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
+  const pending = status.pendingApprovals || [];
+  const waiting = pending.length > 0;
+  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${waiting ? 'waiting' : (health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : '')}`;
   $('#mic-state').textContent = health.microphoneState || '—';
   $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
+  const cameraState = health.cameraState || (health.cameraEnabled === false ? 'off' : '—');
+  $('#camera-state').textContent = health.degradedReason
+    ? `${String(cameraState).replaceAll('_', ' ')} (${String(health.degradedReason).replaceAll('_', ' ')})`
+    : String(cameraState).replaceAll('_', ' ');
+  $('#visual-state').textContent = (health.visualState || '—').replaceAll('_', ' ');
+  const shareState = $('#share-state');
+  if (shareState) shareState.textContent = shareStateLabel(status.screenShare, health);
+  const shareLock = form.querySelector('[name="screenShareEnabled"]');
+  if (shareLock) shareLock.disabled = meetingBusy(status);
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
   $('#tool-state').textContent = health.backend_status || '—';
+  const continuity = status.continuity || health.codex?.continuity;
+  $('#continuity-state').textContent = continuity === 'exact'
+    ? 'Originating thread'
+    : continuity === 'context'
+      ? 'Context only'
+      : '—';
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-  $('#stop-button').disabled = !live && phase !== 'starting';
-  $('#start-button').disabled = operationBusy || live || phase === 'starting';
+  renderApprovals(pending, status.meetingId);
+  renderWorkspace(status.workspaceArtifacts || [], status.meetingId);
+  renderGit(status.gitOperations || []);
+  renderScreenShare(status.screenShare, status.meetingId);
+  $('#stop-button').disabled = !meetingBusy(status);
+  $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
   $('#runtime-log').textContent = log || 'No activity yet.';
   renderSessions(status.sessions || []);
+  const runner = status.runner || {};
+  const runnerState = $('#runner-state');
+  if (runnerState) {
+    runnerState.textContent = runner.paired
+      ? 'Paired. This computer still owns profiles, microphone, workspace, and credentials.'
+      : 'Not paired. Local loopback is active.';
+  }
+  if (runner.paired) {
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = true;
+  }
+}
+
+function handoffStatusLabel(session) {
+  const status = session.handoffStatus || 'none';
+  if (status === 'ready') return session.partial ? 'Handoff ready (partial)' : 'Handoff ready';
+  if (status === 'pending') return 'Handoff pending';
+  if (status === 'failed') return 'Handoff failed — retry available';
+  return session.hasTranscript ? 'Transcript only' : 'Meeting session';
 }
 
 function renderSessions(sessions) {
   const list = $('#session-list');
-  if (!sessions.length) { list.innerHTML = '<p class="empty">Completed meeting transcripts will appear here.</p>'; return; }
+  if (!sessions.length) { list.innerHTML = '<p class="empty">Completed meeting transcripts and handoffs will appear here.</p>'; return; }
   list.replaceChildren(...sessions.map(session => {
     const button = document.createElement('button');
     button.className = `session-card ${selectedSession === session.id ? 'selected' : ''}`;
     button.type = 'button';
-    const title = document.createElement('b'); title.textContent = session.hasTranscript ? 'Meeting transcript' : 'Meeting session';
+    const title = document.createElement('b'); title.textContent = handoffStatusLabel(session);
     const time = document.createElement('span'); time.textContent = new Date(session.updatedAt).toLocaleString();
-    button.append(title, time);
+    const status = document.createElement('em');
+    status.textContent = session.endReason ? `Ended: ${session.endReason}` : session.id;
+    button.append(title, time, status);
     button.addEventListener('click', () => openTranscript(session.id, button));
     return button;
   }));
@@ -199,7 +551,52 @@ async function openTranscript(id, button) {
     document.querySelectorAll('.session-card').forEach(node => node.classList.remove('selected'));
     button.classList.add('selected');
     $('#transcript-view h3').textContent = new Date(id.slice(0, 15).replace(/(\d{8})T(\d{6})Z/, '$1T$2Z')).toString() === 'Invalid Date' ? id : id;
-    $('#transcript-view pre').textContent = result.transcript.trim() || 'This meeting has no transcript content.';
+    const status = result.handoffStatus || 'none';
+    const statusNode = $('#handoff-status');
+    statusNode.hidden = false;
+    statusNode.textContent = status === 'ready'
+      ? (result.partial ? 'Structured handoff is ready. This record is marked partial.' : 'Structured handoff is ready.')
+      : status === 'pending'
+        ? 'Handoff is stored locally and still pending Codex append or daemon release.'
+        : status === 'failed'
+          ? 'Codex append failed. The local handoff is kept; retry without releasing the lease.'
+          : 'No structured handoff is available yet.';
+    $('#transcript-body').textContent = (result.transcript || '').trim() || 'This meeting has no transcript content.';
+    const actions = $('#handoff-actions');
+    const handoffView = $('#handoff-view');
+    const retry = $('#retry-handoff');
+    if (result.handoff) {
+      actions.hidden = false;
+      handoffView.hidden = false;
+      $('#handoff-body').textContent = JSON.stringify(result.handoff, null, 2);
+      retry.hidden = status !== 'failed';
+      retry.onclick = async () => {
+        retry.disabled = true;
+        try {
+          await request(`/api/sessions/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
+          announce('Codex append retry succeeded.');
+          await openTranscript(id, button);
+          await refresh();
+        } catch (error) {
+          announce(error.message, true);
+          await openTranscript(id, button);
+        } finally {
+          retry.disabled = false;
+        }
+      };
+      $('#download-handoff').onclick = () => {
+        const blob = new Blob([JSON.stringify(result.handoff, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${result.handoffId || id}-handoff.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      };
+    } else {
+      actions.hidden = true;
+      handoffView.hidden = true;
+      retry.hidden = true;
+    }
   } catch (error) { announce(error.message, true); }
 }
 
@@ -211,8 +608,19 @@ function announce(text, failure = false) {
 }
 
 async function runChecks() {
-  showErrors(); setBusy(true, 'Checking…');
+  showErrors();
   const box = $('#preflight-results'); box.className = 'preflight';
+  const local = clientErrors();
+  if (Object.keys(local).length) {
+    showErrors(local);
+    box.className = 'preflight failed';
+    box.querySelector('p').textContent = Object.values(local).join(' ');
+    announce('Fill the required fields marked below.', true);
+    const first = form.querySelector(`[name="${Object.keys(local)[0]}"]`);
+    first?.focus();
+    return false;
+  }
+  setBusy(true, 'Checking…');
   box.querySelector('p').textContent = 'Checking local services and meeting configuration…';
   try {
     await addPendingContext(false);
@@ -220,26 +628,46 @@ async function runChecks() {
     showErrors(result.errors);
     box.className = `preflight ${result.ready ? 'ready' : 'failed'}`;
     box.querySelector('p').textContent = result.ready ? 'Ready to join. Credentials, Docker, Codex, and meeting settings passed.' : Object.values(result.errors).join(' ');
+    if (result.ready) announce('');
+    else announce(Object.values(result.errors)[0] || 'Checks failed.', true);
     return result.ready;
-  } catch (error) { box.className = 'preflight failed'; box.querySelector('p').textContent = error.message; return false; }
+  } catch (error) { box.className = 'preflight failed'; box.querySelector('p').textContent = error.message; announce(error.message, true); return false; }
   finally { setBusy(false); }
 }
 
-form.addEventListener('submit', async event => {
-  event.preventDefault(); announce('');
-  if (!await runChecks()) return;
-  setBusy(true, 'Starting…');
+async function startColleague(event) {
+  event?.preventDefault();
+  if (!startLock.begin()) return;
+  announce('');
   try {
+    if (!await runChecks()) return;
+    setBusy(true, 'Starting…');
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
     announce('Colleague AI is starting. Admit it when it reaches the meeting lobby.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
-  finally { setBusy(false); }
-});
+  finally {
+    startLock.end();
+    setBusy(false);
+  }
+}
 
+form.addEventListener('submit', startColleague);
+$('#start-button').addEventListener('click', startColleague);
 $('#check-button').addEventListener('click', runChecks);
+['meeting-url', 'participant-name'].forEach((id) => {
+  $(`#${id}`)?.addEventListener('input', () => {
+    const key = id === 'meeting-url' ? 'meetingUrl' : 'participantName';
+    const node = document.querySelector(`[data-error="${key}"]`);
+    if (node?.textContent) {
+      const next = clientErrors();
+      node.textContent = next[key] || '';
+      $(`#${id}`)?.setAttribute('aria-invalid', next[key] ? 'true' : 'false');
+    }
+  });
+});
 $('#context-files').addEventListener('change', renderPendingFiles);
 $('#add-context-button').addEventListener('click', async () => {
   try { await addPendingContext(); } catch (error) { announce(error.message, true); }
@@ -257,10 +685,21 @@ $('#stop-button').addEventListener('click', async () => {
   catch (error) { announce(error.message, true); }
 });
 
-form.elements.codex.addEventListener('change', () => {
-  const enabled = form.elements.codex.checked;
-  $('#workspace-field').hidden = !enabled;
-  if (!enabled) form.elements.charts.checked = false;
+function codingEnabled() {
+  return Boolean(form.elements.codex?.checked || form.elements.cursor?.checked || form.elements.claudeCode?.checked);
+}
+function exclusiveCoding(changed) {
+  if (!changed.checked) return;
+  ['codex', 'cursor', 'claudeCode'].forEach((name) => {
+    if (form.elements[name] && form.elements[name] !== changed) form.elements[name].checked = false;
+  });
+}
+['codex', 'cursor', 'claudeCode'].forEach((name) => {
+  form.elements[name]?.addEventListener('change', (event) => {
+    exclusiveCoding(event.target);
+    $('#workspace-field').hidden = !codingEnabled();
+    if (!form.elements.codex.checked) form.elements.charts.checked = false;
+  });
 });
 async function refresh() {
   try { renderStatus(await request('/api/status')); } catch { $('.connection').classList.remove('live'); $('#connection-label').textContent = 'Console disconnected'; }
@@ -280,10 +719,12 @@ async function init() {
     $('#model').value = settings.model;
     form.elements.webSearch.checked = settings.tools.webSearch;
     form.elements.codex.checked = settings.tools.codex;
+    if (form.elements.cursor) form.elements.cursor.checked = Boolean(settings.tools.cursor);
+    if (form.elements.claudeCode) form.elements.claudeCode.checked = Boolean(settings.tools.claudeCode);
     form.elements.charts.checked = settings.tools.charts;
     savedPasscode = settings.hasPasscode;
     $('#passcode-hint').textContent = savedPasscode ? 'A passcode is saved. Leave blank to keep it.' : 'Optional when the invitation URL includes access credentials.';
-    $('#workspace-field').hidden = !settings.tools.codex;
+    $('#workspace-field').hidden = !(settings.tools.codex || settings.tools.cursor || settings.tools.claudeCode);
     renderStatus(data.status);
     setInterval(refresh, 2000);
   } catch (error) { announce(`Control panel failed to initialize: ${error.message}`, true); }
@@ -291,32 +732,137 @@ async function init() {
 
 init();
 
+let previewApi = null;
+async function loadPreview() {
+  if (previewApi) return previewApi;
+  try {
+    previewApi = await import('./visual-preview.mjs');
+  } catch {
+    previewApi = { drawPresencePreview() {}, async readAvatarFile() { throw new Error('Camera preview is unavailable.'); } };
+  }
+  return previewApi;
+}
+async function paintPreview() {
+  const canvas = $('#camera-preview');
+  if (!canvas) return;
+  const preview = await loadPreview();
+  preview.drawPresencePreview(canvas, { visualState: $('#camera-preview-state')?.value || 'listening' });
+}
+paintPreview();
+$('#camera-preview-state')?.addEventListener('change', paintPreview);
+$('#camera-avatar')?.addEventListener('change', async event => {
+  const file = event.target.files?.[0];
+  const errorNode = document.querySelector('[data-error="camera"]');
+  try {
+    const preview = await loadPreview();
+    selectedAvatar = file ? await preview.readAvatarFile(file) : null;
+    if (errorNode) errorNode.textContent = '';
+    $('#remove-avatar-button').hidden = !selectedAvatar;
+  } catch (error) {
+    selectedAvatar = null;
+    event.target.value = '';
+    if (errorNode) errorNode.textContent = error.message;
+    $('#remove-avatar-button').hidden = true;
+  }
+});
+$('#remove-avatar-button')?.addEventListener('click', () => {
+  selectedAvatar = null;
+  $('#camera-avatar').value = '';
+  $('#remove-avatar-button').hidden = true;
+  const errorNode = document.querySelector('[data-error="camera"]');
+  if (errorNode) errorNode.textContent = '';
+});
+
 function updatePlatform() {
   let platform = null;
   try {
     const host = new URL($('#meeting-url').value).hostname;
     if (['teams.microsoft.com', 'teams.live.com'].includes(host)) platform = 'Teams';
     else if (/^(?:[a-z0-9-]+\.)?zoom\.us$/.test(host)) platform = 'Zoom';
+    else if (host === 'meet.google.com') platform = 'Meet';
   } catch {}
-  $('#platform-badge').textContent = platform || 'Zoom / Teams';
+  $('#platform-badge').textContent = platform || 'Zoom / Teams / Meet';
   $('#teams-account').hidden = platform !== 'Teams';
-  if (platform === 'Teams') refreshAccount();
+  $('#google-account').hidden = platform !== 'Meet';
+  if (platform === 'Teams') refreshAccount('teams');
+  if (platform === 'Meet') refreshAccount('google');
 }
-async function refreshAccount() {
+async function refreshAccount(kind = 'teams') {
+  const stateId = kind === 'google' ? 'google-account-state' : 'account-state';
   try {
-    const account = await request('/api/platforms/teams/status');
-    $('#account-state').textContent = account.connected ? 'Connected locally. Microsoft may request sign-in again if the session expires.' : 'Not connected. Guest entry will be attempted first.';
-  } catch { $('#account-state').textContent = 'Could not check account state.'; }
+    const account = await request(`/api/platforms/${kind}/status`);
+    const provider = kind === 'google' ? 'Google' : 'Microsoft';
+    $(`#${stateId}`).textContent = account.connected
+      ? `Connected locally. ${provider} may request sign-in again if the session expires.`
+      : 'Not connected. Guest entry will be attempted first.';
+  } catch { $(`#${stateId}`).textContent = 'Could not check account state.'; }
 }
 $('#meeting-url').addEventListener('input', updatePlatform);
-for (const action of ['connect', 'disconnect']) {
-  $(`#${action}-teams`).addEventListener('click', async event => {
-    event.target.disabled = true;
-    try {
-      await request(`/api/platforms/teams/${action}`, { method: 'POST', body: '{}' });
-      announce(action === 'connect' ? 'Preparing the account browser. Open meeting view to sign in.' : 'Microsoft profile removed from this computer.');
-      await refreshAccount(); await refresh();
-    } catch (error) { announce(error.message, true); }
-    finally { event.target.disabled = false; }
-  });
+for (const [kind, noun] of [['teams', 'Microsoft'], ['google', 'Google']]) {
+  for (const action of ['connect', 'disconnect']) {
+    $(`#${action}-${kind}`)?.addEventListener('click', async event => {
+      event.target.disabled = true;
+      try {
+        await request(`/api/platforms/${kind}/${action}`, { method: 'POST', body: '{}' });
+        announce(action === 'connect'
+          ? 'Preparing the account browser. Open meeting view to sign in.'
+          : `${noun} profile removed from this computer.`);
+        await refreshAccount(kind); await refresh();
+      } catch (error) { announce(error.message, true); }
+      finally { event.target.disabled = false; }
+    });
+  }
 }
+$('#pair-runner')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    const started = await request('/api/runner/pair', { method: 'POST', body: '{}' });
+    pendingPairing = { pairingId: started.pairingId, pairingCode: started.pairingCode };
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = false;
+      codeEl.textContent = `Pairing code (shown once): ${started.pairingCode}`;
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = false;
+    announce('Pairing code is shown once. Confirm pairing, then it will not be shown again.');
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});
+$('#complete-runner-pair')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    if (!pendingPairing?.pairingId || !pendingPairing?.pairingCode) {
+      throw new Error('Start pairing before confirming.');
+    }
+    const payload = { pairingId: pendingPairing.pairingId, pairingCode: pendingPairing.pairingCode };
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    event.target.hidden = true;
+    await request('/api/runner/pair/complete', { method: 'POST', body: JSON.stringify(payload) });
+    announce('Runner paired. The pairing code will not be shown again.');
+    await refresh();
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});
+$('#unpair-runner')?.addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    pendingPairing = null;
+    const codeEl = $('#pairing-code');
+    if (codeEl) {
+      codeEl.hidden = true;
+      codeEl.textContent = '';
+    }
+    const completeBtn = $('#complete-runner-pair');
+    if (completeBtn) completeBtn.hidden = true;
+    await request('/api/runner/unpair', { method: 'POST', body: '{}' });
+    announce('Runner unpaired. Local loopback remains active.');
+    await refresh();
+  } catch (error) { announce(error.message, true); }
+  finally { event.target.disabled = false; }
+});

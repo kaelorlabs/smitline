@@ -8,6 +8,7 @@ services:
     env_file: [.env, .env.meeting]
     environment:
       COLLEAGUE_AUTH_MODE: ${COLLEAGUE_AUTH_MODE:-}
+      COLLEAGUE_RUNTIME_STATE: ${COLLEAGUE_RUNTIME_STATE:-}
     shm_size: "2gb"
     ports:
       - "127.0.0.1:6082:6080"

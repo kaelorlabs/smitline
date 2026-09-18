@@ -1,0 +1,515 @@
+#!/usr/bin/env node
+import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import {
+  Colleague,
+  EXIT,
+  ValidationError,
+  StartupError,
+  RuntimeError,
+  FinalizationError,
+  InterruptError,
+  validateContext,
+} from '../../sdk-typescript/src/index.mjs';
+
+const interruptState = { requested: false, handler: null };
+const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+
+function requestInterrupt() {
+  interruptState.requested = true;
+  interruptState.handler?.();
+}
+
+const USAGE = `Usage:
+  colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
+               [--thread <id>] [--model <name>] [--context-file <path>]
+               [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
+               [--screen-share] [--replace]
+  colleague status [--meeting-id <id>]
+  colleague cancel [--meeting-id <id>]
+  colleague context add --file <path> | --text <json> [--meeting-id <id>]
+  colleague context validate --file <path> | --text <json>
+  colleague handoff get [--meeting-id <id>]
+  colleague handoff retry [--meeting-id <id>]
+  colleague approvals list --meeting-id <id>
+  colleague approvals get --meeting-id <id> --approval-id <id>
+  colleague approvals decide --meeting-id <id> --approval-id <id> --decision approved|denied
+  colleague artifacts list --meeting-id <id>
+  colleague artifacts get --meeting-id <id> --artifact-id <id>
+  colleague commits list --meeting-id <id>
+  colleague commits get --meeting-id <id> --operation-id <id>
+  colleague commits create --meeting-id <id> --expected-head <sha> --message <text> --file <path:sha256>
+  colleague pushes list --meeting-id <id>
+  colleague pushes get --meeting-id <id> --operation-id <id>
+  colleague pushes create --meeting-id <id> --commit-sha <sha> --remote <name> --branch <name>
+  colleague screen-share status --meeting-id <id>
+  colleague screen-share pause --meeting-id <id>
+  colleague screen-share resume --meeting-id <id>
+  colleague screen-share observations --meeting-id <id>
+  colleague providers
+  colleague runner status
+  colleague runner pair
+  colleague runner complete --pairing-id <id> --pairing-code <code>
+  colleague runner unpair
+`;
+
+function parseArgs(argv) {
+  const args = { _: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === '--') {
+      args._.push(...argv.slice(i + 1));
+      break;
+    }
+    if (token.startsWith('--')) {
+      const key = token.slice(2);
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        args[key] = next;
+        i += 1;
+      } else {
+        args[key] = true;
+      }
+    } else {
+      args._.push(token);
+    }
+  }
+  return args;
+}
+
+function fail(error, code) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${message}\n`);
+  process.exit(code);
+}
+
+function exitForError(error) {
+  if (error instanceof ValidationError) fail(error, EXIT.validation);
+  if (error instanceof StartupError) fail(error, EXIT.startup);
+  if (error instanceof InterruptError) fail(error, EXIT.interrupt);
+  if (error instanceof FinalizationError) {
+    if (error.handoff?.partial) {
+      writeFinal(error.handoff);
+      process.exit(EXIT.partial);
+    }
+    if (error.archivePath) process.stderr.write(`archive: ${error.archivePath}\n`);
+    fail(error, EXIT.finalization);
+  }
+  if (error instanceof RuntimeError) fail(error, EXIT.runtime);
+  fail(error, EXIT.runtime);
+}
+
+function progress(line) {
+  process.stderr.write(`${line}\n`);
+}
+
+function writeFinal(handoff) {
+  const archivePath = handoff?.archivePath || (handoff?.meetingId ? `recordings/${handoff.meetingId}` : null);
+  process.stdout.write(`${JSON.stringify({ handoff, archivePath }, null, 2)}\n`);
+}
+
+function stateFile(root) {
+  return path.join(root, '.colleague', 'cli-meeting.json');
+}
+
+function activeMeetingFile(root) {
+  return path.join(root, '.colleague', 'active-meeting.json');
+}
+
+async function saveMeetingId(root, meetingId) {
+  const file = stateFile(root);
+  await fs.mkdir(path.dirname(file), { mode: 0o700, recursive: true });
+  await fs.writeFile(file, `${JSON.stringify({ meetingId })}\n`, { mode: 0o600 });
+}
+
+async function readMeetingId(file) {
+  try {
+    const payload = JSON.parse(await fs.readFile(file, 'utf8'));
+    return typeof payload?.meetingId === 'string' && payload.meetingId ? payload.meetingId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function meetingIdCandidates(root) {
+  const ids = await Promise.all([
+    readMeetingId(activeMeetingFile(root)),
+    readMeetingId(stateFile(root)),
+  ]);
+  return [...new Set(ids.filter(Boolean))];
+}
+
+async function loadMeetingId(root, explicit) {
+  if (explicit) return explicit;
+  const [meetingId] = await meetingIdCandidates(root);
+  if (meetingId) return meetingId;
+  throw new ValidationError('no meeting id; pass --meeting-id or run join first');
+}
+
+async function findActiveMeeting(root, client) {
+  for (const meetingId of await meetingIdCandidates(root)) {
+    try {
+      const meeting = await client._transport.getMeeting(meetingId);
+      if (!new Set(['ended', 'cancelled', 'failed']).has(meeting?.state)) return meeting;
+    } catch (error) {
+      if (error?.code !== 'not_found') throw error;
+    }
+  }
+  return null;
+}
+
+function activeMeetingMessage(meetingId) {
+  return `meeting agent ${meetingId} is already running; run colleague cancel --meeting-id ${meetingId} or retry join with --replace`;
+}
+
+async function readContext(args) {
+  if (args['context-file'] && args['context-text']) {
+    throw new ValidationError('use only one of --context-file or --context-text');
+  }
+  if (args['context-file']) {
+    const raw = await fs.readFile(args['context-file'], 'utf8');
+    return validateContext(JSON.parse(raw));
+  }
+  if (args['context-text']) return validateContext(JSON.parse(args['context-text']));
+  return undefined;
+}
+
+function describeEvent(event) {
+  const type = event?.type || 'event';
+  if (String(type).startsWith('transcript.')) return `transcript ${type}`;
+  if (type.startsWith('delegation.')) {
+    const task = event.taskId || event.delegationId || '';
+    return `delegation ${type.replace('delegation.', '')}${task ? ` ${task}` : ''}`;
+  }
+  if (type.startsWith('meeting.')) return `state ${type.replace('meeting.', '')}`;
+  if (type === 'presence.updated') return `presence ${event.visualState || 'updated'}`;
+  if (type === 'handoff.ready') return 'handoff ready';
+  if (type === 'handoff.append_failed') return 'handoff append failed';
+  if (String(type).startsWith('approval.')) {
+    const category = event.request?.category || event.request?.permission || event.decision?.decision || '';
+    return `approval ${type.replace('approval.', '')}${category ? ` ${category}` : ''}`;
+  }
+  if (String(type).startsWith('workspace.action.')) {
+    return `workspace ${type.replace('workspace.action.', '')}`;
+  }
+  if (type === 'artifact.created') return `artifact ${event.artifact?.kind || event.artifact?.id || ''}`.trim();
+  if (type.startsWith('screen_share.')) return `screen-share ${type.replace('screen_share.', '')}`;
+  return type;
+}
+
+function colleagueFromArgs(args) {
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  return {
+    root,
+    client: new Colleague({
+      root,
+      host: args.host || process.env.COLLEAGUE_DAEMON_HOST || '127.0.0.1',
+      port: Number(args.port || process.env.COLLEAGUE_DAEMON_PORT || 8765),
+    }),
+  };
+}
+
+async function joinCommand(args) {
+  if (!args.meeting) throw new ValidationError('--meeting is required');
+  const provider = args.agent || 'codex';
+  const workspace = path.resolve(args.workspace || process.cwd());
+  const exact = !args['context-continuity'];
+  const thread = args.thread || (provider === 'codex' ? process.env.CODEX_THREAD_ID : undefined);
+  if (exact && !thread) {
+    throw new ValidationError('exact continuity requires --thread or CODEX_THREAD_ID; pass --context-continuity for context-only joins');
+  }
+  const context = await readContext(args);
+  const { root, client } = colleagueFromArgs(args);
+  const active = await findActiveMeeting(root, client);
+  if (active && !args.replace) {
+    throw new RuntimeError(activeMeetingMessage(active.id), { code: 'capacity_exceeded' });
+  }
+  if (active) {
+    progress(`replacing active meeting ${active.id}`);
+    await client._transport.cancelMeeting(active.id);
+  }
+  let meeting;
+  try {
+    meeting = await client.joinMeeting({
+      url: args.meeting,
+      agentSession: {
+        provider,
+        sessionId: thread || 'local-portal',
+        workspace,
+        ...(args.model ? { model: args.model } : {}),
+      },
+      context,
+      ...(args['no-camera'] ? { camera: { enabled: false } } : {}),
+      ...(args['screen-share'] ? { screenShare: { enabled: true } } : {}),
+    });
+  } catch (error) {
+    if (error?.code === 'capacity_exceeded') {
+      const known = await findActiveMeeting(root, client);
+      if (known?.id) throw new RuntimeError(activeMeetingMessage(known.id), { code: error.code });
+    }
+    throw error;
+  }
+  await saveMeetingId(root, meeting.id);
+  progress(`joined ${meeting.id}`);
+  if (!args.wait) {
+    process.stdout.write(`${JSON.stringify({ meetingId: meeting.id }, null, 2)}\n`);
+    return EXIT.ok;
+  }
+
+  let cancelStarted = false;
+  const onInterrupt = () => {
+    interruptState.requested = true;
+    if (!cancelStarted) progress('interrupt: requesting cancellation');
+    cancelStarted = true;
+    meeting.cancel().catch((error) => progress(error.message));
+  };
+  interruptState.handler = onInterrupt;
+  if (interruptState.requested) onInterrupt();
+  meeting.on('event', (event) => progress(describeEvent(event)));
+  try {
+    const handoff = await meeting.finished;
+    writeFinal(handoff);
+    if (interruptState.requested) return EXIT.interrupt;
+    if (handoff?.partial) return EXIT.partial;
+    return EXIT.ok;
+  } finally {
+    if (interruptState.handler === onInterrupt) interruptState.handler = null;
+  }
+}
+
+async function daemonCall(args, method, ...rest) {
+  const { root, client } = colleagueFromArgs(args);
+  const meetingId = await loadMeetingId(root, args['meeting-id']);
+  const transport = client._transport;
+  return { root, meetingId, result: await transport[method](meetingId, ...rest) };
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  const command = args._[0];
+  if (!command || command === 'help' || args.help) {
+    process.stdout.write(USAGE);
+    return command ? EXIT.ok : EXIT.validation;
+  }
+  try {
+    if (command === 'context' && args._[1] === 'validate') {
+      if (!args.file && !args.text) throw new ValidationError('context validate requires --file or --text');
+      const context = await readContext({
+        'context-file': args.file,
+        'context-text': args.text,
+      });
+      process.stdout.write(`${JSON.stringify({ valid: true, version: context.version }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    if (command === 'join') return await joinCommand(args);
+    if (command === 'status') {
+      const { result } = await daemonCall(args, 'getMeeting');
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    if (command === 'cancel') {
+      const { result } = await daemonCall(args, 'cancelMeeting');
+      process.stdout.write(`${JSON.stringify({ id: result.id, state: result.state }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    if (command === 'context' && args._[1] === 'add') {
+      const payload = args.file
+        ? validateContext(JSON.parse(await fs.readFile(args.file, 'utf8')))
+        : validateContext(JSON.parse(args.text || 'null'));
+      const { result } = await daemonCall(args, 'updateContext', payload);
+      process.stdout.write(`${JSON.stringify({ id: result.id, state: result.state }, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    if (command === 'handoff' && args._[1] === 'get') {
+      const { result } = await daemonCall(args, 'getHandoff');
+      writeFinal(result);
+      return result?.partial ? EXIT.partial : EXIT.ok;
+    }
+    if (command === 'handoff' && args._[1] === 'retry') {
+      const { result } = await daemonCall(args, 'retryHandoff');
+      writeFinal(result);
+      return result?.partial ? EXIT.partial : EXIT.ok;
+    }
+    if (command === 'approvals') {
+      if (!args['meeting-id']) throw new ValidationError('approvals commands require --meeting-id');
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      if (args._[1] === 'list') {
+        const result = await transport.listApprovals(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (!args['approval-id']) throw new ValidationError('this command requires --approval-id');
+      if (args._[1] === 'get') {
+        const result = await transport.getApproval(meetingId, args['approval-id']);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'decide') {
+        const decision = args.decision;
+        if (decision !== 'approved' && decision !== 'denied') {
+          throw new ValidationError('--decision must be approved or denied');
+        }
+        const result = await transport.decideApproval(meetingId, args['approval-id'], { decision });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown approvals command');
+    }
+    if (command === 'artifacts') {
+      if (!args['meeting-id']) throw new ValidationError('artifacts commands require --meeting-id');
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      if (args._[1] === 'list') {
+        const result = await transport.listArtifacts(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (!args['artifact-id']) throw new ValidationError('this command requires --artifact-id');
+      if (args._[1] === 'get') {
+        const result = await transport.getArtifact(meetingId, args['artifact-id']);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown artifacts command');
+    }
+    if (command === 'commits' || command === 'pushes') {
+      if (!args['meeting-id']) throw new ValidationError(`${command} commands require --meeting-id`);
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      const methods = command === 'commits'
+        ? { list: 'listCommits', get: 'getCommit', create: 'createCommit' }
+        : { list: 'listPushes', get: 'getPush', create: 'createPush' };
+      if (args._[1] === 'list') {
+        const result = await transport[methods.list](meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'get') {
+        if (!args['operation-id']) throw new ValidationError('this command requires --operation-id');
+        const result = await transport[methods.get](meetingId, args['operation-id']);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'create') {
+        if (command === 'commits') {
+          if (!args['expected-head'] || !args.message || !args.file) {
+            throw new ValidationError('commits create requires --expected-head, --message, and --file');
+          }
+          const [filePath, digest] = String(args.file).split(':');
+          if (!filePath || !digest) throw new ValidationError('--file must be path:sha256');
+          const result = await transport[methods.create](meetingId, {
+            expectedHead: args['expected-head'],
+            message: args.message,
+            files: [{ path: filePath, sha256: digest }],
+            id: args['operation-id'],
+          });
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return EXIT.ok;
+        }
+        if (!args['commit-sha'] || !args.remote || !args.branch) {
+          throw new ValidationError('pushes create requires --commit-sha, --remote, and --branch');
+        }
+        const result = await transport[methods.create](meetingId, {
+          commitSha: args['commit-sha'],
+          remote: args.remote,
+          branch: args.branch,
+          id: args['operation-id'],
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError(`unknown ${command} command`);
+    }
+    if (command === 'screen-share') {
+      if (!args['meeting-id']) throw new ValidationError('screen-share commands require --meeting-id');
+      const { client } = colleagueFromArgs(args);
+      const transport = client._transport;
+      const meetingId = args['meeting-id'];
+      if (args._[1] === 'status') {
+        const result = await transport.getScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'pause') {
+        const result = await transport.pauseScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'resume') {
+        const result = await transport.resumeScreenShare(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (args._[1] === 'observations') {
+        const result = await transport.listScreenShareObservations(meetingId);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown screen-share command');
+    }
+    if (command === 'providers') {
+      const { client } = colleagueFromArgs(args);
+      const result = await client.listProviders();
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return EXIT.ok;
+    }
+    if (command === 'runner') {
+      const { client } = colleagueFromArgs(args);
+      const action = args._[1] || 'status';
+      if (action === 'status') {
+        const result = await client.runnerStatus();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'pair') {
+        const result = await client.pairRunner();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'complete') {
+        if (!args['pairing-id'] || !args['pairing-code']) {
+          throw new ValidationError('runner complete requires --pairing-id and --pairing-code');
+        }
+        const result = await client.completeRunnerPair({
+          pairingId: args['pairing-id'],
+          pairingCode: args['pairing-code'],
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      if (action === 'unpair') {
+        const result = await client.unpairRunner();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return EXIT.ok;
+      }
+      throw new ValidationError('unknown runner command');
+    }
+    throw new ValidationError(`unknown command: ${command}`);
+  } catch (error) {
+    exitForError(error);
+  }
+  return EXIT.ok;
+}
+
+let invoked = false;
+if (process.argv[1]) {
+  try {
+    invoked = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    invoked = path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+if (invoked) {
+  process.on('SIGINT', requestInterrupt);
+  process.on('SIGTERM', requestInterrupt);
+  main().then((code) => process.exit(code ?? 0), (error) => exitForError(error));
+}
+
+export { main, parseArgs, describeEvent, DEFAULT_COLLEAGUE_ROOT };

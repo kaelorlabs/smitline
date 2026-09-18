@@ -1,0 +1,23 @@
+{
+  "name": "@colleague-ai/sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Colleague AI SDK for joining Zoom, Teams, and Google Meet meetings through the runtime daemon.",
+  "main": "./src/index.mjs",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.mjs"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "examples"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
