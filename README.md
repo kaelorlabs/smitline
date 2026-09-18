@@ -247,7 +247,6 @@ Transcripts contain meeting content and are retained until you remove them. Gene
 | [`gpt-live/`](gpt-live/) | Standalone browser voice diagnostic |
 | [`live/`](live/) | Earlier local Whisper/Kokoro voice-room experiment; not the product path |
 | [`joinly/`](joinly/) | Vendored meeting/browser/audio infrastructure |
-| [`agents-everywhere-starter-kit/`](agents-everywhere-starter-kit/) | CopilotKit starter reference; not in the active voice path |
 
 ```bash
 docker run --rm \
@@ -291,4 +290,4 @@ See the [product roadmap](docs/product-roadmap.md). Near-term work is latency, c
 
 Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo.
 
-Colleague AI builds on Joinly’s browser and audio infrastructure. The repository also retains the CopilotKit Agents Everywhere starter as a reference. See [THIRD_PARTY.md](THIRD_PARTY.md) for pinned upstream revisions and retained licenses.
+Colleague AI builds on Joinly’s browser and audio infrastructure. See [THIRD_PARTY.md](THIRD_PARTY.md) for the pinned upstream revision and retained license.
