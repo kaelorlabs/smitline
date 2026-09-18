@@ -16,7 +16,7 @@ A voice teammate for Zoom, Microsoft Teams, and Google Meet that connects your t
 
 Colleague AI is another interface to the coding-agent conversation you already have. A host integration (or the local portal) joins a meeting with context and permissions; GPT-Live listens continuously and speaks selectively; delegated work resumes the originating coding-agent session when the host supplies that session’s real id. When the meeting ends, a structured handoff is appended once and the session lease is released.
 
-Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes.
+Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Humans and coding agents should start from [AGENTS.md](AGENTS.md) for the full doc index and invariants.
 
 The supported production path is a **loopback daemon on this computer** (`127.0.0.1`). There is no production hosted control plane. The [hosted runtime](docs/hosted-runtime.md) module is a foundation for later pairing tests, not a cloud deployment.
 

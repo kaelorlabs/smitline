@@ -3,7 +3,7 @@
 **Document status:** canonical product brief and progress ledger  
 **Last reviewed:** 2026-09-17  
 **Current stage:** advanced local alpha / developer preview  
-**Primary implementation branch at this snapshot:** `agent/zoom-teams-adapters`
+**Primary implementation branch at this snapshot:** `developer-platform`
 
 This document is the durable product memory for Colleague AI. It explains what we are building, why it matters, which decisions are settled, what already exists, and what remains. Coding agents should read this document before proposing architecture or product changes and update the progress ledger when a milestone materially changes.
 
