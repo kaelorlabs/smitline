@@ -1,7 +1,7 @@
 # Colleague AI: product vision, decisions, and progress
 
 **Document status:** canonical product brief and progress ledger  
-**Last reviewed:** 2026-09-17  
+**Last reviewed:** 2026-09-18  
 **Current stage:** advanced local alpha / developer preview  
 **Primary implementation branch at this snapshot:** `developer-platform`
 
@@ -162,7 +162,7 @@ Status meanings:
 | Microsoft Teams adapter | Partial | Guest-first join, Microsoft profile fallback, audio, mute, chat, participant count, and termination handling exist. Tenant-policy and audio acceptance coverage remains limited. |
 | Google Meet adapter | Partial | Guest-first join and Google profile fallback exist with fixture coverage. Full live acceptance remains outstanding. |
 | Continuous GPT-Live voice | Implemented | One `gpt-live-1` session, `store: false`, audio context, transcript events, and client delegation exist. Conversational quality and platform audio reliability still need evaluation. |
-| Selective speech and mute transport | Partial | GPT-Live-driven participation and virtual audio gating exist. Cross-platform unmute/remute behavior is still an active reliability area. |
+| Selective speech and mute transport | Partial | GPT-Live-driven participation, virtual audio gating, and public drain/discard of queued playback exist, with automated tests. Zoom mute prefers a visible control and falls back to the in-meeting shortcut. Cross-platform live unmute/remute acceptance is still open. |
 | Local runtime daemon | Implemented | Authenticated loopback HTTP/SSE API owns sessions, events, leases, approvals, artifacts, providers, and supervision. |
 | Durable event and meeting storage | Implemented | Versioned schemas, append-only events, transcript/archive records, validation, recovery, and local retention paths exist. |
 | Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. The installed Codex skill launches a CLI child of the active task so it inherits `CODEX_THREAD_ID` directly; the full live round trip still needs acceptance testing. |
@@ -278,7 +278,7 @@ Run repeatable real meetings for Zoom, Teams, and Meet covering:
 
 ### Milestone B — Cross-platform reliability
 
-- [ ] Complete the current participation/microphone fix and automated tests.
+- [x] Complete the current participation/microphone fix and automated tests.
 - [ ] Pass the full Zoom acceptance script.
 - [ ] Pass the full Teams acceptance script with guest and account-fallback cases.
 - [ ] Pass the full Google Meet acceptance script with guest and account-fallback cases.
@@ -387,6 +387,13 @@ When updating this file, use these rules:
 - Never remove an unresolved limitation solely because it is inconvenient for presentation.
 
 ## Progress log
+
+### 2026-09-18
+
+- Marked the participation and microphone fix complete: queued playback now drains and discards through the public microphone API, with automated coverage. Live cross-platform acceptance stays open.
+- Recorded the Zoom mute path that prefers a visible enabled control, verifies state, and falls back to Alt+A when a click does not change mute state.
+- Recorded Codex `exec` options placed before `resume` and the prompt, and meeting-capacity release when transcript handoff fails, including the host jobs directory for provider append.
+- Disabled screen-share settings now keep the published retention shape. Contributor entry is `AGENTS.md`. The unused CopilotKit starter kit is no longer in the tree.
 
 ### 2026-09-17
 
