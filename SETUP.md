@@ -107,7 +107,7 @@ colleague setup call-me --wait
 
 Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Every call opens with "Hi, I'm an AI assistant calling on behalf of <name>.", and every meeting with "Hi, I'm an AI assistant joining on behalf of <name>. I'll mostly listen; say 'Colleague' if you need me." Afterwards, ask whether they like the voice. To try another one, `colleague setup voice --preview <name>` calls them in that voice; `colleague setup voice --set <name>` keeps it; `colleague setup voice` lists the voices. The voice can be changed the same way at any time.
 
-Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running.
+Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running. The first meeting builds the meeting image, which can take several minutes; tell the user before it starts.
 
 ## 7. Connect the agent
 
