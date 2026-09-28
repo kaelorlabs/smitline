@@ -133,7 +133,7 @@ class CallBrief:
         return {key: value for key, value in data.items() if value is not None}
 
     @classmethod
-    def from_dict(cls, payload):
+    def from_dict(cls, payload, *, environ=None):
         data = require_mapping(payload, 'brief')
         reject_unknown_fields(data, BRIEF_FIELDS, 'brief')
         reject_secrets(data, 'brief')
@@ -158,8 +158,9 @@ class CallBrief:
         voice = optional_field(data, 'voice')
         if voice is not None:
             voice = require_string(voice, 'voice', max_length=32)
-            if not VOICE.fullmatch(voice) or voice not in available_voices():
-                raise ValueError('voice must be one of: ' + ', '.join(available_voices()))
+            voices = available_voices(environ)
+            if not VOICE.fullmatch(voice) or voice not in voices:
+                raise ValueError('voice must be one of: ' + ', '.join(voices))
         max_minutes = optional_field(data, 'maxMinutes')
         max_minutes = (DEFAULT_MAX_MINUTES[channel] if max_minutes is None else
                        require_int(max_minutes, 'maxMinutes', min_value=1,
@@ -201,6 +202,15 @@ def available_voices(environ=None):
     extra = (environ if environ is not None else os.environ).get('COLLEAGUE_EXTRA_VOICES', '')
     names = [name.strip() for name in extra.split(',') if VOICE.fullmatch(name.strip() or '-')]
     return tuple(dict.fromkeys(GPT_LIVE_VOICES + tuple(names)))
+
+
+def default_voice(environ=None):
+    """COLLEAGUE_VOICE when it names a known voice; otherwise GPT-Live's default."""
+    import os
+    from voice_core import DEFAULT_VOICE
+    env = environ if environ is not None else os.environ
+    voice = str(env.get('COLLEAGUE_VOICE') or '').strip()
+    return voice if voice in available_voices(env) else DEFAULT_VOICE
 
 
 def disclosure_line(brief):

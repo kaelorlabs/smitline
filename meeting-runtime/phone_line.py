@@ -12,15 +12,15 @@ import json
 import secrets
 import time
 
-from call_brief import CallBrief, normalize_phone, validate_webhook_url
+from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
-    delegation_config, disclosure_reminder, mentions_ai, opening_cue, voice_instructions,
+    delegation_config, disclosure_reminder, discloses, opening_cue, voice_instructions,
 )
 from twilio_client import TwilioClient, dial_twiml, stream_twiml
 from voice_core import (
-    DEFAULT_VOICE, PCMU8, LiveSession, backend_usage_from, function_call_from, session_config,
+    PCMU8, LiveSession, backend_usage_from, function_call_from, session_config,
 )
 
 
@@ -74,7 +74,13 @@ class UtteranceJoiner:
 
 
 class OutputPacer:
-    """Send model audio to Twilio no more than a short lead ahead of playback."""
+    """Send model audio to Twilio no more than a short lead ahead of playback.
+
+    Audio is sent in 20 ms frames, so what Twilio has buffered never exceeds the
+    lead plus one frame, whatever size GPT-Live's deltas are.
+    """
+
+    FRAME_BYTES = 160  # 20 ms of 8 kHz mu-law
 
     def __init__(self, send, *, lead=OUTPUT_LEAD_SECONDS, clock=time.monotonic,
                  sleep=asyncio.sleep, bytes_per_second=8000):
@@ -92,7 +98,10 @@ class OutputPacer:
 
     def offer(self, payload):
         self._drained.clear()
-        self.queue.put_nowait(payload)
+        audio = base64.b64decode(payload)
+        frames = [audio[i:i + self.FRAME_BYTES] for i in range(0, len(audio), self.FRAME_BYTES)]
+        for index, frame in enumerate(frames):
+            self.queue.put_nowait((base64.b64encode(frame).decode('ascii'), index == len(frames) - 1))
 
     def mark_played(self, name):
         try:
@@ -111,7 +120,7 @@ class OutputPacer:
 
     async def run(self):
         while True:
-            payload = await self.queue.get()
+            payload, last = await self.queue.get()
             seconds = len(base64.b64decode(payload)) / self.bytes_per_second
             now = self.clock()
             ahead = self.play_until - now
@@ -119,8 +128,10 @@ class OutputPacer:
                 await self.sleep(ahead - self.lead)
                 now = self.clock()
             await self._send({'event': 'media', 'media': {'payload': payload}})
-            self.sent_marks += 1
-            await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
+            if last:
+                # One mark per delta tells us when that speech finished playing.
+                self.sent_marks += 1
+                await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
             self.play_until = max(now, self.play_until) + seconds
 
 
@@ -157,6 +168,8 @@ class PhoneSession:
         self.phone_seconds = None
         self.backend_tokens = {'input': 0, 'output': 0}
         self.disclosure_checked = False
+        self.disclosure_attempts = 0
+        self._failed_opening = None
         self.heard_other = asyncio.Event()
         self.last_activity = None
         self.started_at = None
@@ -174,7 +187,7 @@ class PhoneSession:
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording),
             audio_format=PCMU8,
-            voice=self.brief.voice or env.get('COLLEAGUE_VOICE') or DEFAULT_VOICE,
+            voice=self.brief.voice or default_voice(env),
             delegation=delegation_config(
                 self.brief, model=env.get('COLLEAGUE_PHONE_BACKEND_MODEL'),
                 web_search=env.get('COLLEAGUE_PHONE_WEB_SEARCH') == '1', inbound=self.inbound),
@@ -349,19 +362,28 @@ class PhoneSession:
             self._check_disclosure(''.join(self.joiner.parts))
 
     def _check_disclosure(self, text, *, final=False):
-        """Decide once, early in the agent's first utterance, whether it disclosed being an AI.
+        """Check, early in the agent's first utterance, that it said it is an AI acting for NAME.
 
         GPT-Live cannot be forced to say a fixed sentence, so the opening is checked
-        as it is spoken; a miss triggers an immediate instruction to disclose.
+        as it is spoken. A miss triggers an instruction to disclose at once, and the
+        next thing the agent says is checked again. The verdict goes into the result.
         """
         if self.disclosure_checked or self.inbound:
             return
-        verified = mentions_ai(text)
-        if not verified and not final and len(text.strip()) < DISCLOSURE_WINDOW:
+        text = text.strip()
+        if self._failed_opening and text.startswith(self._failed_opening):
+            return  # the rest of the utterance that already failed
+        verified = discloses(text, self.brief.on_behalf_of, self.brief.language)
+        if not verified and not final and len(text) < DISCLOSURE_WINDOW:
             return
-        self.disclosure_checked = True
-        self.ctx.event('call.disclosure', verified=verified)
-        if not verified and self.live is not None:
+        self.disclosure_attempts += 1
+        self.ctx.disclosure = verified
+        self.ctx.event('call.disclosure', verified=verified, attempt=self.disclosure_attempts)
+        if verified or self.disclosure_attempts >= 2:
+            self.disclosure_checked = True
+            return
+        self._failed_opening = text[:60]
+        if self.live is not None:
             self._spawn(self.live.append(
                 'session.instructions.append', disclosure_reminder(self.brief)))
 
@@ -468,8 +490,10 @@ class PhoneSession:
         if self.pacer is not None:
             await asyncio.sleep(1.0)
             await self.pacer.drained(6.0)
-        await self.twilio.update_call(self.call_sid,
-                                      twiml=dial_twiml(self.owner_phone, self.from_number))
+        fallback = (f'Sorry, I could not reach {self.brief.on_behalf_of} right now. '
+                    'They will get back to you. Goodbye.')
+        await self.twilio.update_call(
+            self.call_sid, twiml=dial_twiml(self.owner_phone, self.from_number, fallback=fallback))
         self.end_reason = 'transferred'
         self.ctx.event('call.transferred')
         return {'transferred': True}
@@ -541,6 +565,8 @@ class PhoneLine:
                 status_callback=f'{base}/twilio/status/{ctx.call_id}',
                 amd_callback=f'{base}/twilio/amd/{ctx.call_id}',
                 record=session.recording, timeout=RING_SECONDS,
+                recording_callback=(f'{base}/twilio/recording/{ctx.call_id}'
+                                    if session.recording else None),
                 time_limit=ctx.brief.max_minutes * 60 + 90)
             session.call_sid = created.get('sid')
             ctx.link(providerCallSid=session.call_sid, fromNumber=session.from_number)
@@ -623,8 +649,10 @@ class PhoneLine:
         env = self.environ()
         session = PhoneSession(
             self, ctx, api_key=openai['apiKey'], twilio=self.twilio_factory(twilio_creds),
-            from_number=twilio_creds['fromNumber'], token=token, inbound=True,
-            recording=self._recording(), owner_phone=env.get('COLLEAGUE_OWNER_PHONE'))
+            from_number=twilio_creds.get('twilioNumber') or twilio_creds['fromNumber'],
+            token=token, inbound=True,
+            # Incoming calls are not recorded, so the greeting must not say they are.
+            recording=False, owner_phone=env.get('COLLEAGUE_OWNER_PHONE'))
         session.call_sid = call_sid
         self.sessions[ctx.call_id] = session
         try:
@@ -673,7 +701,9 @@ class PhoneLine:
                 session.phone_seconds = 0
             if not session.connected.is_set():
                 if status == 'failed':
-                    session.fail('Twilio could not place the call.')
+                    code = params.get('ErrorCode') or params.get('SipResponseCode')
+                    session.fail('Twilio could not place the call'
+                                 + (f' (error {code}).' if code else '.'))
                 else:
                     session.end_reason = session.end_reason or TWILIO_TERMINAL[status]
                 session.finished.set()
@@ -722,13 +752,14 @@ def inbound_brief(environ, caller):
     try:
         to = normalize_phone(caller or '')
     except ValueError:
-        to = environ.get('TWILIO_FROM_NUMBER') or '+10000000000'
+        to = environ.get('TWILIO_FROM_NUMBER') or environ.get('COLLEAGUE_CALLER_ID') or '+10000000000'
         context = 'The caller withheld their number. Ask for a callback number.'
     notify = None
     try:
         if environ.get('COLLEAGUE_NOTIFY_WEBHOOK'):
             notify = {'webhookUrl': validate_webhook_url(environ['COLLEAGUE_NOTIFY_WEBHOOK'])}
-    except ValueError:
+    except ValueError as error:
+        print(f'COLLEAGUE_NOTIFY_WEBHOOK is ignored: {error}', flush=True)
         notify = None
     payload = {
         'channel': 'phone',

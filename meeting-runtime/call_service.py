@@ -41,6 +41,8 @@ class CallContext:
         self.owner = owner
         self.transcript = []
         self.ended = False
+        # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
+        self.disclosure = None
 
     def credentials(self, provider):
         return self.service.hooks.credentials(self.owner, provider)
@@ -128,10 +130,19 @@ class CallService:
 
     # Public operations ---------------------------------------------------
 
+    def _brief(self, owner, payload):
+        """Parse a brief after filling in what setup already knows (the owner's name, phone)."""
+        if isinstance(payload, dict):
+            defaults = getattr(self.hooks, 'brief_defaults', None)
+            filled = dict(defaults(owner, payload) or {}) if defaults else {}
+            filled.update({key: value for key, value in payload.items() if value not in (None, '')})
+            payload = filled
+        return CallBrief.from_dict(payload, environ=self.environ)
+
     async def check(self, payload, *, request=None):
         """Everything create() would refuse, reported instead of raised."""
-        brief = CallBrief.from_dict(payload)
         owner = await maybe_await(self.hooks.owner_for(request))
+        brief = self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         problems = []
         if line is None:
@@ -158,8 +169,8 @@ class CallService:
         return closed
 
     async def create(self, payload, *, request=None):
-        brief = CallBrief.from_dict(payload)
         owner = await maybe_await(self.hooks.owner_for(request))
+        brief = self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         if line is None:
             raise CallError(503, 'channel_unavailable',
@@ -215,6 +226,27 @@ class CallService:
             raise
         except Exception as error:
             await context.finish('error', error=f'{type(error).__name__}: {str(error)[:200]}')
+
+    def active_count(self, *, direction=None):
+        count = 0
+        for call_id in list(self._contexts):
+            try:
+                record = self.store.get(call_id)
+            except CallNotFound:
+                continue
+            if direction is None or record.get('direction') == direction:
+                count += 1
+        return count
+
+    def attach_recording(self, call_id, *, sid, url, seconds=None):
+        """Twilio finished a recording. Fetching it needs the Twilio account credentials."""
+        recording = {'sid': sid, 'url': str(url) + '.mp3'}
+        try:
+            recording['seconds'] = int(seconds)
+        except (TypeError, ValueError):
+            pass
+        self.store.update(call_id, recording=recording)
+        self._event(call_id, 'call.recording', **recording)
 
     def get(self, call_id, *, owner=None):
         record = self.store.get(call_id)
@@ -333,6 +365,8 @@ class CallService:
                 self._close_unfinished(call_id, 'The daemon stopped while writing the result.')
                 self._contexts.pop(call_id, None)
                 raise
+            if record['channel'] == 'phone' and record.get('direction') == 'outbound':
+                result['disclosureVerified'] = context.disclosure
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
             status = 'canceled' if result['outcome'] == 'canceled' else 'completed'

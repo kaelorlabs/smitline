@@ -47,7 +47,9 @@ def build_call_service(project_root, runtime_root, data_root, daemon, lines=None
     # Startup settings honor .env like everything else; the environment wins.
     startup_env = {**read_env_file(project_root / '.env'), **os.environ}
     store = CallStore(data_root / 'calls')
-    notifier = WebhookNotifier(load_or_create_secret(data_root / 'webhook.secret'))
+    # Receivers on the local network (https://nas.lan) need COLLEAGUE_WEBHOOK_ALLOW_PRIVATE=1.
+    notifier = WebhookNotifier(load_or_create_secret(data_root / 'webhook.secret'),
+                               allow_private=startup_env.get('COLLEAGUE_WEBHOOK_ALLOW_PRIVATE') == '1')
     hooks = load_hooks(startup_env.get('COLLEAGUE_CALL_HOOKS'), env_file=project_root / '.env',
                        store=store, notifier=notifier)
     environ = lambda: getattr(hooks, 'environ', os.environ)
@@ -75,13 +77,18 @@ async def configure_inbound(service, *, twilio_factory=None, log=print):
     from tunnel import TunnelError
     try:
         creds = service.hooks.credentials('local', 'twilio')
+        number = creds.get('twilioNumber') or ''
+        if not number:
+            log('incoming calls need TWILIO_FROM_NUMBER, a number you bought in Twilio; '
+                'a verified caller ID cannot receive calls', flush=True)
+            return False
         base = (await service.public_url.get()).rstrip('/')
         client = (twilio_factory or (lambda c: TwilioClient(c['accountSid'], c['authToken'])))(creds)
-        await client.set_incoming_voice_url(creds['fromNumber'], f'{base}/twilio/inbound')
+        await client.set_incoming_voice_url(number, f'{base}/twilio/inbound')
     except (MissingCredentials, TunnelError, TwilioError, OSError) as error:
         log(f'incoming calls are not configured: {error}', flush=True)
         return False
-    log(f'incoming calls to {creds["fromNumber"]} reach this computer', flush=True)
+    log(f'incoming calls to {number} reach this computer', flush=True)
     return True
 
 

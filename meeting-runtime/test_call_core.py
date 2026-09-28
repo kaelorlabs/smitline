@@ -137,6 +137,15 @@ class StoreTests(unittest.TestCase):
             self.store.create(self.record(authToken='x'))
 
 
+class NoConversationTests(unittest.TestCase):
+    def test_voicemail_without_a_message(self):
+        from call_result import result_without_conversation
+        result = result_without_conversation('voicemail')
+        self.assertEqual((result['outcome'], result['source']), ('voicemail', 'status'))
+        self.assertIsNone(result_without_conversation('voicemail', transcript=[
+            {'speaker': 'agent', 'text': 'Hi, this is an AI assistant for Robin.'}]))
+
+
 class NotifierTests(unittest.IsolatedAsyncioTestCase):
     def call(self, url='https://example.com/hook'):
         return {'id': 'call-1', 'status': 'completed', 'brief': {'notify': {'webhookUrl': url}}}
@@ -176,6 +185,35 @@ class NotifierTests(unittest.IsolatedAsyncioTestCase):
         result = await WebhookNotifier('s', post=down, sleep=sleep, delays=()).deliver(self.call())
         self.assertEqual(result, {'delivered': False, 'attempts': 1, 'error': 'unreachable'})
 
+    async def test_private_receivers_are_refused_unless_allowed(self):
+        sent = []
+
+        async def post(url, body, headers):
+            sent.append(url)
+            return 200
+
+        async def private(url):
+            return False
+        refused = await WebhookNotifier('s', post=post, resolve=private).deliver(self.call())
+        self.assertEqual(refused, {'delivered': False, 'attempts': 0, 'error': 'rejected'})
+        self.assertEqual(sent, [])
+        allowed = await WebhookNotifier('s', post=post, resolve=private,
+                                        allow_private=True).deliver(self.call())
+        self.assertTrue(allowed['delivered'])
+
+    async def test_hostnames_are_resolved_before_delivery(self):
+        from unittest import mock
+        from call_notify import resolves_publicly
+
+        def infos(address):
+            return mock.AsyncMock(return_value=[(2, 1, 6, '', (address, 443))])
+        loop = asyncio.get_running_loop()
+        with mock.patch.object(loop, 'getaddrinfo', infos('10.0.0.5')):
+            self.assertFalse(await resolves_publicly('https://hooks.example.com/x'))
+        with mock.patch.object(loop, 'getaddrinfo', infos('93.184.216.34')):
+            self.assertTrue(await resolves_publicly('https://hooks.example.com/x'))
+        self.assertTrue(await resolves_publicly('http://localhost:9000/hook'))
+
     async def test_no_webhook_means_no_delivery(self):
         self.assertIsNone(await WebhookNotifier('s').deliver({'status': 'completed', 'brief': {}}))
 
@@ -197,7 +235,8 @@ class HookTests(unittest.TestCase):
             self.assertEqual(hooks.credentials('local', 'openai'), {'apiKey': 'from-file'})
             with self.assertRaises(MissingCredentials) as caught:
                 hooks.credentials('local', 'twilio')
-            self.assertEqual(caught.exception.missing, ('TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER'))
+            self.assertEqual(caught.exception.missing,
+                         ('TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER or COLLEAGUE_CALLER_ID'))
             override = DefaultCallHooks(environ={'OPENAI_API_KEY': 'from-env'}, env_file=env_file)
             self.assertEqual(override.credentials('local', 'openai')['apiKey'], 'from-env')
 

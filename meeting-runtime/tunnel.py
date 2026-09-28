@@ -16,11 +16,31 @@ from urllib.parse import urlsplit
 QUICK_URL = re.compile(r'https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b')
 REGISTERED = 'Registered tunnel connection'
 DEFAULT_IMAGE = 'cloudflare/cloudflared:latest'
-START_TIMEOUT = 40.0
+# The first run may pull the Docker image; a fresh address can take a few seconds to resolve.
+START_TIMEOUT = 90.0
+PROBE_TIMEOUT = 30.0
 
 
 class TunnelError(RuntimeError):
     pass
+
+
+async def reachable(url, timeout):
+    """Poll `url` until it answers 200: the tunnel's DNS name can lag its registration."""
+    from aiohttp import ClientError, ClientSession, ClientTimeout
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    async with ClientSession(timeout=ClientTimeout(total=5)) as session:
+        while True:
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        return True
+            except (ClientError, OSError, asyncio.TimeoutError):
+                pass
+            if loop.time() + 1 >= deadline:
+                return False
+            await asyncio.sleep(1)
 
 
 def configured_url(environ):
@@ -35,12 +55,14 @@ def configured_url(environ):
 
 class PublicUrl:
     def __init__(self, environ, local_port, *, spawn=None, which=shutil.which,
-                 timeout=START_TIMEOUT):
+                 timeout=START_TIMEOUT, probe=None, probe_timeout=PROBE_TIMEOUT):
         self._environ = environ
         self.local_port = local_port
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._which = which
         self.timeout = timeout
+        self._probe = probe or reachable
+        self.probe_timeout = probe_timeout
         self._lock = asyncio.Lock()
         self._process = None
         self._url = None
@@ -54,9 +76,12 @@ class PublicUrl:
             return [binary, 'tunnel', '--no-autoupdate', '--url', target]
         if self._which('docker'):
             image = env.get('COLLEAGUE_CLOUDFLARED_IMAGE') or DEFAULT_IMAGE
-            return ['docker', 'run', '--rm', '--network', 'host', image,
-                    'tunnel', '--no-autoupdate', '--url', target]
+            return ['docker', 'run', '--rm', '--network', 'host', '--name', self.container(),
+                    image, 'tunnel', '--no-autoupdate', '--url', target]
         return None
+
+    def container(self):
+        return f'colleague-tunnel-{self.local_port}'
 
     def available(self):
         try:
@@ -96,15 +121,32 @@ class PublicUrl:
             if command is None:
                 raise TunnelError('Set COLLEAGUE_PUBLIC_URL, or install cloudflared or Docker, so '
                                   'Twilio can reach this computer.')
+            if command[0] == 'docker':
+                await self._remove_stale_container()
             self._process = await self._spawn(
                 *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
             try:
-                self._url = await asyncio.wait_for(self._read_url(), self.timeout)
+                url = await asyncio.wait_for(self._read_url(), self.timeout)
             except asyncio.TimeoutError as error:
                 await self._stop_locked()
                 raise TunnelError('The Cloudflare quick tunnel did not start in time.') from error
             self._reader = asyncio.create_task(self._drain())
+            if not await self._probe(url + '/healthz', self.probe_timeout):
+                await self._stop_locked()
+                raise TunnelError(f'{url} did not become reachable; check the network, or set '
+                                  'COLLEAGUE_PUBLIC_URL.')
+            self._url = url
             return self._url
+
+    async def _remove_stale_container(self):
+        """A daemon that was killed can leave its tunnel container running under our name."""
+        try:
+            process = await self._spawn('docker', 'rm', '-f', self.container(),
+                                        stdout=asyncio.subprocess.DEVNULL,
+                                        stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(process.wait(), 15)
+        except (OSError, asyncio.TimeoutError):
+            pass
 
     async def _read_url(self):
         """Return the tunnel address once cloudflared reports a registered connection."""

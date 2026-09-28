@@ -1,4 +1,4 @@
-"""The only routes Twilio reaches: call status, voicemail detection, media stream, inbound calls.
+"""The only routes Twilio reaches: call status, voicemail detection, recordings, media, inbound calls.
 
 Runs as its own listener on loopback (default 127.0.0.1:8766) so a tunnel or
 proxy can expose it without exposing the daemon API. Every HTTP callback must
@@ -12,6 +12,7 @@ import secrets
 from aiohttp import WSMsgType, web
 
 from call_hooks import MissingCredentials
+from call_store import CallNotFound
 from phone_line import inbound_brief
 from twilio_client import stream_twiml, valid_signature
 
@@ -19,6 +20,9 @@ from twilio_client import stream_twiml, valid_signature
 GATEWAY_PORT = 8766
 START_TIMEOUT = 10.0
 XML = 'text/xml'
+DEFAULT_MAX_INBOUND = 2
+REJECT = '<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>'
+BUSY = '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>'
 
 
 def create_gateway_app(line, service, *, current_url, owner='local'):
@@ -82,21 +86,37 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
         await session.run(ws, start)
         return ws
 
+    async def recording(request):
+        params = await verified_params(request)
+        if params.get('RecordingStatus', 'completed') == 'completed' and params.get('RecordingUrl'):
+            try:
+                service.attach_recording(request.match_info['callId'],
+                                         sid=params.get('RecordingSid'),
+                                         url=params['RecordingUrl'],
+                                         seconds=params.get('RecordingDuration'))
+            except CallNotFound:
+                pass
+        return web.Response(status=204)
+
+    def max_inbound(env):
+        try:
+            return max(0, int(env.get('COLLEAGUE_MAX_INBOUND') or DEFAULT_MAX_INBOUND))
+        except ValueError:
+            return DEFAULT_MAX_INBOUND
+
     async def inbound(request):
         params = await verified_params(request)
         env = line.environ()
         if env.get('COLLEAGUE_ACCEPT_INBOUND') != '1':
-            return web.Response(
-                text='<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>',
-                content_type=XML)
+            return web.Response(text=REJECT, content_type=XML)
+        if service.active_count(direction='inbound') >= max_inbound(env):
+            return web.Response(text=BUSY, content_type=XML)
         caller = params.get('From') or ''
         call_sid = params.get('CallSid') or ''
         try:
             brief = inbound_brief(env, caller)
         except ValueError:
-            return web.Response(
-                text='<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>',
-                content_type=XML)
+            return web.Response(text=REJECT, content_type=XML)
         token = secrets.token_urlsafe(24)
         record = await service.create_inbound(
             brief, owner,
@@ -115,6 +135,7 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
     app = web.Application(client_max_size=64 * 1024)
     app.router.add_post('/twilio/status/{callId}', status)
     app.router.add_post('/twilio/amd/{callId}', amd)
+    app.router.add_post('/twilio/recording/{callId}', recording)
     app.router.add_get('/twilio/media', media)
     app.router.add_post('/twilio/inbound', inbound)
     app.router.add_get('/healthz', healthz)

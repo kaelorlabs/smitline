@@ -45,10 +45,12 @@ def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna'):
     return ''.join(parts)
 
 
-def dial_twiml(number, caller_id, *, timeout=30):
+def dial_twiml(number, caller_id, *, timeout=30, fallback=None, say_voice='Polly.Joanna'):
+    """Connect the caller to `number`; `fallback` is said if nobody answers."""
+    after = f'<Say voice={quoteattr(say_voice)}>{escape(fallback)}</Say>' if fallback else ''
     return ('<?xml version="1.0" encoding="UTF-8"?><Response>'
             f'<Dial callerId={quoteattr(caller_id)} timeout="{int(timeout)}">{escape(number)}</Dial>'
-            '</Response>')
+            f'{after}</Response>')
 
 
 def hangup_twiml():
@@ -85,7 +87,7 @@ class TwilioClient:
         return body or {}
 
     async def create_call(self, *, to, from_, twiml, status_callback=None, amd_callback=None,
-                          record=False, timeout=30, time_limit=None):
+                          record=False, timeout=30, time_limit=None, recording_callback=None):
         form = [('To', to), ('From', from_), ('Twiml', twiml), ('Timeout', str(int(timeout)))]
         if time_limit:
             form.append(('TimeLimit', str(int(time_limit))))
@@ -100,6 +102,10 @@ class TwilioClient:
                      ('AsyncAmdStatusCallbackMethod', 'POST')]
         if record:
             form.append(('Record', 'true'))
+            if recording_callback:
+                form += [('RecordingStatusCallback', recording_callback),
+                         ('RecordingStatusCallbackMethod', 'POST'),
+                         ('RecordingStatusCallbackEvent', 'completed')]
         return await self._call('POST', 'Calls.json', urlencode(form))
 
     async def get_call(self, call_sid):
