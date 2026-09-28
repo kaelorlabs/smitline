@@ -275,7 +275,9 @@ test('call builds a brief, waits for the result, and shows questions for missing
     '--agree', '6:30pm; 7pm', '--never-share', 'card number', '--rehearsal', '--wait']);
   assert.equal(done.code, 0, done.stderr);
   assert.equal(JSON.parse(done.stdout).result.outcome, 'achieved');
-  assert.match(done.stderr, /call ringing/);
+  assert.match(done.stderr, /Calling \+1 415 555 0142 \(call call-0123456789abcdef\)/);
+  assert.match(done.stderr, /Ringing…/);
+  assert.match(done.stderr, /Result: Achieved\. Booked\./);
   const brief = daemon.seen.find((item) => item.method === 'POST').body;
   assert.deepEqual(brief, {
     channel: 'phone', to: '+14155550142', onBehalfOf: 'Robin', objective: 'Book a table',
