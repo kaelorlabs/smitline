@@ -380,6 +380,13 @@ function joinKey(payload) {
 }
 
 function mapHttpError(status, payload, fallback) {
+  const mapped = mapHttpErrorClass(status, payload, fallback);
+  const { code: _code, message: _message, ...details } = payload?.error || {};
+  if (Object.keys(details).length) mapped.details = details;
+  return mapped;
+}
+
+function mapHttpErrorClass(status, payload, fallback) {
   const error = payload?.error || {};
   const code = error.code || fallback;
   const message = redact(error.message || fallback);
@@ -716,6 +723,35 @@ export function createLoopbackTransport(options = {}) {
     },
     unpairRunner() {
       return json('POST', '/v1/runner/unpair', {});
+    },
+    checkCall(brief) {
+      return json('POST', '/v1/calls/check', brief);
+    },
+    startCall(brief) {
+      return json('POST', '/v1/calls', brief);
+    },
+    getCall(callId) {
+      return json('GET', `/v1/calls/${encodeURIComponent(callId)}`);
+    },
+    waitForCall(callId, timeoutSeconds = 60) {
+      // Node's fetch gives up on response headers after 300 s, so stay below it.
+      const timeout = Math.max(0, Math.min(Number(timeoutSeconds) || 0, 280));
+      return json('GET', `/v1/calls/${encodeURIComponent(callId)}/wait?timeout=${timeout}`);
+    },
+    listCalls(limit = 20) {
+      return json('GET', `/v1/calls?limit=${Math.max(1, Math.min(Number(limit) || 20, 100))}`);
+    },
+    instructCall(callId, text) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/instructions`, { text });
+    },
+    endCall(callId) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/end`, {});
+    },
+    transferCall(callId) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/transfer`, {});
+    },
+    listVoices() {
+      return json('GET', '/v1/voices');
     },
     async *events(meetingId, { lastEventId = '', signal, seen } = {}) {
       const delivered = seen || new Set();
@@ -1069,6 +1105,45 @@ export class Colleague {
 
   async unpairRunner() {
     return this._transport.unpairRunner();
+  }
+
+  /** Validate a call brief and report missing configuration without dialing. */
+  async checkCall(brief) {
+    return this._transport.checkCall(brief);
+  }
+
+  /** Start a phone call or meeting from a brief; returns the queued call. */
+  async startCall(brief) {
+    return this._transport.startCall(brief);
+  }
+
+  async getCall(callId) {
+    return this._transport.getCall(callId);
+  }
+
+  /** Long-poll until the call is terminal or the timeout (at most 300 s) passes. */
+  async waitForCall(callId, timeoutSeconds = 60) {
+    return this._transport.waitForCall(callId, timeoutSeconds);
+  }
+
+  async listCalls(limit = 20) {
+    return (await this._transport.listCalls(limit)).calls;
+  }
+
+  async instructCall(callId, text) {
+    return this._transport.instructCall(callId, text);
+  }
+
+  async endCall(callId) {
+    return this._transport.endCall(callId);
+  }
+
+  async transferCall(callId) {
+    return this._transport.transferCall(callId);
+  }
+
+  async listVoices() {
+    return this._transport.listVoices();
   }
 
   async _join(payload, key) {

@@ -301,6 +301,8 @@ test('initialize advertises tools and the tasks extension', async () => {
     'get_meeting_screen_share', 'pause_meeting_screen_share', 'resume_meeting_screen_share',
     'list_meeting_screen_share_observations', 'list_coding_providers',
     'get_runner_status', 'pair_runner', 'complete_runner_pair', 'unpair_runner',
+    'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
+    'send_call_instruction', 'end_call', 'transfer_call_to_me', 'list_voices',
   ]);
   const joinCurrent = listed.result.tools.find((tool) => tool.name === 'join_current_meeting');
   assert.deepEqual(joinCurrent.inputSchema.required, ['url', 'sessionId', 'workspace', 'context']);
@@ -586,4 +588,48 @@ test('spawned process does not print logs on stdout', async () => {
   }
   assert.ok(!stdout.toLowerCase().includes('daemon.auth'));
   assert.ok(!stdout.includes('Bearer'));
+});
+
+test('call tools map to the SDK and surface brief questions', async () => {
+  const calls = [];
+  const callId = 'call-0123456789abcdef';
+  const colleague = {
+    async startCall(brief) { calls.push(['start', brief]); return { id: callId, status: 'queued' }; },
+    async checkCall(brief) { calls.push(['check', brief]); return { ok: true, problems: [] }; },
+    async waitForCall(id, timeout) {
+      calls.push(['wait', id, timeout]);
+      return { id, status: 'completed', result: { outcome: 'achieved' } };
+    },
+    async getCall(id) { return { id, status: 'ringing' }; },
+    async listCalls(limit) { calls.push(['list', limit]); return []; },
+    async instructCall(id, text) { calls.push(['instruct', id, text]); return { delivered: true }; },
+    async endCall(id) { return { id, status: 'summarizing' }; },
+    async transferCall() { return { transferred: true }; },
+    async listVoices() { return { default: 'marin', voices: ['marin'] }; },
+  };
+  const session = createMcpSession({ colleague, log() {} });
+  const brief = { channel: 'phone', to: '+14155550142', onBehalfOf: 'Robin', objective: 'Book a table' };
+  const started = await call(session, 'tools/call', { name: 'start_call', arguments: brief });
+  assert.equal(JSON.parse(started.result.content[0].text).id, callId);
+  const waited = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId } });
+  assert.equal(JSON.parse(waited.result.content[0].text).result.outcome, 'achieved');
+  assert.deepEqual(calls[1], ['wait', callId, 50]);
+  await call(session, 'tools/call', {
+    name: 'send_call_instruction', arguments: { callId, text: 'Ask about parking' },
+  });
+  assert.deepEqual(calls[2], ['instruct', callId, 'Ask about parking']);
+  const bad = await call(session, 'tools/call', { name: 'get_call', arguments: { callId: '../etc' } });
+  assert.equal(bad.result.isError, true);
+
+  colleague.startCall = async () => {
+    const error = new ColleagueError('brief is missing objective', { code: 'brief_incomplete', status: 422 });
+    error.details = { missing: [{ field: 'objective', question: 'What should the call achieve?' }] };
+    throw error;
+  };
+  const incomplete = await call(session, 'tools/call', {
+    name: 'start_call', arguments: { channel: 'phone', to: '+14155550142' },
+  });
+  assert.equal(incomplete.result.isError, true);
+  const payload = JSON.parse(incomplete.result.content[0].text);
+  assert.equal(payload.details.missing[0].question, 'What should the call achieve?');
 });

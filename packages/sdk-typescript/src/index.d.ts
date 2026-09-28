@@ -199,6 +199,59 @@ export interface ColleagueOptions {
   port?: number;
 }
 
+export interface CallBrief {
+  channel: 'phone' | 'meeting';
+  /** E.164 phone number, or a Zoom, Teams, or Google Meet invite URL. */
+  to: string;
+  /** Name spoken in the AI disclosure at the start of a phone call. */
+  onBehalfOf: string;
+  objective: string;
+  context?: string;
+  mayAgreeTo?: string[];
+  mustNotShare?: string[];
+  successCriteria?: string;
+  language?: string;
+  voice?: string;
+  maxMinutes?: number;
+  rehearsal?: boolean;
+  notify?: { webhookUrl?: string };
+  agentSession?: Record<string, unknown>;
+}
+
+export type CallStatus =
+  | 'queued' | 'connecting' | 'ringing' | 'waiting' | 'in_progress' | 'summarizing'
+  | 'completed' | 'failed' | 'canceled';
+
+export interface CallResult {
+  outcome: 'achieved' | 'partial' | 'not_reached' | 'voicemail' | 'declined' | 'failed' | 'canceled';
+  summary: string;
+  details: Array<{ label: string; value: string }>;
+  decisions: string[];
+  actionItems: string[];
+  openQuestions: string[];
+  transcript: Array<{ speaker: string; text: string }>;
+  durationSeconds: number;
+  source?: string;
+}
+
+export interface Call {
+  id: string;
+  owner?: string;
+  channel: 'phone' | 'meeting';
+  direction?: 'outbound' | 'inbound';
+  status: CallStatus;
+  endReason?: string;
+  brief: CallBrief;
+  createdAt: string;
+  updatedAt?: string;
+  answeredAt?: string;
+  endedAt?: string;
+  line?: Record<string, unknown>;
+  result: CallResult | null;
+  usage?: Record<string, unknown>;
+  error?: string;
+}
+
 export class Colleague {
   constructor(options?: ColleagueOptions);
   joinMeeting(request: JoinMeetingRequest): Promise<MeetingHandle>;
@@ -207,6 +260,15 @@ export class Colleague {
   pairRunner(payload?: Record<string, unknown>): Promise<Record<string, unknown>>;
   completeRunnerPair(payload: { pairingId: string; pairingCode: string }): Promise<Record<string, unknown>>;
   unpairRunner(): Promise<Record<string, unknown>>;
+  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[] }>;
+  startCall(brief: CallBrief): Promise<Call>;
+  getCall(callId: string): Promise<Call>;
+  waitForCall(callId: string, timeoutSeconds?: number): Promise<Call>;
+  listCalls(limit?: number): Promise<Call[]>;
+  instructCall(callId: string, text: string): Promise<{ delivered: boolean }>;
+  endCall(callId: string): Promise<Call>;
+  transferCall(callId: string): Promise<Record<string, unknown>>;
+  listVoices(): Promise<{ default: string; voices: string[] }>;
 }
 
 export function createLoopbackTransport(options?: {

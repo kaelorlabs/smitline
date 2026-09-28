@@ -430,6 +430,13 @@ def iterate_sse_text(text: str, seen=None):
 
 
 def _map_http_error(status, payload, fallback):
+    mapped = _map_http_error_class(status, payload, fallback)
+    error = (payload or {}).get('error') or {}
+    mapped.details = {key: value for key, value in error.items() if key not in ('code', 'message')}
+    return mapped
+
+
+def _map_http_error_class(status, payload, fallback):
     error = (payload or {}).get('error') or {}
     code = error.get('code') or fallback
     message = redact(error.get('message') or fallback)
@@ -520,7 +527,8 @@ class LoopbackTransport:
                 time.sleep(0.05)
             raise StartupError('runtime daemon did not become ready', code='daemon_unavailable')
 
-    def _http(self, method, path, body=None, headers=None, last_event_id='', retried=False, raw=False):
+    def _http(self, method, path, body=None, headers=None, last_event_id='', retried=False, raw=False,
+              timeout=30):
         self._ensure_daemon()
         if not self._token:
             self._token = self._read_auth()
@@ -539,7 +547,8 @@ class LoopbackTransport:
                     self._token = self._read_auth()
                     if self._token:
                         return self._http(method, path, body=body, headers=headers,
-                                          last_event_id=last_event_id, retried=True, raw=raw)
+                                          last_event_id=last_event_id, retried=True, raw=raw,
+                                          timeout=timeout)
                 raise
         payload = None if body is None else json.dumps(body).encode('utf-8')
         request_headers = {
@@ -558,7 +567,7 @@ class LoopbackTransport:
         )
         media_type = 'application/octet-stream'
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 raw_body = response.read()
                 status = response.status
                 media_type = response.headers.get('Content-Type') or media_type
@@ -688,6 +697,36 @@ class LoopbackTransport:
 
     def unpair_runner(self):
         return self._http('POST', '/v1/runner/unpair', {})
+
+    def check_call(self, brief):
+        return self._http('POST', '/v1/calls/check', brief)
+
+    def start_call(self, brief):
+        return self._http('POST', '/v1/calls', brief)
+
+    def get_call(self, call_id):
+        return self._http('GET', f'/v1/calls/{quote(call_id)}')
+
+    def wait_for_call(self, call_id, timeout_seconds=60):
+        timeout = max(0, min(float(timeout_seconds or 0), 300))
+        return self._http('GET', f'/v1/calls/{quote(call_id)}/wait?timeout={timeout:g}',
+                          timeout=timeout + 15)
+
+    def list_calls(self, limit=20):
+        limit = max(1, min(int(limit or 20), 100))
+        return self._http('GET', f'/v1/calls?limit={limit}')
+
+    def instruct_call(self, call_id, text):
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/instructions', {'text': text})
+
+    def end_call(self, call_id):
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/end', {})
+
+    def transfer_call(self, call_id):
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/transfer', {})
+
+    def list_voices(self):
+        return self._http('GET', '/v1/voices')
 
     def events(self, meeting_id, *, last_event_id='', seen=None, stop=None):
         delivered = seen if seen is not None else set()
@@ -1041,6 +1080,37 @@ class Colleague:
 
     async def unpair_runner(self):
         return self._transport.unpair_runner()
+
+    async def check_call(self, brief):
+        """Validate a call brief and report missing configuration without dialing."""
+        return self._transport.check_call(brief)
+
+    async def start_call(self, brief):
+        """Start a phone call or meeting from a brief; returns the queued call."""
+        return self._transport.start_call(brief)
+
+    async def get_call(self, call_id):
+        return self._transport.get_call(call_id)
+
+    async def wait_for_call(self, call_id, timeout_seconds=60):
+        """Wait until the call is terminal or the timeout (at most 300 s) passes."""
+        import asyncio
+        return await asyncio.to_thread(self._transport.wait_for_call, call_id, timeout_seconds)
+
+    async def list_calls(self, limit=20):
+        return self._transport.list_calls(limit)['calls']
+
+    async def instruct_call(self, call_id, text):
+        return self._transport.instruct_call(call_id, text)
+
+    async def end_call(self, call_id):
+        return self._transport.end_call(call_id)
+
+    async def transfer_call(self, call_id):
+        return self._transport.transfer_call(call_id)
+
+    async def list_voices(self):
+        return self._transport.list_voices()
 
     async def join_meeting(self, request):
         payload = validate_join_request(request)

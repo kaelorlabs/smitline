@@ -14,6 +14,16 @@ import {
   InterruptError,
   validateContext,
 } from '../../sdk-typescript/src/index.mjs';
+import {
+  GPT_LIVE_VOICES,
+  openBrowser,
+  readEnv,
+  registerAgents,
+  serveSecretsPage,
+  setupStatus,
+  validateSetting,
+  writeEnv,
+} from './setup.mjs';
 
 const interruptState = { requested: false, handler: null };
 const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
@@ -24,6 +34,22 @@ function requestInterrupt() {
 }
 
 const USAGE = `Usage:
+  colleague call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
+               [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--webhook <url>]
+               [--check] [--wait]
+  colleague call --meeting <url> --objective <text> [...same options] [--wait]
+  colleague call --brief <json> | --brief-file <path> [--check] [--wait]
+  colleague calls list [--limit <n>]
+  colleague calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
+  colleague calls instruct --call-id <id> --text <guidance>
+  colleague voices
+  colleague setup status [--json] [--no-verify]
+  colleague setup secrets [--no-open]
+  colleague setup set <KEY> <value>
+  colleague setup register [--agents claude-code,codex,cursor]
+  colleague setup voice [--set <name>]
+  colleague setup call-me [--wait]
   colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
@@ -287,6 +313,199 @@ async function daemonCall(args, method, ...rest) {
   return { root, meetingId, result: await transport[method](meetingId, ...rest) };
 }
 
+function splitList(value) {
+  if (value === undefined || value === true) return undefined;
+  return String(value).split(';').map((item) => item.trim()).filter(Boolean);
+}
+
+async function briefFromArgs(args, root) {
+  if (args.brief || args['brief-file']) {
+    const text = args.brief ? String(args.brief) : await fs.readFile(path.resolve(String(args['brief-file'])), 'utf8');
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new ValidationError('the brief must be JSON');
+    }
+  }
+  const env = readEnv(root);
+  // A flag given without a value parses as true; treat it as absent for text fields.
+  const text = (value) => (value === undefined || value === true ? undefined : String(value));
+  const brief = {
+    channel: text(args.meeting) ? 'meeting' : 'phone',
+    to: text(args.meeting) || text(args.to),
+    onBehalfOf: text(args['on-behalf-of']) || process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME,
+    objective: text(args.objective),
+    context: text(args.context),
+    mayAgreeTo: splitList(args.agree),
+    mustNotShare: splitList(args['never-share']),
+    successCriteria: text(args.success),
+    language: text(args.language),
+    voice: text(args.voice),
+    maxMinutes: text(args['max-minutes']) === undefined ? undefined : Number(args['max-minutes']),
+    rehearsal: args.rehearsal === true ? true : undefined,
+    notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
+  };
+  return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
+}
+
+function printJson(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function explainValidation(error) {
+  const missing = error?.details?.missing;
+  if (Array.isArray(missing) && missing.length) {
+    for (const item of missing) progress(`missing ${item.field}: ${item.question}`);
+  }
+}
+
+const TERMINAL = new Set(['completed', 'failed', 'canceled']);
+
+async function waitUntilDone(client, callId) {
+  let last = '';
+  for (;;) {
+    if (interruptState.requested) throw new InterruptError('interrupted; the call keeps running');
+    const call = await client.waitForCall(callId, 50);
+    if (call.status !== last) {
+      progress(`call ${call.status}${call.endReason ? ` (${call.endReason})` : ''}`);
+      last = call.status;
+    }
+    if (TERMINAL.has(call.status)) return call;
+  }
+}
+
+async function callCommand(args) {
+  const { root, client } = colleagueFromArgs(args);
+  const brief = await briefFromArgs(args, root);
+  try {
+    if (args.check) {
+      const report = await client.checkCall(brief);
+      printJson(report);
+      return report.ok ? EXIT.ok : EXIT.startup;
+    }
+    const call = await client.startCall(brief);
+    progress(`call ${call.id} queued`);
+    if (!args.wait) {
+      printJson(call);
+      return EXIT.ok;
+    }
+    const done = await waitUntilDone(client, call.id);
+    printJson(done);
+    return done.status === 'completed' ? EXIT.ok : EXIT.runtime;
+  } catch (error) {
+    explainValidation(error);
+    throw error;
+  }
+}
+
+function requireCallId(args) {
+  const callId = args['call-id'] || args._[2];
+  if (!callId || callId === true) throw new ValidationError('--call-id is required');
+  return String(callId);
+}
+
+async function callsCommand(args) {
+  const { client } = colleagueFromArgs(args);
+  const action = args._[1] || 'list';
+  if (action === 'list') {
+    printJson({ calls: await client.listCalls(Number(args.limit || 20)) });
+    return EXIT.ok;
+  }
+  const callId = requireCallId(args);
+  if (action === 'get') printJson(await client.getCall(callId));
+  else if (action === 'wait') {
+    const timeout = args.timeout === undefined ? null : Number(args.timeout);
+    printJson(timeout === null ? await waitUntilDone(client, callId) : await client.waitForCall(callId, timeout));
+  } else if (action === 'end') printJson(await client.endCall(callId));
+  else if (action === 'transfer') printJson(await client.transferCall(callId));
+  else if (action === 'instruct') {
+    if (!args.text || args.text === true) throw new ValidationError('--text is required');
+    printJson(await client.instructCall(callId, String(args.text)));
+  } else throw new ValidationError('unknown calls command');
+  return EXIT.ok;
+}
+
+function printStatus(report) {
+  for (const item of report.checks) {
+    const mark = item.ok === true ? 'PASS' : item.required ? 'FAIL' : 'WARN';
+    process.stdout.write(`${mark}  ${item.label}${item.detail ? ` — ${item.detail}` : ''}\n`);
+    if (item.ok !== true && item.fix) process.stdout.write(`      fix: ${item.fix}\n`);
+  }
+  process.stdout.write(`\nready: ${report.ready}  phone: ${report.phoneReady}  meetings: ${report.meetingsReady}\n`);
+}
+
+async function setupCommand(args) {
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const action = args._[1] || 'status';
+  if (action === 'status') {
+    const report = await setupStatus({ root, verify: !args['no-verify'] });
+    if (args.json) printJson(report);
+    else printStatus(report);
+    return report.ready ? EXIT.ok : EXIT.startup;
+  }
+  if (action === 'secrets') {
+    const result = await serveSecretsPage({
+      root,
+      onUrl(url) {
+        const opened = args['no-open'] ? false : openBrowser(url);
+        progress(`Open this page to enter keys (it works once, on this computer only):\n${url}`);
+        if (!opened) progress('Could not open a browser automatically; open the address above.');
+      },
+    });
+    printJson({ saved: result.saved });
+    return EXIT.ok;
+  }
+  if (action === 'set') {
+    const key = args._[2];
+    const value = args._[3];
+    if (!key || value === undefined) throw new ValidationError('usage: colleague setup set <KEY> <value>');
+    let clean;
+    try {
+      clean = validateSetting(String(key), String(value));
+    } catch (error) {
+      throw new ValidationError(error.message);
+    }
+    writeEnv(root, { [key]: clean });
+    printJson({ saved: [key] });
+    return EXIT.ok;
+  }
+  if (action === 'register') {
+    const agents = args.agents && args.agents !== true ? String(args.agents).split(',').map((a) => a.trim()) : undefined;
+    printJson(registerAgents(root, { agents }));
+    return EXIT.ok;
+  }
+  if (action === 'voice') {
+    if (args.set && args.set !== true) {
+      try {
+        writeEnv(root, { COLLEAGUE_VOICE: validateSetting('COLLEAGUE_VOICE', String(args.set)) });
+      } catch (error) {
+        throw new ValidationError(error.message);
+      }
+    }
+    printJson({ voice: readEnv(root).COLLEAGUE_VOICE || 'marin', voices: GPT_LIVE_VOICES });
+    return EXIT.ok;
+  }
+  if (action === 'call-me') {
+    const env = readEnv(root);
+    const phone = process.env.COLLEAGUE_OWNER_PHONE || env.COLLEAGUE_OWNER_PHONE;
+    const name = process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME;
+    if (!phone || !name) {
+      throw new ValidationError('set your name and phone first: colleague setup set COLLEAGUE_OWNER_NAME "<name>" and COLLEAGUE_OWNER_PHONE +1...');
+    }
+    return callCommand({
+      ...args,
+      brief: JSON.stringify({
+        channel: 'phone',
+        to: phone,
+        onBehalfOf: name,
+        objective: `This is the setup test call to ${name}, the owner. Say that Colleague AI is set up and working and that this is your voice. Tell them they can ask their agent for a different voice at any time, and that from now on they can ask their agent to call someone or join a meeting. Answer a quick question if they have one, then say goodbye. Keep it under a minute.`,
+        maxMinutes: 3,
+      }),
+    });
+  }
+  throw new ValidationError('unknown setup command');
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
@@ -305,6 +524,14 @@ async function main(argv = process.argv.slice(2)) {
       return EXIT.ok;
     }
     if (command === 'join') return await joinCommand(args);
+    if (command === 'call') return await callCommand(args);
+    if (command === 'calls') return await callsCommand(args);
+    if (command === 'setup') return await setupCommand(args);
+    if (command === 'voices') {
+      const { client } = colleagueFromArgs(args);
+      printJson(await client.listVoices());
+      return EXIT.ok;
+    }
     if (command === 'status') {
       const { result } = await daemonCall(args, 'getMeeting');
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
