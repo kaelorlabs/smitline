@@ -13,7 +13,7 @@ Colleague AI talks with people in real time and returns a structured result. Use
 | --- | --- |
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link |
 | `to` | E.164 number such as `+14155550142`, or the invite URL |
-| `onBehalfOf` | The user's name. The call opens with "Hi, I'm an AI assistant calling on behalf of NAME." |
+| `onBehalfOf` | The user's name. The call opens with "Hi, I'm an AI assistant calling on behalf of NAME." Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
 | `context` | What the other side may ask: names, dates, reference numbers, preferences |
 | `mayAgreeTo` | What may be accepted without checking back, such as times or a price ceiling |
@@ -24,7 +24,7 @@ If something important is unknown, ask the user before calling. Never guess pric
 
 ## 2. Offer a rehearsal the first time
 
-For a new kind of call, offer: "Want me to practice on you first?" Then start the same brief with `rehearsal: true` and `to` set to the user's own number.
+For a new kind of call, offer: "Want me to practice on you first?" Then start the same brief with `rehearsal: true` and without `to`: a rehearsal always rings the user's own phone, and the user plays the other side.
 
 ## 3. Start, then wait
 
@@ -38,4 +38,4 @@ While the call runs, `send_call_instruction` passes on new guidance from the use
 
 Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say.
 
-Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (a message was left), `failed`, `canceled`.
+Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call.
