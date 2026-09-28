@@ -87,7 +87,7 @@ If the browser did not open (`"opened": false`), give the user the address. It w
 
 When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
 
-Phone calls need a Twilio account (twilio.com). If the user has one number there, the status suggests it and you set it. If they have several, ask which one. Outgoing calls can show the user's own mobile instead, once they verify it in Twilio under Verified Caller IDs (`COLLEAGUE_CALLER_ID`). A trial Twilio account can only call verified numbers, which includes the user's own.
+Phone calls need a Twilio account (twilio.com). If the user has one number there, the status suggests it and you set it. If they have several, ask which one. Outgoing calls can show the user's own mobile instead, once they verify it in Twilio under Verified Caller IDs; they enter it on the page as "Show my own number" (`COLLEAGUE_CALLER_ID`). A trial Twilio account can only call verified numbers, which includes the user's own.
 
 ## 5. Start Colleague AI
 

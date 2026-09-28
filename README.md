@@ -90,6 +90,8 @@ The agent follows [SETUP.md](SETUP.md). It checks your computer, opens a page in
 
 Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
 
+To follow a call live, read its transcript as it happens, or take it over on your phone, run `./start-control-panel.sh` and open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
+
 ### Manual setup
 
 For the agent-native Codex experience, register the local integration once:
@@ -149,6 +151,7 @@ Admit **Colleague AI** if it enters the waiting room. It listens continuously, o
 | Local interface | Address |
 | --- | --- |
 | Meeting operations console | http://127.0.0.1:8095 |
+| Calls (live transcript, results, take over) | http://127.0.0.1:8095/calls |
 | Agent browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
 | Status, transcripts, and tool activity | http://127.0.0.1:8094/health |
 | Runtime daemon (loopback) | http://127.0.0.1:8765 |
