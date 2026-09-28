@@ -490,9 +490,13 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('problem-title').textContent = call.answeredAt ? 'This call ended because of a problem' : 'This call did not go through';
   $('problem-text').textContent = failed ? sentence(call.error || 'Something went wrong before the call could start.') : '';
   $('handed-over').hidden = !(state.transferred || call.endReason === 'transferred');
-  const recording = typeof call.line?.recordingUrl === 'string' ? call.line.recordingUrl : '';
+  // The recording stays in Twilio; its API address opens with the Twilio account credentials.
+  const recording = call.recording && typeof call.recording.url === 'string' ? call.recording : null;
   $('recording').hidden = !recording;
-  $('recording-url').textContent = recording;
+  $('recording-text').textContent = recording
+    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'open it in the Twilio console under Call Recordings, or with your Account SID and Auth Token at:'].filter(Boolean).join(' · ')
+    : '';
+  $('recording-url').textContent = recording ? recording.url : '';
   $('result-pending').hidden = call.status !== 'summarizing';
   renderResult(call);
   renderTranscript(call);
