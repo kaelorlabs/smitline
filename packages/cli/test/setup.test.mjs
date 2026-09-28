@@ -41,6 +41,20 @@ test('settings are validated and secrets are refused', () => {
   assert.throws(() => validateSetting('COLLEAGUE_OWNER_NAME', 'a\nb'), /one line/);
 });
 
+test('connector settings take an https origin and a passphrase of at least 12 characters', () => {
+  assert.equal(validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://colleague.example.com/'), 'https://colleague.example.com');
+  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'http://colleague.example.com'), /https/);
+  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://colleague.example.com/mcp'), /no path/);
+  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_PASSPHRASE', 'correct horse battery staple'), /secret/);
+  const passphrase = 'correct horse battery staple';
+  assert.deepEqual(sanitizeSubmission(new URLSearchParams({ COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase })),
+    { updates: { COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase }, errors: [] });
+  assert.match(sanitizeSubmission(new URLSearchParams({ COLLEAGUE_CONNECTOR_PASSPHRASE: 'too short' })).errors[0], /at least 12/);
+  const html = renderSecretsPage({ COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase }, '/setup/x');
+  assert.match(html, /Remote connector \(server mode\)/);
+  assert.ok(!html.includes(passphrase));
+});
+
 test('secrets page submission is validated and never echoes secrets', async (t) => {
   const { updates, errors } = sanitizeSubmission(new URLSearchParams({
     OPENAI_API_KEY: 'sk-abc', COLLEAGUE_OWNER_PHONE: 'nope', TWILIO_AUTH_TOKEN: 'has space',

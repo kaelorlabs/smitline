@@ -510,6 +510,8 @@ export const TOOL_DEFINITIONS = [
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
+export const CALLS_INSTRUCTIONS = 'To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing), then wait_for_call until the call finishes, and report the outcome.';
+
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {
     throw new ValidationError('callId must be a call id returned by start_call');
@@ -661,6 +663,9 @@ export function createMcpSession(options = {}) {
   }));
   const colleague = options.colleague || createColleague();
   const currentCodexSessionId = options.currentCodexSessionId ?? process.env.CODEX_THREAD_ID;
+  // tools: 'calls' limits the session to the call tools (the remote connector).
+  const callsOnly = options.tools === 'calls';
+  const protocolVersions = options.protocolVersions || null;
   const handles = new Map();
   const tasks = new Map();
   const notifications = [];
@@ -860,6 +865,7 @@ export function createMcpSession(options = {}) {
   }
 
   async function callTool(name, args, message) {
+    if (callsOnly && !CALL_TOOL_NAMES.has(name)) throw new ValidationError(`unknown tool: ${name}`);
     if (name === 'join_current_meeting') return joinCurrentMeeting(args, message);
     if (name === 'start_meeting') return startMeeting(args, message);
     if (name === 'get_meeting_status') {
@@ -1121,19 +1127,31 @@ export function createMcpSession(options = {}) {
     if (method === 'initialize') {
       clientInfo = params?.clientInfo || {};
       initialized = true;
+      const requested = params?.protocolVersion;
+      const protocolVersion = protocolVersions
+        ? (protocolVersions.includes(requested) ? requested : protocolVersions[0])
+        : requested || MCP_PROTOCOL_VERSION;
+      if (callsOnly) {
+        return rpcResult(id, {
+          protocolVersion,
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: 'colleague-ai', version: MCP_SERVER_VERSION },
+          instructions: CALLS_INSTRUCTIONS,
+        });
+      }
       return rpcResult(id, {
-        protocolVersion: params?.protocolVersion || MCP_PROTOCOL_VERSION,
+        protocolVersion,
         capabilities: {
           tools: { listChanged: false },
           extensions: { [TASKS_EXTENSION]: {} },
         },
         serverInfo: { name: 'colleague-ai', version: MCP_SERVER_VERSION },
-        instructions: 'To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing), then wait_for_call until the call finishes, and report the outcome. Colleague AI MCP adapter talks only to the loopback daemon. In Codex, read CODEX_THREAD_ID from the invoking task command environment and pass that exact value to join_current_meeting.sessionId. Persistent MCP servers do not receive this per-task environment automatically. Other integrations must inject the real originating sessionId into start_meeting for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.',
+        instructions: `${CALLS_INSTRUCTIONS} Colleague AI MCP adapter talks only to the loopback daemon. In Codex, read CODEX_THREAD_ID from the invoking task command environment and pass that exact value to join_current_meeting.sessionId. Persistent MCP servers do not receive this per-task environment automatically. Other integrations must inject the real originating sessionId into start_meeting for exact continuity. Generic MCP clients must set continuity=context. Do not pass last/latest. Poll get_meeting_handoff unless this client advertises io.modelcontextprotocol/tasks on waitUntilHandoff calls.`,
       });
     }
     if (method === 'ping') return rpcResult(id, {});
     if (method === 'tools/list') {
-      return rpcResult(id, { tools: TOOL_DEFINITIONS });
+      return rpcResult(id, { tools: callsOnly ? CALL_TOOL_DEFINITIONS : TOOL_DEFINITIONS });
     }
     if (method === 'tools/call') {
       try {

@@ -24,6 +24,7 @@ import {
   validateSetting,
   writeEnv,
 } from './setup.mjs';
+import { openConnectorStore } from '../../mcp/src/connector-store.mjs';
 
 const interruptState = { requested: false, handler: null };
 const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
@@ -50,6 +51,8 @@ const USAGE = `Usage:
   colleague setup register [--agents claude-code,codex,cursor]
   colleague setup voice [--set <name>]
   colleague setup call-me [--wait]
+  colleague connector status
+  colleague connector revoke --all | --client <id>
   colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
@@ -506,6 +509,31 @@ async function setupCommand(args) {
   throw new ValidationError('unknown setup command');
 }
 
+// Remote connector grants: listed and revoked without showing any token.
+async function connectorCommand(args) {
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const store = openConnectorStore(root);
+  const action = args._[1] || 'status';
+  if (action === 'status') {
+    const url = process.env.COLLEAGUE_CONNECTOR_URL || readEnv(root).COLLEAGUE_CONNECTOR_URL || null;
+    printJson({ connectorUrl: url ? `${url.replace(/\/$/, '')}/mcp` : null, ...store.summary() });
+    return EXIT.ok;
+  }
+  if (action === 'revoke') {
+    if (args.all === true) {
+      printJson({ revoked: store.revoke({ all: true }) });
+      return EXIT.ok;
+    }
+    if (!args.client || args.client === true) throw new ValidationError('usage: colleague connector revoke --all | --client <id>');
+    const clientId = String(args.client);
+    const known = store.getClient(clientId) || store.summary().grants.some((grant) => grant.clientId === clientId);
+    if (!known) throw new ValidationError(`no registered client ${clientId}; see colleague connector status`);
+    printJson({ revoked: store.revoke({ clientId }) });
+    return EXIT.ok;
+  }
+  throw new ValidationError('unknown connector command');
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
@@ -527,6 +555,7 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'call') return await callCommand(args);
     if (command === 'calls') return await callsCommand(args);
     if (command === 'setup') return await setupCommand(args);
+    if (command === 'connector') return await connectorCommand(args);
     if (command === 'voices') {
       const { client } = colleagueFromArgs(args);
       printJson(await client.listVoices());

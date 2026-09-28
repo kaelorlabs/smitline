@@ -10,12 +10,15 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-export const SECRET_KEYS = Object.freeze(['OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TAVILY_API_KEY']);
+export const SECRET_KEYS = Object.freeze([
+  'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE',
+]);
 export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
   'TWILIO_FROM_NUMBER', 'COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_ALLOWED_CALLING_CODES',
-  'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS',
+  'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_CONNECTOR_URL',
 ]);
+export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
   'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
   'tempo', 'beacon', 'delta', 'cinder',
@@ -77,6 +80,24 @@ export function writeEnv(root, updates) {
   return Object.keys(updates);
 }
 
+/** The connector's public address: an https origin with no path (http only on loopback, for tests). */
+export function connectorOrigin(value, { allowLoopback = false } = {}) {
+  let url;
+  try {
+    url = new URL(String(value).trim());
+  } catch {
+    throw new Error('COLLEAGUE_CONNECTOR_URL must be an https URL such as https://colleague.example.com');
+  }
+  const loopback = allowLoopback && url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !loopback) {
+    throw new Error(`COLLEAGUE_CONNECTOR_URL must be an https URL${allowLoopback ? ' (plain http is allowed only for 127.0.0.1 and localhost)' : ''}`);
+  }
+  if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error('COLLEAGUE_CONNECTOR_URL must be only the origin, such as https://colleague.example.com, with no path');
+  }
+  return url.origin;
+}
+
 export function validateSetting(key, value) {
   if (!SETTING_KEYS.includes(key)) {
     if (SECRET_KEYS.includes(key)) throw new Error(`${key} is a secret: enter it on the page from "colleague setup secrets"`);
@@ -98,6 +119,7 @@ export function validateSetting(key, value) {
   if (['COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK'].includes(key) && !/^https:\/\/[^\s/]+/.test(text)) {
     throw new Error(`${key} must be an https URL`);
   }
+  if (key === 'COLLEAGUE_CONNECTOR_URL') return connectorOrigin(text);
   if (key === 'COLLEAGUE_OWNER_NAME' && (!text || text.length > 120)) {
     throw new Error('COLLEAGUE_OWNER_NAME must be 1 to 120 characters');
   }
@@ -306,11 +328,24 @@ const FIELDS = [
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Phone calls (optional)', secret: true },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Phone calls (optional)', hint: 'E.164, such as +14155550142.' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'For the test call and for taking over calls.' },
+  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'The https address of this server, such as https://colleague.example.com. Only for cloud agents; see docs/agents.md.' },
+  { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters. You type it to approve each app that connects.' },
 ];
 
-function escapeHtml(value) {
+export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+export const PAGE_STYLE = `:root{color-scheme:light dark;--bg:#f4f6f6;--card:#fff;--ink:#111719;--muted:#56636a;--line:#d9dfe2;--accent:#0f766e}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1315;--card:#151c1f;--ink:#e4eaec;--muted:#97a5ab;--line:#28343a;--accent:#3fbfae;--on-accent:#0e1315}}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;padding:32px 16px}
+main{max-width:560px;margin:0 auto;display:grid;gap:18px}h1{font-size:1.5rem;margin:0}
+p{margin:0;color:var(--muted)}fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:16px;display:grid;gap:14px}
+legend{font-weight:600;padding:0 6px}label{display:grid;gap:4px}small{color:var(--muted)}
+input{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button{font:inherit;font-weight:600;padding:10px 16px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent,#fff);cursor:pointer;justify-self:start}
+.note{border-left:3px solid var(--accent);padding:8px 12px;background:var(--card)}`;
 
 export function renderSecretsPage(saved, action, message = '') {
   const groups = [...new Set(FIELDS.map((f) => f.group))];
@@ -326,16 +361,7 @@ ${f.hint ? `<small>${escapeHtml(f.hint)}</small>` : ''}</label>`;
   }).join('\n');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Colleague AI setup</title><style>
-:root{color-scheme:light dark;--bg:#f4f6f6;--card:#fff;--ink:#111719;--muted:#56636a;--line:#d9dfe2;--accent:#0f766e}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1315;--card:#151c1f;--ink:#e4eaec;--muted:#97a5ab;--line:#28343a;--accent:#3fbfae}}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;padding:32px 16px}
-main{max-width:560px;margin:0 auto;display:grid;gap:18px}h1{font-size:1.5rem;margin:0}
-p{margin:0;color:var(--muted)}fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:16px;display:grid;gap:14px}
-legend{font-weight:600;padding:0 6px}label{display:grid;gap:4px}small{color:var(--muted)}
-input{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink)}
-input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-button{font:inherit;font-weight:600;padding:10px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;justify-self:start}
-.note{border-left:3px solid var(--accent);padding:8px 12px;background:var(--card)}</style></head>
+${PAGE_STYLE}</style></head>
 <body><main><h1>Colleague AI setup</h1>
 <p>Keys stay on this computer, in the project's ignored <code>.env</code> file. Your agent never sees them.</p>
 ${message ? `<p class="note">${escapeHtml(message)}</p>` : ''}
@@ -362,7 +388,14 @@ export function sanitizeSubmission(form) {
   for (const field of FIELDS) {
     const value = String(form.get(field.key) || '').trim();
     if (!value) continue;
-    if (/[\r\n\s]/.test(value) && field.secret) { errors.push(`${field.label} must not contain spaces`); continue; }
+    if (field.secret && (field.spaces ? /[\r\n]/ : /\s/).test(value)) {
+      errors.push(`${field.label} must ${field.spaces ? 'be one line' : 'not contain spaces'}`);
+      continue;
+    }
+    if (field.minLength && value.length < field.minLength) {
+      errors.push(`${field.label} must be at least ${field.minLength} characters`);
+      continue;
+    }
     try {
       updates[field.key] = field.secret ? value : validateSetting(field.key, value);
     } catch (error) {

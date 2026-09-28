@@ -185,6 +185,7 @@ Old Zoom-specific paths (`compose.zoom.yaml`, `.env.zoom`, `start-zoom-agent.sh`
 | **Python SDK** | `colleague-ai` — same contract; not published to PyPI |
 | **CLI** | `packages/cli` — `colleague join\|status\|cancel\|handoff\|approvals\|artifacts\|…` |
 | **MCP** | `packages/mcp` — stdio adapter over the TypeScript SDK; stdout is JSON-RPC only |
+| **Remote connector** | `./start-connector.sh` — MCP over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls; call tools only, and the daemon stays on loopback. See [agents](docs/agents.md). |
 
 Exact continuity: pass the real originating `sessionId` (for Codex, the host thread id). Never `last`, `latest`, `--last`, or a URL hash.
 
