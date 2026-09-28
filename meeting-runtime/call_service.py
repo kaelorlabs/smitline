@@ -3,7 +3,7 @@ import asyncio
 import os
 
 from call_brief import BriefIncomplete, CallBrief
-from call_hooks import CallRefused, MissingCredentials, maybe_await
+from call_hooks import CallRefused, LineNotReady, MissingCredentials, maybe_await
 from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
     result_from_handoff, result_without_conversation, transcript_entries,
@@ -148,12 +148,20 @@ class CallService:
         except MissingCredentials as error:
             raise CallError(503, 'not_configured', str(error),
                             provider=error.provider, missing=list(error.missing)) from error
+        return self._launch(brief, owner, line.start, direction='outbound')
+
+    async def create_inbound(self, brief, owner, start):
+        """Record a call someone else placed to us; `start(ctx)` runs it on the line."""
+        return self._launch(brief, owner, start, direction='inbound')
+
+    def _launch(self, brief, owner, start, *, direction):
         now = self.store.now()
         record = {
             'version': 1,
             'id': new_call_id(),
             'owner': owner,
             'channel': brief.channel,
+            'direction': direction,
             'status': 'queued',
             'brief': brief.to_dict(),
             'createdAt': now,
@@ -163,17 +171,17 @@ class CallService:
             'usage': {},
         }
         self.store.create(record)
-        self._event(record['id'], 'call.created', channel=brief.channel)
+        self._event(record['id'], 'call.created', channel=brief.channel, direction=direction)
         context = CallContext(self, record['id'], brief, owner)
         self._contexts[record['id']] = context
-        task = asyncio.create_task(self._run(line, context), name='call-' + record['id'])
+        task = asyncio.create_task(self._run(start, context), name='call-' + record['id'])
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return record
 
-    async def _run(self, line, context):
+    async def _run(self, start, context):
         try:
-            await line.start(context)
+            await start(context)
         except asyncio.CancelledError:
             await context.finish('canceled')
             raise
@@ -245,7 +253,10 @@ class CallService:
         transfer = getattr(line, 'transfer', None)
         if transfer is None:
             raise CallError(409, 'unsupported', f'{record["channel"]} calls cannot be transferred')
-        return await transfer(call_id)
+        try:
+            return await transfer(call_id)
+        except LineNotReady as error:
+            raise CallError(409, 'not_ready', str(error)) from error
 
     # Finishing -----------------------------------------------------------
 

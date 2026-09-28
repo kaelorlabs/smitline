@@ -316,7 +316,7 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
     # The browser and display subprocesses do not inherit project secrets.
-    env = {k: v for k, v in os.environ.items() if k not in ('OPENAI_API_KEY', 'MEETING_URL', 'MEETING_PASSCODE', 'BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY')}
+    env = {k: v for k, v in os.environ.items() if k not in ('OPENAI_API_KEY', 'MEETING_URL', 'MEETING_PASSCODE', 'BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN')}
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(PulseServer(env=env))
         await stack.enter_async_context(VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900))
