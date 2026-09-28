@@ -210,4 +210,12 @@ All of these paths are gitignored. Stop the meeting or daemon before deleting fi
 
 Screenshots from incoming shared-content capture are stored as artifacts (`kind: screenshot` / `observation`), not as a separate public dump. Pairing codes and `deviceEnrollment` are shown once and are not written to these files.
 
+### Container user and file permissions
+
+The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `jobs/`, `recordings/`, and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
+
+Before starting the container, the daemon creates `jobs/`, `recordings/`, and `profiles/` as 0700 directories, because Docker would create missing ones as root. If an earlier run left them owned by root or by uid 1001 (the image's `app` user), run `sudo chown -R "$(id -u):$(id -g)" meeting-runtime/jobs meeting-runtime/recordings meeting-runtime/profiles`.
+
+With rootless Docker or Podman, container root is your user: export `COLLEAGUE_UID=0 COLLEAGUE_GID=0` before starting the daemon or `start-meeting-agent.sh`; values already in the environment are kept.
+
 Restarting the meeting participant starts a **new** GPT-Live voice context even when a coding-agent session can be resumed.

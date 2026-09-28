@@ -9,7 +9,7 @@ from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization
 from schema_validation import field_name_is_secret
 from session_continuity import EXACT, continuity_mode
 from runtime_state import (
-    active_meeting_path, context_index_from_handoff, context_index_path,
+    active_meeting_path, context_index_from_handoff, context_index_path, ensure_private_dir,
     meeting_state_path, read_json, state_from_session, write_private_json,
 )
 
@@ -26,6 +26,12 @@ except ImportError:
 
 COMPOSE_FILE = 'compose.meeting.yaml'
 SERVICE = 'meeting-agent'
+# Dockerfile.login builds FROM this local image, which compose.yaml defines.
+BASE_COMPOSE_FILE = 'compose.yaml'
+BASE_SERVICE = 'joinly'
+BASE_IMAGE = 'meeting-agent-joinly:local'
+# Bind-mount sources the container writes; Docker would create missing ones as root.
+MOUNTED_DIRS = ('jobs', 'recordings', 'profiles')
 HEALTH_URL = 'http://127.0.0.1:8094/health'
 STAGE_TO_STATE = {
     'starting': 'joining',
@@ -95,16 +101,54 @@ class UrlHealthClient:
             return None
 
 
+def host_user_env(environ=None):
+    """The uid and gid compose.meeting.yaml runs the container as: the host user's own.
+
+    Runtime files are private to the host user, so the container must share its uid.
+    Values already set (for example 0:0 for rootless Docker) are kept.
+    """
+    env = os.environ if environ is None else environ
+    ids = {}
+    for key, lookup in (('COLLEAGUE_UID', 'getuid'), ('COLLEAGUE_GID', 'getgid')):
+        value = str(env.get(key) or '').strip()
+        if not value and hasattr(os, lookup):
+            value = str(getattr(os, lookup)())
+        if value:
+            ids[key] = value
+    return ids
+
+
+def _last_line(text):
+    lines = [line.strip() for line in str(text or '').splitlines() if line.strip()]
+    return lines[-1] if lines else ''
+
+
 class ComposeMeetingAgent:
     """Single-container meeting-agent capacity at the current fixed ports."""
 
-    def __init__(self, runner):
+    def __init__(self, runner, environ=None):
         self.runner = runner
+        self.environ = environ
+
+    async def ensure_base_image(self):
+        """Build the Joinly base on a fresh machine; Docker cannot pull this local tag."""
+        found = await self.runner.run(
+            ['docker', 'image', 'inspect', '--format', '{{.Id}}', BASE_IMAGE], env=None)
+        if found.returncode == 0:
+            return False
+        built = await self.runner.run(
+            ['docker', 'compose', '-f', BASE_COMPOSE_FILE, 'build', BASE_SERVICE], env=None)
+        if built.returncode != 0:
+            raise RuntimeError(
+                'failed to build the meeting base image: '
+                + (_last_line(built.stderr) or 'docker compose build joinly failed'))
+        return True
 
     async def up(self, env):
+        await self.ensure_base_image()
         result = await self.runner.run(
             ['docker', 'compose', '-f', COMPOSE_FILE, 'up', '-d', '--build', SERVICE],
-            env=env,
+            env={**host_user_env(self.environ), **(env or {})},
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or 'failed to start meeting-agent')
@@ -283,6 +327,16 @@ class ProductionMeetingSupervisor:
             'COLLEAGUE_HOST_RUNTIME_STATE': str(state_path),
         }
 
+    def _prepare_mounts(self):
+        for name in MOUNTED_DIRS:
+            path = self.runtime_root / name
+            try:
+                ensure_private_dir(path)
+            except PermissionError as error:
+                raise RuntimeError(
+                    f'{path} belongs to another user, so the meeting container cannot use it. '
+                    f'Run: sudo chown -R "$(id -u):$(id -g)" {path}') from error
+
     def _write_session_files(self, session, camera_settings=None, screen_share_settings=None):
         payload = state_from_session(session)
         if camera_settings:
@@ -321,6 +375,7 @@ class ProductionMeetingSupervisor:
                 screen_share_settings=screen_share_settings)
             try:
                 self._preflight_coding(session)
+                self._prepare_mounts()
                 await self.launcher.up(self._container_env(session))
                 await self._wait_until_running()
                 await self._wait_until_health()
