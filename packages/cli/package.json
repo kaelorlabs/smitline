@@ -1,6 +1,7 @@
 {
   "name": "colleague",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "Blocking Colleague AI CLI for joining Zoom, Teams, and Google Meet meetings.",

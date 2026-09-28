@@ -28,12 +28,18 @@ def context_from_brief(brief):
 
 
 def meeting_payload(brief, call_id, workspace):
-    agent_session = brief.agent_session or {
+    agent_session = dict(brief.agent_session or {
         'provider': 'generic',
         'sessionId': call_id,
         'workspace': workspace,
         'metadata': {'continuity': 'context', 'source': 'call-api'},
-    }
+    })
+    # The meeting's opening disclosure names onBehalfOf; a brief's voice overrides COLLEAGUE_VOICE.
+    metadata = dict(agent_session.get('metadata') or {})
+    metadata['onBehalfOf'] = brief.on_behalf_of
+    if brief.voice:
+        metadata['voice'] = brief.voice
+    agent_session['metadata'] = metadata
     return {
         'meetingUrl': brief.to,
         'agentSession': agent_session,

@@ -261,6 +261,172 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
+
+class HostAskingAdapter(Adapter):
+    """Self-unmute is disabled by the host; the host can still ask Colleague AI to unmute."""
+
+    def __init__(self):
+        super().__init__()
+        self.block = True
+        self.host_asked = False
+        self.accepted = 0
+
+    async def accept_unmute_request(self):
+        if not self.host_asked:
+            return False
+        self.host_asked = False
+        self.accepted += 1
+        self.state = 'open'
+        return True
+
+
+class Events:
+    def __init__(self):
+        self.events = []
+
+    def event(self, kind, **kwargs):
+        self.events.append(kind)
+
+    def transcript(self, *args, **kwargs):
+        pass
+
+
+class HostUnmuteRequestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_host_request_arms_a_blocked_microphone(self):
+        adapter, microphone, state, record = HostAskingAdapter(), Mic(), {}, Events()
+        participation = Participation(adapter, microphone, state, quiet_seconds=.03, record=record)
+        task = asyncio.create_task(participation.run())
+        voice = struct.pack('<120h', *([500] * 120))
+        try:
+            await asyncio.sleep(.02)
+            self.assertEqual(state['microphoneState'], 'blocked')
+            self.assertFalse(await participation.platform_microphone_changed('muted'))
+            participation.offer(voice)
+            await asyncio.sleep(.05)
+            self.assertEqual(microphone.data, [])
+            adapter.host_asked = True
+            self.assertTrue(await participation.platform_microphone_changed('muted'))
+            self.assertEqual(state['microphoneState'], 'open')
+            self.assertNotIn('error', state)
+            self.assertEqual(record.events, ['host_unmute_accepted'])
+            participation.offer(voice)
+            await asyncio.sleep(.15)
+            self.assertEqual(microphone.data, [voice])
+            self.assertEqual(adapter.opens, 0)
+            self.assertEqual(adapter.state, 'open')
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_no_request_or_unknown_state_never_unmutes(self):
+        adapter, state = HostAskingAdapter(), {}
+        participation = Participation(adapter, Mic(), state)
+        adapter.host_asked = True
+        self.assertFalse(await participation.accept_host_unmute('unknown'))
+        self.assertEqual(adapter.accepted, 0)
+        plain = Participation(Adapter(), Mic(), {})
+        self.assertFalse(await plain.accept_host_unmute('muted'))
+
+    async def test_host_mute_after_acceptance_is_still_respected(self):
+        adapter, microphone, state = HostAskingAdapter(), Mic(), {}
+        participation = Participation(adapter, microphone, state, quiet_seconds=.03)
+        adapter.host_asked = True
+        self.assertTrue(await participation.platform_microphone_changed('muted'))
+        adapter.state = 'muted'
+        self.assertTrue(await participation.platform_microphone_changed('muted'))
+        self.assertEqual(state['floorState'], 'platform_muted')
+        self.assertFalse(participation.platform_ready)
+
+    async def test_bridge_accepts_host_request_then_speaks_the_disclosure(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+
+        socket = FakeLiveSocket(bridge)
+        adapter, microphone, record = HostAskingAdapter(), Mic(), Events()
+        runtime = RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'})
+
+        async def wait_until(check):
+            for _ in range(200):
+                if check():
+                    return
+                await asyncio.sleep(.01)
+            self.fail('Timed out waiting for bridge event')
+
+        def intros():
+            return [event for event in socket.sent if event['type'] == 'session.commentary.append'
+                    and 'on behalf of Robin' in event['content']]
+
+        with patch.object(bridge, 'ClientSession', socket.client), \
+                patch.object(bridge, 'record', record), \
+                patch.object(bridge, 'stop', asyncio.Event()):
+            task = asyncio.create_task(bridge.run_voice(
+                IdleSpeaker(), microphone, None, 'test-only', runtime, adapter))
+            try:
+                await socket.events.put({'type': 'session.started'})
+                await asyncio.sleep(.3)
+                self.assertEqual(intros(), [])
+                adapter.host_asked = True
+                await wait_until(lambda: intros())
+                await asyncio.sleep(.3)
+                self.assertEqual(len(intros()), 1)
+                self.assertEqual(adapter.accepted, 1)
+                self.assertIn('host_unmute_accepted', record.events)
+                self.assertIn('ai_disclosure_cued', record.events)
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 1}})
+                await asyncio.wait_for(task, 2)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+class IdleSpeaker:
+    async def read(self):
+        await asyncio.Event().wait()
+
+
+class FakeLiveSocket:
+    """A GPT-Live WebSocket stand-in for bridge.run_voice."""
+
+    def __init__(self, bridge):
+        self.bridge = bridge
+        self.events = asyncio.Queue()
+        self.sent = []
+        socket = self
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def ws_connect(self, *args, **kwargs):
+                return socket
+
+        self.client = Client
+
+    async def send_json(self, value):
+        self.sent.append(value)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        value = await self.events.get()
+        return SimpleNamespace(type=self.bridge.WSMsgType.TEXT, json=lambda: value)
+
+    async def close(self):
+        pass
+
     async def test_client_delegation_keeps_forwarding_meeting_audio(self):
         import bridge
         from delegation_router import DelegationRouter

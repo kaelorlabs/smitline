@@ -48,7 +48,7 @@ Before joining:
 
    The launcher inherits the exact `CODEX_THREAD_ID` and sends it to the daemon. Delete the temporary context file after the command returns. Do not put the context JSON directly in shell arguments.
 
-Colleague AI's microphone policy is automatic: it joins muted, listens, opens the platform microphone only while delivering selected speech, and remutes afterward. There is no always-unmuted launch mode. If the user asks to join unmuted, explain this behavior; do not encode an unsupported audio mode in context.
+Colleague AI's microphone policy is automatic: it joins muted, unmutes the platform microphone once when its voice session starts, opens with a short AI disclosure naming the user, then listens. Between replies a local audio gate transmits silence while the platform shows it unmuted; it mutes the platform microphone when the session ends. A host or participant mute is respected, and in Zoom it accepts the host's explicit "Ask to unmute" request. There is no separate always-unmuted launch mode. If the user asks to join unmuted, explain this behavior; do not encode an unsupported audio mode in context.
 
 Exact continuity is required for this workflow. The launch needs access to the local loopback daemon; when the execution environment blocks `127.0.0.1`, request that access once after context validation. If the task ID or launcher is unavailable, or the exact join fails, report the blocker. Do not silently retry with MCP launch, `--context-continuity`, `start_meeting`, `local-portal`, `last`, or `latest`.
 

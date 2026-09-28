@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Local Colleague AI SDK for joining Zoom, Teams, and Google Meet meetings through the runtime daemon.",
+  "license": "Apache-2.0",
   "main": "./src/index.mjs",
   "types": "./src/index.d.ts",
   "exports": {

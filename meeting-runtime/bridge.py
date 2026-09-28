@@ -18,6 +18,7 @@ from startup_input import handoff_to_session_input
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
 from session_continuity import continuity_from_payload
 from meeting_connection import joined_meeting
+from meeting_intro import introduce, intro_instructions
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
@@ -80,6 +81,10 @@ Participation policy: Default to listening silently. Respond when someone direct
 Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts, verified backend results, and inference. Never invent access, results, sources, actions, or capabilities.
 Delegation policy: Delegate technical, workspace, repository, data, planning, and current-fact work to the backend instead of answering from guesswork. Delegate only for an explicit actionable request addressed to you, or to verify a material factual correction that meets the participation policy. Never delegate merely because the conversation mentions a related topic. Continue listening and handle simple unrelated conversation while backend work runs. You may briefly acknowledge that you are checking. Never invent a pending technical result. If a participant cancels or corrects the request, follow the latest spoken request. Do not claim that you browsed the web, edited files, or ran tools yourself. Identify yourself as an AI if asked.''',
               'delegation': {'type': 'client'}}
+    if runtime.voice:
+        config['audio']['output'] = {'voice': runtime.voice}
+    if runtime.meeting_intro:
+        config['instructions'] += intro_instructions(runtime.owner_name)
     if runtime.meeting_instructions:
         config['instructions'] += (
             '\nOrganizer-provided meeting guidance: ' + runtime.meeting_instructions +
@@ -107,7 +112,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
             await ws.send_json({'type': 'session.start', 'session': config})
             ready = asyncio.Event()
             finished = asyncio.Event()
-            participation = Participation(adapter, microphone, state, on_presence=_sync_presence)
+            participation = Participation(
+                adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             delegations = ClientDelegation(
                 send=ws.send_json, record=record, state=state, runtime=runtime,
@@ -137,11 +143,17 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     await ws.send_json({'type': 'session.input_audio.append', 'audio': base64.b64encode(chunk.data).decode()})
 
             async def watch_microphone():
+                # Also accepts a host's explicit request to unmute (Participation.accept_host_unmute).
                 await ready.wait()
                 while not stop.is_set():
                     await asyncio.sleep(.2)
                     actual = await adapter.get_microphone_state()
                     await gate.platform_microphone_changed(actual)
+
+            async def introduce_once():
+                if await introduce(ws.send_json, runtime, participation, ready, stop):
+                    state['introduced'] = True
+                    record.event('ai_disclosure_cued')
 
             async def watch_meeting():
                 await ready.wait()
@@ -185,6 +197,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('meeting_audio_input', send_audio),
                 ('reply_audio_output', gate.run),
                 ('microphone_monitor', watch_microphone),
+                ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
                 ('session_closer', closer),
             ]

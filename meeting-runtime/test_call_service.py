@@ -327,7 +327,9 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
     def test_payload_keeps_host_agent_session(self):
         session = {'provider': 'codex', 'sessionId': 'thread-1', 'workspace': '/w'}
         parsed = CallBrief.from_dict(brief(channel='meeting', to=ZOOM, agentSession=session))
-        self.assertEqual(meeting_payload(parsed, 'call-x', '/ws')['agentSession'], session)
+        # The host session is kept; the metadata adds who the meeting disclosure names.
+        self.assertEqual(meeting_payload(parsed, 'call-x', '/ws')['agentSession'],
+                         {**session, 'metadata': {'onBehalfOf': 'Robin'}})
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):

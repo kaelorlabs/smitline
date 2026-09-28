@@ -158,6 +158,11 @@ def state_from_session(session):
     }
     if metadata.get('source'):
         payload['source'] = metadata['source']
+    if metadata.get('onBehalfOf'):
+        # Named in the meeting's opening AI disclosure (meeting_intro.owner_name).
+        payload['onBehalfOf'] = metadata['onBehalfOf']
+    if metadata.get('voice'):
+        payload['voice'] = metadata['voice']
     if session.camera_enabled is not None:
         payload['cameraEnabled'] = bool(session.camera_enabled)
     return payload
@@ -182,4 +187,7 @@ def environ_from_state(payload):
         mapping['COLLEAGUE_MEETING_INSTRUCTIONS'] = str(payload['meetingInstructions'])
     if payload.get('meetingUrl'):
         mapping['MEETING_URL'] = str(payload['meetingUrl'])
+    if payload.get('voice'):
+        # Validated by runtime_config; an unknown name falls back to the default voice.
+        mapping['COLLEAGUE_VOICE'] = str(payload['voice'])
     return mapping

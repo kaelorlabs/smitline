@@ -347,7 +347,7 @@ export function createServer({
       dockerTimeoutMs,
       { code: -1, stdout: '', stderr: 'timed out' },
     );
-    if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker Desktop and try again.';
+    if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker (Docker Desktop, or Docker Engine inside WSL) and try again.';
     const codex = await runCommand('/bin/bash', ['-lc', 'if command -v codex >/dev/null 2>&1; then codex login status; elif [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then /Applications/ChatGPT.app/Contents/Resources/codex login status; else exit 127; fi'], { cwd: root });
     if (settings.tools?.codex && codex.code !== 0) errors.codex = 'Codex is unavailable or signed out. Run codex login.';
     if (settings.tools?.cursor) {

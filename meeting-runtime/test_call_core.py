@@ -421,3 +421,24 @@ class VoiceCoreTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MeetingPayloadTests(unittest.TestCase):
+    def test_meeting_carries_the_name_and_voice(self):
+        from meeting_line import meeting_payload
+        from runtime_state import environ_from_state
+        brief = CallBrief.from_dict({
+            "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
+            "objective": "Take notes", "voice": "cinder",
+            "agentSession": {"provider": "codex", "sessionId": "thread-1", "workspace": "/w"},
+        })
+        payload = meeting_payload(brief, "call-0123456789abcdef", "/tmp/w")
+        self.assertEqual(payload["agentSession"]["sessionId"], "thread-1")
+        self.assertEqual(payload["agentSession"]["metadata"], {"onBehalfOf": "Sam", "voice": "cinder"})
+        self.assertIsNone(brief.agent_session.get("metadata"))
+        self.assertEqual(environ_from_state({"voice": "cinder"})["COLLEAGUE_VOICE"], "cinder")
+        plain = meeting_payload(CallBrief.from_dict({
+            "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
+            "objective": "Take notes"}), "call-0123456789abcdef", "/tmp/w")
+        self.assertEqual(plain["agentSession"]["metadata"]["source"], "call-api")
+        self.assertNotIn("voice", plain["agentSession"]["metadata"])

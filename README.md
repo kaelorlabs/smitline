@@ -30,7 +30,7 @@ The current product has been exercised in live Zoom calls. Teams and Google Meet
 | --- | --- |
 | **Make phone calls** | Your agent sends a brief; Colleague AI calls through Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
 | **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API. |
-| **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone. |
+| **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone after a short opening AI disclosure. |
 | **Bring a coding agent in** | Codex is the default. Cursor and Claude Code are optional adapters that only use flags documented by their CLIs. |
 | **Keep one technical session** | Exact continuity resumes the host-supplied thread id. Context continuity (`local-portal`) does not invent or hash a thread. |
 | **Work with an explicit workspace** | The worker can inspect the selected directory. Approved mutations run in an isolated worktree, not through Cursor/Claude CLIs. |
@@ -66,7 +66,7 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 - **Least privilege.** Hosted/remote requests may only **narrow** local permissions. The local runner is the final enforcement point.
 - **Fail closed.** Unknown provider ids, undocumented CLI flags, `last`/`latest` session ids, and missing job bindings are rejected.
 - **No secret-bearing logs.** Pairing codes and `deviceEnrollment` are revealed once. Tokens are not placed in URLs, query strings, events, or errors.
-- **Operator mute is authoritative.** Colleague AI does not unmute itself after a host or participant mute.
+- **Operator mute is authoritative.** Colleague AI does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
 ## Prerequisites
 
@@ -146,7 +146,7 @@ See the [control panel guide](docs/control-panel.md) for operator workflow and [
 
 ### 3. Admit the participant
 
-Admit **Colleague AI** if it enters the waiting room. It listens continuously, opens its meeting microphone only while delivering a reply, and remutes after playback.
+Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to skip the disclosure.
 
 | Local interface | Address |
 | --- | --- |
@@ -268,7 +268,6 @@ Transcripts contain meeting content and are retained until you remove them. Gene
 | [`packages/sdk-typescript/`](packages/sdk-typescript/) · [`packages/sdk-python/`](packages/sdk-python/) | Host SDKs |
 | [`packages/cli/`](packages/cli/) · [`packages/mcp/`](packages/mcp/) | CLI and MCP adapter |
 | [`gpt-live/`](gpt-live/) | Standalone browser voice diagnostic |
-| [`live/`](live/) | Earlier local Whisper/Kokoro voice-room experiment; not the product path |
 | [`joinly/`](joinly/) | Vendored meeting/browser/audio infrastructure |
 
 ```bash
@@ -288,7 +287,7 @@ Unit tests do not establish live admission, audio quality, or file delivery. Tes
 
 | Symptom | Check |
 | --- | --- |
-| Agent is silent | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. |
+| Agent is silent | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. If `microphoneState` is `blocked` in Zoom, the host disabled self-unmute: the host can click **Ask to unmute** on its tile, and Colleague AI accepts. |
 | Coding-agent tool fails | Keep the launcher terminal open. Verify the CLI login. A worker lock means another worker is already running. Cursor/Claude exact resume needs documented CLI flags. |
 | Chat attachment is unavailable | Host must allow file transfer; Zoom upload remains experimental. |
 | Agent cannot enter the meeting | Inspect the browser viewer for waiting-room, sign-in, passcode, or host-removal messages. Connect a Microsoft or Google account only as guest-denied fallback. |

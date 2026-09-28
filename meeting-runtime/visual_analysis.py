@@ -1,4 +1,7 @@
 """Provider-neutral visual analysis. Codex is used only when the CLI documents local-image input."""
+import asyncio
+import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -12,6 +15,7 @@ from startup_input import clip_tokens
 
 IMAGE_FLAG_TOKENS = ('--image', '--images', '--input-image')
 MAX_CONTEXT = 400
+ANALYZE_TIMEOUT = 45
 
 
 class VisualAnalysisUnavailable(RuntimeError):
@@ -120,13 +124,9 @@ class CodexVisualAnalysisProvider(VisualAnalysisProvider):
             if self.workspace:
                 args.extend(['-C', str(self.workspace)])
             args.append(prompt)
-            run = self.runner or subprocess.run
-            try:
-                result = run(args, capture_output=True, text=True, timeout=45, check=False)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise VisualAnalysisUnavailable('Codex image analysis failed') from error
-        text = (result.stdout or '') + '\n' + (result.stderr or '')
-        parsed = _extract_observation_json(text)
+            # Only stdout carries the answer; stderr echoes the prompt and its JSON example.
+            stdout = await self._run(args)
+        parsed = _extract_observation_json(stdout)
         if parsed is None:
             raise VisualAnalysisUnavailable('Codex image analysis returned no observation')
         reject_secrets(parsed, 'codex observation')
@@ -140,18 +140,52 @@ class CodexVisualAnalysisProvider(VisualAnalysisProvider):
             visible_text=parsed.get('visibleText') or (),
         ))
 
+    async def _run(self, args):
+        """Run Codex without blocking the daemon's event loop; return its stdout."""
+        if self.runner is not None:
+            try:
+                result = await asyncio.to_thread(
+                    self.runner, args, capture_output=True, text=True,
+                    timeout=ANALYZE_TIMEOUT, check=False)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise VisualAnalysisUnavailable('Codex image analysis failed') from error
+            return result.stdout or ''
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL)
+        except OSError as error:
+            raise VisualAnalysisUnavailable('Codex image analysis failed') from error
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), ANALYZE_TIMEOUT)
+        except asyncio.TimeoutError as error:
+            await _kill(process)
+            raise VisualAnalysisUnavailable('Codex image analysis timed out') from error
+        except asyncio.CancelledError:
+            await _kill(process)
+            raise
+        return stdout.decode('utf-8', errors='replace')
+
+
+async def _kill(process):
+    with contextlib.suppress(ProcessLookupError):
+        process.kill()
+    await process.wait()
+
 
 def _extract_observation_json(text):
-    import json
+    """Return the last JSON object with a summary; skip non-JSON text such as a prompt echo."""
     blob = str(text or '')
-    start = blob.find('{')
-    end = blob.rfind('}')
-    if start < 0 or end <= start:
-        return None
-    try:
-        payload = json.loads(blob[start:end + 1])
-    except ValueError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
+    decoder = json.JSONDecoder()
+    found = None
+    index = blob.find('{')
+    while index >= 0:
+        try:
+            payload, end = decoder.raw_decode(blob, index)
+        except ValueError:
+            index = blob.find('{', index + 1)
+            continue
+        if isinstance(payload, dict) and 'summary' in payload:
+            found = payload
+        index = blob.find('{', end)
+    return found

@@ -15,12 +15,13 @@ def audible_pcm(data, threshold=160):
 
 class Participation:
     def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic,
-                 on_presence=None):
+                 on_presence=None, record=None):
         self.adapter, self.state = adapter, state
         self.gate = SpeechGate(microphone)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.on_presence = on_presence
+        self.record = record
         self.last_output_audio = float('-inf')
         self.queue = asyncio.Queue(maxsize=500)
         self.lock = asyncio.Lock()
@@ -82,13 +83,36 @@ class Participation:
                 self.on_presence()
             return True
         if not self.platform_ready:
-            return False
+            return await self.accept_host_unmute(actual)
         self.platform_ready = False
         async with self.lock:
             self._discard_pending()
             await self.gate.set_muted(True)
             self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
         self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+        if self.on_presence:
+            self.on_presence()
+        return True
+
+    async def accept_host_unmute(self, actual):
+        """Unmute only when the host explicitly asks, e.g. Zoom's "Ask to unmute" dialog."""
+        accept = getattr(self.adapter, 'accept_unmute_request', None)
+        if actual not in ('muted', 'blocked') or accept is None:
+            return False
+        try:
+            if not await accept():
+                return False
+            for _ in range(20):
+                if await self.adapter.get_microphone_state() == 'open':
+                    break
+                await asyncio.sleep(.1)
+            else:
+                return False
+        except Exception:
+            return False
+        self._arm_platform_microphone()
+        if self.record is not None:
+            self.record.event('host_unmute_accepted')
         if self.on_presence:
             self.on_presence()
         return True
