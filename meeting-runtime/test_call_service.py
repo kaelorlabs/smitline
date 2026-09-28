@@ -313,6 +313,50 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/v1/calls', spec['paths'])
 
 
+class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
+    """The meeting line's payload must pass the real daemon's meeting validation."""
+
+    async def test_meeting_call_runs_through_the_daemon(self):
+        from test_runtime_daemon import FakeSupervisor
+        from test_schemas import handoff_payload
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = FakeSupervisor()
+            workspace = Path(temp) / 'workspace'
+            workspace.mkdir()
+            harness = ServiceHarness(temp)
+
+            def lines(daemon):
+                line = MeetingLine(daemon, workspace=workspace, poll_interval=0.01, handoff_timeout=5)
+                harness.service.lines = {'meeting': line}
+                return harness.service
+            app = create_app(root=Path(temp) / 'daemon', auth_token='t', supervisor=supervisor,
+                             call_service_factory=lines)
+            daemon = app.runtime_daemon
+            record = await harness.service.create(brief(
+                channel='meeting', to=ZOOM, context='Q3 sales review',
+                mustNotShare=['salaries'], mayAgreeTo=['moving the deadline a week']))
+            call = await harness.service.wait(record['id'], timeout=0.2)
+            meeting_id = call['line']['meetingId']
+            self.assertEqual(supervisor.started, [meeting_id])
+            session = await daemon.get_meeting(meeting_id)
+            self.assertEqual(session.agent_session.provider, 'generic')
+            context = session.context.to_dict()
+            self.assertEqual(context['objective'], 'Book a table for 4 at 7pm')
+            self.assertIn('Do not share: salaries', context['constraints'])
+            daemon.transition(meeting_id, 'live')
+            await asyncio.sleep(0.05)
+            self.assertEqual(harness.store.get(record['id'])['status'], 'in_progress')
+            daemon.transition(meeting_id, 'ended')
+            daemon.store_handoff(handoff_payload(meetingId=meeting_id, startedAt=session.started_at,
+                                                 summary='Agreed on Q3.'))
+            done = await harness.service.wait(record['id'], timeout=5)
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(done['result']['summary'], 'Agreed on Q3.')
+            self.assertEqual(done['result']['actionItems'], ['dev: Implement leases'])
+            await harness.service.shutdown()
+            app.runtime_daemon.close()
+
+
 class ServerModeTests(unittest.TestCase):
     def test_server_bind_requires_a_token(self):
         with tempfile.TemporaryDirectory() as temp:
