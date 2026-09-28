@@ -67,6 +67,7 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 ## Prerequisites
 
 - macOS or Linux, Python 3.10+, Node.js 22+, npm, and Git. Host workers use Unix file locking.
+- On Windows, use WSL2 with Ubuntu: install Docker inside WSL (or enable Docker Desktop's WSL integration) and clone the repository inside the Linux home directory, not under `/mnt/c` or `/mnt/d`. `npm run doctor` checks for this.
 - Docker with Docker Compose, running locally.
 - An OpenAI project API key with access to `gpt-live-1` and the configured Codex backend model (default `gpt-5.6-terra`).
 - Optional: Tavily API key for web search.
@@ -291,3 +292,7 @@ See the [product roadmap](docs/product-roadmap.md). Near-term work is latency, c
 Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo.
 
 Colleague AI builds on Joinly’s browser and audio infrastructure. See [THIRD_PARTY.md](THIRD_PARTY.md) for the pinned upstream revision and retained license.
+
+## License
+
+Colleague AI is licensed under the [Apache License 2.0](LICENSE). The vendored Joinly source in `joinly/` keeps its MIT license; see [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md).
