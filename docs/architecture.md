@@ -152,6 +152,43 @@ sequenceDiagram
 
 Disconnect removes the local profile directory. It does not revoke sessions on other devices. Zoom has no signed-in profile fallback.
 
+## Incoming shared-content change detection
+
+When screen share is enabled, the meeting container screenshots the share surface every `captureIntervalMs`. Only settled, meaningfully changed frames reach the paid vision analyzer:
+
+```text
+meeting container (each capture)
+  inbox still holds a frame        -> skip (backpressure)
+  same bytes as previous capture   -> reuse its signature, no decode
+  tile signature                   -> ~64x36 tiles (rows follow the aspect ratio); per tile the
+                                      mean luminance and mean horizontal/vertical gradient over
+                                      at most 6x6 sampled pixels
+  settle                           -> must match the previous capture for settleTicks captures
+  mask                             -> tiles that changed in 4 of the last 6 local comparisons
+                                      (clock, video, webcam thumbnail, caret) are ignored until
+                                      they stay quiet for about 3 captures
+  changed vs last selected frame   -> write to inbox with the masked tile list
+host daemon (each inbox frame)
+  duplicate bytes / unchanged / oversized -> skip, as before
+  matches one of the last 32 analyzed screens of this meeting
+                                   -> re-emit that observation with reused: true; no analyzer
+                                      call and no new screenshot or observation artifact
+  otherwise                        -> store screenshot, analyze, store observation, remember it
+container -> GPT-Live session.thinking.append ("Shared content: ...")
+```
+
+A tile counts as changed when its luminance or either gradient moves by more than 8 of 255. The change score is the square root of the changed-tile fraction, roughly the side of the changed area relative to the frame side.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `captureIntervalMs` | 4000 | Capture period, 2000-15000 ms. |
+| `minChange` | 0.08 | Minimum change score. 0.08 is about 15 of 2304 tiles: a new slide bullet or a two-line scroll passes; a mouse pointer (1-4 tiles) or a hover highlight does not. |
+| `settleTicks` | 1 | Consecutive near-identical captures needed before selection, 0-5. 0 selects the first changed capture, including mid-transition frames. |
+
+Cost for a 1920x1080 frame in the meeting container: about 70 ms when the bytes changed (26 ms PNG decode through Pillow when importable, 45 ms tile sampling) and a SHA-256 otherwise. The host daemon decodes in pure Python (about 0.2 s for a slide, 0.8-0.9 s for dense code) and only for selected frames. Both sides compute signatures in a worker thread.
+
+Content that keeps changing over more than half the frame, such as full-screen video, never settles and is not analyzed until it stops.
+
 ## Retention and deletion
 
 All of these paths are gitignored. Stop the meeting or daemon before deleting files in use.

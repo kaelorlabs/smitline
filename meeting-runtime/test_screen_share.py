@@ -10,7 +10,8 @@ from screen_share_pipeline import ScreenShareBus, ScreenShareCaptureLoop, Screen
 from visual_analysis import (
     CodexVisualAnalysisProvider, StaticVisualAnalysisProvider, detect_codex_image_flag,
 )
-from visual_hash import average_hash, change_score, sha256_hex, solid_png
+from visual_diff import compare, frame_signature, is_significant
+from visual_hash import sha256_hex, solid_png
 
 
 class FakeAdapter:
@@ -57,13 +58,13 @@ class ScreenShareSchemaTests(unittest.TestCase):
 
 
 class HashAndPipelineTests(unittest.IsolatedAsyncioTestCase):
-    def test_change_detection_and_perceptual_hash(self):
+    def test_change_detection_and_tile_signature(self):
         red = solid_png(32, 32, 255, 0, 0)
         red2 = solid_png(32, 32, 250, 0, 0)
         blue = solid_png(32, 32, 0, 0, 255)
         self.assertEqual(sha256_hex(red), sha256_hex(solid_png(32, 32, 255, 0, 0)))
-        self.assertLess(change_score(average_hash(red), average_hash(red2)), 0.2)
-        self.assertGreater(change_score(average_hash(red), average_hash(blue)), 0.4)
+        self.assertFalse(is_significant(compare(frame_signature(red), frame_signature(red2)), 0.08))
+        self.assertGreater(compare(frame_signature(red), frame_signature(blue)).score, 0.4)
 
     def test_codex_image_support_is_feature_detected(self):
         self.assertIsNone(detect_codex_image_flag('Usage: codex exec [prompt]'))
@@ -85,7 +86,7 @@ class HashAndPipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_rate_backpressure_retention_and_analysis(self):
         red = solid_png(48, 48, 255, 0, 0)
         blue = solid_png(48, 48, 0, 0, 255)
-        adapter = FakeAdapter(frames=[red, red, blue])
+        adapter = FakeAdapter(frames=[red, red, red, blue])
         with tempfile.TemporaryDirectory() as directory:
             bus = ScreenShareBus(directory, 'mtg-abc123')
             state = {'floorState': 'listening'}
@@ -93,6 +94,9 @@ class HashAndPipelineTests(unittest.IsolatedAsyncioTestCase):
             loop = ScreenShareCaptureLoop(
                 adapter=adapter, settings={'enabled': True, 'minChange': 0.05, 'maxFrames': 2},
                 bus=bus, state=state, send=appended.append)
+            settling = await loop.tick()
+            self.assertTrue(settling['available'])
+            self.assertEqual(bus.list_inbox(), [])
             first = await loop.tick()
             self.assertTrue(first['available'])
             self.assertEqual(len(bus.list_inbox()), 1)

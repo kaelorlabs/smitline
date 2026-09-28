@@ -87,6 +87,24 @@ test('client-side validation rejects secrets, placeholders, and relative workspa
     camera: { enabled: false },
   });
   assert.equal(disabled.camera.enabled, false);
+  const share = validateJoinRequest({
+    url: ZOOM,
+    agentSession: agentSession(),
+    screenShare: { enabled: true, captureIntervalMs: 5000, minChange: 0.05, settleTicks: 0 },
+  });
+  assert.deepEqual(share.screenShare, { enabled: true, captureIntervalMs: 5000, minChange: 0.05, settleTicks: 0 });
+  for (const settleTicks of [6, -1, 1.5, true]) {
+    assert.throws(() => validateJoinRequest({
+      url: ZOOM,
+      agentSession: agentSession(),
+      screenShare: { enabled: true, settleTicks },
+    }), /screenShare\.settleTicks/);
+  }
+  assert.throws(() => validateJoinRequest({
+    url: ZOOM,
+    agentSession: agentSession(),
+    screenShare: { enabled: true, maskWindow: 4 },
+  }), /screenShare\.maskWindow is not allowed/);
   const context = {
     version: 1,
     objective: 'support meeting',

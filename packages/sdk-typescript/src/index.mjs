@@ -299,7 +299,7 @@ export function validateJoinRequest(request) {
 
 function validateScreenShare(value) {
   if (!isPlainObject(value)) throw new ValidationError('screenShare must be an object');
-  const known = new Set(['enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds']);
+  const known = new Set(['enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds', 'settleTicks']);
   for (const key of Object.keys(value)) {
     if (!known.has(key)) throw new ValidationError(`screenShare.${key} is not allowed`);
   }
@@ -337,6 +337,12 @@ function validateScreenShare(value) {
       throw new ValidationError('screenShare.retentionSeconds is out of bounds');
     }
     out.retentionSeconds = value.retentionSeconds;
+  }
+  if (value.settleTicks !== undefined) {
+    if (!Number.isInteger(value.settleTicks) || value.settleTicks < 0 || value.settleTicks > 5) {
+      throw new ValidationError('screenShare.settleTicks is out of bounds');
+    }
+    out.settleTicks = value.settleTicks;
   }
   return out;
 }

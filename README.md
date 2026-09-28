@@ -195,7 +195,7 @@ Cursor and Claude Code reject exact mode when their CLI help does not document r
 - **Approvals** appear in the portal, `colleague approvals`, SDK handles, and MCP tools. One decision per request: approved or denied. There is no approve-all.
 - **Artifacts** (plans, patches, command logs, screenshots, observations) stay in `.colleague/daemon-data/.colleague/artifacts/`. Metadata can be listed; bytes are local.
 - **Virtual camera** shows listening / working / speaking presence, never task text. Uncheck **Show in the meeting** for audio-only. If the host blocks video, audio continues.
-- **Incoming screen share** captures the meeting’s share/presentation surface at a low rate when enabled at join. Off by default. Pause/resume from portal, CLI, SDK, or MCP. Voice cannot turn it on.
+- **Incoming screen share** captures the meeting’s share/presentation surface at a low rate when enabled at join. Off by default. Pause/resume from portal, CLI, SDK, or MCP. Voice cannot turn it on. A frame is analyzed only after the screen settles and changes meaningfully; returning to an earlier screen reuses its observation. See [change detection](docs/architecture.md#incoming-shared-content-change-detection).
 
 ## Hosted runtime foundation
 

@@ -1,11 +1,18 @@
-"""PNG decode, average-hash, and change detection without image libraries."""
+"""PNG decode and digests without required image libraries.
+
+Pillow is used for the pixel stage only when it is importable (the meeting image has it);
+the pure-Python path returns identical pixels and is what the host daemon runs.
+"""
 import hashlib
+import io
 import struct
 import zlib
 
 
 PNG_SIG = b'\x89PNG\r\n\x1a\n'
-HASH_SIZE = 8
+CHANNELS = {0: 1, 2: 3, 4: 2, 6: 4}
+USE_PILLOW = True
+_PILLOW = []
 
 
 def sha256_hex(data):
@@ -13,11 +20,34 @@ def sha256_hex(data):
 
 
 def decode_png_rgb(data):
+    width, height, color_type, compressed = _read_png(data)
+    fast = _pillow_rgb(data, width, height) if USE_PILLOW else None
+    if fast is not None:
+        return width, height, fast
+    raw = zlib.decompress(compressed)
+    channels = CHANNELS[color_type]
+    stride = width * channels
+    rows = []
+    cursor = 0
+    prior = bytearray(stride)
+    for _ in range(height):
+        if cursor + 1 + stride > len(raw):
+            raise ValueError('PNG scanline is truncated')
+        filter_id = raw[cursor]
+        scan = bytearray(raw[cursor + 1:cursor + 1 + stride])
+        cursor += 1 + stride
+        _paeth_unfilter(filter_id, scan, prior, channels)
+        prior = scan
+        rows.append(scan)
+    return width, height, _to_rgb(b''.join(rows), color_type, width * height)
+
+
+def _read_png(data):
     if not isinstance(data, (bytes, bytearray)) or len(data) < 24 or data[:8] != PNG_SIG:
         raise ValueError('frame is not a PNG image')
     offset = 8
     width = height = None
-    color_type = bit_depth = interlace = None
+    color_type = None
     idat = []
     while offset + 12 <= len(data):
         length = struct.unpack('>I', data[offset:offset + 4])[0]
@@ -35,7 +65,7 @@ def decode_png_rgb(data):
                 struct.unpack('>IIBBBBB', chunk))
             if compression != 0 or filter_method != 0 or interlace != 0:
                 raise ValueError('PNG compression is unsupported')
-            if bit_depth != 8 or color_type not in (0, 2, 4, 6):
+            if bit_depth != 8 or color_type not in CHANNELS:
                 raise ValueError('PNG color type is unsupported')
         elif kind == b'IDAT':
             idat.append(chunk)
@@ -43,52 +73,54 @@ def decode_png_rgb(data):
             break
     if width is None or not idat:
         raise ValueError('PNG is missing image data')
-    raw = zlib.decompress(b''.join(idat))
-    channels = {0: 1, 2: 3, 4: 2, 6: 4}[color_type]
-    stride = width * channels
-    rows = []
-    cursor = 0
-    prior = bytearray(stride)
-    for _ in range(height):
-        if cursor + 1 + stride > len(raw):
-            raise ValueError('PNG scanline is truncated')
-        filter_id = raw[cursor]
-        scan = bytearray(raw[cursor + 1:cursor + 1 + stride])
-        cursor += 1 + stride
-        _paeth_unfilter(filter_id, scan, prior, channels)
-        prior = scan
-        rows.append(bytes(scan))
-    rgb = bytearray(width * height * 3)
-    out = 0
-    for row in rows:
-        i = 0
-        for _ in range(width):
-            if color_type == 0:
-                gray = row[i]
-                rgb[out:out + 3] = bytes((gray, gray, gray))
-                i += 1
-            elif color_type == 2:
-                rgb[out:out + 3] = row[i:i + 3]
-                i += 3
-            elif color_type == 4:
-                gray = row[i]
-                rgb[out:out + 3] = bytes((gray, gray, gray))
-                i += 2
-            else:
-                rgb[out:out + 3] = row[i:i + 3]
-                i += 4
-            out += 3
-    return width, height, bytes(rgb)
+    return width, height, color_type, b''.join(idat)
+
+
+def _pillow_rgb(data, width, height):
+    if not _PILLOW:
+        try:
+            from PIL import Image
+        except Exception:
+            Image = None
+        _PILLOW.append(Image)
+    image_module = _PILLOW[0]
+    if image_module is None:
+        return None
+    try:
+        with image_module.open(io.BytesIO(bytes(data))) as image:
+            if image.size != (width, height):
+                return None
+            rgb = image.convert('RGB').tobytes()
+    except Exception:
+        return None
+    return rgb if len(rgb) == width * height * 3 else None
+
+
+def _to_rgb(pixels, color_type, count):
+    if color_type == 2:
+        return bytes(pixels)
+    rgb = bytearray(count * 3)
+    if color_type == 6:
+        for channel in range(3):
+            rgb[channel::3] = pixels[channel::4]
+    else:
+        gray = pixels if color_type == 0 else pixels[0::2]
+        for channel in range(3):
+            rgb[channel::3] = gray
+    return bytes(rgb)
 
 
 def _paeth_unfilter(filter_id, scan, prior, bpp):
     length = len(scan)
     if filter_id == 0:
         return
+    if filter_id in (2, 4) and not any(scan):
+        # A zero Up or Paeth residual always reproduces the row above.
+        scan[:] = prior
+        return
     if filter_id == 1:
-        for i in range(length):
-            left = scan[i - bpp] if i >= bpp else 0
-            scan[i] = (scan[i] + left) & 255
+        for i in range(bpp, length):
+            scan[i] = (scan[i] + scan[i - bpp]) & 255
         return
     if filter_id == 2:
         for i in range(length):
@@ -100,56 +132,25 @@ def _paeth_unfilter(filter_id, scan, prior, bpp):
             scan[i] = (scan[i] + ((left + prior[i]) // 2)) & 255
         return
     if filter_id == 4:
-        for i in range(length):
-            a = scan[i - bpp] if i >= bpp else 0
+        for i in range(min(bpp, length)):
+            scan[i] = (scan[i] + prior[i]) & 255
+        for i in range(bpp, length):
+            a = scan[i - bpp]
             b = prior[i]
-            c = prior[i - bpp] if i >= bpp else 0
-            p = a + b - c
-            pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-            pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
-            scan[i] = (scan[i] + pr) & 255
+            c = prior[i - bpp]
+            pa = b - c if b >= c else c - b
+            pb = a - c if a >= c else c - a
+            pc = a + b - c - c
+            if pc < 0:
+                pc = -pc
+            if pa <= pb and pa <= pc:
+                scan[i] = (scan[i] + a) & 255
+            elif pb <= pc:
+                scan[i] = (scan[i] + b) & 255
+            else:
+                scan[i] = (scan[i] + c) & 255
         return
     raise ValueError('PNG filter is unsupported')
-
-
-def average_hash(data):
-    width, height, rgb = decode_png_rgb(data)
-    samples = []
-    totals = [0, 0, 0]
-    count = max(width * height, 1)
-    for i in range(0, len(rgb), 3):
-        totals[0] += rgb[i]
-        totals[1] += rgb[i + 1]
-        totals[2] += rgb[i + 2]
-    for y in range(HASH_SIZE):
-        src_y = min(height - 1, (y * height) // HASH_SIZE)
-        for x in range(HASH_SIZE):
-            src_x = min(width - 1, (x * width) // HASH_SIZE)
-            i = (src_y * width + src_x) * 3
-            samples.append((rgb[i] * 299 + rgb[i + 1] * 587 + rgb[i + 2] * 114) // 1000)
-    mean = sum(samples) / len(samples)
-    bits = 0
-    for index, value in enumerate(samples):
-        if value >= mean:
-            bits |= 1 << index
-    color = tuple(value // count for value in totals)
-    return (bits, color)
-
-
-def hash_distance(left, right):
-    left_bits = left[0] if isinstance(left, tuple) else left
-    right_bits = right[0] if isinstance(right, tuple) else right
-    return bin((left_bits or 0) ^ (right_bits or 0)).count('1')
-
-
-def change_score(left, right):
-    bit_score = hash_distance(left, right) / float(HASH_SIZE * HASH_SIZE)
-    left_color = left[1] if isinstance(left, tuple) and len(left) > 1 else None
-    right_color = right[1] if isinstance(right, tuple) and len(right) > 1 else None
-    if left_color is not None and right_color is not None:
-        color_score = sum(abs(a - b) for a, b in zip(left_color, right_color)) / 765.0
-        return max(bit_score, color_score)
-    return bit_score
 
 
 def mean_rgb(data):
