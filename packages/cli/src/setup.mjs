@@ -327,50 +327,218 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
 // Secrets page -------------------------------------------------------------
 
 const FIELDS = [
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'From platform.openai.com. GPT-Live needs a paid tier.' },
-  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Spoken in the AI disclosure: calling on behalf of this name.' },
-  { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Phone calls (optional)', secret: true },
-  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Phone calls (optional)', secret: true },
-  { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Phone calls (optional)', hint: 'E.164, such as +14155550142.' },
-  { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'For the test call and for taking over calls.' },
-  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'The https address of this server, such as https://colleague.example.com. Only for cloud agents; see docs/agents.md.' },
-  { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters. You type it to approve each app that connects.' },
+  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
+  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m an AI assistant calling on behalf of [your name].”' },
+  { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Phone calls (optional)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
+  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Phone calls (optional)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
+  { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Phone calls (optional)', hint: 'A number you bought in Twilio, listed under Phone Numbers. Needed for incoming calls, and for outgoing calls unless you show your own number below. Include the country code, such as +1 415 555 0142.' },
+  { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified in Twilio under Phone Numbers > Verified Caller IDs. Outgoing calls show it instead of the Twilio number. Incoming calls still ring the Twilio number.' },
+  { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Colleague AI rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
+  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
+  { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-export const PAGE_STYLE = `:root{color-scheme:light dark;--bg:#f4f6f6;--card:#fff;--ink:#111719;--muted:#56636a;--line:#d9dfe2;--accent:#0f766e}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1315;--card:#151c1f;--ink:#e4eaec;--muted:#97a5ab;--line:#28343a;--accent:#3fbfae;--on-accent:#0e1315}}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;padding:32px 16px}
-main{max-width:560px;margin:0 auto;display:grid;gap:18px}h1{font-size:1.5rem;margin:0}
-p{margin:0;color:var(--muted)}fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:16px;display:grid;gap:14px}
-legend{font-weight:600;padding:0 6px}label{display:grid;gap:4px}small{color:var(--muted)}
-input{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink)}
-input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-button{font:inherit;font-weight:600;padding:10px 16px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent,#fff);cursor:pointer;justify-self:start}
-.note{border-left:3px solid var(--accent);padding:8px 12px;background:var(--card)}`;
+// Shared by the local setup page and the connector's approval page. Tokens and
+// the brand mark follow the local console (control-panel/styles.css).
+export const PAGE_STYLE = `:root{color-scheme:light dark;--bg:#f6f6f9;--card:#fff;--field:#fff;--ink:#25262b;--muted:#5f626c;--line:#e5e6eb;--line-strong:#cfd0d8;--accent:#555bc0;--accent-hover:#464ca8;--on-accent:#fff;--accent-soft:#ebecfa;--mark:#30323b;--good:#1d6b45;--good-bg:#e7f4ec;--good-line:#bfe0cc;--warn:#7d4f0b;--warn-bg:#fdf3e1;--warn-line:#f0d7a8;--bad:#a3303d;--bad-bg:#fcecee;--bad-line:#efc9ce}
+@media (prefers-color-scheme:dark){:root{--bg:#131418;--card:#1b1c21;--field:#131418;--ink:#e8e9ef;--muted:#a9acb8;--line:#2e3038;--line-strong:#4a4d59;--accent:#a9adf5;--accent-hover:#bfc2f8;--on-accent:#15161b;--accent-soft:#272a4a;--mark:#e8e9ef;--good:#86d9a8;--good-bg:#16301f;--good-line:#25533a;--warn:#f2c678;--warn-bg:#36290f;--warn-line:#5c4518;--bad:#f5a0a9;--bad-bg:#3a1a1f;--bad-line:#62303a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:0 16px 56px}
+main{max-width:600px;margin:0 auto;display:grid;gap:20px}
+.brand{display:flex;align-items:center;gap:10px;padding:24px 0 4px;font-size:16px;font-weight:600;letter-spacing:-.4px}
+.brand b{font-weight:400;color:var(--muted)}
+.brand-mark{width:24px;height:24px;border-radius:6px;background:var(--mark);display:flex;align-items:center;justify-content:center;gap:3px}
+.brand-mark i{display:block;width:3px;height:11px;border-radius:2px;background:var(--bg)}
+.brand-mark i:nth-child(2){height:16px}
+h1{font-size:26px;line-height:1.25;letter-spacing:-.6px;margin:0}
+h2{font-size:16px;line-height:1.3;margin:0}
+p{margin:0}
+a{color:var(--accent);text-underline-offset:2px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;overflow-wrap:anywhere}
+.lead{color:var(--muted);font-size:16px}
+.muted,small{color:var(--muted)}
+.hint{color:var(--muted);font-size:13px;line-height:1.5}
+.card,fieldset{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin:0;min-width:0}
+fieldset{display:grid;gap:18px}
+legend{float:left;width:100%;padding:0;font-size:16px;font-weight:600}
+label{font-weight:600}
+input{font:inherit;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--field);color:var(--ink)}
+input::placeholder{color:var(--muted);opacity:1}
+input[aria-invalid="true"]{border-color:var(--bad);border-width:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input:focus-visible{outline-offset:0;border-color:var(--accent)}
+button{font:inherit;font-weight:600;min-height:44px;padding:10px 20px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:var(--on-accent);cursor:pointer}
+button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button.secondary{background:var(--card);color:var(--ink);border-color:var(--line-strong)}
+button.secondary:hover{background:var(--bg);border-color:var(--muted)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.note,.notice{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 16px;background:var(--card);display:grid;gap:6px}
+.notice.success{border-color:var(--good-line);border-left-color:var(--good);background:var(--good-bg)}
+.notice.warn{border-color:var(--warn-line);border-left-color:var(--warn);background:var(--warn-bg)}
+.notice.error,.error{border:1px solid var(--bad-line);border-left:4px solid var(--bad);border-radius:8px;padding:12px 16px;background:var(--bad-bg);color:var(--ink)}
+.notice ul{margin:0;padding-left:1.2em}
+.notice.error a{color:var(--ink)}
+.notice strong{font-weight:600}
+.notice.success strong{color:var(--good)}
+.notice.error strong{color:var(--bad)}
+.notice.warn strong{color:var(--warn)}
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.promises{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.promises li{display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start}
+.promises .icon{width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-top:1px}
+.promises strong{display:block}
+.group-hint{color:var(--muted);font-size:14px;margin-top:-10px}
+.field{display:grid;gap:6px}
+.label-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.badge{font-size:12px;font-weight:600;line-height:1;padding:4px 8px;border-radius:999px}
+.badge.required{color:var(--bad);background:var(--bad-bg)}
+.badge.saved{color:var(--good);background:var(--good-bg)}
+.badge.optional{color:var(--muted);background:var(--bg);border:1px solid var(--line)}
+.field-error{color:var(--bad);font-size:14px;font-weight:600}
+details.card{padding:0}
+details.card>summary{cursor:pointer;padding:16px 20px;font-weight:600;list-style-position:inside;border-radius:12px}
+details.card[open]>summary{border-bottom:1px solid var(--line);border-radius:12px 12px 0 0}
+.details-body{padding:18px 20px 20px;display:grid;gap:18px}
+.details-body .group-hint{margin-top:0}
+form{display:grid;gap:16px}
+.submit{display:grid;gap:10px;margin-top:4px}
+.done-check{width:44px;height:44px;border-radius:50%;background:var(--good-bg);color:var(--good);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700}
+.done-check.warn{background:var(--warn-bg);color:var(--warn)}
+.done{display:grid;gap:14px}
+.done ul{margin:0;padding-left:1.2em}
+@media (max-width:480px){h1{font-size:23px}.card,fieldset{padding:16px}.actions button{flex:1 1 auto}}`;
 
-export function renderSecretsPage(saved, action, message = '') {
+/**
+ * The local page where the user types keys. Secret values are never rendered:
+ * a saved secret shows only as "Saved".
+ *
+ * options.tone      'success' | 'error' | 'info' (default) styles `message`.
+ * options.savedNow  keys saved by the last submission, confirmed at the top by label.
+ * options.errors    validation messages; each appears next to the field it names
+ *                   (by label or key) and in a summary at the top.
+ * options.done      adds a "Done" button that submits the form with action=done.
+ * options.finished  renders the closing confirmation instead of the form.
+ */
+export function renderSecretsPage(saved, action, message = '', options = {}) {
+  const { tone = 'info', savedNow = [], errors = [], done = false, finished = false } = options;
+  const brand = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Colleague <b>AI</b></span></div>';
+  const groupTitles = { Required: 'The basics' };
+  const groupHints = {
+    Required: 'Required for every call and meeting.',
+    'Phone calls (optional)': 'Skip this if you only want Colleague AI in video meetings. For phone calls you need a Twilio account: https://www.twilio.com/try-twilio',
+    'Remote connector (server mode)': 'Only for running Colleague AI on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',
+  };
+  const isSaved = (field) => present(saved[field.key]);
+  const required = (field) => field.group === 'Required';
+  // Escaped text with its https links made clickable; links open in a new tab so this page stays open.
+  const linked = (text) => escapeHtml(text).replace(/https:\/\/[a-z0-9][^\s<]*[^\s<.,;:)”]/gi, (url) =>
+    `<a href="${url}" target="_blank" rel="noopener noreferrer">${url.replace(/^https:\/\//, '')}</a>`);
+  // Validation messages name settings by key; show the field's label and plain words instead.
+  const plain = (text) => {
+    let value = String(text);
+    for (const field of FIELDS) value = value.split(`${field.key} `).join(`${field.label.replace(/ \(optional\)$/, '')} `);
+    return value.replace(/must be an E\.164 number such as \+\d+/g, 'must include the country code and start with +, such as +1 415 555 0142');
+  };
+  const friendly = (text) => plain(text).replace(/^(.)/, (c) => c.toUpperCase()).replace(/([^.])$/, '$1.');
+  const fieldFor = (error) => FIELDS.find((f) => String(error).startsWith(f.label) || String(error).startsWith(`${f.key} `));
+  const fieldErrors = new Map();
+  for (const error of errors) {
+    const field = fieldFor(error);
+    // Nothing typed is kept after an error, so say so next to the field.
+    if (field && !fieldErrors.has(field.key)) fieldErrors.set(field.key, `${friendly(error)} Enter it again.`);
+  }
+  const head = (title) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title><style>
+${PAGE_STYLE}</style></head>`;
+
+  if (finished) {
+    const savedLabels = FIELDS.filter(isSaved).map((f) => `<li>${escapeHtml(f.label)}</li>`).join('');
+    const missing = FIELDS.filter((f) => required(f) && !isSaved(f)).map((f) => f.label);
+    return `${head('Colleague AI setup: done')}
+<body><main>${brand}
+<section class="card done" aria-labelledby="done-title">
+<div class="done-check${missing.length ? ' warn' : ''}" aria-hidden="true">${missing.length ? '!' : '✓'}</div>
+<h1 id="done-title">${missing.length ? `Saved. ${missing.length === 1 ? 'One thing is' : 'A few things are'} still missing.` : 'All set'}</h1>
+<p class="lead">You can close this tab and go back to your agent. It continues setup from here, and it learns which fields you filled in, never what you typed.</p>
+${savedLabels ? `<h2>Saved on this computer</h2><ul>${savedLabels}</ul>` : '<p>Nothing new was saved.</p>'}
+${missing.length ? `<div class="notice warn"><strong>Still needed: ${escapeHtml(missing.join(', '))}</strong><span>Your agent will ask you about ${missing.length === 1 ? 'it' : 'them'}.</span></div>` : ''}
+<p class="hint">This page has stopped working, so no one else can use it. To change a key later, ask your agent to open the setup page again.</p>
+</section></main></body></html>`;
+  }
+
+  const fieldHtml = (field) => {
+    const id = field.key;
+    const error = fieldErrors.get(field.key);
+    const placeholder = isSaved(field) ? (field.secret ? 'Saved. Leave empty to keep it.' : `Saved: ${saved[field.key]}`) : '';
+    const badge = isSaved(field) ? '<span class="badge saved">✓ Saved</span>'
+      : required(field) ? '<span class="badge required">Required</span>' : '';
+    const describedBy = [error ? `${id}-error` : '', field.hint ? `${id}-hint` : ''].filter(Boolean).join(' ');
+    const phone = /PHONE|NUMBER|CALLER_ID/.test(field.key);
+    const type = field.secret ? 'password' : phone ? 'tel' : 'text';
+    return `<div class="field">
+<div class="label-row"><label for="${id}">${escapeHtml(field.label)}</label>${badge}</div>
+<input id="${id}" name="${field.key}" type="${type}" autocomplete="off" spellcheck="false" autocapitalize="off"${phone ? ' inputmode="tel"' : ''} placeholder="${escapeHtml(placeholder)}"${describedBy ? ` aria-describedby="${describedBy}"` : ''}${required(field) && !isSaved(field) ? ' aria-required="true"' : ''}${error ? ' aria-invalid="true"' : ''}>
+${error ? `<p class="field-error" id="${id}-error">${escapeHtml(error)}</p>` : ''}
+${field.hint ? `<p class="hint" id="${id}-hint">${linked(field.hint)}</p>` : ''}
+</div>`;
+  };
   const groups = [...new Set(FIELDS.map((f) => f.group))];
   const sections = groups.map((group) => {
-    const rows = FIELDS.filter((f) => f.group === group).map((f) => {
-      const isSaved = present(saved[f.key]);
-      const placeholder = isSaved ? (f.secret ? 'Saved. Leave empty to keep it.' : `Saved: ${saved[f.key]}`) : '';
-      return `<label><span>${escapeHtml(f.label)}</span>
-<input name="${f.key}" type="${f.secret ? 'password' : 'text'}" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(placeholder)}">
-${f.hint ? `<small>${escapeHtml(f.hint)}</small>` : ''}</label>`;
-    }).join('\n');
-    return `<fieldset><legend>${escapeHtml(group)}</legend>${rows}</fieldset>`;
+    const fields = FIELDS.filter((f) => f.group === group);
+    const rows = fields.map(fieldHtml).join('\n');
+    const hint = groupHints[group] ? `<p class="group-hint">${linked(groupHints[group])}</p>` : '';
+    // Server-mode settings stay folded away unless they are in use.
+    if (/\(server mode\)$/.test(group)) {
+      const open = fields.some((f) => isSaved(f) || fieldErrors.has(f.key)) ? ' open' : '';
+      return `<details class="card"${open}><summary>${escapeHtml(group)}</summary><div class="details-body">${hint}${rows}</div></details>`;
+    }
+    return `<fieldset><legend>${escapeHtml(groupTitles[group] || group)}</legend>${hint}${rows}</fieldset>`;
   }).join('\n');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Colleague AI setup</title><style>
-${PAGE_STYLE}</style></head>
-<body><main><h1>Colleague AI setup</h1>
-<p>Keys stay on this computer, in the project's ignored <code>.env</code> file. Your agent never sees them.</p>
-${message ? `<p class="note">${escapeHtml(message)}</p>` : ''}
-<form method="post" action="${escapeHtml(action)}">${sections}<button type="submit">Save</button></form></main></body></html>`;
+
+  const errorItems = errors.map((error) => {
+    const field = fieldFor(error);
+    const text = escapeHtml(friendly(error));
+    return `<li>${field ? `<a href="#${field.key}">${text}</a>` : text}</li>`;
+  }).join('');
+  const list = (items) => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`);
+  const savedLabels = savedNow.map((key) => FIELDS.find((f) => f.key === key)?.label).filter(Boolean);
+  const notices = [];
+  if (savedLabels.length) {
+    const next = errors.length ? ' Fix the fields marked below, then save again.' : done ? ' Add more, or press Done when you are finished.' : '';
+    notices.push(`<div class="notice success" role="status"><strong>Saved on this computer</strong><span>${escapeHtml(list(savedLabels))}.${next}</span></div>`);
+  }
+  if (errors.length) {
+    notices.push(`<div class="notice error" role="alert"><strong>${errors.length === 1 ? 'One field needs a fix' : `${errors.length} fields need a fix`}</strong>${message ? `<span>${escapeHtml(plain(message))}</span>` : ''}<ul>${errorItems}</ul></div>`);
+  } else if (message) {
+    const title = { success: 'Saved', error: 'Something went wrong' }[tone];
+    notices.push(`<div class="notice ${escapeHtml(tone)}" role="${tone === 'error' ? 'alert' : 'status'}">${title ? `<strong>${title}</strong>` : ''}<span>${escapeHtml(plain(message))}</span></div>`);
+  }
+  const notice = notices.join('\n');
+  // Once something is saved, finishing becomes the obvious next step.
+  const doneFirst = done && savedLabels.length > 0 && !errors.length;
+  const saveButton = `<button type="submit" name="action" value="save"${doneFirst ? ' class="secondary"' : ''}>Save</button>`;
+  const doneButton = done ? `<button type="submit" name="action" value="done"${doneFirst ? '' : ' class="secondary"'}>Done, return to your agent</button>` : '';
+  const submitHint = done
+    ? 'Save as often as you like. Done saves anything you typed, closes this page, and lets your agent continue.'
+    : 'Fill in what you have, then press Save. Your agent continues setup from there.';
+  return `${head('Colleague AI setup')}
+<body><main>${brand}
+<header><h1>Colleague AI setup</h1></header>
+<p class="lead">Type your keys here, not in the chat with your agent.</p>
+<ul class="promises">
+<li><span class="icon" aria-hidden="true">✓</span><span><strong>Saved only on this computer</strong><span class="muted">In the project’s private <code>.env</code> file, readable only by your user account.</span></span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span><strong>Your agent never sees them</strong><span class="muted">It only learns which fields you filled in.</span></span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span><strong>Private to this computer</strong><span class="muted">Only this computer can open this page, and it stops working when setup is done.</span></span></li>
+</ul>
+${notice}
+<form method="post" action="${escapeHtml(action)}" autocomplete="off" novalidate>
+${sections}
+<div class="submit"><div class="actions">${saveButton}${doneButton}</div><p class="hint">${submitHint}</p></div>
+</form></main></body></html>`;
 }
 
 function readBody(request, limit = 16 * 1024) {
@@ -410,11 +578,24 @@ export function sanitizeSubmission(form) {
   return { updates, errors };
 }
 
-/** Serve the one-time secrets page until it is submitted; resolves with the saved key names. */
-export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUrl } = {}) {
+/**
+ * Serve the one-time secrets page until the user presses Done. Each Save writes
+ * what was typed and keeps the page open; onSaved(keys) runs after each save.
+ * Resolves with every key saved during the session. On timeout it resolves with
+ * timedOut: true if anything was saved, and rejects otherwise.
+ */
+export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUrl, onSaved } = {}) {
   const token = crypto.randomBytes(18).toString('base64url');
   const pathName = `/setup/${token}`;
+  const savedKeys = [];
+  let closed = false;
   return new Promise((resolve, reject) => {
+    const finish = () => {
+      closed = true;
+      clearTimeout(timer);
+      server.close();
+      server.closeIdleConnections?.();
+    };
     const server = http.createServer(async (request, response) => {
       const url = new URL(request.url, 'http://127.0.0.1');
       const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' };
@@ -422,8 +603,12 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUr
         response.writeHead(404, headers).end('Not found');
         return;
       }
+      if (closed) {
+        response.writeHead(410, headers).end('This setup page is closed. Ask your agent to open it again.');
+        return;
+      }
       if (request.method === 'GET') {
-        response.writeHead(200, headers).end(renderSecretsPage(readEnv(root), pathName));
+        response.writeHead(200, headers).end(renderSecretsPage(readEnv(root), pathName, '', { done: true }));
         return;
       }
       if (request.method !== 'POST') {
@@ -433,21 +618,32 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUr
       try {
         const form = new URLSearchParams(await readBody(request));
         const { updates, errors } = sanitizeSubmission(form);
+        // Valid fields are saved even when another field needs a fix, so nothing typed correctly is lost.
+        const saved = Object.keys(updates).length ? writeEnv(root, updates) : [];
+        for (const key of saved) if (!savedKeys.includes(key)) savedKeys.push(key);
+        if (saved.length) onSaved?.(saved);
+        const env = readEnv(root);
         if (errors.length) {
-          response.writeHead(422, headers).end(renderSecretsPage(readEnv(root), pathName, errors.join(' ')));
+          response.writeHead(422, headers).end(renderSecretsPage(env, pathName, '', { savedNow: saved, errors, done: true }));
           return;
         }
-        const saved = Object.keys(updates).length ? writeEnv(root, updates) : [];
-        response.writeHead(200, headers).end(renderSecretsPage(readEnv(root), pathName,
-          saved.length ? 'Saved. You can close this page and return to your agent.' : 'Nothing changed.'));
-        clearTimeout(timer);
-        server.close();
-        resolve({ saved });
+        if (form.get('action') === 'done') {
+          response.writeHead(200, headers).end(renderSecretsPage(env, pathName, '', { finished: true }));
+          finish();
+          resolve({ saved: [...savedKeys] });
+          return;
+        }
+        const message = saved.length ? '' : 'Nothing new to save. Type a value first, or press Done when you are finished.';
+        response.writeHead(200, headers).end(renderSecretsPage(env, pathName, message, { savedNow: saved, done: true }));
       } catch (error) {
         response.writeHead(400, headers).end('Bad request');
       }
     });
-    const timer = setTimeout(() => { server.close(); reject(new Error('setup page timed out without a submission')); }, timeoutMs);
+    const timer = setTimeout(() => {
+      finish();
+      if (savedKeys.length) resolve({ saved: [...savedKeys], timedOut: true });
+      else reject(new Error('setup page timed out without a submission'));
+    }, timeoutMs);
     server.on('error', reject);
     server.listen(port, '127.0.0.1', () => {
       const address = server.address();

@@ -73,20 +73,82 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
 
   const root = await tempRoot(t);
   let pageUrl;
-  const done = serveSecretsPage({ root, onUrl(url) { pageUrl = url; } });
+  const savedEvents = [];
+  const done = serveSecretsPage({ root, onUrl(url) { pageUrl = url; }, onSaved(keys) { savedEvents.push(keys); } });
   while (!pageUrl) await new Promise((resolve) => setTimeout(resolve, 10));
   const wrong = await fetch(new URL('/setup/guess', pageUrl));
   assert.equal(wrong.status, 404);
   const page = await fetch(pageUrl);
-  assert.match(await page.text(), /Colleague AI setup/);
-  const saved = await fetch(pageUrl, {
+  const first = await page.text();
+  assert.match(first, /Colleague AI setup/);
+  assert.match(first, /name="action" value="done"/);
+
+  // Each save keeps the page open for more.
+  const saved = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-live', COLLEAGUE_OWNER_NAME: 'Robin' });
+  assert.equal(saved.status, 200);
+  const afterSave = await saved.text();
+  assert.match(afterSave, /Saved on this computer/);
+  assert.match(afterSave, /OpenAI API key and Your name/);
+  assert.ok(!afterSave.includes('sk-live'));
+  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-live');
+
+  // A field that needs a fix does not throw away the valid ones next to it.
+  const partial = await postForm(pageUrl, { TWILIO_ACCOUNT_SID: 'AC-secret-sid', COLLEAGUE_OWNER_PHONE: 'nope' });
+  assert.equal(partial.status, 422);
+  const partialHtml = await partial.text();
+  assert.match(partialHtml, /aria-invalid="true"/);
+  assert.match(partialHtml, /Your phone number must include the country code/);
+  assert.ok(!partialHtml.includes('AC-secret-sid'));
+  assert.equal(readEnv(root).TWILIO_ACCOUNT_SID, 'AC-secret-sid');
+
+  // Done saves what was typed, shows the closing page, and reports every key once.
+  const finished = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', COLLEAGUE_OWNER_PHONE: '+14155550142', action: 'done' });
+  assert.equal(finished.status, 200);
+  assert.match(await finished.text(), /All set/);
+  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'COLLEAGUE_OWNER_PHONE'] });
+  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_PHONE']]);
+  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-newer');
+  const closed = await fetch(pageUrl).then((response) => response.status, () => 'closed');
+  assert.ok([410, 'closed'].includes(closed), String(closed));
+});
+
+function postForm(url, fields) {
+  return fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ OPENAI_API_KEY: 'sk-live', COLLEAGUE_OWNER_NAME: 'Robin' }).toString(),
+    body: new URLSearchParams(fields).toString(),
   });
-  assert.equal(saved.status, 200);
-  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME'] });
-  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-live');
+}
+
+async function servedUrl(options) {
+  let pageUrl;
+  const done = serveSecretsPage({ ...options, onUrl(url) { pageUrl = url; } });
+  while (!pageUrl) await new Promise((resolve) => setTimeout(resolve, 10));
+  return { done, pageUrl };
+}
+
+test('the secrets page times out: with saves it resolves, without it rejects', async (t) => {
+  const idle = await servedUrl({ root: await tempRoot(t), timeoutMs: 200 });
+  await assert.rejects(idle.done, /timed out/);
+
+  const root = await tempRoot(t);
+  const used = await servedUrl({ root, timeoutMs: 600 });
+  assert.equal((await postForm(used.pageUrl, { COLLEAGUE_OWNER_NAME: 'Robin' })).status, 200);
+  assert.deepEqual(await used.done, { saved: ['COLLEAGUE_OWNER_NAME'], timedOut: true });
+});
+
+test('the secrets page explains saved fields, errors, and the finish without echoing values', () => {
+  const saved = { OPENAI_API_KEY: 'sk-secret-value', TWILIO_AUTH_TOKEN: 'token-secret' };
+  const errors = ['COLLEAGUE_OWNER_PHONE must be an E.164 number such as +14155550142'];
+  const html = renderSecretsPage(saved, '/setup/x', '', { savedNow: ['OPENAI_API_KEY'], errors, done: true });
+  assert.ok(!html.includes('sk-secret-value') && !html.includes('token-secret'));
+  assert.match(html, /<input id="COLLEAGUE_OWNER_PHONE"[^>]*aria-invalid="true"/);
+  assert.match(html, /<a href="#COLLEAGUE_OWNER_PHONE">/);
+  assert.match(html, /Show my own number/);
+  const finished = renderSecretsPage(saved, '/setup/x', '', { finished: true });
+  assert.match(finished, /still missing/);
+  assert.match(finished, /Your name/);
+  assert.ok(!finished.includes('<form'));
 });
 
 function fakeRunner(outcomes = {}) {
