@@ -18,8 +18,16 @@ if [[ -n "${COLLEAGUE_PYTHON:-}" ]]; then
     exit 1
   fi
 else
+  # A venv made without python3-venv installed has python but no pip; start over.
+  if [[ -x "$VENV/bin/python" ]] && ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$VENV"
+  fi
   if [[ ! -x "$VENV/bin/python" ]]; then
-    python3 -m venv "$VENV"
+    if ! python3 -m venv "$VENV"; then
+      rm -rf "$VENV"
+      echo 'Could not create a Python virtual environment. On Ubuntu run: sudo apt install -y python3-venv' >&2
+      exit 1
+    fi
   fi
   PYTHON="$VENV/bin/python"
   if ! has_aiohttp "$PYTHON"; then

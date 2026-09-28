@@ -272,7 +272,8 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   }));
   checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(root, 'node_modules', 'mammoth')), { fix: 'npm install' }));
   // The daemon creates a Python virtual environment on first start; Ubuntu ships without venv.
-  const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(root, '.venv', 'bin', 'python'));
+  // A venv made without python3-venv has python but no pip, so look for pip.
+  const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(root, '.venv', 'bin', 'pip'));
   const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
   const pythonDetail = venvReady ? 'environment ready'
     : python.status === 0 ? 'the first start creates the environment'
