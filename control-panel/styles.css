@@ -14,6 +14,10 @@ button:disabled { cursor:not-allowed; opacity:.45}
 .brand-mark { width:26px; height:26px; background:#30323b; border-radius:7px; display:flex; align-items:center; justify-content:center; gap:3px}
 .brand-mark i { display:block; width:3px; height:12px; border-radius:2px; background:#fff}
 .brand-mark i:nth-child(2) { height:18px}
+.topnav { display:flex; gap:4px; margin:0 auto 0 24px}
+.topnav a { display:inline-flex; align-items:center; min-height:36px; padding:0 12px; border-radius:6px; color:var(--muted); text-decoration:none; font-size:13px; font-weight:500}
+.topnav a:hover { color:var(--ink); background:var(--soft)}
+.topnav a[aria-current=page] { color:var(--ink); background:#eeeef5}
 .connection { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted)}
 .connection span:first-child { height:6px; width:6px; border-radius:50%; background:#92949e}
 .connection.live span:first-child { background:var(--ok)}
@@ -158,6 +162,9 @@ footer { max-width:1280px; margin:auto; padding:0 40px 24px; display:flex; justi
 .tool-grid { grid-template-columns:1fr}
 .tool-card { min-height:54px; align-items:center}
 .tool-card span:last-child { display:flex; flex-wrap:wrap; gap:8px}
+}
+@media(max-width:480px) { .brand>span:last-child { display:none}
+.topnav { margin-left:12px}
 }
 @media(max-width:720px) { .topbar { padding:0 18px; height:60px}
 .connection { font-size:11px}

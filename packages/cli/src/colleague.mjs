@@ -112,9 +112,21 @@ function parseArgs(argv) {
   return args;
 }
 
+// A next step for errors a person can act on; agents read the exit code.
+function hintFor(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error?.code === 'daemon_unavailable') return 'Colleague AI\'s background service did not answer. Check the setup with: colleague setup status';
+  if (error?.code === 'not_configured') return 'See what is missing with: colleague setup status';
+  if (error?.code === 'not_found' && /call/i.test(message)) return 'List recent calls with: colleague calls list';
+  if (/^unknown (command|\w+ command)/.test(message)) return 'See all commands with: colleague help';
+  return '';
+}
+
 function fail(error, code) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
+  const hint = hintFor(error);
+  const prefix = error instanceof InterruptError ? '' : 'Error: ';
+  process.stderr.write(`${prefix}${message}\n${hint ? `Hint: ${hint}\n` : ''}`);
   process.exit(code);
 }
 
@@ -366,18 +378,61 @@ function explainValidation(error) {
 }
 
 const TERMINAL = new Set(['completed', 'failed', 'canceled']);
+const OUTCOME_TEXT = {
+  achieved: 'Achieved', partial: 'Partly achieved', not_reached: 'Not reached', voicemail: 'Left a voicemail',
+  declined: 'Declined', failed: 'Failed', canceled: 'Canceled',
+};
+const END_REASON_TEXT = {
+  hangup: 'ended normally', remote_hangup: 'they hung up', no_answer: 'no answer', busy: 'the line was busy',
+  voicemail: 'left a voicemail', max_duration: 'time limit reached', canceled: 'canceled', meeting_ended: 'the meeting ended',
+  transferred: 'handed to you', error: 'something went wrong',
+};
+
+function formatPhone(value) {
+  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(String(value || ''));
+  return match ? `+1 ${match[1]} ${match[2]} ${match[3]}` : String(value || '');
+}
+
+function stamp(line) {
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return `${time}  ${line}`;
+}
+
+// One plain line per status change, for a person reading over the agent's shoulder.
+function describeCallStatus(call) {
+  const meeting = call.channel === 'meeting';
+  const reason = END_REASON_TEXT[call.endReason] || (call.endReason ? String(call.endReason).replace(/_/g, ' ') : '');
+  switch (call.status) {
+    case 'queued': return meeting ? 'Queued. Joining the meeting shortly.' : 'Queued. Dialing shortly.';
+    case 'connecting': return meeting ? 'Joining the meeting…' : 'Dialing…';
+    case 'ringing': return 'Ringing…';
+    case 'waiting': return 'Waiting to be let into the meeting…';
+    case 'in_progress': return meeting ? 'In the meeting. Colleague AI is listening.' : 'Connected. Colleague AI is talking with them.';
+    case 'summarizing': return `Call ended${reason ? ` (${reason})` : ''}. Writing the result…`;
+    case 'completed': return `Done${reason ? ` (${reason})` : ''}.`;
+    case 'failed': return `The call failed${call.error ? `: ${call.error}` : reason ? ` (${reason}).` : '.'}`;
+    case 'canceled': return 'Canceled.';
+    default: return `Status: ${call.status}`;
+  }
+}
 
 async function waitUntilDone(client, callId) {
   let last = '';
   for (;;) {
-    if (interruptState.requested) throw new InterruptError('interrupted; the call keeps running');
+    if (interruptState.requested) {
+      throw new InterruptError(`Stopped following call ${callId}. The call keeps going; check it with: colleague calls get --call-id ${callId}`);
+    }
     // Short long-polls keep Ctrl-C responsive; the request cannot be aborted mid-wait.
     const call = await client.waitForCall(callId, 10);
     if (call.status !== last) {
-      progress(`call ${call.status}${call.endReason ? ` (${call.endReason})` : ''}`);
+      progress(stamp(describeCallStatus(call)));
       last = call.status;
     }
-    if (TERMINAL.has(call.status)) return call;
+    if (TERMINAL.has(call.status)) {
+      const result = call.result;
+      if (result?.outcome) progress(`Result: ${OUTCOME_TEXT[result.outcome] || result.outcome}.${result.summary ? ` ${result.summary}` : ''}`);
+      return call;
+    }
   }
 }
 
@@ -391,7 +446,13 @@ async function callCommand(args) {
       return report.ok ? EXIT.ok : EXIT.startup;
     }
     const call = await client.startCall(brief);
-    progress(`call ${call.id} queued`);
+    const target = call.brief || brief;
+    progress(target.channel === 'meeting'
+      ? `Joining the meeting (call ${call.id}).`
+      : `Calling ${formatPhone(target.to)} (call ${call.id}).`);
+    progress(args.wait
+      ? 'Following the call until it ends. Ctrl-C stops following; the call keeps going.'
+      : `Follow it with: colleague calls wait --call-id ${call.id}`);
     if (!args.wait) {
       printJson(call);
       return EXIT.ok;
@@ -432,13 +493,48 @@ async function callsCommand(args) {
   return EXIT.ok;
 }
 
-function printStatus(report) {
-  for (const item of report.checks) {
-    const mark = item.ok === true ? 'PASS' : item.required ? 'FAIL' : 'WARN';
-    process.stdout.write(`${mark}  ${item.label}${item.detail ? ` — ${item.detail}` : ''}\n`);
-    if (item.ok !== true && item.fix) process.stdout.write(`      fix: ${item.fix}\n`);
+const STATUS_GROUPS = [
+  ['core', 'The basics'],
+  ['phone', 'Phone calls (optional)'],
+  ['meetings', 'Meetings (optional)'],
+  ['agents', 'Your agents'],
+];
+
+// Human-readable setup status, grouped, with one mark per check and the fix under
+// anything that is not done. Colors only on a terminal, and never with NO_COLOR.
+function printStatus(report, { stream = process.stdout } = {}) {
+  const color = Boolean(stream.isTTY) && !process.env.NO_COLOR;
+  const paint = (code, text) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);
+  const marks = {
+    ok: paint('32', '✓'), missing: paint('31', '✗'), optional: paint('33', '○'), unknown: paint('33', '?'),
+  };
+  const lines = [paint('1', 'Colleague AI setup'), ''];
+  const known = new Set(STATUS_GROUPS.map(([id]) => id));
+  const groups = [...STATUS_GROUPS, ...[...new Set(report.checks.map((c) => c.group))]
+    .filter((id) => !known.has(id)).map((id) => [id, id[0].toUpperCase() + id.slice(1)])];
+  for (const [id, title] of groups) {
+    const checks = report.checks.filter((c) => (c.group || 'core') === id);
+    if (!checks.length) continue;
+    lines.push(paint('1', title));
+    for (const item of checks) {
+      const mark = item.ok === true ? marks.ok : item.ok === null ? marks.unknown : item.required ? marks.missing : marks.optional;
+      lines.push(`  ${mark} ${item.label}${item.detail ? paint('2', ` — ${item.detail}`) : ''}`);
+      if (item.ok !== true && item.fix) lines.push(`      Fix: ${item.fix}`);
+    }
+    lines.push('');
   }
-  process.stdout.write(`\nready: ${report.ready}  phone: ${report.phoneReady}  meetings: ${report.meetingsReady}\n`);
+  const blocking = report.checks.filter((c) => c.required && c.ok !== true).length;
+  lines.push(report.ready
+    ? paint('32', 'Ready. Your agent can use Colleague AI.')
+    : paint('31', `Not ready yet: ${blocking} required ${blocking === 1 ? 'item needs' : 'items need'} a fix (marked ✗).`));
+  const phone = report.checks.filter((c) => c.group === 'phone');
+  const phoneText = report.phoneReady ? 'ready' : phone.some((c) => c.ok === true && c.id !== 'public_url') ? 'not finished' : 'not set up';
+  const docker = report.checks.find((c) => c.id === 'docker');
+  const meetingsText = report.meetingsReady ? 'ready' : docker && docker.ok !== true ? 'need Docker' : 'ready once the basics are done';
+  lines.push(`Phone calls: ${phoneText}. Meetings: ${meetingsText}.`);
+  const next = (report.next || []).find((item) => item.fix);
+  if (next) lines.push(`Next: ${next.fix}`);
+  stream.write(`${lines.join('\n')}\n`);
 }
 
 function portOpen(port, host = '127.0.0.1') {

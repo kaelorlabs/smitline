@@ -25,7 +25,7 @@ bash start-control-panel.sh
 
 ## Follow calls
 
-`http://127.0.0.1:8095/calls` lists recent phone calls and meetings started through the call API. Choosing one shows its status, the live transcript as it happens, and the result when it ends. While a phone call is connected, **Join the call** hands it to `COLLEAGUE_OWNER_PHONE` (press twice to confirm) and **End call** asks the assistant to wrap up. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request.
+`http://127.0.0.1:8095/calls` (**Calls** in the console's top bar) lists recent phone calls and meetings started through the call API. Choosing one shows its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Colleague AI leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
 Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open while operating the meeting agent.
 
