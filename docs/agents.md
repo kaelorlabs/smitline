@@ -27,7 +27,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 | `transfer_call_to_me` | Hand a connected phone call to `COLLEAGUE_OWNER_PHONE`. |
 | `list_voices` | GPT-Live voices. |
 
-`colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed. For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`. Codex users who want exact coding-thread continuity in meetings should also run `scripts/install-codex-integration.sh`.
+`colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` and `join-colleague-ai-meeting` skills into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`. Codex users who want exact coding-thread continuity in meetings should also run `scripts/install-codex-integration.sh`.
 
 The skill in `.agents/skills/call-with-colleague-ai` teaches agents to write a complete brief, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
 
@@ -44,7 +44,7 @@ colleague calls transfer --call-id call-0123456789abcdef
 colleague voices
 ```
 
-`--on-behalf-of` defaults to `COLLEAGUE_OWNER_NAME`. Lists (`--agree`, `--never-share`) are separated by semicolons. With `--wait`, progress goes to stderr and the finished call to stdout as JSON. Exit codes: 0 completed, 2 invalid or incomplete brief (the missing questions are printed), 3 not configured, 4 failed.
+`--on-behalf-of` defaults to `COLLEAGUE_OWNER_NAME`. Lists (`--agree`, `--never-share`) are separated by semicolons. With `--wait`, progress goes to stderr and the finished call to stdout as JSON. Exit codes: 0 the call completed (read `result.outcome` for how it went, including `not_reached` or `voicemail`), 2 invalid or incomplete brief (the missing questions are printed), 3 not configured or the daemon could not start (`--check` also exits 3 when the brief cannot be placed yet), 4 the call failed or was canceled, 130 interrupted. Without `--wait` the command exits 0 as soon as the call is queued and prints its id.
 
 ## REST API and SDKs
 

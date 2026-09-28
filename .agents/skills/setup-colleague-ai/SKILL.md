@@ -1,17 +1,17 @@
 ---
 name: setup-colleague-ai
-description: Set up Colleague AI for the user so their agent can place phone calls and join Zoom, Teams, or Google Meet. Drives `colleague setup status --json`, the local key page, caller ID, agent registration, and the first test call. Use when the user asks to install, configure, or fix Colleague AI.
+description: Set up Colleague AI for the user so their agent can place phone calls and join Zoom, Teams, or Google Meet. Drives `colleague setup status --json`, the local setup page, caller ID, the first test call, and agent registration. Use when the user asks to install, configure, or fix Colleague AI.
 ---
 
 # Set up Colleague AI
 
 Follow [SETUP.md](../../../SETUP.md) in the repository root. It is the canonical, step-by-step setup for agents. In short:
 
-1. Clone inside the Linux or macOS home directory (WSL2 on Windows), run `npm install`, and link `packages/cli/src/colleague.mjs` as `colleague`.
-2. Run `colleague setup status --json` and work through `next` in order: ask each `ask` question, run each `fix`.
-3. Keys go only on the page from `colleague setup secrets`. Never ask for keys in the chat.
-4. Set the user's name with `colleague setup set COLLEAGUE_OWNER_NAME "<name>"`. For phone calls, set the caller ID and the user's phone.
-5. Run `colleague setup register` so the agent gets the call tools, then `colleague setup call-me --wait` for the first call.
+1. Check prerequisites (Node 22, Python with venv, Docker for meetings, cloudflared for phone calls). Clone inside the Linux or macOS home directory (WSL2 on Windows), run `npm install`, and link `packages/cli/src/colleague.mjs` as `colleague`. An agent running on Windows runs each command with `wsl.exe -d Ubuntu --exec bash -lc '...'`.
+2. Run `colleague setup status --json` and work through `next` in order: apply each `suggest` without asking, ask each `ask` question, run each `fix`.
+3. Run `colleague setup secrets`. It opens a local page and returns at once. The user enters keys, their name, and phone details there, presses Done, and tells you. Never ask for keys in the chat.
+4. Run `colleague setup start`, then `colleague setup call-me --wait` for the first call when `firstCallReady` is true. Offer `colleague setup voice --preview <name>` to try another voice.
+5. Run `colleague setup register` last, then tell the user to restart the agent app.
 
 ## Invariants
 

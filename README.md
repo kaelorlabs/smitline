@@ -28,7 +28,7 @@ The current product has been exercised in live Zoom calls. Teams and Google Meet
 
 | Capability | Experience |
 | --- | --- |
-| **Make phone calls** | Your agent sends a brief; Colleague AI calls through Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, listen in, or take over. |
+| **Make phone calls** | Your agent sends a brief; Colleague AI calls through Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
 | **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API. |
 | **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone. |
 | **Bring a coding agent in** | Codex is the default. Cursor and Claude Code are optional adapters that only use flags documented by their CLIs. |
@@ -86,7 +86,7 @@ Copy this prompt into your coding agent (Claude Code, Codex, Cursor, OpenClaw, H
 Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-The agent follows [SETUP.md](SETUP.md). It asks for your name and whether you want phone calls, opens a page on your computer where you type your keys, connects itself to Colleague AI, and ends by ringing your phone. Keys stay in the ignored `.env` file and never pass through the agent.
+The agent follows [SETUP.md](SETUP.md). It checks your computer, opens a page in your browser where you enter your keys, your name, and (for phone calls) your Twilio details and phone number, rings your phone so you hear Colleague AI, and then connects itself. You change the voice any time by asking your agent. Keys stay in the ignored `.env` file and never pass through the agent.
 
 Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
 
@@ -183,7 +183,7 @@ Old Zoom-specific paths (`compose.zoom.yaml`, `.env.zoom`, `start-zoom-agent.sh`
 | **Portal** | `./start-control-panel.sh` — operator UI; context continuity only |
 | **TypeScript SDK** | `@colleague-ai/sdk` — host integrations; not published to npm |
 | **Python SDK** | `colleague-ai` — same contract; not published to PyPI |
-| **CLI** | `packages/cli` — `colleague join\|status\|cancel\|handoff\|approvals\|artifacts\|…` |
+| **CLI** | `packages/cli` — `colleague call\|calls\|voices\|setup` for calls and setup; `colleague join\|status\|cancel\|handoff\|approvals\|artifacts\|…` for meetings |
 | **MCP** | `packages/mcp` — stdio adapter over the TypeScript SDK; stdout is JSON-RPC only |
 | **Remote connector** | `./start-connector.sh` — MCP over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls; call tools only, and the daemon stays on loopback. See [agents](docs/agents.md). |
 

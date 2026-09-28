@@ -9,73 +9,105 @@ Agent: follow the steps below. Run the commands yourself, say in one short line 
 ## Rules
 
 - **Never ask for keys in the chat.** Keys go on the local setup page, which writes them to the ignored `.env` file. If the user pastes a key into the chat anyway, do not repeat it or write it anywhere; point them to the page.
-- **Ask, don't guess.** Every missing item comes with the exact question to ask.
-- **Keep it short.** Four questions at most for a working setup: OpenAI key, the user's name, and, for phone calls, Twilio details and the user's phone number.
+- **Let the page do the asking.** The page collects the OpenAI key, the user's name, and, for phone calls, the Twilio details and the user's phone number. A typical setup needs at most two questions in the chat.
+- **Don't ask what the status already answers.** When a step has a `suggest`, apply it with `colleague setup set KEY VALUE` and tell the user what you chose.
+- **Make the first call before asking for a restart.** Restarting the agent app ends this conversation, so the test call comes first.
 
-## 1. Get the code onto a supported system
+## 1. Prerequisites
 
-Colleague AI runs on macOS and Linux. On Windows it runs inside WSL2.
+Colleague AI runs on macOS and Linux. On Windows it runs inside WSL2 (Ubuntu).
 
-- **Windows without WSL:** ask the user to run `wsl --install -d Ubuntu` in an administrator PowerShell and restart. Continue inside Ubuntu.
-- Clone inside the Linux or macOS home directory, not under `/mnt/c` or `/mnt/d`:
+| Needed for | What | Check |
+|---|---|---|
+| Everything | Node.js 22 or newer | `node --version` |
+| Everything | Python 3.10 or newer with `venv` | `python3 -c "import venv, ensurepip"` |
+| Meetings | Docker (Docker Engine in WSL, or Docker Desktop) | `docker info` |
+| Phone calls | A way for Twilio to reach this computer: `cloudflared` (recommended), Docker, or a server with `COLLEAGUE_PUBLIC_URL` | `cloudflared --version` |
+
+On Ubuntu, Python's `venv` is a separate package. If it is missing, ask the user to run this once, because it needs their password:
+
+```bash
+sudo apt install -y python3 python3-venv
+```
+
+`cloudflared` starts the phone tunnel in a couple of seconds; without it the tunnel runs from a Docker image, which is slower the first time. If the user wants phone calls, install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/.
+
+### When your agent runs on Windows
+
+If you (the agent) run on Windows rather than inside WSL, run every command in this file inside Ubuntu:
+
+```bash
+wsl.exe -d Ubuntu --exec bash -lc 'cd ~/colleague-ai && colleague setup status --json'
+```
+
+Use `--exec` and single quotes around the whole Linux command, so Windows and the Linux login shell do not expand `$VARIABLES` or strip quotes before the command runs. For a value with spaces, put double quotes inside the single quotes: `'colleague setup set COLLEAGUE_OWNER_NAME "Sam Rivera"'`.
+
+If WSL is not installed, ask the user to run `wsl --install -d Ubuntu` in an administrator PowerShell and restart, then continue.
+
+## 2. Get the code
+
+Clone inside the Linux or macOS home directory, not under `/mnt/c` or `/mnt/d`:
 
 ```bash
 git clone https://github.com/kaelorlabs/colleague-ai.git ~/colleague-ai
 cd ~/colleague-ai
 npm install
-```
-
-Link the `colleague` command once:
-
-```bash
 mkdir -p ~/.local/bin && ln -sf ~/colleague-ai/packages/cli/src/colleague.mjs ~/.local/bin/colleague
 ```
 
 If `~/.local/bin` is not on `PATH`, write `node ~/colleague-ai/packages/cli/src/colleague.mjs` wherever the steps below say `colleague`.
 
-## 2. Check what is missing
+## 3. Check what is missing
 
 ```bash
 colleague setup status --json
 ```
 
-The result has `ready`, `phoneReady`, `meetingsReady`, and a `next` list. Work through `next` in order: ask the `ask` question if there is one, then run the `fix` command. Run the status command again after each change.
+The result has:
 
-## 3. Keys: the local setup page
+- `ready`: keys and name are in place.
+- `phoneReady`, `meetingsReady`: each channel can be used.
+- `firstCallReady`: the test call to the user's phone can be made.
+- `next`: steps to do now, in order. Each has a `fix` command, an `ask` question when the user must decide something, and sometimes a `suggest` to apply without asking.
+- `optional`: steps that only matter if the user wants that channel.
+
+Run it again after each change.
+
+## 4. The setup page
 
 ```bash
 colleague setup secrets
 ```
 
-This prints a one-time address on `127.0.0.1` and tries to open it in the browser. Tell the user: "I opened a setup page on your computer. Enter your OpenAI API key there, plus your Twilio details if you want phone calls. It saves to this computer only." The command finishes when they press Save and prints which fields were saved, never the values.
+This starts a page on `127.0.0.1`, opens it in the browser, and returns at once with the address. Tell the user:
 
-GPT-Live needs an OpenAI account with billing on a paid API tier. If the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
+> I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also fill in the Twilio section and your phone number. Press Done when you're finished, then tell me.
 
-## 4. The user's name
+If the browser did not open (`"opened": false`), give the user the address. It works only on this computer and stays available for 15 minutes; run the command again for a new one.
 
-Ask: "What name should I say I'm calling on behalf of?" Then:
+When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
+
+Phone calls need a Twilio account (twilio.com). If the user has one number there, the status suggests it and you set it. If they have several, ask which one. Outgoing calls can show the user's own mobile instead, once they verify it in Twilio under Verified Caller IDs (`COLLEAGUE_CALLER_ID`). A trial Twilio account can only call verified numbers, which includes the user's own.
+
+## 5. Start Colleague AI
 
 ```bash
-colleague setup set COLLEAGUE_OWNER_NAME "<name>"
+colleague setup start
 ```
 
-Every phone call opens with "Hi, I'm an AI assistant calling on behalf of <name>."
+The first start installs Python packages and can take a minute or two; the command shows progress and prints the error if something is missing.
 
-## 5. Phone calls (optional)
+## 6. The first call
 
-Ask: "Do you want phone calls too?" If not, skip to step 6.
+When `firstCallReady` is true:
 
-1. The user needs a Twilio account (twilio.com). Its Account SID and Auth Token go on the setup page from step 3.
-2. Ask: "Should calls come from a Twilio number, or show your own mobile number?"
-   - **Twilio number:** `colleague setup set TWILIO_FROM_NUMBER +1...`
-   - **Own mobile:** the user verifies it once in the Twilio console as a caller ID, then `colleague setup set COLLEAGUE_CALLER_ID +1...`. `TWILIO_FROM_NUMBER` must still be set.
-3. Ask: "What's your phone number? I'll call it once to show setup works." Then `colleague setup set COLLEAGUE_OWNER_PHONE +1...`.
+```bash
+colleague setup call-me --wait
+```
 
-A trial Twilio account can only call verified numbers, which includes the user's own. Twilio reaches this computer through a Cloudflare quick tunnel that starts on the first call; that needs Docker or `cloudflared`.
+Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Afterwards, ask whether they like the voice. To try another one, `colleague setup voice --preview <name>` calls them in that voice; `colleague setup voice --set <name>` keeps it; `colleague setup voice` lists the voices. The voice can be changed the same way at any time.
 
-## 6. Meetings
-
-Joining Zoom, Teams, or Google Meet needs Docker. If `docker` fails in the status, help the user start Docker, or install it inside WSL.
+Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running.
 
 ## 7. Connect the agent
 
@@ -83,21 +115,9 @@ Joining Zoom, Teams, or Google Meet needs Docker. If `docker` fails in the statu
 colleague setup register
 ```
 
-This adds the Colleague AI MCP server to Claude Code, Codex, and Cursor when they are installed, and prints the command for other MCP clients. Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web need the remote connector; see [docs/agents.md](docs/agents.md).
+This adds the Colleague AI MCP server to Claude Code, Codex, and Cursor when they are installed. From WSL it also adds it to Claude Desktop, Cursor, and Claude Code on the Windows side, and it installs the call and meeting skills. It prints the command for other MCP clients. Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
 
-## 8. The first call
-
-When `phoneReady` is true:
-
-```bash
-colleague setup call-me --wait
-```
-
-Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Afterwards, ask whether they liked the voice. To change it, run `colleague setup voice --set <name>`; `colleague setup voice` lists the voices.
-
-Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join."
-
-## 9. Finish
+## 8. Finish
 
 Tell the user in two or three sentences what works now, then give examples:
 
@@ -106,3 +126,14 @@ Tell the user in two or three sentences what works now, then give examples:
 - "Join this meeting and help with the Q3 numbers: <link>"
 
 Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `colleague call --to ... --objective ... --wait`. See [docs/calls.md](docs/calls.md).
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `python3 cannot create a virtual environment` | `sudo apt install -y python3-venv`, then `colleague setup start` |
+| The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
+| `Twilio can reach this computer` fails | Install `cloudflared` or start Docker; on a server set `COLLEAGUE_PUBLIC_URL` |
+| Calls fail with a tunnel error | Check the network and try again; the tunnel restarts on the next call |
+| The agent does not show the call tools | Run `colleague setup register` and restart the agent app |
+| Anything else | `.colleague/daemon.log` in the checkout has the daemon's log |
