@@ -10,9 +10,10 @@ Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared local 
 4. Start the colleague. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.
 5. Admit the participant. It connects computer audio and starts listening continuously.
 6. The adapter opens the platform microphone once and keeps the audio connection stable. The virtual microphone transmits silence while Colleague AI listens and immediately transports speech when GPT-Live chooses to respond.
-7. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
-8. A host or participant mute is authoritative; Colleague AI does not reopen the platform microphone automatically.
-9. Stop the colleague to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
+7. Once its microphone is open, Colleague AI says one short AI disclosure naming the person it acts for, then listens. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to turn this off. `COLLEAGUE_VOICE` picks the GPT-Live voice.
+8. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
+9. A host or participant mute is authoritative; Colleague AI does not reopen the platform microphone on its own. In Zoom it accepts the host's explicit "Ask to unmute" request.
+10. Stop the colleague to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
 
 A connected profile marker means a signed-in account menu was seen. Google or Microsoft can expire that session. If fallback asks for sign-in again, reconnect through the console. One profile and one meeting/account browser can run at a time. Signed-in participation can display the account's name rather than the configured guest name.
 
@@ -30,9 +31,14 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 `MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams and Google Meet reuse Joinly controllers for chat and leave, with explicit admission and microphone checks in Colleague AI. Signed-in fallback is declared on the adapter (`signed_in_profile`); the join path does not branch on platform id.
 
-The bridge owns the GPT-Live connection, virtual devices, tool dispatch, transcripts, and selective participation prompt. Platform mute controls establish the audio connection and respect an external mute. A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
+The bridge owns the GPT-Live connection, virtual devices, tool dispatch, transcripts, and selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
 Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Adapters do not share this computer's desktop. Optional incoming shared-content capture is disabled by default and only screenshots the meeting share or presentation surface.
+
+## Troubleshooting
+
+- **Colleague AI never speaks in Zoom, and `microphoneState` is `blocked`.** The host has turned off "Allow participants to unmute themselves", so the one unmute at session start failed. The host can click **Ask to unmute** on Colleague AI's video tile (or in the participant list); the Zoom adapter accepts "The host would like you to unmute" and arms its microphone. It then stays unmuted between replies, so the host asks only once unless they mute it again.
+- **A host muted Colleague AI.** It stays muted. Unmute it from the meeting UI, or in Zoom click **Ask to unmute** again.
 
 ## Breaking migration
 
