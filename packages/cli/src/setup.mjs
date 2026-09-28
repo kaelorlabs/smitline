@@ -293,8 +293,8 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   }));
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
     detail: present(env.COLLEAGUE_OWNER_NAME) ? env.COLLEAGUE_OWNER_NAME : 'missing',
-    ask: 'What name should I say I am calling on behalf of?',
-    fix: 'colleague setup set COLLEAGUE_OWNER_NAME "<name>"',
+    ask: 'Please add your name on the setup page; every call says it is calling on behalf of that name.',
+    fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_NAME "<name>")',
   }));
 
   const twilioSaved = present(env.TWILIO_ACCOUNT_SID) && present(env.TWILIO_AUTH_TOKEN);
@@ -344,8 +344,8 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   checks.push(callerCheck);
   checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.COLLEAGUE_OWNER_PHONE), {
     group: 'phone', required: false, detail: env.COLLEAGUE_OWNER_PHONE || 'missing',
-    ask: 'What is your phone number? I will call it once to prove setup works.',
-    fix: 'colleague setup set COLLEAGUE_OWNER_PHONE +1...',
+    ask: 'Please add your phone number on the setup page; I will call it once so you can hear Colleague AI.',
+    fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_PHONE +1...)',
   }));
   const reachable = present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
   checks.push(check('public_url', 'Twilio can reach this computer', reachable, {
@@ -399,6 +399,7 @@ const FIELDS = [
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Phone calls (optional)', hint: 'A number you bought in Twilio, listed under Phone Numbers. Needed for incoming calls, and for outgoing calls unless you show your own number below. Include the country code, such as +1 415 555 0142.' },
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified in Twilio under Phone Numbers > Verified Caller IDs. Outgoing calls show it instead of the Twilio number. Incoming calls still ring the Twilio number.' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Colleague AI rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
+  { key: 'TAVILY_API_KEY', label: 'Tavily API key', group: 'Web search in meetings (optional extra)', secret: true, hint: 'Lets Colleague AI look things up on the web during meetings. Get a key at https://app.tavily.com. Leave empty to skip.' },
   { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
@@ -557,7 +558,7 @@ ${field.hint ? `<p class="hint" id="${id}-hint">${linked(field.hint)}</p>` : ''}
     const rows = fields.map(fieldHtml).join('\n');
     const hint = groupHints[group] ? `<p class="group-hint">${linked(groupHints[group])}</p>` : '';
     // Server-mode settings stay folded away unless they are in use.
-    if (/\(server mode\)$/.test(group)) {
+    if (/\((server mode|optional extra)\)$/.test(group)) {
       const open = fields.some((f) => isSaved(f) || fieldErrors.has(f.key)) ? ' open' : '';
       return `<details class="card"${open}><summary>${escapeHtml(group)}</summary><div class="details-body">${hint}${rows}</div></details>`;
     }
@@ -663,7 +664,13 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUr
     };
     const server = http.createServer(async (request, response) => {
       const url = new URL(request.url, 'http://127.0.0.1');
-      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' };
+      const headers = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      };
       if (url.pathname !== pathName) {
         response.writeHead(404, headers).end('Not found');
         return;

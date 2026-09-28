@@ -305,6 +305,8 @@ test('setup secrets starts the page in the background and prints its address', a
   // The command has returned, and the page is still being served.
   const page = await fetch(url);
   assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /default-src 'none'/);
+  assert.match(await page.text(), /Tavily API key/);
   const saved = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -393,4 +395,17 @@ test('call builds a brief, waits for the result, and shows questions for missing
   const missing = await runCli(['call', ...common, '--to', '+14155550142']);
   assert.equal(missing.code, 2);
   assert.match(missing.stderr, /missing objective: What should the call achieve\?/);
+});
+
+test('setup secrets --wait stops on SIGTERM', async (t) => {
+  const root = await tempRoot(t);
+  const child = spawn(process.execPath, [cli, 'setup', 'secrets', '--wait', '--no-open', '--root', root], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  while (!/http:\/\/127/.test(stderr)) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(stderr, /Could not open a browser/);
+  const exited = new Promise((resolve) => child.on('close', resolve));
+  child.kill('SIGTERM');
+  assert.equal(await exited, 130);
+  assert.deepEqual(sanitizeSubmission(new URLSearchParams({ TAVILY_API_KEY: 'tvly-abc' })).updates, { TAVILY_API_KEY: 'tvly-abc' });
 });

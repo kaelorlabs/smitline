@@ -534,6 +534,7 @@ function printStatus(report, { stream = process.stdout } = {}) {
   lines.push(`Phone calls: ${phoneText}. Meetings: ${meetingsText}.`);
   const next = (report.next || []).find((item) => item.fix);
   if (next) lines.push(`Next: ${next.fix}`);
+  else if (report.firstCallReady) lines.push('Try it: colleague setup call-me --wait');
   stream.write(`${lines.join('\n')}\n`);
 }
 
@@ -638,6 +639,10 @@ async function setupCommand(args) {
     else printStatus(report);
     return report.ready ? EXIT.ok : EXIT.startup;
   }
+  if (['secrets', 'start'].includes(action)) {
+    // Nothing to clean up: stop at once (a daemon that is starting keeps starting).
+    interruptState.handler = () => process.exit(EXIT.interrupt);
+  }
   if (action === 'secrets' && args.serve) {
     // Background page process: announce the address on stdout, then stay quiet.
     await serveSecretsPage({
@@ -655,7 +660,7 @@ async function setupCommand(args) {
       onUrl(url) {
         const opened = args['no-open'] ? false : openBrowser(url);
         progress(`Enter keys on this page (this computer only; it closes after 15 minutes):\n${url}`);
-        if (!opened) progress('Could not open a browser automatically; open the address above.');
+        if (!opened && !args['no-open']) progress('Could not open a browser automatically; open the address above.');
       },
       onSaved(keys) {
         progress(`Saved: ${keys.join(', ')}`);
