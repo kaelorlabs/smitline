@@ -158,6 +158,9 @@ def state_from_session(session):
     }
     if metadata.get('source'):
         payload['source'] = metadata['source']
+    if metadata.get('onBehalfOf'):
+        # Named in the meeting's opening AI disclosure (meeting_intro.owner_name).
+        payload['onBehalfOf'] = metadata['onBehalfOf']
     if session.camera_enabled is not None:
         payload['cameraEnabled'] = bool(session.camera_enabled)
     return payload

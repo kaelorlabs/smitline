@@ -225,6 +225,14 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('/Users/Taylor/secret.png', json.dumps(stored))
         await self.supervisor.cancel(meeting.id)
 
+    async def test_on_behalf_of_metadata_reaches_the_runtime_state(self):
+        meeting = session(agentSession=agent_session_payload(
+            metadata={'source': 'call-api', 'onBehalfOf': 'Maya Shah'}))
+        await self.supervisor.start(meeting)
+        stored = read_json(meeting_state_path(self.runtime, meeting.id))
+        self.assertEqual(stored['onBehalfOf'], 'Maya Shah')
+        await self.supervisor.cancel(meeting.id)
+
     async def test_launch_to_live_context_cancel_and_heartbeat(self):
         meeting = session()
         await self.supervisor.start(meeting)
