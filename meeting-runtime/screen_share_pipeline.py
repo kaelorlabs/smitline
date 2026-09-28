@@ -152,6 +152,8 @@ class ScreenShareCaptureLoop:
         self.inflight = False
         self._capture_digest = None
         self._capture_signature = None
+        self._deferred = None
+        self._last_error = None
         self._publish_status()
 
     def _stopped(self):
@@ -178,11 +180,27 @@ class ScreenShareCaptureLoop:
     async def run(self):
         interval = self.settings['captureIntervalMs'] / 1000.0
         while not self._stopped():
-            await self.tick()
+            await self.safe_tick()
             if self._sleep is not None:
                 await self._sleep(interval)
             else:
                 await asyncio.sleep(interval)
+
+    async def safe_tick(self):
+        """A capture or file error degrades screen understanding; it never ends the meeting."""
+        try:
+            status = await self.tick()
+        except Exception as error:
+            detail = f'{type(error).__name__}: {error}'[:200]
+            if detail != self._last_error:
+                print('screen share capture failed: ' + detail, flush=True)
+            self._last_error = detail
+            self._publish_status(
+                available=False, active=False, capturing=False, paused=False,
+                degradedReason='unavailable')
+            return self.state['screenShare']
+        self._last_error = None
+        return status
 
     async def tick(self):
         if not self.settings['enabled']:
@@ -234,7 +252,6 @@ class ScreenShareCaptureLoop:
                 available=True, active=True, capturing=False, paused=False,
                 degradedReason='oversized')
             return self.state['screenShare']
-        self.tracker.select(signature)
         frame_id = 'frm-' + secrets.token_hex(6)
         meta = {
             'id': frame_id,
@@ -247,24 +264,38 @@ class ScreenShareCaptureLoop:
         if masked:
             meta['maskedTiles'] = sorted(masked)
         self.bus.write_inbox(png, meta)
+        # Select only after the write, so a failed write is retried next tick.
+        self.tracker.select(signature)
         self._publish_status(
             available=True, active=True, capturing=True, paused=False, degradedReason=None)
         return self.state['screenShare']
 
     async def drain_observations(self):
-        observations = self.bus.take_outbox()
+        try:
+            observations = self.bus.take_outbox()
+        except OSError:
+            observations = []
         for observation in observations:
             self.inflight = False
             self._publish_status(
                 lastObservationAt=observation.timestamp, available=True, active=True,
                 capturing=True, paused=False, degradedReason=None)
+            self._deferred = None
+            if self._speaking():
+                # Appending mid-reply would redirect it; keep only the newest screen.
+                self._deferred = observation
+            else:
+                await self._append(observation)
+        if self._deferred is not None and not self._speaking():
+            observation, self._deferred = self._deferred, None
             await self._append(observation)
         return observations
 
+    def _speaking(self):
+        return self.state.get('floorState') == 'speaking'
+
     async def _append(self, observation):
         if self.send is None:
-            return
-        if self.state.get('floorState') == 'speaking':
             return
         prefix = 'Shared content (earlier screen again): ' if observation.reused else 'Shared content: '
         text = clip_tokens(prefix + observation.summary, 240)
