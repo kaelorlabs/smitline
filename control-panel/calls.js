@@ -141,14 +141,18 @@ async function refresh() {
   try {
     const { calls } = await api('/api/calls');
     renderList(calls);
-    if (!selected) return;
+    const target = selected;
+    if (!target) return;
     // Live transcript lines arrive as call.transcript events; the result holds the final transcript.
-    const { events } = await api(`/api/calls/${selected}/events${cursor ? `?after=${cursor}` : ''}`);
+    const { events } = await api(`/api/calls/${target}/events${cursor ? `?after=${cursor}` : ''}`);
+    const call = await api(`/api/calls/${target}`);
+    if (target !== selected) return; // the user picked another call meanwhile
     for (const event of events) {
+      if (cursor && Number(event.id) <= Number(cursor)) continue;
       cursor = event.id;
       if (event.type === 'call.transcript') liveLines.push({ speaker: event.data.speaker, text: event.data.text });
     }
-    renderCall(await api(`/api/calls/${selected}`), liveLines);
+    renderCall(call, liveLines);
   } catch (error) {
     $('action-note').textContent = error.message;
   }

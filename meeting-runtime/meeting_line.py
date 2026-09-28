@@ -54,6 +54,8 @@ class MeetingLine:
         self._monotonic = monotonic
         self._meetings = {}
         self._canceled = set()
+        self._starting = set()
+        self._over_time = set()
 
     def ready(self, hooks, owner, brief):
         hooks.credentials(owner, 'openai')
@@ -65,15 +67,23 @@ class MeetingLine:
 
     async def start(self, ctx):
         ctx.set_status('connecting')
-        session = await self.daemon.create_meeting(
-            meeting_payload(ctx.brief, ctx.call_id, self.workspace))
+        self._starting.add(ctx.call_id)
+        try:
+            session = await self.daemon.create_meeting(
+                meeting_payload(ctx.brief, ctx.call_id, self.workspace))
+        finally:
+            self._starting.discard(ctx.call_id)
         self._meetings[ctx.call_id] = session.id
         ctx.link(meetingId=session.id, platform=session.platform)
+        if ctx.call_id in self._canceled:
+            # Ended while the meeting was still being created: stop it now.
+            await self.daemon.cancel_meeting(session.id)
         await self._follow(ctx, session.id)
 
     async def _follow(self, ctx, meeting_id):
         last = None
         started = None
+        limit = ctx.brief.max_minutes * 60
         while True:
             session = await self.daemon.get_meeting(meeting_id)
             if session.state != last:
@@ -85,11 +95,22 @@ class MeetingLine:
                     ctx.set_status(status)
             if session.state == 'ended':
                 break
+            if started is not None and self._now() - started >= limit and ctx.call_id not in self._over_time:
+                self._over_time.add(ctx.call_id)
+                ctx.event('call.max_duration')
+                await self.daemon.cancel_meeting(meeting_id)
             await self._sleep(self.poll_interval)
         handoff = await self._await_handoff(meeting_id)
         seconds = int(self._now() - started) if started is not None else 0
-        reason = 'canceled' if ctx.call_id in self._canceled else 'meeting_ended'
+        if ctx.call_id in self._over_time:
+            reason = 'max_duration'
+        elif ctx.call_id in self._canceled:
+            reason = 'canceled'
+        else:
+            reason = 'meeting_ended'
         self._meetings.pop(ctx.call_id, None)
+        self._canceled.discard(ctx.call_id)
+        self._over_time.discard(ctx.call_id)
         await ctx.finish(reason, usage={'voiceSeconds': seconds}, handoff=handoff)
 
     async def _await_handoff(self, meeting_id):
@@ -111,7 +132,11 @@ class MeetingLine:
     async def end(self, call_id):
         meeting_id = self._meetings.get(call_id)
         if meeting_id is None:
-            return False
+            if call_id not in self._starting:
+                return False
+            # start() cancels the meeting as soon as it exists.
+            self._canceled.add(call_id)
+            return True
         self._canceled.add(call_id)
         await self.daemon.cancel_meeting(meeting_id)
         return True

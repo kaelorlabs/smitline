@@ -1,5 +1,6 @@
 """Call briefs: what an agent asks Colleague AI to do on a phone call or in a meeting."""
 from dataclasses import dataclass, field
+import ipaddress
 import re
 from urllib.parse import urlsplit
 
@@ -63,6 +64,14 @@ def validate_webhook_url(value, name='notify.webhookUrl'):
         raise ValueError(f'{name} must not contain credentials')
     host = (url.hostname or '').lower()
     if url.scheme == 'https' and host:
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return text
+        # An https IP literal must be public; local receivers use http on localhost.
+        if address.is_private or address.is_loopback or address.is_link_local or \
+                address.is_reserved or address.is_multicast or address.is_unspecified:
+            raise ValueError(f'{name} must not point at a private or local IP address over https')
         return text
     if url.scheme == 'http' and host in ('127.0.0.1', 'localhost', '::1'):
         return text

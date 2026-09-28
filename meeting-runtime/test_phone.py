@@ -38,12 +38,20 @@ class FakeTwilio:
     def __init__(self):
         self.created = []
         self.updates = []
+        self.remote_status = 'ringing'
+        self.refuse_twiml = False
 
     async def create_call(self, **kwargs):
         self.created.append(kwargs)
         return {'sid': 'CA123'}
 
+    async def get_call(self, call_sid):
+        return {'sid': call_sid, 'status': self.remote_status}
+
     async def update_call(self, call_sid, **kwargs):
+        if self.refuse_twiml and 'twiml' in kwargs:
+            from twilio_client import TwilioError
+            raise TwilioError(400, 21220, 'Call is not in-progress. Cannot redirect.')
         self.updates.append((call_sid, kwargs))
         return {}
 
@@ -91,6 +99,8 @@ class FakeLive:
     async def events(self):
         while True:
             event = await self.queue.get()
+            if event['type'] == 'drop':  # the socket closes without session.closed
+                return
             if event['type'] == 'session.started':
                 self.started.set()
             if event['type'] == 'session.closed':
@@ -160,7 +170,11 @@ class PhoneHarness:
         self.store = CallStore(Path(temp) / 'calls')
         self.hooks = DefaultCallHooks(environ=self.env, store=self.store)
 
+        self.url_ready = asyncio.Event()
+        self.url_ready.set()
+
         async def public_url():
+            await self.url_ready.wait()
             return PUBLIC
         self.line = PhoneLine(public_url=public_url, environ=lambda: self.env,
                               twilio_factory=lambda creds: self.twilio,
@@ -238,7 +252,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
                 'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
                 'arguments': '{"reason": "completed"}'}}})
         await until(lambda: ws.closed)
-        self.assertEqual(live.outputs, [('fc1', {'ok': True}, 'd1')])
+        # Hanging up needs no tool result, so no further backend turn is requested.
+        self.assertEqual(live.outputs, [])
         await asyncio.wait_for(task, 3)
         self.h.line.on_status(record['id'], {'CallStatus': 'completed', 'CallDuration': '40'})
         done = await self.h.service.wait(record['id'], timeout=5)
@@ -311,6 +326,88 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
                 await missing.service.create(brief())
             self.assertEqual(caught.exception.details['missing'],
                              ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER'])
+        self.h.line.gateway_ready = False
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.create(brief())
+        self.assertEqual(caught.exception.code, 'gateway_unavailable')
+
+    async def test_end_while_the_tunnel_starts_never_dials(self):
+        self.h.url_ready.clear()
+        record = await self.h.service.create(brief())
+        await until(lambda: self.h.line.session(record['id']) is not None)
+        await self.h.service.end(record['id'])
+        self.h.url_ready.set()
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['status'], 'canceled')
+        self.assertEqual(self.h.twilio.created, [])
+
+    async def test_a_call_that_never_connects_is_ended_and_explained(self):
+        self.h.line.connect_timeout = 0.1
+        self.h.twilio.remote_status = 'in-progress'
+        record, _session = await self.h.dial()
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['status'], 'failed')
+        self.assertIn('could not reach the phone gateway', done['error'])
+        self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
+        # Twilio says nobody answered and the callback was lost: an ordinary no-answer.
+        self.h.twilio.remote_status = 'no-answer'
+        record, _session = await self.h.dial()
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual((done['status'], done['endReason']), ('completed', 'no_answer'))
+
+    async def test_voice_session_failures_are_errors(self):
+        class Broken(FakeLive):
+            async def __aenter__(self):
+                raise RuntimeError('401 invalid_api_key')
+        self.h.line.live_factory = Broken
+        record, session = await self.h.dial()
+        ws = FakeTwilioSocket()
+        await session.run(ws, {'streamSid': 'MZ1', 'callSid': 'CA123'})
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['status'], 'failed')
+        self.assertIn('voice session could not start', done['error'])
+        self.assertTrue(ws.closed)
+
+        self.h.line.live_factory = FakeLive
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?', 'start_ms': 0, 'end_ms': 300})
+        live.push({'type': 'drop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['endReason'], 'error')
+        self.assertIn('voice connection was lost', done['error'])
+
+    async def test_transfer_cancels_the_pending_hangup_and_failures_are_reported(self):
+        self.h.env['COLLEAGUE_OWNER_PHONE'] = '+14155550199'
+        record, session = await self.h.dial()
+        session.owner_phone = '+14155550199'
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        await self.h.service.end(record['id'])
+        pending = session._pending_hangup
+        self.assertIsNotNone(pending)
+        self.h.twilio.refuse_twiml = True
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.transfer(record['id'])
+        self.assertEqual((caught.exception.status, caught.exception.code), (502, 'provider_error'))
+        self.assertIsNone(session.end_reason)
+        self.assertTrue(pending.cancelled() or pending.done())
+        self.h.twilio.refuse_twiml = False
+        await self.h.service.transfer(record['id'])
+        self.assertEqual(session.end_reason, 'transferred')
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        await asyncio.sleep(0.05)
+        self.assertNotIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
+
+    def test_inbound_brief_tolerates_withheld_numbers_and_bad_webhooks(self):
+        parsed = inbound_brief({'TWILIO_FROM_NUMBER': '+15005550006',
+                                'COLLEAGUE_NOTIFY_WEBHOOK': 'http://example.com/x'}, 'anonymous')
+        self.assertEqual(parsed.to, '+15005550006')
+        self.assertIn('withheld', parsed.context)
+        self.assertIsNone(parsed.webhook_url)
 
 
 class PromptTests(unittest.TestCase):
@@ -469,12 +566,15 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
             async def readline(self):
                 return self.lines.pop(0) if self.lines else b''
 
+        output = [b'INF starting\n',
+                  b'INF |  https://brave-fox-12.trycloudflare.com  |\n',
+                  b'INF Registered tunnel connection connIndex=0 location=sjc01\n']
+
         class Process:
             returncode = None
 
             def __init__(self):
-                self.stderr = Stream([b'INF starting\n',
-                                      b'INF |  https://brave-fox-12.trycloudflare.com  |\n'])
+                self.stderr = Stream(output)
 
             def terminate(self):
                 self.returncode = 0
@@ -486,13 +586,26 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         async def spawn(*command, **kwargs):
             spawned.append(command)
             return Process()
-        tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn,
-                           which=lambda name: '/usr/bin/cloudflared' if name == 'cloudflared' else None)
+        cloudflared = lambda name: '/usr/bin/cloudflared' if name == 'cloudflared' else None
+        tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared)
+        self.assertIsNone(tunnel.current())
         self.assertEqual(await tunnel.get(), 'https://brave-fox-12.trycloudflare.com')
         self.assertEqual(await tunnel.get(), 'https://brave-fox-12.trycloudflare.com')
+        self.assertEqual(tunnel.current(), 'https://brave-fox-12.trycloudflare.com')
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0][-1], 'http://127.0.0.1:8766')
         await tunnel.close()
+        self.assertIsNone(tunnel.current())
+
+        # cloudflared names api.trycloudflare.com in its own errors; that is never the tunnel.
+        output[:] = [b'ERR failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": '
+                     b'dial tcp: lookup api.trycloudflare.com: no such host\n']
+        with self.assertRaises(TunnelError):
+            await PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared).get()
+        # An address without a registered connection is not ready.
+        output[:] = [b'INF |  https://brave-fox-12.trycloudflare.com  |\n']
+        with self.assertRaises(TunnelError):
+            await PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared).get()
         docker = PublicUrl(lambda: {}, 8766, spawn=spawn,
                            which=lambda name: '/usr/bin/docker' if name == 'docker' else None)
         self.assertEqual(docker.command()[:4], ['docker', 'run', '--rm', '--network'])
@@ -504,10 +617,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         FakeLive.instances = []
         self.temp = tempfile.TemporaryDirectory()
         self.h = PhoneHarness(self.temp.name)
-
-        async def public_url():
-            return PUBLIC
-        app = create_gateway_app(self.h.line, self.h.service, public_url=public_url)
+        self.current = PUBLIC
+        app = create_gateway_app(self.h.line, self.h.service, current_url=lambda: self.current)
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
 
@@ -530,6 +641,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post_signed(path, {'CallStatus': 'ringing'})
         self.assertEqual(response.status, 204)
         self.assertEqual(self.h.store.get(record['id'])['status'], 'ringing')
+        # Without a current public address nothing is verified, and nothing is started.
+        self.current = None
+        response = await self.post_signed(path, {'CallStatus': 'ringing'})
+        self.assertEqual(response.status, 403)
 
     async def test_media_stream_needs_the_call_token(self):
         record, session = await self.h.dial()
@@ -606,11 +721,8 @@ class RealSocketTests(unittest.IsolatedAsyncioTestCase):
         live_url = f'ws://127.0.0.1:{self.live_server.port}/v1/live/sessions'
         self.h = PhoneHarness(self.temp.name)
         self.h.line.live_factory = lambda key, config: LiveSession(key, config, url=live_url)
-
-        async def public_url():
-            return PUBLIC
         self.gateway = TestClient(TestServer(
-            create_gateway_app(self.h.line, self.h.service, public_url=public_url)))
+            create_gateway_app(self.h.line, self.h.service, current_url=lambda: PUBLIC)))
         await self.gateway.start_server()
 
     async def asyncTearDown(self):

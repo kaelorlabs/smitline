@@ -59,6 +59,9 @@ class BriefTests(unittest.TestCase):
             phone_brief(maxMinutes=61),
             phone_brief(notify={'webhookUrl': 'http://example.com/hook'}),
             phone_brief(notify={'webhookUrl': 'https://user:pw@example.com/hook'}),
+            phone_brief(notify={'webhookUrl': 'https://10.0.0.5/hook'}),
+            phone_brief(notify={'webhookUrl': 'https://169.254.169.254/latest'}),
+            phone_brief(notify={'webhookUrl': 'https://[::1]/hook'}),
             phone_brief(agentSession={'provider': 'codex'}),
             phone_brief(unexpected=True),
             phone_brief(language='english please'),
@@ -145,7 +148,7 @@ class NotifierTests(unittest.IsolatedAsyncioTestCase):
             sent.append((url, body, headers))
             return 204
         result = await WebhookNotifier('s3cret', post=post).deliver(self.call())
-        self.assertEqual(result, {'delivered': True, 'attempts': 1, 'status': 204})
+        self.assertEqual(result, {'delivered': True, 'attempts': 1})
         url, body, headers = sent[0]
         self.assertEqual(headers['X-Colleague-Signature'], signature('s3cret', body))
         self.assertEqual(json.loads(body)['type'], 'call.completed')
@@ -166,7 +169,12 @@ class NotifierTests(unittest.IsolatedAsyncioTestCase):
         async def gone(url, body, headers):
             return 410
         self.assertEqual(await WebhookNotifier('s', post=gone).deliver(self.call()),
-                         {'delivered': False, 'attempts': 1, 'status': 410})
+                         {'delivered': False, 'attempts': 1, 'error': 'rejected'})
+
+        async def down(url, body, headers):
+            raise OSError('connection refused')
+        result = await WebhookNotifier('s', post=down, sleep=sleep, delays=()).deliver(self.call())
+        self.assertEqual(result, {'delivered': False, 'attempts': 1, 'error': 'unreachable'})
 
     async def test_no_webhook_means_no_delivery(self):
         self.assertIsNone(await WebhookNotifier('s').deliver({'status': 'completed', 'brief': {}}))

@@ -29,6 +29,12 @@ test('.env merge keeps other lines and writes 0600', async (t) => {
   assert.equal(statSync(path.join(root, '.env')).mode & 0o777, 0o600);
   assert.deepEqual(parseEnv('export A="x y"\nB=\'z\'\n#C=1'), { A: 'x y', B: 'z' });
   assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+
+  // A key assigned twice: readers take the last one, so repeats must go.
+  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_VOICE=marin\nPORT=1\nCOLLEAGUE_VOICE=quartz\n');
+  writeEnv(root, { COLLEAGUE_VOICE: 'cinder' });
+  assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'COLLEAGUE_VOICE=cinder\nPORT=1\n');
+  assert.equal(readEnv(root).COLLEAGUE_VOICE, 'cinder');
 });
 
 test('settings are validated and secrets are refused', () => {
@@ -112,13 +118,21 @@ test('status reports what to ask the user, and verifies keys when present', asyn
     if (String(url).includes('IncomingPhoneNumbers')) return Response.json({ incoming_phone_numbers: [{ phone_number: '+15005550006' }] });
     return Response.json({ outgoing_caller_ids: [{ phone_number: '+14155550100' }] });
   };
-  await fs.writeFile(path.join(root, '.env'), [
+  const envLines = [
     'OPENAI_API_KEY=sk-test', 'COLLEAGUE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
     'TWILIO_AUTH_TOKEN=tok', 'COLLEAGUE_CALLER_ID=+14155550100', 'COLLEAGUE_OWNER_PHONE=+14155550100',
-  ].join('\n'));
+  ];
+  // The daemon needs TWILIO_FROM_NUMBER even when a verified mobile is the caller ID.
+  await fs.writeFile(path.join(root, '.env'), envLines.join('\n'));
+  const withoutFrom = await setupStatus({ root, env: {}, fetchImpl, runner, find });
+  assert.equal(withoutFrom.phoneReady, false);
+  assert.match(withoutFrom.checks.find((c) => c.id === 'caller_id').detail, /TWILIO_FROM_NUMBER/);
+  await fs.writeFile(path.join(root, '.env'), [...envLines, 'TWILIO_FROM_NUMBER=+15005550006'].join('\n'));
   const full = await setupStatus({ root, env: {}, fetchImpl, runner, find });
   assert.equal(full.ready, true);
   assert.equal(full.phoneReady, true);
+  const offline = await setupStatus({ root, env: {}, fetchImpl, runner, find, verify: false });
+  assert.equal(offline.checks.find((c) => c.id === 'caller_id').ok, true);
   assert.match(full.checks.find((c) => c.id === 'twilio').detail, /trial/);
   assert.ok(requests[0].endsWith('/v1/models/gpt-live-1'));
 

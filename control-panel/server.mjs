@@ -27,6 +27,11 @@ const CONTEXT_INDEX = path.join(ROOT, 'meeting-runtime', 'context', 'index.json'
 const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
 export const DOCKER_INFO_TIMEOUT_MS = 8000;
 
+export function loopbackHost(host) {
+  const name = String(host || '').replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1').toLowerCase();
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
+
 function headers(type = 'application/json; charset=utf-8') {
   return {
     'Content-Type': type,
@@ -706,6 +711,12 @@ export function createServer({
 
   return http.createServer(async (request, response) => {
     try {
+      // DNS rebinding: a page served from another name that resolves to 127.0.0.1
+      // must not read this console, so only loopback host names are served.
+      if (!loopbackHost(request.headers.host)) {
+        response.writeHead(421, headers('text/plain; charset=utf-8'));
+        return response.end('Misdirected request');
+      }
       const pathname = new URL(request.url, `http://127.0.0.1:${PORT}`).pathname;
       if (pathname.startsWith('/api/')) return await api(request, response, pathname);
       const assets = {

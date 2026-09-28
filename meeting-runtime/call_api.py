@@ -42,7 +42,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     @handle
     async def check_call(request):
         payload = await read_json(request)
-        return public_json(service.check(payload))
+        return public_json(await service.check(payload, request=request))
 
     @handle
     async def create_call(request):

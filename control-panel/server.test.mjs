@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -867,4 +868,22 @@ test('calls view reads calls openly and protects end and transfer', async () => 
     server.close();
     await once(server, 'close');
   }
+});
+
+test('console only answers loopback host names', async () => {
+  const { loopbackHost } = await import('./server.mjs');
+  for (const host of ['127.0.0.1:8095', 'localhost:8095', '[::1]:8095', 'LOCALHOST']) {
+    assert.equal(loopbackHost(host), true);
+  }
+  for (const host of ['evil.example:8095', '127.0.0.1.nip.io:8095', '', undefined]) {
+    assert.equal(loopbackHost(host), false);
+  }
+  await withServer(async (base) => {
+    const port = new URL(base).port;
+    const rebound = await new Promise((resolve) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/calls', headers: { Host: `evil.example:${port}` } },
+        (response) => { response.resume(); resolve(response.statusCode); });
+    });
+    assert.equal(rebound, 421);
+  });
 });

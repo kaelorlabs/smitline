@@ -102,6 +102,9 @@ class TwilioClient:
             form.append(('Record', 'true'))
         return await self._call('POST', 'Calls.json', urlencode(form))
 
+    async def get_call(self, call_sid):
+        return await self._call('GET', f'Calls/{call_sid}.json')
+
     async def update_call(self, call_sid, *, status=None, twiml=None):
         form = []
         if status:

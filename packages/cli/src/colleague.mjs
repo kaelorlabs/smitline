@@ -368,7 +368,8 @@ async function waitUntilDone(client, callId) {
   let last = '';
   for (;;) {
     if (interruptState.requested) throw new InterruptError('interrupted; the call keeps running');
-    const call = await client.waitForCall(callId, 50);
+    // Short long-polls keep Ctrl-C responsive; the request cannot be aborted mid-wait.
+    const call = await client.waitForCall(callId, 10);
     if (call.status !== last) {
       progress(`call ${call.status}${call.endReason ? ` (${call.endReason})` : ''}`);
       last = call.status;

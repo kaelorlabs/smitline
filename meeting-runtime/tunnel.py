@@ -12,7 +12,9 @@ import shutil
 from urllib.parse import urlsplit
 
 
-QUICK_URL = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
+# api.trycloudflare.com appears in cloudflared's own error messages; it is never a tunnel.
+QUICK_URL = re.compile(r'https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b')
+REGISTERED = 'Registered tunnel connection'
 DEFAULT_IMAGE = 'cloudflare/cloudflared:latest'
 START_TIMEOUT = 40.0
 
@@ -70,6 +72,18 @@ class PublicUrl:
             return 'configured'
         return 'quick_tunnel' if self.command() else 'unavailable'
 
+    def current(self):
+        """The address Twilio uses right now, without starting anything; None if there is none."""
+        try:
+            url = configured_url(self._environ())
+        except TunnelError:
+            return None
+        if url:
+            return url
+        if self._url and self._process is not None and self._process.returncode is None:
+            return self._url
+        return None
+
     async def get(self):
         url = configured_url(self._environ())
         if url:
@@ -93,13 +107,21 @@ class PublicUrl:
             return self._url
 
     async def _read_url(self):
+        """Return the tunnel address once cloudflared reports a registered connection."""
+        url = None
         while True:
             line = await self._process.stderr.readline()
             if not line:
-                raise TunnelError('cloudflared exited before printing a tunnel address.')
-            match = QUICK_URL.search(line.decode('utf-8', 'replace'))
-            if match:
-                return match.group(0)
+                raise TunnelError('cloudflared exited before the tunnel was ready.')
+            text = line.decode('utf-8', 'replace')
+            if 'failed' in text.lower() and 'trycloudflare' in text and url is None:
+                raise TunnelError('cloudflared could not create a quick tunnel; check the '
+                                  'network, or set COLLEAGUE_PUBLIC_URL.')
+            match = QUICK_URL.search(text)
+            if match and url is None:
+                url = match.group(0)
+            if url and REGISTERED in text:
+                return url
 
     async def _drain(self):
         try:

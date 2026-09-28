@@ -21,8 +21,11 @@ START_TIMEOUT = 10.0
 XML = 'text/xml'
 
 
-def create_gateway_app(line, service, *, public_url, owner='local'):
-    """public_url: async callable returning the https origin Twilio uses to reach us."""
+def create_gateway_app(line, service, *, current_url, owner='local'):
+    """current_url: returns the https origin Twilio uses to reach us right now, or None.
+
+    It must not start a tunnel: unsigned requests reach these routes too.
+    """
 
     def auth_token():
         try:
@@ -30,10 +33,15 @@ def create_gateway_app(line, service, *, public_url, owner='local'):
         except MissingCredentials:
             return None
 
+    def base_url():
+        base = current_url()
+        if not base:
+            raise web.HTTPForbidden(text='no public address')
+        return base.rstrip('/')
+
     async def verified_params(request):
         params = dict(await request.post())
-        base = (await public_url()).rstrip('/')
-        url = base + request.path_qs
+        url = base_url() + request.path_qs
         if not valid_signature(auth_token(), url, params,
                                request.headers.get('X-Twilio-Signature')):
             raise web.HTTPForbidden(text='invalid signature')
@@ -97,8 +105,7 @@ def create_gateway_app(line, service, *, public_url, owner='local'):
             if line.session(record['id']) is not None:
                 break
             await asyncio.sleep(0.02)
-        base = (await public_url()).rstrip('/')
-        stream_url = 'wss://' + base.split('://', 1)[1] + '/twilio/media'
+        stream_url = 'wss://' + base_url().split('://', 1)[1] + '/twilio/media'
         twiml = stream_twiml(stream_url, {'callId': record['id'], 'token': token})
         return web.Response(text=twiml, content_type=XML)
 

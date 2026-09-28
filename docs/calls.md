@@ -79,7 +79,14 @@ Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.16
 | `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
 
-Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents. Delivery is retried three times with backoff; the outcome is recorded as a call event.
+Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents; an https URL may not name a private, loopback, or link-local IP address. Delivery is retried three times with backoff. The outcome is recorded as a `call.webhook` event with `delivered`, `attempts`, and a coarse `error` (`rejected`, `failed`, or `unreachable`), never the receiver's exact response.
+
+## Reliability
+
+- Statuses only move forward; a late provider callback cannot move a call back.
+- `POST /v1/calls/check` applies the same checks as starting a call, including the destination allow-list.
+- When the daemon stops, calls still in progress are closed as `failed` with the transcript so far. At startup, any call a previous daemon left unfinished is closed the same way, so a waiting agent always gets an answer.
+- Long transcripts keep their first 60 and last 340 lines, so the opening (with the disclosure) survives.
 
 ## Other endpoints
 

@@ -71,6 +71,8 @@ class WebhookNotifier:
             'X-Colleague-Event': 'call.' + call['status'],
             'X-Colleague-Signature': signature(self.secret, body),
         }
+        # Outcomes are coarse on purpose: the result is readable by API callers, so
+        # it must not become a probe of the receiver's exact responses.
         attempts = (0.0,) + self.delays
         last = None
         for attempt, delay in enumerate(attempts, start=1):
@@ -78,14 +80,14 @@ class WebhookNotifier:
                 await self._sleep(delay)
             try:
                 status = await self._post(url, body, headers)
-            except Exception as error:
-                last = {'delivered': False, 'attempts': attempt, 'error': type(error).__name__}
+            except Exception:
+                last = {'delivered': False, 'attempts': attempt, 'error': 'unreachable'}
             else:
                 if 200 <= status < 300:
-                    return {'delivered': True, 'attempts': attempt, 'status': status}
-                last = {'delivered': False, 'attempts': attempt, 'status': status}
+                    return {'delivered': True, 'attempts': attempt}
                 if 400 <= status < 500 and status not in (408, 429):
-                    return last
+                    return {'delivered': False, 'attempts': attempt, 'error': 'rejected'}
+                last = {'delivered': False, 'attempts': attempt, 'error': 'failed'}
             if self.on_attempt:
                 self.on_attempt(last)
         return last

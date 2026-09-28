@@ -42,12 +42,16 @@ export const BRIEF_SCHEMA = {
     successCriteria: { type: 'string', description: 'How to tell the call succeeded' },
     language: { type: 'string', description: 'Language tag such as en or es' },
     voice: { type: 'string', description: 'GPT-Live voice name; see list_voices' },
-    maxMinutes: { type: 'integer', minimum: 1, maximum: 240 },
+    maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
     rehearsal: { type: 'boolean', description: "Phone only: practice on the user's own phone first, with the user playing the other side" },
     notify: {
       type: 'object',
       additionalProperties: false,
       properties: { webhookUrl: { type: 'string', description: 'https URL that receives the finished call' } },
+    },
+    agentSession: {
+      type: 'object',
+      description: 'Meeting only: the coding-agent session for exact continuity ({ provider, sessionId, workspace }). Omit unless you pass the real originating session id.',
     },
   },
 };

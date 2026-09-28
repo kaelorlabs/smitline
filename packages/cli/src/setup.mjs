@@ -64,12 +64,15 @@ export function writeEnv(root, updates) {
     lines = [];
   }
   const remaining = new Map(Object.entries(updates));
-  lines = lines.map((line) => {
+  const written = new Set();
+  // Readers take the last assignment, so replace the first and drop any repeats.
+  lines = lines.flatMap((line) => {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
-    if (!match || !remaining.has(match[1])) return line;
-    const value = remaining.get(match[1]);
+    if (!match || !Object.hasOwn(updates, match[1])) return [line];
+    if (written.has(match[1])) return [];
+    written.add(match[1]);
     remaining.delete(match[1]);
-    return `${match[1]}=${value}`;
+    return [`${match[1]}=${updates[match[1]]}`];
   });
   while (lines.length && lines.at(-1) === '') lines.pop();
   for (const [key, value] of remaining) lines.push(`${key}=${value}`);
@@ -271,11 +274,13 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     ask: 'Do you want phone calls too? If yes, enter your Twilio Account SID and Auth Token on the setup page.',
     fix: 'colleague setup secrets',
   }));
+  // The daemon always needs TWILIO_FROM_NUMBER (inbound calls and transfers use it);
+  // COLLEAGUE_CALLER_ID only changes what outgoing calls display.
   const from = env.COLLEAGUE_CALLER_ID || env.TWILIO_FROM_NUMBER;
-  let callerOk = present(from) && E164.test(from);
-  let callerDetail = callerOk ? from : 'missing';
-  if (callerOk && twilio.ok === true) {
-    const owned = (twilio.numbers || []).includes(from) || (twilio.verified || []).includes(from);
+  let callerOk = present(env.TWILIO_FROM_NUMBER) && E164.test(env.TWILIO_FROM_NUMBER) && E164.test(from);
+  let callerDetail = callerOk ? from : (present(env.TWILIO_FROM_NUMBER) ? `${from} is not an E.164 number` : 'TWILIO_FROM_NUMBER is missing');
+  if (callerOk && Array.isArray(twilio.numbers)) {
+    const owned = twilio.numbers.includes(from) || (twilio.verified || []).includes(from);
     if (!owned) { callerOk = false; callerDetail = `${from} is not a number or verified caller ID in this Twilio account`; }
   }
   checks.push(check('caller_id', 'Caller ID', callerOk, {

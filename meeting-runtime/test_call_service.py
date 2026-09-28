@@ -177,10 +177,49 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((caught.exception.status, caught.exception.code), (403, 'insufficient_credit'))
 
     async def test_check_reports_problems(self):
-        self.assertEqual(self.h.service.check(brief())['ok'], True)
-        report = self.h.service.check(brief(channel='meeting', to=ZOOM))
+        self.assertEqual((await self.h.service.check(brief()))['ok'], True)
+        report = await self.h.service.check(brief(channel='meeting', to=ZOOM))
         self.assertFalse(report['ok'])
         self.assertIn('not available', report['problems'][0])
+        self.h.service.hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k',
+                                                         'COLLEAGUE_ALLOWED_CALLING_CODES': '44'})
+        blocked = await self.h.service.check(brief())
+        self.assertFalse(blocked['ok'])
+        self.assertIn('COLLEAGUE_ALLOWED_CALLING_CODES', blocked['problems'][0])
+
+    async def test_statuses_never_move_backwards(self):
+        record = await self.h.service.create(brief())
+        await asyncio.sleep(0)
+        await self.h.service.wait(record['id'], timeout=0.05)
+        self.h.service._set_status(record['id'], 'ringing')
+        self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
+
+    async def test_shutdown_and_restart_close_unfinished_calls(self):
+        record = await self.h.service.create(brief())
+        await asyncio.sleep(0)
+        await self.h.service.wait(record['id'], timeout=0.05)
+        self.h.line.proceed = asyncio.Event()  # never finishes on its own
+        await self.h.service.shutdown()
+        done = self.h.store.get(record['id'])
+        self.assertEqual(done['status'], 'failed')
+        self.assertEqual(done['result']['outcome'], 'failed')
+        self.assertEqual(len(done['result']['transcript']), 2)
+        # A record left behind by a crashed daemon is closed at the next start.
+        orphan = dict(done, id='call-00000000000000aa', status='in_progress', result=None)
+        self.h.store.create(orphan)
+        restarted = ServiceHarness(self.temp.name)
+        self.assertEqual(restarted.service.reconcile(), ['call-00000000000000aa'])
+        self.assertEqual(restarted.store.get('call-00000000000000aa')['status'], 'failed')
+
+    def test_long_transcripts_keep_their_opening(self):
+        from call_service import CallContext, TRANSCRIPT_HEAD, TRANSCRIPT_TAIL
+        context = CallContext(self.h.service, 'x', None, 'local')
+        context.service = type('S', (), {'_event': lambda *a, **k: None})()
+        for index in range(1000):
+            context.add_transcript('other', f'line {index}')
+        self.assertEqual(len(context.transcript), TRANSCRIPT_HEAD + TRANSCRIPT_TAIL)
+        self.assertEqual(context.transcript[0]['text'], 'line 0')
+        self.assertEqual(context.transcript[-1]['text'], 'line 999')
 
 
 class FakeSession(SimpleNamespace):
@@ -240,6 +279,49 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload['agentSession']['metadata']['continuity'], 'context')
             self.assertEqual(payload['context']['summary'], 'Q3 sales review')
             self.assertEqual(h.summarizer.calls, 0)
+            await h.service.shutdown()
+
+    async def test_ending_before_the_meeting_exists_still_stops_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            daemon.states = ['joining']
+            gate = asyncio.Event()
+            original = daemon.create_meeting
+
+            async def slow_create(payload):
+                await gate.wait()
+                return await original(payload)
+            daemon.create_meeting = slow_create
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep)
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            await asyncio.sleep(0)
+            await h.service.end(record['id'])
+            self.assertEqual(h.store.get(record['id'])['status'], 'connecting')
+            gate.set()
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(daemon.canceled, ['mtg-1'])
+            self.assertEqual(done['endReason'], 'canceled')
+            await h.service.shutdown()
+
+    async def test_meetings_end_at_max_minutes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            daemon.states = ['live']
+            ticks = iter(range(0, 100000, 20))
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep,
+                               monotonic=lambda: next(ticks))
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM, maxMinutes=1))
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(daemon.canceled, ['mtg-1'])
+            self.assertEqual(done['endReason'], 'max_duration')
             await h.service.shutdown()
 
     def test_payload_keeps_host_agent_session(self):
