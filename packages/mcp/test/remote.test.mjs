@@ -239,6 +239,15 @@ test('discovery, registration, approval, tokens, and a call over MCP', async (t)
   assert.equal(initialized.status, 202);
   const listed = await mcp(base, token, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, { session });
   assert.deepEqual(listed.body.result.tools.map((tool) => tool.name), CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
+  const remoteStart = listed.body.result.tools.find((tool) => tool.name === 'start_call');
+  assert.equal(remoteStart.inputSchema.properties.agentSession, undefined);
+  assert.deepEqual(remoteStart.inputSchema.required, ['channel', 'objective']);
+  const handover = await mcp(base, token, {
+    jsonrpc: '2.0', id: 5, method: 'tools/call',
+    params: { name: 'start_call', arguments: { ...BRIEF, agentSession: { provider: 'codex', sessionId: 'x' } } },
+  }, { session });
+  assert.equal(handover.body.result.isError, true);
+  assert.match(handover.body.result.structuredContent.message, /remote connector/);
   const started = await mcp(base, token, {
     jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'start_call', arguments: BRIEF },
   }, { session });

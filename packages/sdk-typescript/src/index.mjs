@@ -30,6 +30,8 @@ const SECRET_KEYS = new Set([
   'apiKey', 'secret', 'password', 'credential', 'privateKey',
 ]);
 const PLACEHOLDER_SESSIONS = new Set(['', '--last', 'last']);
+// The first start creates a Python environment and installs packages.
+const DEFAULT_STARTUP_TIMEOUT_MS = 60000;
 const MAX_STRING = 8000;
 const MAX_ITEMS = 200;
 
@@ -554,7 +556,7 @@ export function createLoopbackTransport(options = {}) {
     if (await isPortOpen(host, port)) {
       token = token || await readAuth();
       if (!token) {
-        const deadline = Date.now() + (options.startupTimeoutMs || 8000);
+        const deadline = Date.now() + (options.startupTimeoutMs || DEFAULT_STARTUP_TIMEOUT_MS);
         while (Date.now() < deadline && !token) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           token = await readAuth();
@@ -571,7 +573,7 @@ export function createLoopbackTransport(options = {}) {
         .then(() => spawnDaemon({ root, host, port }))
         .then(async (child) => {
           child?.unref?.();
-          const ready = await waitForPort(host, port, options.startupTimeoutMs || 8000, isPortOpen);
+          const ready = await waitForPort(host, port, options.startupTimeoutMs || DEFAULT_STARTUP_TIMEOUT_MS, isPortOpen);
           if (!ready) throw new StartupError('runtime daemon did not become ready', { code: 'daemon_unavailable' });
         })
         .finally(() => { starting = null; });

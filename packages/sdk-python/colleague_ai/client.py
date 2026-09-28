@@ -453,7 +453,7 @@ def _map_http_error_class(status, payload, fallback):
 
 class LoopbackTransport:
     def __init__(self, *, root=None, host='127.0.0.1', port=None, request=None, spawn_daemon=None,
-                 is_port_open=None, read_auth=None, autostart=True, startup_timeout_s=8.0):
+                 is_port_open=None, read_auth=None, autostart=True, startup_timeout_s=60.0):
         self.root = Path(root or os.getcwd())
         self.host = host
         self.port = int(port or os.environ.get('COLLEAGUE_DAEMON_PORT') or 8765)

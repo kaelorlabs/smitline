@@ -30,11 +30,13 @@ const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start
 export const BRIEF_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['channel', 'to', 'objective', 'onBehalfOf'],
+  // to and onBehalfOf can come from setup (owner phone for rehearsals, owner name);
+  // when they cannot, the daemon answers brief_incomplete with a question to ask.
+  required: ['channel', 'objective'],
   properties: {
     channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join Zoom, Teams, or Google Meet' },
-    to: { type: 'string', description: 'E.164 phone number such as +14155550142, or the meeting invite URL' },
-    onBehalfOf: { type: 'string', description: "The user's name. The call opens with: Hi, I'm an AI assistant calling on behalf of NAME." },
+    to: { type: 'string', description: "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone." },
+    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, I'm an AI assistant calling on behalf of NAME. Defaults to the name given at setup." },
     objective: { type: 'string', description: 'What the call must achieve, in one or two sentences' },
     context: { type: 'string', description: 'Background the other party may ask about: names, dates, reference numbers, preferences' },
     mayAgreeTo: { type: 'array', items: { type: 'string' }, description: 'What the assistant may agree to without checking back, such as acceptable times or prices' },
@@ -514,6 +516,13 @@ export const TOOL_DEFINITIONS = [
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
+// The remote connector serves cloud agents that have no local coding session to hand over.
+const { agentSession: _localOnly, ...REMOTE_BRIEF_PROPERTIES } = BRIEF_SCHEMA.properties;
+const REMOTE_BRIEF_SCHEMA = { ...BRIEF_SCHEMA, properties: REMOTE_BRIEF_PROPERTIES };
+export const REMOTE_CALL_TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS.map((tool) => (
+  tool.inputSchema === BRIEF_SCHEMA ? { ...tool, inputSchema: REMOTE_BRIEF_SCHEMA } : tool
+));
+
 export const CALLS_INSTRUCTIONS = 'To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing), then wait_for_call until the call finishes, and report the outcome.';
 
 function requireCallId(args) {
@@ -870,6 +879,9 @@ export function createMcpSession(options = {}) {
 
   async function callTool(name, args, message) {
     if (callsOnly && !CALL_TOOL_NAMES.has(name)) throw new ValidationError(`unknown tool: ${name}`);
+    if (callsOnly && args && Object.hasOwn(args, 'agentSession')) {
+      throw new ValidationError('agentSession is only available to a local coding agent, not through the remote connector');
+    }
     if (name === 'join_current_meeting') return joinCurrentMeeting(args, message);
     if (name === 'start_meeting') return startMeeting(args, message);
     if (name === 'get_meeting_status') {
@@ -1155,7 +1167,7 @@ export function createMcpSession(options = {}) {
     }
     if (method === 'ping') return rpcResult(id, {});
     if (method === 'tools/list') {
-      return rpcResult(id, { tools: callsOnly ? CALL_TOOL_DEFINITIONS : TOOL_DEFINITIONS });
+      return rpcResult(id, { tools: callsOnly ? REMOTE_CALL_TOOL_DEFINITIONS : TOOL_DEFINITIONS });
     }
     if (method === 'tools/call') {
       try {
