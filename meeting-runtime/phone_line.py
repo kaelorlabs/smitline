@@ -29,6 +29,8 @@ OPENING_DELAY = 2.5
 SILENCE_PROMPT_SECONDS = 40.0
 SILENCE_END_SECONDS = 65.0
 WRAP_UP_SECONDS = 60.0
+# Characters of the agent's first utterance to hear before judging the disclosure.
+DISCLOSURE_WINDOW = 120
 TWILIO_TERMINAL = {
     'completed': 'hangup', 'busy': 'busy', 'no-answer': 'no_answer', 'failed': 'error',
     'canceled': 'canceled',
@@ -215,6 +217,8 @@ class PhoneSession:
         finally:
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
+                if speaker == 'agent':
+                    self._check_disclosure(text, final=True)
             self.finished.set()
 
     async def _read_twilio(self):
@@ -280,13 +284,27 @@ class PhoneSession:
         for speaker, text in self.joiner.add(source, event.get('delta') or '',
                                              event.get('start_ms'), event.get('end_ms')):
             self.ctx.add_transcript(speaker, text)
-            if speaker == 'agent' and not self.disclosure_checked and not self.inbound:
-                self.disclosure_checked = True
-                verified = mentions_ai(text)
-                self.ctx.event('call.disclosure', verified=verified)
-                if not verified:
-                    asyncio.create_task(self.live.append(
-                        'session.instructions.append', disclosure_reminder(self.brief)))
+            if speaker == 'agent':
+                self._check_disclosure(text, final=True)
+        if source == 'agent' and self.joiner.speaker == 'agent':
+            self._check_disclosure(''.join(self.joiner.parts))
+
+    def _check_disclosure(self, text, *, final=False):
+        """Decide once, early in the agent's first utterance, whether it disclosed being an AI.
+
+        GPT-Live cannot be forced to say a fixed sentence, so the opening is checked
+        as it is spoken; a miss triggers an immediate instruction to disclose.
+        """
+        if self.disclosure_checked or self.inbound:
+            return
+        verified = mentions_ai(text)
+        if not verified and not final and len(text.strip()) < DISCLOSURE_WINDOW:
+            return
+        self.disclosure_checked = True
+        self.ctx.event('call.disclosure', verified=verified)
+        if not verified and self.live is not None:
+            asyncio.create_task(self.live.append(
+                'session.instructions.append', disclosure_reminder(self.brief)))
 
     async def _open(self):
         """Prompt the opening once the other side speaks, or after a short pause."""

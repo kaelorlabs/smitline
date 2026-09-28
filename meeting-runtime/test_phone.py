@@ -523,5 +523,105 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(calls[0]['id'], twiml)
 
 
+def fake_live_app(record):
+    """A GPT-Live WebSocket speaking the documented event protocol."""
+    from aiohttp import web
+
+    async def sessions(request):
+        record['auth'] = request.headers.get('Authorization')
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        heard = False
+        async for message in ws:
+            event = json.loads(message.data)
+            kind = event['type']
+            record.setdefault('kinds', []).append(kind)
+            if kind == 'session.start':
+                record['config'] = event['session']
+                await ws.send_json({'type': 'session.started', 'session': {'id': 'sess_fake'}})
+            elif kind == 'session.input_audio.append' and not heard:
+                heard = True
+                await ws.send_json({'type': 'session.input_transcript.delta', 'delta': 'Hello?',
+                                    'start_ms': 0, 'end_ms': 300})
+            elif kind == 'session.commentary.append':
+                await ws.send_json({'type': 'session.output_transcript.delta',
+                                    'delta': "Hi, I'm an AI assistant calling on behalf of Robin.",
+                                    'start_ms': 500, 'end_ms': 2500})
+                await ws.send_json({'type': 'session.output_audio.delta',
+                                    'delta': base64.b64encode(b'\xff' * 160).decode(),
+                                    'start_ms': 500, 'end_ms': 520})
+            elif kind == 'session.close':
+                await ws.send_json({'type': 'session.closed', 'reason': 'close_requested',
+                                    'usage': {'seconds': 7}})
+                await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get('/v1/live/sessions', sessions)
+    return app
+
+
+class RealSocketTests(unittest.IsolatedAsyncioTestCase):
+    """The phone bridge over real aiohttp WebSockets on both sides."""
+
+    async def asyncSetUp(self):
+        from voice_core import LiveSession
+        self.temp = tempfile.TemporaryDirectory()
+        self.record = {}
+        self.live_server = TestServer(fake_live_app(self.record))
+        await self.live_server.start_server()
+        live_url = f'ws://127.0.0.1:{self.live_server.port}/v1/live/sessions'
+        self.h = PhoneHarness(self.temp.name)
+        self.h.line.live_factory = lambda key, config: LiveSession(key, config, url=live_url)
+
+        async def public_url():
+            return PUBLIC
+        self.gateway = TestClient(TestServer(
+            create_gateway_app(self.h.line, self.h.service, public_url=public_url)))
+        await self.gateway.start_server()
+
+    async def asyncTearDown(self):
+        await self.gateway.close()
+        await self.live_server.close()
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def test_call_through_gateway_and_live_sockets(self):
+        record, session = await self.h.dial()
+        twilio = await self.gateway.ws_connect('/twilio/media')
+        await twilio.send_str(json.dumps({'event': 'connected', 'protocol': 'Call'}))
+        await twilio.send_str(json.dumps({'event': 'start', 'start': {
+            'streamSid': 'MZ9', 'callSid': 'CA123',
+            'customParameters': {'callId': record['id'], 'token': session.token}}}))
+        await until(lambda: self.record.get('config') is not None)
+        await twilio.send_str(json.dumps({'event': 'media', 'streamSid': 'MZ9',
+                                          'media': {'track': 'inbound', 'payload': 'f39/f39/'}}))
+        media = None
+        while media is None:
+            message = json.loads((await asyncio.wait_for(twilio.receive(), 5)).data)
+            if message['event'] == 'media':
+                media = message
+        self.assertEqual(media['streamSid'], 'MZ9')
+        self.assertEqual(len(base64.b64decode(media['media']['payload'])), 160)
+        mark = json.loads((await asyncio.wait_for(twilio.receive(), 5)).data)
+        self.assertEqual(mark['event'], 'mark')
+        await twilio.send_str(json.dumps({'event': 'mark', 'mark': mark['mark']}))
+        await twilio.send_str(json.dumps({'event': 'stop', 'streamSid': 'MZ9'}))
+        await twilio.close()
+        self.h.line.on_status(record['id'], {'CallStatus': 'completed', 'CallDuration': '12'})
+        done = await self.h.service.wait(record['id'], timeout=10)
+
+        self.assertEqual(self.record['auth'], 'Bearer sk-test')
+        self.assertEqual(self.record['config']['audio']['format'], {'type': 'audio/pcmu', 'rate': 8000})
+        self.assertIn('session.input_audio.append', self.record['kinds'])
+        self.assertEqual(self.record['kinds'][-1], 'session.close')
+        self.assertEqual(done['status'], 'completed')
+        self.assertEqual(done['endReason'], 'remote_hangup')
+        self.assertEqual(done['usage']['voiceSeconds'], 7)
+        self.assertEqual([line['speaker'] for line in done['result']['transcript']], ['other', 'agent'])
+        disclosure = [e for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
+        self.assertEqual(disclosure[0]['data'], {'verified': True})
+
+
 if __name__ == '__main__':
     unittest.main()
