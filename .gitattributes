@@ -1,0 +1,14 @@
+# The runtime targets Linux and macOS and is mounted into Linux containers.
+# Keep LF line endings in every checkout, including Windows, so shell
+# scripts and container bind mounts work without conversion.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.wav binary
+*.pdf binary
+*.docx binary
+*.lock text eol=lf
