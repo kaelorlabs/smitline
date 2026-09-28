@@ -1,8 +1,20 @@
 import unittest
 
-from bridge import build_session_config
+from bridge import browser_environment, build_session_config
 from runtime_config import RuntimeConfig
 from test_schemas import context_payload, permissions_payload
+
+
+class BrowserEnvironmentTests(unittest.TestCase):
+    def test_keys_and_meeting_details_stay_out_of_the_browser(self):
+        env = browser_environment({
+            'OPENAI_API_KEY': 'x', 'TAVILY_API_KEY': 'x', 'TWILIO_ACCOUNT_SID': 'x',
+            'TWILIO_AUTH_TOKEN': 'x', 'COLLEAGUE_CONNECTOR_PASSPHRASE': 'x',
+            'MEETING_URL': 'x', 'MEETING_PASSCODE': 'x', 'SOME_SECRET': 'x',
+            'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse', 'COLLEAGUE_OWNER_NAME': 'Robin',
+        })
+        self.assertEqual(env, {'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse',
+                               'COLLEAGUE_OWNER_NAME': 'Robin'})
 
 
 class SessionConfigTests(unittest.TestCase):

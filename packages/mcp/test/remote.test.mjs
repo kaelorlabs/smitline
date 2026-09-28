@@ -256,13 +256,19 @@ test('discovery, registration, approval, tokens, and a call over MCP', async (t)
 });
 
 test('refresh tokens rotate, and reusing an old one revokes the grant', async (t) => {
-  const { base } = await startServer(t);
+  const { base, clock } = await startServer(t);
   const { client, tokens } = await signIn(base);
   const rotated = await tokenRequest(base, { grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id });
   assert.equal(rotated.status, 200);
   assert.notEqual(rotated.body.access_token, tokens.access_token);
   assert.notEqual(rotated.body.refresh_token, tokens.refresh_token);
   const session = await openSession(base, rotated.body.access_token);
+
+  // A retry within the grace period (lost response, parallel refresh) still works.
+  const retried = await tokenRequest(base, { grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id });
+  assert.equal(retried.status, 200);
+  assert.notEqual(retried.body.refresh_token, rotated.body.refresh_token);
+  clock.now += 2 * 60_000;
 
   const other = await signIn(base);
   const crossClient = await tokenRequest(base, {

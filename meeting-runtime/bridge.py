@@ -62,6 +62,15 @@ def stage(value):
         presence.sync()
 
 
+PRIVATE_NAMES = frozenset({'MEETING_URL', 'MEETING_PASSCODE', 'TWILIO_ACCOUNT_SID'})
+PRIVATE_SUFFIX = re.compile(r'(?:KEY|TOKEN|SECRET|PASSWORD|PASSPHRASE)$')
+
+
+def browser_environment(environ):
+    """Everything in .env reaches this container; keep keys and meeting details from the browser."""
+    return {k: v for k, v in environ.items() if k not in PRIVATE_NAMES and not PRIVATE_SUFFIX.search(k)}
+
+
 def build_session_config(runtime, meeting_state=None):
     meeting_state = meeting_state or {}
     config = {'model': 'gpt-live-1', 'store': False,
@@ -316,7 +325,7 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
     # The browser and display subprocesses do not inherit project secrets.
-    env = {k: v for k, v in os.environ.items() if k not in ('OPENAI_API_KEY', 'MEETING_URL', 'MEETING_PASSCODE', 'BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN')}
+    env = browser_environment(os.environ)
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(PulseServer(env=env))
         await stack.enter_async_context(VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900))

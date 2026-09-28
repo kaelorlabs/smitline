@@ -9,6 +9,8 @@ import path from 'node:path';
 export const ACCESS_TTL_MS = 60 * 60_000;
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000;
 export const MAX_CLIENTS = 200;
+// A rotated refresh token may be replayed this long before reuse counts as theft.
+export const REUSE_GRACE_MS = 60_000;
 // A client that registered recently may be in the middle of its approval.
 const REGISTRATION_GRACE_MS = 10 * 60_000;
 
@@ -175,7 +177,11 @@ export function openConnectorStore(root, { now = Date.now } = {}) {
       return { grantId: entry.grantId, clientId: grant.clientId, resource: grant.resource, scope: grant.scope };
     },
 
-    /** Exchange a refresh token for new tokens. Reusing a rotated token revokes its grant. */
+    /**
+     * Exchange a refresh token for new tokens. Reusing a rotated token revokes its
+     * grant, except within a short grace period so a client that retries after a lost
+     * response, or refreshes twice at once, is not locked out.
+     */
     rotateRefresh(token, clientId) {
       const db = prune(tokensFile.read());
       const digest = sha256(token);
@@ -183,6 +189,12 @@ export function openConnectorStore(root, { now = Date.now } = {}) {
       if (!entry) {
         const retired = own(db.retired, digest);
         if (!retired) return { error: 'invalid' };
+        const grant = own(db.grants, retired.grantId);
+        if (grant && grant.clientId === clientId && now() - (retired.retiredAt || 0) <= REUSE_GRACE_MS) {
+          const tokens = mint(db, retired.grantId, true);
+          tokensFile.write(db);
+          return { grantId: retired.grantId, resource: grant.resource, scope: grant.scope, ...tokens };
+        }
         dropGrant(db, retired.grantId);
         tokensFile.write(db);
         return { error: 'reused', grantId: retired.grantId };
@@ -190,7 +202,7 @@ export function openConnectorStore(root, { now = Date.now } = {}) {
       const grant = own(db.grants, entry.grantId);
       if (!grant || grant.clientId !== clientId) return { error: 'invalid' };
       delete db.refresh[digest];
-      db.retired[digest] = { grantId: entry.grantId, expiresAt: entry.expiresAt };
+      db.retired[digest] = { grantId: entry.grantId, expiresAt: entry.expiresAt, retiredAt: now() };
       grant.refreshedAt = iso(now());
       const tokens = mint(db, entry.grantId, true);
       tokensFile.write(db);
