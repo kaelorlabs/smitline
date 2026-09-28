@@ -122,6 +122,16 @@ class TwilioClient:
         return [item.get('phone_number') for item in body.get('incoming_phone_numbers') or ()
                 if item.get('phone_number')]
 
+    async def set_incoming_voice_url(self, number, voice_url):
+        """Point one of the account's numbers at our inbound webhook (HTTP POST)."""
+        from urllib.parse import quote
+        body = await self._call('GET', f'IncomingPhoneNumbers.json?PhoneNumber={quote(number)}')
+        matches = body.get('incoming_phone_numbers') or []
+        if not matches:
+            raise TwilioError(404, 'number_not_found', f'{number} is not a number in this Twilio account')
+        form = urlencode([('VoiceUrl', voice_url), ('VoiceMethod', 'POST')])
+        return await self._call('POST', f'IncomingPhoneNumbers/{matches[0]["sid"]}.json', form)
+
     async def verified_caller_ids(self):
         body = await self._call('GET', 'OutgoingCallerIds.json?PageSize=50')
         return [item.get('phone_number') for item in body.get('outgoing_caller_ids') or ()

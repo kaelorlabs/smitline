@@ -418,6 +418,39 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
             await TwilioClient('AC1', 'tok', request=failing).update_call('CA1', status='completed')
         self.assertEqual(caught.exception.code, 21211)
 
+    async def test_inbound_number_follows_the_gateway_address(self):
+        from daemon_main import configure_inbound
+        requests = []
+
+        async def request(method, url, form):
+            requests.append((method, url, form))
+            if method == 'GET':
+                return 200, {'incoming_phone_numbers': [{'sid': 'PN1', 'phone_number': '+15005550006'}]}
+            return 200, {'sid': 'PN1'}
+
+        class Service:
+            hooks = DefaultCallHooks(environ=dict(ENV))
+
+            class public_url:
+                @staticmethod
+                async def get():
+                    return PUBLIC + '/'
+        logs = []
+        configured = await configure_inbound(
+            Service, twilio_factory=lambda creds: TwilioClient(creds['accountSid'], creds['authToken'],
+                                                               request=request),
+            log=lambda *args, **kwargs: logs.append(args[0]))
+        self.assertTrue(configured)
+        self.assertIn('PhoneNumber=%2B15005550006', requests[0][1])
+        self.assertTrue(requests[1][1].endswith('/IncomingPhoneNumbers/PN1.json'))
+        self.assertEqual(dict(parse_qsl(requests[1][2])),
+                         {'VoiceUrl': f'{PUBLIC}/twilio/inbound', 'VoiceMethod': 'POST'})
+
+        class Unconfigured(Service):
+            hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k'})
+        self.assertFalse(await configure_inbound(Unconfigured, log=lambda *a, **k: logs.append(a[0])))
+        self.assertIn('not configured', logs[-1])
+
 
 class TunnelTests(unittest.IsolatedAsyncioTestCase):
     def test_configured_url(self):

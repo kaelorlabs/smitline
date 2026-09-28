@@ -48,7 +48,7 @@ Only the gateway routes are public: `/twilio/status/{id}`, `/twilio/amd/{id}`, `
 
 ## Incoming calls
 
-Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEAGUE_NOTIFY_WEBHOOK`, then point your Twilio number's voice webhook at `https://PUBLIC/twilio/inbound` (HTTP POST). The agent answers as your assistant, takes a message, and the result is delivered like any other call with `direction: "inbound"`. Incoming calls are rejected while the setting is off. With a quick tunnel the address changes on restart, so incoming calls suit server installs best.
+Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEAGUE_NOTIFY_WEBHOOK`, then restart the daemon. At startup it points `TWILIO_FROM_NUMBER`'s voice webhook at `https://PUBLIC/twilio/inbound` (HTTP POST) through the Twilio API, starting the quick tunnel if needed; the daemon log says whether that worked. The agent answers as your assistant, takes a message, and the result is delivered like any other call with `direction: "inbound"`. Incoming calls are rejected while the setting is off. A quick tunnel only works while the daemon runs, so incoming calls suit server installs best.
 
 ## Settings
 
