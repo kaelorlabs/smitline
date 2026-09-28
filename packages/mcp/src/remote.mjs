@@ -37,10 +37,23 @@ const PAGE_HEADERS = Object.freeze({
   // same-origin keeps the Origin header on the approval form's POST.
   'Referrer-Policy': 'same-origin',
 });
-const PAGE_EXTRA = `.field{display:grid;gap:4px}ul{margin:0;padding-left:1.2rem;color:var(--muted)}dl{margin:0;display:grid;gap:2px}
-dt{font-size:.875rem;color:var(--muted)}dd{margin:0 0 8px;overflow-wrap:anywhere}
-.actions{display:flex;gap:10px;flex-wrap:wrap}button.secondary{background:transparent;color:var(--ink);border:1px solid var(--line)}
-.error{color:var(--ink);border-left:3px solid #c2410c;padding:8px 12px;background:var(--card)}`;
+const PAGE_EXTRA = `.eyebrow{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px}
+.field{display:grid;gap:6px}
+.card{display:grid;gap:14px}
+.facts{margin:0;display:grid;gap:12px}
+.facts div{display:grid;gap:2px}
+.facts dt{font-size:13px;color:var(--muted)}
+.facts dd{margin:0;overflow-wrap:anywhere}
+.facts .app{font-size:17px;font-weight:600}
+.origin{display:inline-block;font-size:15px;font-weight:600;padding:4px 8px;border-radius:6px;background:var(--accent-soft);color:var(--ink)}
+.scope{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.scope li{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}
+.scope .icon{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-top:1px}
+.scope.can .icon{background:var(--accent-soft);color:var(--accent)}
+.scope.cannot .icon{background:var(--good-bg);color:var(--good)}
+.decide .actions button{min-width:120px}
+@media (max-width:480px){.decide .actions button{min-width:0}}`;
+const BRAND = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Colleague <b>AI</b></span></div>';
 
 // Configuration ---------------------------------------------------------------
 
@@ -220,42 +233,57 @@ function page(title, body) {
 <title>${escapeHtml(title)}</title><style>
 ${PAGE_STYLE}
 ${PAGE_EXTRA}</style></head>
-<body><main>${body}</main></body></html>`;
+<body><main>${BRAND}${body}</main></body></html>`;
 }
 
 function errorPage(message) {
-  return page('Colleague AI connection', `<h1>This connection request can't continue</h1>
+  return page('Colleague AI connection', `<h1>This connection request can’t continue</h1>
 <p class="error" role="alert">${escapeHtml(message)}</p>
-<p>Go back to the app and connect again.</p>`);
+<p class="lead">Nothing was shared. Go back to the app and connect again.</p>`);
 }
 
+// The owner decides here: which app, where it returns, and what it may do.
 function approvalPage(request, csrf, error = '') {
   const name = escapeHtml(request.client.clientName);
+  const origin = escapeHtml(new URL(request.redirectUri).origin);
   const hidden = Object.entries({ ...request.fields, csrf })
     .map(([key, value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}">`)
     .join('\n');
-  return page('Allow access to Colleague AI', `<h1>Allow ${name} to use Colleague AI?</h1>
-<p>An app is asking to connect to your Colleague AI server. If you allow it, it can:</p>
-<ul><li>place phone calls and join video meetings for you, following briefs it writes;</li>
-<li>read the status, results, and transcripts of those calls;</li>
-<li>send guidance during a call, end a call, or hand a call to your phone.</li></ul>
-<p>It cannot read your API keys, your files, or your coding workspaces.</p>
-<fieldset><legend>Request details</legend><dl>
-<dt>App name, as the app describes itself</dt><dd>${name}</dd>
-<dt>After you decide, you return to</dt><dd><code>${escapeHtml(new URL(request.redirectUri).origin)}</code></dd>
-<dt>Client ID</dt><dd><code>${escapeHtml(request.client.clientId)}</code></dd>
-</dl></fieldset>
-<p class="note">Allow only if you just added this connector yourself and the return address belongs to the app you are using.</p>
-${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ''}
-<form method="post" action="/oauth/authorize">
+  return page('Allow access to Colleague AI', `<header><p class="eyebrow">Connection request</p>
+<h1>Allow ${name} to use Colleague AI?</h1></header>
+<p class="lead">An app is asking to connect to your Colleague AI server. Check who is asking, then allow or deny.</p>
+<section class="card" aria-labelledby="who-title">
+<h2 id="who-title">Who is asking</h2>
+<dl class="facts">
+<div><dt>App name, as the app describes itself</dt><dd class="app">${name}</dd></div>
+<div><dt>After you decide, you return to</dt><dd><code class="origin">${origin}</code></dd></div>
+<div><dt>Client ID</dt><dd><code>${escapeHtml(request.client.clientId)}</code></dd></div>
+</dl>
+<p class="notice warn"><span><strong>Allow only if you just added this connector yourself</strong> and ${origin} belongs to the app you are using. Anyone can pick an app name; the return address is what counts.</span></p>
+</section>
+<section class="card" aria-labelledby="scope-title">
+<h2 id="scope-title">If you allow it, it can</h2>
+<ul class="scope can">
+<li><span class="icon" aria-hidden="true">✓</span><span>Place phone calls and join video meetings on your behalf, following briefs it writes</span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span>Read the status, results, and transcripts of those calls</span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span>Send guidance during a call, end a call, or hand a call to your phone</span></li>
+</ul>
+<h2>It cannot</h2>
+<ul class="scope cannot">
+<li><span class="icon" aria-hidden="true">✕</span><span>Read your API keys, your files, or your coding workspaces</span></li>
+</ul>
+</section>
+<form method="post" action="/oauth/authorize" class="card decide" aria-labelledby="decide-title">
+<h2 id="decide-title">Your decision</h2>
 ${hidden}
+${error ? `<p class="error" role="alert" id="passphrase-error">${escapeHtml(error)}</p>` : ''}
 <div class="field"><label for="passphrase">Owner passphrase</label>
-<input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required aria-describedby="passphrase-hint">
-<small id="passphrase-hint">The passphrase set for the remote connector on this server's setup page.</small></div>
+<input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required aria-describedby="${error ? 'passphrase-error ' : ''}passphrase-hint"${error ? ' aria-invalid="true" autofocus' : ''}>
+<small id="passphrase-hint">The passphrase chosen for the remote connector on this server’s setup page. You need it only to allow.</small></div>
 <div class="actions"><button type="submit" name="decision" value="approve">Allow</button>
 <button type="submit" name="decision" value="deny" class="secondary" formnovalidate>Deny</button></div>
 </form>
-<p><small>Access renews while the app uses it and ends after 30 days without use. Revoke it at any time with <code>colleague connector revoke</code>.</small></p>`);
+<p class="hint">Access renews while the app uses it and ends after 30 days without use. Revoke it at any time with <code>colleague connector revoke</code>.</p>`);
 }
 
 // Server ---------------------------------------------------------------------------------
