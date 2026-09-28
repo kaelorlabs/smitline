@@ -17,6 +17,7 @@ export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
   'TWILIO_FROM_NUMBER', 'COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_ALLOWED_CALLING_CODES',
   'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_CONNECTOR_URL',
+  'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND',
 ]);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
@@ -24,7 +25,17 @@ export const GPT_LIVE_VOICES = Object.freeze([
   'tempo', 'beacon', 'delta', 'cinder',
 ]);
 const E164 = /^\+[1-9][0-9]{7,14}$/;
+const VOICE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;
 const MCP_NAME = 'colleague-ai';
+// Skills a local agent can use without opening this repository.
+const INSTALLED_SKILLS = ['call-with-colleague-ai', 'join-colleague-ai-meeting'];
+
+/** GPT-Live voices plus any listed in COLLEAGUE_EXTRA_VOICES (new voices OpenAI adds). */
+export function availableVoices(env = process.env) {
+  const extra = String(env.COLLEAGUE_EXTRA_VOICES || '').split(',').map((name) => name.trim())
+    .filter((name) => VOICE_NAME.test(name));
+  return [...new Set([...GPT_LIVE_VOICES, ...extra])];
+}
 
 // .env handling ------------------------------------------------------------
 
@@ -101,7 +112,7 @@ export function connectorOrigin(value, { allowLoopback = false } = {}) {
   return url.origin;
 }
 
-export function validateSetting(key, value) {
+export function validateSetting(key, value, { env = process.env } = {}) {
   if (!SETTING_KEYS.includes(key)) {
     if (SECRET_KEYS.includes(key)) throw new Error(`${key} is a secret: enter it on the page from "colleague setup secrets"`);
     throw new Error(`unknown setting ${key}; allowed: ${SETTING_KEYS.join(', ')}`);
@@ -113,8 +124,16 @@ export function validateSetting(key, value) {
     if (!E164.test(compact)) throw new Error(`${key} must be an E.164 number such as +14155550142`);
     return compact;
   }
-  if (key === 'COLLEAGUE_VOICE' && !GPT_LIVE_VOICES.includes(text)) {
-    throw new Error(`COLLEAGUE_VOICE must be one of: ${GPT_LIVE_VOICES.join(', ')}`);
+  if (key === 'COLLEAGUE_VOICE' && !availableVoices(env).includes(text)) {
+    throw new Error(`COLLEAGUE_VOICE must be one of: ${availableVoices(env).join(', ')}`);
+  }
+  if (key === 'COLLEAGUE_EXTRA_VOICES') {
+    const names = text.split(',').map((name) => name.trim()).filter(Boolean);
+    if (names.some((name) => !VOICE_NAME.test(name))) throw new Error('COLLEAGUE_EXTRA_VOICES must be voice names separated by commas');
+    return names.join(',');
+  }
+  if (key === 'COLLEAGUE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
+    throw new Error('COLLEAGUE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
   }
   if (['COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_RECORD_CALLS'].includes(key) && !['0', '1'].includes(text)) {
     throw new Error(`${key} must be 0 or 1`);
@@ -252,12 +271,24 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     fix: 'Start Docker, or install it inside WSL', ask: 'Please start Docker (or Docker Desktop) and tell me when it is running.',
   }));
   checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(root, 'node_modules', 'mammoth')), { fix: 'npm install' }));
+  // The daemon creates a Python virtual environment on first start; Ubuntu ships without venv.
+  const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(root, '.venv', 'bin', 'python'));
+  const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
+  const pythonDetail = venvReady ? 'environment ready'
+    : python.status === 0 ? 'the first start creates the environment'
+      : python.status === 3 ? 'Python is older than 3.10'
+        : python.error ? 'python3 is not installed' : 'python3 cannot create a virtual environment (python3-venv is missing)';
+  checks.push(check('python', 'Python 3.10 or newer with venv', python.status === 0, {
+    detail: pythonDetail,
+    fix: process.platform === 'darwin' ? 'brew install python@3.12' : 'sudo apt install -y python3 python3-venv',
+    ask: process.platform === 'darwin' ? undefined : 'Please run this once in a terminal; it needs your password: sudo apt install -y python3 python3-venv',
+  }));
 
   let openai = { ok: present(env.OPENAI_API_KEY) };
   if (openai.ok && verify) openai = await verifyOpenAi(env.OPENAI_API_KEY, fetchImpl);
   checks.push(check('openai_key', 'OpenAI API key with GPT-Live access', openai.ok, {
     detail: openai.detail || (present(env.OPENAI_API_KEY) ? 'saved' : 'missing'),
-    ask: 'Please enter your OpenAI API key on the local setup page I opened. Do not paste it into this chat.',
+    ask: 'Please enter your OpenAI API key on the setup page I opened in your browser. Do not paste it into this chat.',
     fix: openai.fix || 'colleague setup secrets',
   }));
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
@@ -274,20 +305,43 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     ask: 'Do you want phone calls too? If yes, enter your Twilio Account SID and Auth Token on the setup page.',
     fix: 'colleague setup secrets',
   }));
-  // The daemon always needs TWILIO_FROM_NUMBER (inbound calls and transfers use it);
-  // COLLEAGUE_CALLER_ID only changes what outgoing calls display.
-  const from = env.COLLEAGUE_CALLER_ID || env.TWILIO_FROM_NUMBER;
-  let callerOk = present(env.TWILIO_FROM_NUMBER) && E164.test(env.TWILIO_FROM_NUMBER) && E164.test(from);
-  let callerDetail = callerOk ? from : (present(env.TWILIO_FROM_NUMBER) ? `${from} is not an E.164 number` : 'TWILIO_FROM_NUMBER is missing');
-  if (callerOk && Array.isArray(twilio.numbers)) {
-    const owned = twilio.numbers.includes(from) || (twilio.verified || []).includes(from);
-    if (!owned) { callerOk = false; callerDetail = `${from} is not a number or verified caller ID in this Twilio account`; }
+  // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else TWILIO_FROM_NUMBER.
+  // Incoming calls can only ring TWILIO_FROM_NUMBER, a number bought in Twilio.
+  const from = present(env.COLLEAGUE_CALLER_ID) ? env.COLLEAGUE_CALLER_ID : env.TWILIO_FROM_NUMBER;
+  let callerOk = present(from) && E164.test(from);
+  let callerDetail = !present(from) ? 'no number chosen yet' : (callerOk ? from : `${from} is not an E.164 number`);
+  let callerAsk = 'Should calls come from your Twilio number, or show your own mobile number (verified in Twilio)?';
+  let callerFix = 'colleague setup set TWILIO_FROM_NUMBER +1... (or COLLEAGUE_CALLER_ID for a verified mobile)';
+  let suggest = null;
+  if (Array.isArray(twilio.numbers)) {
+    const verified = twilio.verified || [];
+    if (callerOk && !twilio.numbers.includes(from) && !verified.includes(from)) {
+      callerOk = false;
+      callerDetail = `${from} is not a number or verified caller ID in this Twilio account`;
+    } else if (!present(from) && twilio.numbers.length === 1) {
+      // One number: nothing to ask; the agent sets it.
+      suggest = { key: 'TWILIO_FROM_NUMBER', value: twilio.numbers[0] };
+      callerDetail = `this Twilio account has one number, ${twilio.numbers[0]}`;
+      callerAsk = undefined;
+      callerFix = `colleague setup set TWILIO_FROM_NUMBER ${twilio.numbers[0]}`;
+    } else if (!present(from) && twilio.numbers.length > 1) {
+      callerDetail = `Twilio numbers: ${twilio.numbers.join(', ')}`;
+      callerAsk = `Which number should calls come from: ${twilio.numbers.join(', ')}?`;
+    } else if (!present(from) && verified.length) {
+      suggest = { key: 'COLLEAGUE_CALLER_ID', value: verified[0] };
+      callerDetail = `no Twilio number yet; ${verified[0]} is verified and can be shown on outgoing calls`;
+      callerAsk = undefined;
+      callerFix = `colleague setup set COLLEAGUE_CALLER_ID ${verified[0]}`;
+    }
   }
-  checks.push(check('caller_id', 'Caller ID', callerOk, {
-    group: 'phone', required: false, detail: callerDetail,
-    ask: 'Should calls come from a Twilio number or show your own verified mobile number?',
-    fix: 'colleague setup set TWILIO_FROM_NUMBER +1... (or COLLEAGUE_CALLER_ID for a verified mobile)',
-  }));
+  if (callerOk && !present(env.TWILIO_FROM_NUMBER)) {
+    callerDetail += '; incoming calls also need TWILIO_FROM_NUMBER, a number bought in Twilio';
+  }
+  const callerCheck = check('caller_id', 'Number calls come from', callerOk, {
+    group: 'phone', required: false, detail: callerDetail, ask: callerAsk, fix: callerFix,
+  });
+  if (suggest && !callerOk) callerCheck.suggest = suggest;
+  checks.push(callerCheck);
   checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.COLLEAGUE_OWNER_PHONE), {
     group: 'phone', required: false, detail: env.COLLEAGUE_OWNER_PHONE || 'missing',
     ask: 'What is your phone number? I will call it once to prove setup works.',
@@ -312,15 +366,26 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   const coreReady = checks.filter((c) => c.required).every((c) => c.ok === true);
   const phoneReady = coreReady && checks.filter((c) => c.group === 'phone' && c.id !== 'owner_phone').every((c) => c.ok === true);
   const meetingsReady = coreReady && checks.find((c) => c.id === 'docker').ok === true;
-  const next = checks.filter((c) => c.ok !== true && (c.required || c.group === 'phone' || c.group === 'agents'))
-    .map((c) => ({ id: c.id, ask: c.ask, fix: c.fix }));
+  // The first call rings the owner's phone; without phone setup it is a meeting instead.
+  const firstCallReady = phoneReady && checks.find((c) => c.id === 'owner_phone').ok === true;
+  // Phone steps become next steps once the user has started on phone calls; until then
+  // only the question "do you want phone calls?" is asked, and the rest is optional.
+  const wantsPhone = twilioSaved || ['TWILIO_FROM_NUMBER', 'COLLEAGUE_CALLER_ID', 'COLLEAGUE_OWNER_PHONE'].some((key) => present(env[key]));
+  const step = (c) => ({ id: c.id, ask: c.ask, fix: c.fix, ...(c.suggest ? { suggest: c.suggest } : {}) });
+  const pending = checks.filter((c) => c.ok !== true);
+  const isNext = (c) => c.required || c.group === 'agents' || (c.group === 'phone' && (wantsPhone || c.id === 'twilio'));
+  const next = pending.filter(isNext).map(step);
+  const optional = pending.filter((c) => !isNext(c) && ['phone', 'meetings'].includes(c.group)).map(step);
   return {
     ready: coreReady,
     phoneReady,
     meetingsReady,
+    firstCallReady,
     voice: env.COLLEAGUE_VOICE || 'marin',
+    voices: availableVoices(env),
     checks,
     next,
+    optional,
   };
 }
 
@@ -475,7 +540,44 @@ export function mcpServerPath(root) {
   return path.join(root, 'packages', 'mcp', 'src', 'server.mjs');
 }
 
-export function registerAgents(root, { agents, runner = run, home = os.homedir(), find = which } = {}) {
+/** From WSL: the Windows user folders as Linux paths, or null outside WSL. */
+export function windowsProfile({ runner = run, find = which } = {}) {
+  if (!find('cmd.exe') || !find('wslpath')) return null;
+  const folder = (variable) => {
+    const echo = runner('cmd.exe', ['/c', 'echo', `%${variable}%`], { timeout: 8_000 });
+    const value = (echo.stdout || '').trim().split(/\r?\n/).pop();
+    if (echo.status !== 0 || !value || value.includes('%')) return null;
+    const converted = runner('wslpath', ['-u', value]);
+    return converted.status === 0 ? converted.stdout.trim() : null;
+  };
+  const userProfile = folder('USERPROFILE');
+  if (!userProfile) return null;
+  return { userProfile, appData: folder('APPDATA'), distro: process.env.WSL_DISTRO_NAME || null };
+}
+
+function addToMcpJson(file, entry) {
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { config = {}; }
+  config.mcpServers = { ...(config.mcpServers || {}), [MCP_NAME]: entry };
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function installSkills(root, skillsDir) {
+  const installed = [];
+  for (const name of INSTALLED_SKILLS) {
+    const source = path.join(root, '.agents', 'skills', name);
+    if (!fs.existsSync(path.join(source, 'SKILL.md'))) continue;
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.cpSync(source, path.join(skillsDir, name), { recursive: true, force: true });
+    installed.push(name);
+  }
+  return installed;
+}
+
+export function registerAgents(root, {
+  agents, runner = run, home = os.homedir(), find = which,
+  windows = inWsl() ? windowsProfile({ runner, find }) : null,
+} = {}) {
   const server = mcpServerPath(root);
   const results = [];
   const wanted = agents ? new Set(agents) : null;
@@ -499,10 +601,39 @@ export function registerAgents(root, { agents, runner = run, home = os.homedir()
     fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
     results.push({ id: 'cursor', registered: true, detail: 'restart Cursor to load it' });
   }
+  // Windows apps start the server inside this WSL distribution.
+  const bridged = {
+    command: 'wsl.exe',
+    args: [...(windows?.distro ? ['-d', windows.distro] : []), '--exec', process.execPath, server],
+  };
+  if (windows) {
+    const desktopDir = windows.appData && path.join(windows.appData, 'Claude');
+    if (want('claude-desktop') && desktopDir && fs.existsSync(desktopDir)) {
+      addToMcpJson(path.join(desktopDir, 'claude_desktop_config.json'), bridged);
+      results.push({ id: 'claude-desktop', registered: true, detail: 'quit and reopen Claude Desktop to load it' });
+    }
+    const windowsCursor = path.join(windows.userProfile, '.cursor');
+    if (want('cursor') && fs.existsSync(windowsCursor)) {
+      addToMcpJson(path.join(windowsCursor, 'mcp.json'), bridged);
+      results.push({ id: 'cursor-windows', registered: true, detail: 'restart Cursor on Windows to load it' });
+    }
+    if (want('claude-code') && runner('cmd.exe', ['/c', 'where', 'claude'], { timeout: 8_000 }).status === 0) {
+      runner('cmd.exe', ['/c', 'claude', 'mcp', 'remove', '--scope', 'user', MCP_NAME], { timeout: 20_000 });
+      const added = runner('cmd.exe', ['/c', 'claude', 'mcp', 'add', '--scope', 'user', MCP_NAME, '--', bridged.command, ...bridged.args], { timeout: 20_000 });
+      results.push({ id: 'claude-code-windows', registered: added.status === 0, detail: added.status === 0 ? 'restart Claude Code on Windows to load it' : (added.stderr || '').trim().slice(0, 200) });
+    }
+  }
+  // Skills teach an agent to write a good brief and wait for the result.
+  const skills = [];
+  for (const [id, dir] of [['claude', path.join(home, '.claude')], ['codex', path.join(home, '.codex')],
+    ...(windows ? [['claude-windows', path.join(windows.userProfile, '.claude')]] : [])]) {
+    if (fs.existsSync(dir)) skills.push({ id, installed: installSkills(root, path.join(dir, 'skills')) });
+  }
   const manual = {
     command: process.execPath,
     args: [server],
-    note: 'Other MCP clients (Claude Desktop, OpenClaw, Hermes): add a stdio server with this command. Cloud agents use the remote connector; see docs/agents.md.',
+    ...(windows ? { windows: bridged } : {}),
+    note: 'Other MCP clients (OpenClaw, Hermes, and others): add a stdio server with this command. Cloud agents use the remote connector; see docs/agents.md.',
   };
-  return { results, manual };
+  return { results, skills, manual };
 }

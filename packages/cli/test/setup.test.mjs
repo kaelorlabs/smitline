@@ -8,8 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission, serveSecretsPage,
-  setupStatus, validateSetting, writeEnv,
+  availableVoices, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
+  serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv,
 } from '../src/setup.mjs';
 
 const cli = fileURLToPath(new URL('../src/colleague.mjs', import.meta.url));
@@ -45,6 +45,13 @@ test('settings are validated and secrets are refused', () => {
   assert.throws(() => validateSetting('COLLEAGUE_PUBLIC_URL', 'http://x'), /https/);
   assert.throws(() => validateSetting('PATH', '/bin'), /unknown setting/);
   assert.throws(() => validateSetting('COLLEAGUE_OWNER_NAME', 'a\nb'), /one line/);
+  // Voices OpenAI adds later can be allowed without a release.
+  const env = { COLLEAGUE_EXTRA_VOICES: 'aurora, bad name,nova' };
+  assert.deepEqual(availableVoices(env).slice(-2), ['aurora', 'nova']);
+  assert.equal(validateSetting('COLLEAGUE_VOICE', 'aurora', { env }), 'aurora');
+  assert.throws(() => validateSetting('COLLEAGUE_VOICE', 'aurora', { env: {} }), /one of/);
+  assert.equal(validateSetting('COLLEAGUE_EXTRA_VOICES', 'aurora, nova'), 'aurora,nova');
+  assert.throws(() => validateSetting('COLLEAGUE_EXTRA_VOICES', 'Aurora!'), /voice names/);
 });
 
 test('connector settings take an https origin and a passphrase of at least 12 characters', () => {
@@ -103,11 +110,22 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   const root = await tempRoot(t);
   await fs.writeFile(path.join(root, 'start-runtime-daemon.sh'), '#!/bin/sh\n');
   await fs.mkdir(path.join(root, 'node_modules', 'mammoth'), { recursive: true });
-  const runner = fakeRunner({ 'docker info': 0 });
+  const runner = fakeRunner({ 'docker info': 0, 'python3 -c': 0 });
   const find = (binary) => (binary === 'docker' ? '/usr/bin/docker' : null);
   const empty = await setupStatus({ root, env: {}, verify: false, runner, find });
   assert.equal(empty.ready, false);
+  assert.equal(empty.firstCallReady, false);
   assert.deepEqual(empty.next.slice(0, 2).map((item) => item.id), ['openai_key', 'owner_name']);
+  // Until the user opts into phone calls, only that question is a next step.
+  assert.ok(empty.next.some((item) => item.id === 'twilio'));
+  assert.ok(!empty.next.some((item) => ['caller_id', 'owner_phone', 'public_url'].includes(item.id)));
+  assert.deepEqual(empty.optional.map((item) => item.id), ['caller_id', 'owner_phone']);
+
+  const noVenv = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({ 'docker info': 0 }), find });
+  const python = noVenv.checks.find((c) => c.id === 'python');
+  assert.equal(python.ok, false);
+  assert.match(python.detail, /python3-venv/);
+  assert.equal(noVenv.next[0].id, 'python');
   assert.match(empty.next[0].ask, /Do not paste it into this chat/);
 
   const requests = [];
@@ -120,17 +138,26 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   };
   const envLines = [
     'OPENAI_API_KEY=sk-test', 'COLLEAGUE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
-    'TWILIO_AUTH_TOKEN=tok', 'COLLEAGUE_CALLER_ID=+14155550100', 'COLLEAGUE_OWNER_PHONE=+14155550100',
+    'TWILIO_AUTH_TOKEN=tok', 'COLLEAGUE_OWNER_PHONE=+14155550100',
   ];
-  // The daemon needs TWILIO_FROM_NUMBER even when a verified mobile is the caller ID.
+  // No number chosen yet.
   await fs.writeFile(path.join(root, '.env'), envLines.join('\n'));
   const withoutFrom = await setupStatus({ root, env: {}, fetchImpl, runner, find });
   assert.equal(withoutFrom.phoneReady, false);
-  assert.match(withoutFrom.checks.find((c) => c.id === 'caller_id').detail, /TWILIO_FROM_NUMBER/);
+  // One number in the account: no question, the agent sets it.
+  const callerStep = withoutFrom.next.find((item) => item.id === 'caller_id');
+  assert.deepEqual(callerStep.suggest, { key: 'TWILIO_FROM_NUMBER', value: '+15005550006' });
+  assert.equal(callerStep.ask, undefined);
+  // A verified mobile alone is enough for outgoing calls.
+  await fs.writeFile(path.join(root, '.env'), [...envLines, 'COLLEAGUE_CALLER_ID=+14155550100'].join('\n'));
+  const callerOnly = await setupStatus({ root, env: {}, fetchImpl, runner, find });
+  assert.equal(callerOnly.phoneReady, true);
+  assert.match(callerOnly.checks.find((c) => c.id === 'caller_id').detail, /incoming calls also need TWILIO_FROM_NUMBER/);
   await fs.writeFile(path.join(root, '.env'), [...envLines, 'TWILIO_FROM_NUMBER=+15005550006'].join('\n'));
   const full = await setupStatus({ root, env: {}, fetchImpl, runner, find });
   assert.equal(full.ready, true);
   assert.equal(full.phoneReady, true);
+  assert.equal(full.firstCallReady, full.checks.find((c) => c.id === 'owner_phone').ok === true);
   const offline = await setupStatus({ root, env: {}, fetchImpl, runner, find, verify: false });
   assert.equal(offline.checks.find((c) => c.id === 'caller_id').ok, true);
   assert.match(full.checks.find((c) => c.id === 'twilio').detail, /trial/);
@@ -158,6 +185,86 @@ test('register adds the stdio server to detected agents', async (t) => {
   const cursor = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
   assert.deepEqual(cursor.mcpServers['colleague-ai'].args, ['/repo/packages/mcp/src/server.mjs']);
   assert.equal(manual.args[0], '/repo/packages/mcp/src/server.mjs');
+});
+
+test('register from WSL also adds Windows apps and installs the call skills', async (t) => {
+  const repo = await tempRoot(t);
+  for (const name of ['call-with-colleague-ai', 'join-colleague-ai-meeting', 'setup-colleague-ai']) {
+    await fs.mkdir(path.join(repo, '.agents', 'skills', name), { recursive: true });
+    await fs.writeFile(path.join(repo, '.agents', 'skills', name, 'SKILL.md'), `# ${name}\n`);
+  }
+  const home = await tempRoot(t);
+  await fs.mkdir(path.join(home, '.claude'));
+  const userProfile = await tempRoot(t);
+  const appData = path.join(userProfile, 'AppData', 'Roaming');
+  await fs.mkdir(path.join(appData, 'Claude'), { recursive: true });
+  await fs.writeFile(path.join(appData, 'Claude', 'claude_desktop_config.json'), JSON.stringify({ mcpServers: { other: { command: 'x' } } }));
+  await fs.mkdir(path.join(userProfile, '.claude'));
+  const calls = [];
+  const runner = (binary, args) => { calls.push([binary, ...args]); return { status: 0, stdout: '', stderr: '' }; };
+  const { results, skills, manual } = registerAgents(repo, {
+    runner, find: () => null, home, windows: { userProfile, appData, distro: 'Ubuntu' },
+  });
+  const server = path.join(repo, 'packages', 'mcp', 'src', 'server.mjs');
+  const desktop = JSON.parse(await fs.readFile(path.join(appData, 'Claude', 'claude_desktop_config.json'), 'utf8'));
+  assert.deepEqual(desktop.mcpServers.other, { command: 'x' });
+  assert.deepEqual(desktop.mcpServers['colleague-ai'], {
+    command: 'wsl.exe', args: ['-d', 'Ubuntu', '--exec', process.execPath, server],
+  });
+  assert.ok(results.some((r) => r.id === 'claude-desktop' && r.registered));
+  const windowsClaude = calls.find((c) => c[0] === 'cmd.exe' && c.includes('add'));
+  assert.deepEqual(windowsClaude.slice(-6), ['wsl.exe', '-d', 'Ubuntu', '--exec', process.execPath, server]);
+  assert.deepEqual(skills.map((s) => s.id), ['claude', 'claude-windows']);
+  assert.deepEqual(skills[0].installed, ['call-with-colleague-ai', 'join-colleague-ai-meeting']);
+  await fs.access(path.join(home, '.claude', 'skills', 'call-with-colleague-ai', 'SKILL.md'));
+  await fs.access(path.join(userProfile, '.claude', 'skills', 'join-colleague-ai-meeting', 'SKILL.md'));
+  assert.equal(manual.windows.command, 'wsl.exe');
+
+  // Outside WSL there is no Windows side.
+  assert.equal(windowsProfile({ runner, find: () => null }), null);
+  const translated = windowsProfile({
+    find: () => '/bin/x',
+    runner: (binary, args) => (binary === 'cmd.exe'
+      ? { status: 0, stdout: args[2] === '%USERPROFILE%' ? 'C:\\Users\\sam\r\n' : 'C:\\Users\\sam\\AppData\\Roaming\r\n' }
+      : { status: 0, stdout: `/mnt/c/${args[1].slice(3).replaceAll('\\', '/')}\n` }),
+  });
+  assert.equal(translated.userProfile, '/mnt/c/Users/sam');
+  assert.equal(translated.appData, '/mnt/c/Users/sam/AppData/Roaming');
+});
+
+test('setup secrets starts the page in the background and prints its address', async (t) => {
+  const root = await tempRoot(t);
+  const started = await runCli(['setup', 'secrets', '--no-open', '--root', root], { COLLEAGUE_SETUP_PAGE_TIMEOUT_MS: '5000' });
+  assert.equal(started.code, 0, started.stderr);
+  const { url, opened, next } = JSON.parse(started.stdout);
+  assert.equal(opened, false);
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/setup\//);
+  assert.match(next, /press Done/);
+  // The command has returned, and the page is still being served.
+  const page = await fetch(url);
+  assert.equal(page.status, 200);
+  const saved = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ COLLEAGUE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+});
+
+test('a voice preview calls the owner in that voice without saving it', async (t) => {
+  const root = await tempRoot(t);
+  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\nCOLLEAGUE_OWNER_PHONE=+14155550100\n');
+  const daemon = await fakeCallsDaemon(root);
+  t.after(daemon.close);
+  const preview = await runCli(['setup', 'voice', '--preview', 'cinder', '--root', root, '--port', String(daemon.port)]);
+  assert.equal(preview.code, 0, preview.stderr);
+  const brief = daemon.seen.find((item) => item.method === 'POST').body;
+  assert.equal(brief.voice, 'cinder');
+  assert.equal(brief.to, '+14155550100');
+  assert.equal(readEnv(root).COLLEAGUE_VOICE, undefined);
+  const bad = await runCli(['setup', 'voice', '--preview', 'alloy', '--root', root]);
+  assert.equal(bad.code, 2);
 });
 
 async function fakeCallsDaemon(root) {

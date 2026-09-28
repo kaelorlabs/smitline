@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +17,7 @@ import {
   validateContext,
 } from '../../sdk-typescript/src/index.mjs';
 import {
-  GPT_LIVE_VOICES,
+  availableVoices,
   openBrowser,
   readEnv,
   registerAgents,
@@ -46,10 +48,11 @@ const USAGE = `Usage:
   colleague calls instruct --call-id <id> --text <guidance>
   colleague voices
   colleague setup status [--json] [--no-verify]
-  colleague setup secrets [--no-open]
+  colleague setup secrets [--no-open] [--wait]
   colleague setup set <KEY> <value>
-  colleague setup register [--agents claude-code,codex,cursor]
-  colleague setup voice [--set <name>]
+  colleague setup start
+  colleague setup register [--agents claude-code,codex,cursor,claude-desktop]
+  colleague setup voice [--set <name>] [--preview <name>]
   colleague setup call-me [--wait]
   colleague connector status
   colleague connector revoke --all | --client <id>
@@ -438,6 +441,98 @@ function printStatus(report) {
   process.stdout.write(`\nready: ${report.ready}  phone: ${report.phoneReady}  meetings: ${report.meetingsReady}\n`);
 }
 
+function portOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host });
+    socket.setTimeout(400);
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('timeout', () => { socket.destroy(); resolve(false); });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+function tail(file, lines = 15) {
+  try {
+    return readFileSync(file, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/** Start the runtime daemon in the background and wait for it, showing progress. */
+async function startDaemon(root, { timeoutMs = 240_000 } = {}) {
+  const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+  if (await portOpen(port)) return { running: true, started: false, port };
+  const dir = path.join(root, '.colleague');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const log = path.join(dir, 'daemon.log');
+  const fd = openSync(log, 'a', 0o600);
+  const child = spawn('bash', [path.join(root, 'start-runtime-daemon.sh')], {
+    cwd: root,
+    detached: true,
+    stdio: ['ignore', fd, fd],
+    env: { ...process.env, COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) },
+  });
+  closeSync(fd);
+  let exitCode = null;
+  child.once('exit', (code) => { exitCode = code ?? 1; });
+  child.unref();
+  progress('Starting Colleague AI. The first start installs Python packages and can take a minute or two.');
+  const started = Date.now();
+  let lastNote = started;
+  while (Date.now() - started < timeoutMs) {
+    if (await portOpen(port)) {
+      progress(`Colleague AI is running (log: ${log}).`);
+      return { running: true, started: true, port, log };
+    }
+    if (exitCode !== null) {
+      const recent = tail(log);
+      const hint = /ensurepip|venv/.test(recent)
+        ? ' Python cannot create a virtual environment; run: sudo apt install -y python3-venv'
+        : '';
+      throw new StartupError(`Colleague AI stopped while starting (exit ${exitCode}).${hint}\n${recent}`, { code: 'daemon_unavailable' });
+    }
+    if (Date.now() - lastNote >= 15_000) {
+      lastNote = Date.now();
+      progress(`Still starting (${Math.round((Date.now() - started) / 1000)} s)...`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new StartupError(`Colleague AI did not start within ${Math.round(timeoutMs / 1000)} s. Recent log:\n${tail(log)}`, { code: 'daemon_unavailable' });
+}
+
+/** Run the setup page in a background process, so the agent gets the address at once. */
+function launchSecretsPage(root, { open }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'setup', 'secrets', '--serve', '--root', root], {
+      cwd: root,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let buffered = '';
+    const timer = setTimeout(() => { child.kill(); reject(new StartupError('the setup page did not start', { code: 'setup_page' })); }, 15_000);
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk;
+      const line = buffered.split('\n')[0];
+      if (!buffered.includes('\n')) return;
+      clearTimeout(timer);
+      child.stdout.destroy();
+      child.unref();
+      try {
+        const { url } = JSON.parse(line);
+        resolve({ url, opened: open ? openBrowser(url) : false });
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new StartupError(`the setup page exited early (${code})`, { code: 'setup_page' }));
+    });
+    child.once('error', reject);
+  });
+}
+
 async function setupCommand(args) {
   const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
   const action = args._[1] || 'status';
@@ -447,16 +542,44 @@ async function setupCommand(args) {
     else printStatus(report);
     return report.ready ? EXIT.ok : EXIT.startup;
   }
-  if (action === 'secrets') {
+  if (action === 'secrets' && args.serve) {
+    // Background page process: announce the address on stdout, then stay quiet.
+    await serveSecretsPage({
+      root,
+      timeoutMs: Number(process.env.COLLEAGUE_SETUP_PAGE_TIMEOUT_MS) || undefined,
+      onUrl(url) {
+        process.stdout.write(`${JSON.stringify({ url })}\n`);
+      },
+    }).catch(() => {});
+    return EXIT.ok;
+  }
+  if (action === 'secrets' && args.wait) {
     const result = await serveSecretsPage({
       root,
       onUrl(url) {
         const opened = args['no-open'] ? false : openBrowser(url);
-        progress(`Open this page to enter keys (it works once, on this computer only):\n${url}`);
+        progress(`Enter keys on this page (this computer only; it closes after 15 minutes):\n${url}`);
         if (!opened) progress('Could not open a browser automatically; open the address above.');
+      },
+      onSaved(keys) {
+        progress(`Saved: ${keys.join(', ')}`);
       },
     });
     printJson({ saved: result.saved });
+    return EXIT.ok;
+  }
+  if (action === 'secrets') {
+    const { url, opened } = await launchSecretsPage(root, { open: !args['no-open'] });
+    printJson({
+      url,
+      opened,
+      next: `${opened ? 'The setup page is open in your browser' : `Open ${url} in a browser on this computer`}. `
+        + 'Enter your keys there, press Done, then tell me. The page stays available for 15 minutes.',
+    });
+    return EXIT.ok;
+  }
+  if (action === 'start') {
+    printJson(await startDaemon(root));
     return EXIT.ok;
   }
   if (action === 'set') {
@@ -479,14 +602,36 @@ async function setupCommand(args) {
     return EXIT.ok;
   }
   if (action === 'voice') {
+    const env = { ...readEnv(root), ...process.env };
+    const voices = availableVoices(env);
+    const pick = (value, flag) => {
+      if (!voices.includes(String(value))) throw new ValidationError(`--${flag} must be one of: ${voices.join(', ')}`);
+      return String(value);
+    };
     if (args.set && args.set !== true) {
-      try {
-        writeEnv(root, { COLLEAGUE_VOICE: validateSetting('COLLEAGUE_VOICE', String(args.set)) });
-      } catch (error) {
-        throw new ValidationError(error.message);
-      }
+      writeEnv(root, { COLLEAGUE_VOICE: pick(args.set, 'set') });
     }
-    printJson({ voice: readEnv(root).COLLEAGUE_VOICE || 'marin', voices: GPT_LIVE_VOICES });
+    if (args.preview && args.preview !== true) {
+      // A short call to the owner's phone in that voice; nothing is saved.
+      const voice = pick(args.preview, 'preview');
+      const phone = env.COLLEAGUE_OWNER_PHONE;
+      const name = env.COLLEAGUE_OWNER_NAME;
+      if (!phone || !name) {
+        throw new ValidationError('a voice preview calls your phone; set your name and phone first on the setup page');
+      }
+      return callCommand({
+        ...args,
+        brief: JSON.stringify({
+          channel: 'phone',
+          to: phone,
+          onBehalfOf: name,
+          voice,
+          objective: `This is a voice preview for ${name}. In two or three sentences, say this is the ${voice} voice for Colleague AI, and ask whether they would like to keep it. Then say goodbye and end the call.`,
+          maxMinutes: 2,
+        }),
+      });
+    }
+    printJson({ voice: readEnv(root).COLLEAGUE_VOICE || 'marin', voices });
     return EXIT.ok;
   }
   if (action === 'call-me') {
