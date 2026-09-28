@@ -1,0 +1,199 @@
+"""Call briefs: what an agent asks Colleague AI to do on a phone call or in a meeting."""
+from dataclasses import dataclass, field
+import re
+from urllib.parse import urlsplit
+
+from meeting_urls import platform_for_url
+from schema_validation import (
+    optional_field, reject_secrets, reject_unknown_fields, require_bool, require_enum,
+    require_int, require_mapping, require_string, require_string_list,
+)
+
+
+CHANNELS = ('phone', 'meeting')
+BRIEF_FIELDS = (
+    'channel', 'to', 'onBehalfOf', 'objective', 'context', 'mayAgreeTo', 'mustNotShare',
+    'successCriteria', 'language', 'voice', 'maxMinutes', 'rehearsal', 'notify',
+    'agentSession',
+)
+NOTIFY_FIELDS = ('webhookUrl',)
+E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
+VOICE = re.compile(r'^[a-z][a-z0-9_-]{1,31}$')
+LANGUAGE = re.compile(r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$')
+DEFAULT_MAX_MINUTES = {'phone': 10, 'meeting': 120}
+MAX_MINUTES = {'phone': 60, 'meeting': 240}
+MAX_CONTEXT = 6000
+
+QUESTIONS = {
+    'channel': 'Should I place a phone call or join a video meeting?',
+    'to': 'What number should I call, or what is the meeting link?',
+    'objective': 'What should the call achieve?',
+    'onBehalfOf': 'Whose behalf am I calling on? I say this name when the call starts.',
+}
+
+
+class BriefIncomplete(ValueError):
+    """Required brief fields are missing; each comes with a question for the user."""
+
+    def __init__(self, missing):
+        self.missing = tuple(missing)
+        super().__init__('brief is missing ' + ', '.join(self.missing))
+
+    def to_dict(self):
+        return {
+            'missing': [{'field': name, 'question': QUESTIONS[name]} for name in self.missing],
+        }
+
+
+def normalize_phone(value, name='to'):
+    text = require_string(value, name, max_length=32)
+    compact = re.sub(r'[\s().-]', '', text)
+    if not E164.fullmatch(compact):
+        raise ValueError(f'{name} must be an E.164 phone number such as +14155550142')
+    return compact
+
+
+def validate_webhook_url(value, name='notify.webhookUrl'):
+    text = require_string(value, name, max_length=2048)
+    try:
+        url = urlsplit(text)
+    except ValueError as error:
+        raise ValueError(f'{name} is not a valid URL') from error
+    if url.username or url.password:
+        raise ValueError(f'{name} must not contain credentials')
+    host = (url.hostname or '').lower()
+    if url.scheme == 'https' and host:
+        return text
+    if url.scheme == 'http' and host in ('127.0.0.1', 'localhost', '::1'):
+        return text
+    raise ValueError(f'{name} must use https, or http on localhost')
+
+
+def _optional_text(data, key, max_length):
+    value = optional_field(data, key)
+    if value is None:
+        return None
+    return require_string(value, key, allow_newlines=True, max_length=max_length)
+
+
+def _optional_list(data, key):
+    value = optional_field(data, key)
+    if value is None:
+        return ()
+    return require_string_list(value, key, max_items=20, item_max_length=300)
+
+
+@dataclass(frozen=True)
+class CallBrief:
+    channel: str
+    to: str
+    on_behalf_of: str
+    objective: str
+    context: str = None
+    may_agree_to: tuple = ()
+    must_not_share: tuple = ()
+    success_criteria: str = None
+    language: str = None
+    voice: str = None
+    max_minutes: int = None
+    rehearsal: bool = False
+    webhook_url: str = None
+    agent_session: dict = field(default=None, compare=False)
+
+    @property
+    def platform(self):
+        return platform_for_url(self.to) if self.channel == 'meeting' else 'phone'
+
+    def to_dict(self):
+        data = {
+            'channel': self.channel,
+            'to': self.to,
+            'onBehalfOf': self.on_behalf_of,
+            'objective': self.objective,
+            'context': self.context,
+            'mayAgreeTo': list(self.may_agree_to),
+            'mustNotShare': list(self.must_not_share),
+            'successCriteria': self.success_criteria,
+            'language': self.language,
+            'voice': self.voice,
+            'maxMinutes': self.max_minutes,
+            'rehearsal': self.rehearsal,
+            'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
+            'agentSession': self.agent_session,
+        }
+        return {key: value for key, value in data.items() if value is not None}
+
+    @classmethod
+    def from_dict(cls, payload):
+        data = require_mapping(payload, 'brief')
+        reject_unknown_fields(data, BRIEF_FIELDS, 'brief')
+        reject_secrets(data, 'brief')
+        missing = [name for name in ('channel', 'to', 'objective', 'onBehalfOf')
+                   if not isinstance(data.get(name), str) or not data.get(name).strip()]
+        if missing:
+            raise BriefIncomplete(missing)
+        channel = require_enum(data['channel'], 'channel', CHANNELS)
+        if channel == 'phone':
+            to = normalize_phone(data['to'])
+        else:
+            to = require_string(data['to'], 'to', max_length=2048)
+            platform_for_url(to)
+        agent_session = optional_field(data, 'agentSession')
+        if agent_session is not None:
+            if channel != 'meeting':
+                raise ValueError('agentSession is only supported for meetings')
+            agent_session = dict(require_mapping(agent_session, 'agentSession'))
+        language = optional_field(data, 'language')
+        if language is not None and not LANGUAGE.fullmatch(require_string(language, 'language', max_length=16)):
+            raise ValueError('language must be a language tag such as en or pt-BR')
+        voice = optional_field(data, 'voice')
+        if voice is not None:
+            voice = require_string(voice, 'voice', max_length=32)
+            if not VOICE.fullmatch(voice) or voice not in available_voices():
+                raise ValueError('voice must be one of: ' + ', '.join(available_voices()))
+        max_minutes = optional_field(data, 'maxMinutes')
+        max_minutes = (DEFAULT_MAX_MINUTES[channel] if max_minutes is None else
+                       require_int(max_minutes, 'maxMinutes', min_value=1,
+                                   max_value=MAX_MINUTES[channel]))
+        rehearsal = optional_field(data, 'rehearsal')
+        rehearsal = False if rehearsal is None else require_bool(rehearsal, 'rehearsal')
+        if rehearsal and channel != 'phone':
+            raise ValueError('rehearsal is only supported for phone calls')
+        notify = optional_field(data, 'notify')
+        webhook_url = None
+        if notify is not None:
+            notify = require_mapping(notify, 'notify')
+            reject_unknown_fields(notify, NOTIFY_FIELDS, 'notify')
+            if optional_field(notify, 'webhookUrl') is not None:
+                webhook_url = validate_webhook_url(notify['webhookUrl'])
+        return cls(
+            channel=channel,
+            to=to,
+            on_behalf_of=require_string(data['onBehalfOf'], 'onBehalfOf', max_length=120),
+            objective=require_string(data['objective'], 'objective', allow_newlines=True,
+                                     max_length=1000),
+            context=_optional_text(data, 'context', MAX_CONTEXT),
+            may_agree_to=_optional_list(data, 'mayAgreeTo'),
+            must_not_share=_optional_list(data, 'mustNotShare'),
+            success_criteria=_optional_text(data, 'successCriteria', 500),
+            language=language,
+            voice=voice,
+            max_minutes=max_minutes,
+            rehearsal=rehearsal,
+            webhook_url=webhook_url,
+            agent_session=agent_session,
+        )
+
+
+def available_voices(environ=None):
+    """Documented GPT-Live voices plus any listed in COLLEAGUE_EXTRA_VOICES."""
+    import os
+    from voice_core import GPT_LIVE_VOICES
+    extra = (environ if environ is not None else os.environ).get('COLLEAGUE_EXTRA_VOICES', '')
+    names = [name.strip() for name in extra.split(',') if VOICE.fullmatch(name.strip() or '-')]
+    return tuple(dict.fromkeys(GPT_LIVE_VOICES + tuple(names)))
+
+
+def disclosure_line(brief):
+    """The fixed opening sentence every phone call starts with."""
+    return f"Hi, I'm an AI assistant calling on behalf of {brief.on_behalf_of}."
