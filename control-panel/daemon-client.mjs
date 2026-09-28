@@ -246,6 +246,22 @@ export function createDaemonClient(options = {}) {
     runnerStatus() {
       return send('GET', '/v1/runner', undefined, { startIfNeeded: false });
     },
+    listCalls(limit = 30) {
+      return send('GET', `/v1/calls?limit=${Number(limit) || 30}`, undefined, { startIfNeeded: false });
+    },
+    getCall(callId) {
+      return send('GET', `/v1/calls/${encodeURIComponent(callId)}`, undefined, { startIfNeeded: false });
+    },
+    callEvents(callId, after = '') {
+      const cursor = /^\d+$/.test(String(after)) ? `&after=${after}` : '';
+      return send('GET', `/v1/calls/${encodeURIComponent(callId)}/events?format=json${cursor}`, undefined, { startIfNeeded: false });
+    },
+    endCall(callId) {
+      return send('POST', `/v1/calls/${encodeURIComponent(callId)}/end`, {}, { startIfNeeded: false });
+    },
+    transferCall(callId) {
+      return send('POST', `/v1/calls/${encodeURIComponent(callId)}/transfer`, {}, { startIfNeeded: false });
+    },
     pairRunner(payload = {}) {
       return send('POST', '/v1/runner/pair', payload, { startIfNeeded: true });
     },

@@ -184,13 +184,13 @@ Status meanings:
 | Incoming screen understanding | Partial | Opt-in capture and local observations exist. Cross-platform live quality needs acceptance testing. |
 | Outgoing screen sharing | Missing | Colleague AI cannot yet share its desktop or artifact view as a meeting screen share. |
 | Virtual camera presence | Implemented | Presence states exist without exposing task content. Live compatibility needs continued testing. |
-| TypeScript SDK | Implemented locally | Blocking handle, events, status, cancellation, approvals, artifacts, and durable handoff exist. Package is not published. |
-| Python SDK | Implemented locally | Mirrors the local daemon contract. Package is not published. |
-| CLI | Implemented locally | Blocking join/status/cancel/handoff/approval/artifact workflows exist. Distribution and installer UX remain. |
-| MCP adapter | Implemented locally | Thin stdio adapter over the TypeScript SDK exists, including durable-task behavior where the client supports it. It provides meeting controls, but exact Codex launch uses the task-local CLI because persistent MCP processes cannot reliably inherit per-task identity. Other hosts must pass an explicit session id or use context continuity. |
-| Local operations portal | Implemented | Manual launch and operations console at `127.0.0.1:8095`; always context continuity. It should remain optional. |
+| TypeScript SDK | Implemented locally | Blocking handle, events, status, cancellation, approvals, artifacts, durable handoff, and call methods exist. Package is not published. |
+| Python SDK | Implemented locally | Mirrors the local daemon contract, including calls. Package is not published. |
+| CLI | Implemented locally | Blocking join/status/cancel/handoff/approval/artifact workflows, `call`/`calls`/`voices`, and agent-driven `setup` exist. Distribution and installer UX remain. |
+| MCP adapter | Implemented locally | Thin stdio adapter over the TypeScript SDK exists, including durable-task behavior where the client supports it. It provides meeting controls and call tools (`start_call`, `wait_for_call`, and more), but exact Codex launch uses the task-local CLI because persistent MCP processes cannot reliably inherit per-task identity. Other hosts must pass an explicit session id or use context continuity. |
+| Local operations portal | Implemented | Manual launch and operations console at `127.0.0.1:8095`; always context continuity. A calls view follows live transcripts and can end or hand over a phone call. It should remain optional. |
 | Hosted runner/control plane | Foundation only | Pairing and isolation primitives exist. There is no production multi-tenant hosted service. |
-| Packaging and onboarding | Partial | The local installer installs the task-local CLI launcher and Codex meeting skill, and registers MCP controls. There is no one-command public distribution or published SDK/CLI/MCP package. |
+| Packaging and onboarding | Partial | A copied prompt lets the user's agent follow [SETUP.md](../SETUP.md): `colleague setup status --json` lists what is missing with the question to ask, keys go on a one-time local page, `setup register` connects Claude Code, Codex, and Cursor, and `setup call-me` rings the user. The Codex installer still adds the exact-continuity launcher and skill. There is no published SDK/CLI/MCP package, and the flow has not been run end to end by a new user. |
 | Automated QA | Strong but incomplete | Broad unit and adversarial coverage exists. Automated tests cannot prove browser selectors, tenant policy, admission, audio quality, or real provider behavior. |
 | Live acceptance | Incomplete | A complete current-matrix acceptance run across Zoom, Teams, Meet, exact session resume, approvals, handoff, and restart recovery is still required. |
 
@@ -401,6 +401,7 @@ When updating this file, use these rules:
 - Added the calls core: brief validation with questions for missing fields, durable call records and events, results from a strict-schema summary or the meeting handoff, signed webhooks with retries, extension hooks, a transport-neutral GPT-Live session module, the meeting line, `/v1/calls` routes with an OpenAPI description, and opt-in server mode with API tokens. Covered by unit and HTTP tests; no live acceptance yet.
 - The meeting bridge still drives GPT-Live directly. Moving it onto the shared voice module waits for a live meeting to verify the change.
 - Added phone calls through Twilio: the phone line, Twilio client with signature checks, a separate loopback gateway for Twilio routes, a Cloudflare quick tunnel for laptops, inbound message-taking behind a setting, and docs. A real call has not been placed yet.
+- Added agent access and agent-driven setup: call methods in both SDKs, MCP call tools, `colleague call`/`calls`/`voices`, `colleague setup` (status with questions, local key page, settings, registration, voice, test call), SETUP.md with the copy-paste prompt, a call-briefing skill, and a calls view in the console with live transcript, end, and hand-over.
 
 ### 2026-09-18
 

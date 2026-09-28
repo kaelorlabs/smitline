@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Colleague AI calls</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/calls.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Calls</h1>
+    <a href="/">Meeting console</a>
+  </header>
+  <main class="layout">
+    <nav aria-label="Recent calls">
+      <h2 class="label">Recent</h2>
+      <ol id="call-list" class="call-list"></ol>
+      <p id="list-empty" class="muted" hidden>No calls yet. Ask your agent to call someone.</p>
+    </nav>
+    <section id="detail" aria-live="polite">
+      <p class="muted" id="detail-empty">Choose a call to follow it live.</p>
+      <article id="call" hidden>
+        <header class="call-head">
+          <div>
+            <h2 id="call-title"></h2>
+            <p id="call-objective" class="muted"></p>
+          </div>
+          <span id="call-status" class="chip"></span>
+        </header>
+        <div class="actions" id="actions">
+          <button type="button" id="join-button">Join the call</button>
+          <button type="button" id="end-button" class="secondary">End call</button>
+          <span id="action-note" class="muted" role="status"></span>
+        </div>
+        <section id="result" class="result" hidden>
+          <h3>Result</h3>
+          <p><span id="result-outcome" class="chip"></span></p>
+          <p id="result-summary"></p>
+          <dl id="result-details"></dl>
+          <div id="result-lists"></div>
+        </section>
+        <section>
+          <h3>Transcript</h3>
+          <ol id="transcript" class="transcript"></ol>
+          <p id="transcript-empty" class="muted">Nothing said yet.</p>
+        </section>
+      </article>
+    </section>
+  </main>
+  <script type="module" src="/calls.js"></script>
+</body>
+</html>

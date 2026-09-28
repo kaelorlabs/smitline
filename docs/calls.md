@@ -76,7 +76,7 @@ Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.16
 | --- | --- |
 | `GET /v1/calls/{id}` | Poll the call. |
 | `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. |
-| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. |
+| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
 
 Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents. Delivery is retried three times with backoff; the outcome is recorded as a call event.

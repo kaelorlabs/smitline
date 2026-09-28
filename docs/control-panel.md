@@ -23,6 +23,10 @@ The control panel never returns API keys to the browser. `.env`, `.env.meeting`,
 bash start-control-panel.sh
 ```
 
+## Follow calls
+
+`http://127.0.0.1:8095/calls` lists recent phone calls and meetings started through the call API. Choosing one shows its status, the live transcript as it happens, and the result when it ends. While a phone call is connected, **Join the call** hands it to `COLLEAGUE_OWNER_PHONE` (press twice to confirm) and **End call** asks the assistant to wrap up. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request.
+
 Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open while operating the meeting agent.
 
 ## Configure a meeting

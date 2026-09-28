@@ -430,8 +430,35 @@ export function createServer({
         handoffId: archive.handoffId,
       });
     }
+    // Call reads follow the transcript routes above: same-origin GETs carry no Origin header.
+    const callMatch = pathname.match(/^\/api\/calls(?:\/(call-[0-9a-f]{16})(?:\/(end|transfer|events))?)?$/);
+    if (callMatch && request.method === 'GET') {
+      const [, callId, action] = callMatch;
+      try {
+        if (!callId) return json(response, 200, await daemonClient.listCalls(30));
+        if (!action) return json(response, 200, await daemonClient.getCall(callId));
+        if (action === 'events') {
+          const after = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('after') || '';
+          return json(response, 200, await daemonClient.callEvents(callId, after));
+        }
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+      return json(response, 405, { error: 'Method not allowed.' });
+    }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
-    const artifactMatch = pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
+    if (callMatch && request.method === 'POST' && ['end', 'transfer'].includes(callMatch[2])) {
+      try {
+        const callId = callMatch[1];
+        const payload = callMatch[2] === 'end'
+          ? await daemonClient.endCall(callId)
+          : await daemonClient.transferCall(callId);
+        return json(response, 200, payload);
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    const artifactMatch =pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
     if (request.method === 'GET' && artifactMatch) {
       const meetingId = decodeURIComponent(artifactMatch[1]);
       const artifactId = artifactMatch[2] ? decodeURIComponent(artifactMatch[2]) : '';
@@ -688,6 +715,9 @@ export function createServer({
         '/visual-preview.mjs': ['visual-preview.mjs', 'text/javascript; charset=utf-8'],
         '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
         '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+        '/calls': ['calls.html', 'text/html; charset=utf-8'],
+        '/calls.js': ['calls.js', 'text/javascript; charset=utf-8'],
+        '/calls.css': ['calls.css', 'text/css; charset=utf-8'],
       };
       const asset = assets[pathname];
       if (!asset) { response.writeHead(404, headers('text/plain; charset=utf-8')); return response.end('Not found'); }

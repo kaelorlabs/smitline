@@ -96,6 +96,10 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     async def call_events(request):
         call_id = request.match_info['callId']
         service.get(call_id, owner=await owner(request))
+        if request.query.get('format') == 'json':
+            # Polling clients (the local console) read a page of events after a cursor.
+            events = service.events(call_id, after=request.query.get('after'))
+            return public_json({'events': events[:500]})
         response = web.StreamResponse(status=200, headers={
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',

@@ -827,3 +827,44 @@ test('runner pairing reveals the code once and omits enrollment from status', as
     assert.equal((await unpaired.json()).paired, false);
   });
 });
+
+test('calls view reads calls openly and protects end and transfer', async () => {
+  const actions = [];
+  const callId = 'call-0123456789abcdef';
+  const server = createServer({
+    root: fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-calls-')),
+    daemon: {
+      async listCalls() { return { calls: [{ id: callId, status: 'in_progress' }] }; },
+      async getCall(id) { return { id, status: 'in_progress' }; },
+      async callEvents(id, after) { actions.push(['events', id, after]); return { events: [] }; },
+      async endCall(id) { actions.push(['end', id]); return { id, status: 'summarizing' }; },
+      async transferCall(id) { actions.push(['transfer', id]); return { transferred: true }; },
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const page = await fetch(`${base}/calls`);
+    assert.match(await page.text(), /id="transcript"/);
+    assert.equal((await (await fetch(`${base}/api/calls`)).json()).calls[0].id, callId);
+    await fetch(`${base}/api/calls/${callId}/events?after=4`);
+    assert.deepEqual(actions[0], ['events', callId, '4']);
+    const denied = await fetch(`${base}/api/calls/${callId}/transfer`, { method: 'POST', body: '{}' });
+    assert.equal(denied.status, 403);
+    const bootstrap = await (await fetch(`${base}/api/bootstrap`)).json();
+    const ended = await fetch(`${base}/api/calls/${callId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:8095', 'X-Colleague-Token': bootstrap.token },
+      body: '{}',
+    });
+    assert.equal(ended.status, 200);
+    assert.deepEqual(actions.at(-1), ['end', callId]);
+    // Malformed call ids never reach the daemon; unmatched API paths fall to the auth check.
+    assert.equal((await fetch(`${base}/api/calls/call-XYZ`)).status, 403);
+    assert.equal(actions.length, 2);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});

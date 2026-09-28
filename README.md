@@ -2,19 +2,21 @@
 
 # Colleague AI
 
-### Bring your coding agent into the conversation.
+### Your agent can make the call.
 
-A voice teammate for Zoom, Microsoft Teams, and Google Meet that connects your team to Codex, Cursor, or Claude Code, an explicit workspace, and optional web search.
+Give any AI agent a phone line and a seat in Zoom, Microsoft Teams, and Google Meet. Colleague AI talks with people in real time using GPT-Live, then reports back to the chat that sent it.
 
-[Get started](#get-started) · [Architecture](#architecture) · [Continuity](#exact-vs-context-continuity) · [Troubleshooting](#troubleshooting)
+[Get started](#get-started) · [Calls](docs/calls.md) · [Phone](docs/phone.md) · [Agents](docs/agents.md) · [Architecture](#architecture) · [Troubleshooting](#troubleshooting)
 
-**Local-first meeting orchestration · Cloud voice · Operator-controlled tools**
+**Self-hosted · Your own keys · Apache-2.0**
 
 </div>
 
 ---
 
-Colleague AI is another interface to the coding-agent conversation you already have. A host integration (or the local portal) joins a meeting with context and permissions; GPT-Live listens continuously and speaks selectively; delegated work resumes the originating coding-agent session when the host supplies that session’s real id. When the meeting ends, a structured handoff is appended once and the session lease is released.
+Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Colleague AI holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your Twilio account; meetings are joined by a browser participant on your computer.
+
+Colleague AI is also another interface to the coding-agent conversation you already have. A host integration (or the local portal) joins a meeting with context and permissions; GPT-Live listens continuously and speaks selectively; delegated work resumes the originating coding-agent session when the host supplies that session’s real id. When the meeting ends, a structured handoff is appended once and the session lease is released.
 
 Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Humans and coding agents should start from [AGENTS.md](AGENTS.md) for the full doc index and invariants.
 
@@ -26,6 +28,8 @@ The current product has been exercised in live Zoom calls. Teams and Google Meet
 
 | Capability | Experience |
 | --- | --- |
+| **Make phone calls** | Your agent sends a brief; Colleague AI calls through Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, listen in, or take over. |
+| **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API. |
 | **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone. |
 | **Bring a coding agent in** | Codex is the default. Cursor and Claude Code are optional adapters that only use flags documented by their CLIs. |
 | **Keep one technical session** | Exact continuity resumes the host-supplied thread id. Context continuity (`local-portal`) does not invent or hash a thread. |
@@ -57,8 +61,8 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 
 ## Security model
 
-- **Loopback only.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected.
-- **Host-owned secrets.** OpenAI and Tavily keys stay in ignored `.env`. Browser profiles, transcripts, jobs, artifacts, and pairing hashes stay on disk and gitignored. They are never uploaded to the mock hosted plane.
+- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's Twilio routes, which check Twilio signatures, are exposed through a tunnel.
+- **Host-owned secrets.** OpenAI, Twilio, and Tavily keys stay in ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, jobs, artifacts, and pairing hashes stay on disk and gitignored. They are never uploaded to the mock hosted plane.
 - **Least privilege.** Hosted/remote requests may only **narrow** local permissions. The local runner is the final enforcement point.
 - **Fail closed.** Unknown provider ids, undocumented CLI flags, `last`/`latest` session ids, and missing job bindings are rejected.
 - **No secret-bearing logs.** Pairing codes and `deviceEnrollment` are revealed once. Tokens are not placed in URLs, query strings, events, or errors.
@@ -75,6 +79,18 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 - A Zoom, Teams, or Google Meet meeting that permits the agent to join through the web client.
 
 ## Get started
+
+Copy this prompt into your coding agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar):
+
+```text
+Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
+```
+
+The agent follows [SETUP.md](SETUP.md). It asks for your name and whether you want phone calls, opens a page on your computer where you type your keys, connects itself to Colleague AI, and ends by ringing your phone. Keys stay in the ignored `.env` file and never pass through the agent.
+
+Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
+
+### Manual setup
 
 For the agent-native Codex experience, register the local integration once:
 

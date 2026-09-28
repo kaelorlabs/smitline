@@ -281,6 +281,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         resumed = await self.client.get(f'/v1/calls/{call["id"]}/events',
                                         headers={**self.auth, 'Last-Event-ID': '2'})
         self.assertNotIn('event: call.created', await resumed.text())
+        page = await self.client.get(f'/v1/calls/{call["id"]}/events?format=json&after=1',
+                                     headers=self.auth)
+        events = (await page.json())['events']
+        self.assertEqual(events[0]['id'], '2')
+        self.assertIn('call.transcript', [event['type'] for event in events])
 
     async def test_brief_problems_and_errors(self):
         response = await self.client.post('/v1/calls', json={'channel': 'phone'}, headers=self.auth)
