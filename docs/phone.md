@@ -1,6 +1,6 @@
 # Phone calls
 
-Colleague AI places phone calls through your Twilio account and talks with GPT-Live-1. Start a call with a brief through `/v1/calls` (see [calls](calls.md)); the result comes back when the call ends.
+Colleague AI places phone calls through your SignalWire or Twilio account and talks with GPT-Live-1. Start a call with a brief through `/v1/calls` (see [calls](calls.md)); the result comes back when the call ends.
 
 ## How a call runs
 
@@ -35,13 +35,26 @@ sequenceDiagram
 - **Rehearsal.** A brief with `"rehearsal": true` calls `COLLEAGUE_OWNER_PHONE` and nothing else: `to` defaults to it, and any other number is refused. You play the other party; everything else runs as in the real call.
 - **Recording.** With `COLLEAGUE_RECORD_CALLS=1`, Twilio records the call, the agent mentions the recording after the disclosure, and when Twilio finishes the recording the call gets a `recording` field with its `sid`, length, and `url`. The URL is on Twilio's API: fetching it needs your Twilio Account SID and Auth Token. Recordings stay in your Twilio account; delete them there.
 
+## Providers
+
+The call needs live, two-way audio over a WebSocket (`<Connect><Stream>`). Two providers support it with the same REST calls, webhook signatures, and media-stream messages, so one code path serves both:
+
+| | SignalWire | Twilio |
+| --- | --- | --- |
+| Free trial | Works. Calls only numbers verified in SignalWire (up to 10, US and Canada); $5 of credit lifts that. | Does not work: the trial strips `<Stream>` and rejects most call parameters. Upgrade (add funds) first. |
+| Settings | `SIGNALWIRE_SPACE`, `SIGNALWIRE_PROJECT_ID`, `SIGNALWIRE_API_TOKEN`, `SIGNALWIRE_SIGNING_KEY`, `SIGNALWIRE_FROM_NUMBER` | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+| REST base | `https://SPACE/api/laml/2010-04-01` | `https://api.twilio.com/2010-04-01` |
+| Webhook signature | `X-SignalWire-Signature`, keyed with the signing key | `X-Twilio-Signature`, keyed with the auth token |
+
+Whichever is set up is used; with both, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`. SignalWire does not document `TimeLimit`, so the line alone enforces `maxMinutes` there. The rest of this page says Twilio for either.
+
 ## Setup
 
-1. Create a Twilio account and note the Account SID and Auth Token.
+1. Create a SignalWire account (free trial) or an upgraded Twilio account, and put its credentials on the setup page (`colleague setup secrets`).
 2. Choose the caller ID:
-   - **A Twilio number:** buy one in Twilio and set `TWILIO_FROM_NUMBER`.
-   - **Your own mobile:** verify it in Twilio as a caller ID and set `COLLEAGUE_CALLER_ID`. People see a number they know; calls back ring your phone. This is enough for outgoing calls; incoming calls need `TWILIO_FROM_NUMBER`, a number bought in Twilio.
-   Twilio trial accounts can only call verified numbers, which includes your own.
+   - **A provider number:** get one under Phone Numbers and set `SIGNALWIRE_FROM_NUMBER` or `TWILIO_FROM_NUMBER`.
+   - **Your own mobile:** verify it with the provider as a caller ID and set `COLLEAGUE_CALLER_ID`. People see a number they know; calls back ring your phone. This is enough for outgoing calls; incoming calls need a number bought from the provider.
+   A SignalWire trial calls only verified numbers, including your own once you verify it.
 3. Put the values in `.env` (see `.env.example`). The daemon rereads `.env` for every call.
 4. Give Twilio a way to reach the gateway:
    - **Laptop:** do nothing. The first call starts a Cloudflare quick tunnel (`cloudflared` if installed, otherwise the `cloudflare/cloudflared` Docker image; override with `COLLEAGUE_CLOUDFLARED_IMAGE`) and checks that the new address answers before dialing. The address changes each time the daemon restarts. The Docker fallback uses host networking, which Docker Engine on Linux and in WSL supports; Docker Desktop on macOS or Windows may not reach the gateway that way, so install `cloudflared` there.
@@ -60,6 +73,8 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 | --- | --- | --- |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | none | Required for phone calls. |
 | `TWILIO_FROM_NUMBER` | none | A number bought in Twilio. Needed for incoming calls, and for outgoing calls unless `COLLEAGUE_CALLER_ID` is set. |
+| `SIGNALWIRE_SPACE`, `SIGNALWIRE_PROJECT_ID`, `SIGNALWIRE_API_TOKEN`, `SIGNALWIRE_SIGNING_KEY`, `SIGNALWIRE_FROM_NUMBER` | none | The same, through SignalWire's Compatibility API. The signing key checks webhook signatures. |
+| `COLLEAGUE_PHONE_PROVIDER` | detected | `signalwire` or `twilio` when both are set up. |
 | `COLLEAGUE_CALLER_ID` | `TWILIO_FROM_NUMBER` | Caller ID for outgoing calls, such as your verified mobile. |
 | `COLLEAGUE_OWNER_NAME` | none | Default `onBehalfOf`, and the name in the inbound greeting. |
 | `COLLEAGUE_OWNER_PHONE` | none | Rehearsals, the setup test call, and transfers. |
@@ -78,7 +93,7 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 
 ## Your responsibilities
 
-Calls leave through your Twilio account under your name. Automated and AI-voiced calls are regulated: in the United States, AI voices count as artificial voices under the robocall rules, so call people who expect the call or have agreed to it. Several states require everyone's consent before recording. The EU AI Act requires telling people they are talking to an AI. Keep the disclosure, start by calling your own number, and use `COLLEAGUE_ALLOWED_CALLING_CODES` to limit destinations.
+Calls leave through your provider account under your name. Automated and AI-voiced calls are regulated: in the United States, AI voices count as artificial voices under the robocall rules, so call people who expect the call or have agreed to it. Several states require everyone's consent before recording. The EU AI Act requires telling people they are talking to an AI. Keep the disclosure, start by calling your own number, and use `COLLEAGUE_ALLOWED_CALLING_CODES` to limit destinations.
 
 ## Not yet verified
 

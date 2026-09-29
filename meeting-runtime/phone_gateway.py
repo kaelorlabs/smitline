@@ -1,4 +1,4 @@
-"""The only routes Twilio reaches: call status, voicemail detection, recordings, media, inbound calls.
+"""The only routes Twilio (or SignalWire) reaches: call status, voicemail detection, recordings, media, inbound calls.
 
 Runs as its own listener on loopback (default 127.0.0.1:8766) so a tunnel or
 proxy can expose it without exposing the daemon API. Every HTTP callback must
@@ -14,7 +14,7 @@ from aiohttp import WSMsgType, web
 from call_hooks import MissingCredentials
 from call_store import CallNotFound
 from phone_line import inbound_brief
-from twilio_client import stream_twiml, valid_signature
+from twilio_client import signing_keys, stream_twiml, valid_signature
 
 
 GATEWAY_PORT = 8766
@@ -31,11 +31,11 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
     It must not start a tunnel: unsigned requests reach these routes too.
     """
 
-    def auth_token():
+    def keys():
         try:
-            return service.hooks.credentials(owner, 'twilio')['authToken']
+            return signing_keys(service.hooks.credentials(owner, 'twilio'))
         except MissingCredentials:
-            return None
+            return []
 
     def base_url():
         base = current_url()
@@ -46,8 +46,9 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
     async def verified_params(request):
         params = dict(await request.post())
         url = base_url() + request.path_qs
-        if not valid_signature(auth_token(), url, params,
-                               request.headers.get('X-Twilio-Signature')):
+        provided = (request.headers.get('X-Twilio-Signature')
+                    or request.headers.get('X-SignalWire-Signature'))
+        if not any(valid_signature(key, url, params, provided) for key in keys()):
             raise web.HTTPForbidden(text='invalid signature')
         return params
 

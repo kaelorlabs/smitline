@@ -18,7 +18,7 @@ from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
     delegation_config, disclosure_reminder, discloses, opening_cue, voice_instructions,
 )
-from twilio_client import TwilioClient, dial_twiml, stream_twiml
+from twilio_client import client_for, dial_twiml, stream_twiml
 from voice_core import (
     PCMU8, LiveSession, backend_usage_from, function_call_from, session_config,
 )
@@ -508,8 +508,7 @@ class PhoneLine:
         self._public_url = public_url
         self._public_available = public_available
         self.environ = environ
-        self.twilio_factory = twilio_factory or (lambda creds: TwilioClient(
-            creds['accountSid'], creds['authToken']))
+        self.twilio_factory = twilio_factory or client_for
         self.live_factory = live_factory or (lambda key, config: LiveSession(key, config))
         self.status_grace = status_grace
         self.connect_timeout = connect_timeout

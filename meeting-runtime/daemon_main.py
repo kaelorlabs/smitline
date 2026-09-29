@@ -73,7 +73,7 @@ async def configure_inbound(service, *, twilio_factory=None, log=print):
     A laptop's quick-tunnel address changes on every start, so this runs at startup.
     """
     from call_hooks import MissingCredentials
-    from twilio_client import TwilioClient, TwilioError
+    from twilio_client import TwilioError, client_for
     from tunnel import TunnelError
     try:
         creds = service.hooks.credentials('local', 'twilio')
@@ -83,7 +83,7 @@ async def configure_inbound(service, *, twilio_factory=None, log=print):
                 'a verified caller ID cannot receive calls', flush=True)
             return False
         base = (await service.public_url.get()).rstrip('/')
-        client = (twilio_factory or (lambda c: TwilioClient(c['accountSid'], c['authToken'])))(creds)
+        client = (twilio_factory or client_for)(creds)
         await client.set_incoming_voice_url(number, f'{base}/twilio/inbound')
     except (MissingCredentials, TunnelError, TwilioError, OSError) as error:
         log(f'incoming calls are not configured: {error}', flush=True)

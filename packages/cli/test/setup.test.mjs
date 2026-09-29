@@ -179,7 +179,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.equal(empty.firstCallReady, false);
   assert.deepEqual(empty.next.slice(0, 2).map((item) => item.id), ['openai_key', 'owner_name']);
   // Until the user opts into phone calls, only that question is a next step.
-  assert.ok(empty.next.some((item) => item.id === 'twilio'));
+  assert.ok(empty.next.some((item) => item.id === 'phone_account'));
   assert.ok(!empty.next.some((item) => ['caller_id', 'owner_phone', 'public_url'].includes(item.id)));
   assert.deepEqual(empty.optional.map((item) => item.id), ['caller_id', 'owner_phone']);
 
@@ -199,7 +199,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   const fetchImpl = async (url) => {
     requests.push(String(url));
     if (String(url).includes('api.openai.com')) return new Response('{}', { status: 200 });
-    if (String(url).endsWith('/Accounts/AC1.json')) return Response.json({ status: 'active', type: 'Trial' });
+    if (String(url).endsWith('/Accounts/AC1.json')) return Response.json({ status: 'active', type: 'Full' });
     if (String(url).includes('IncomingPhoneNumbers')) return Response.json({ incoming_phone_numbers: [{ phone_number: '+15005550006' }] });
     return Response.json({ outgoing_caller_ids: [{ phone_number: '+14155550100' }] });
   };
@@ -227,7 +227,15 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.equal(full.firstCallReady, full.checks.find((c) => c.id === 'owner_phone').ok === true);
   const offline = await setupStatus({ root, env: {}, fetchImpl, runner, find, verify: false });
   assert.equal(offline.checks.find((c) => c.id === 'caller_id').ok, true);
-  assert.match(full.checks.find((c) => c.id === 'twilio').detail, /trial/);
+  // Twilio's trial strips <Stream>, so it cannot carry a Colleague AI call.
+  const twilioTrial = await setupStatus({
+    root, env: {}, runner, find, fetchImpl: async (url) => (String(url).endsWith('/Accounts/AC1.json')
+      ? Response.json({ status: 'active', type: 'Trial' }) : fetchImpl(url)),
+  });
+  const trialAccount = twilioTrial.checks.find((c) => c.id === 'phone_account');
+  assert.equal(trialAccount.ok, false);
+  assert.match(trialAccount.detail, /free trial blocks the live call audio/);
+  assert.equal(twilioTrial.phoneReady, false);
   assert.ok(requests[0].endsWith('/v1/models/gpt-live-1'));
 
   const noAccess = await setupStatus({
@@ -413,4 +421,49 @@ test('setup secrets --wait stops on SIGTERM', async (t) => {
   child.kill('SIGTERM');
   assert.equal(await exited, 130);
   assert.deepEqual(sanitizeSubmission(new URLSearchParams({ TAVILY_API_KEY: 'tvly-abc' })).updates, { TAVILY_API_KEY: 'tvly-abc' });
+});
+
+test('status verifies a SignalWire account on its Space and suggests its number', async (t) => {
+  const root = await tempRoot(t);
+  await fs.writeFile(path.join(root, 'start-runtime-daemon.sh'), '#!/bin/sh\n');
+  await fs.mkdir(path.join(root, 'node_modules', 'mammoth'), { recursive: true });
+  await fs.writeFile(path.join(root, '.env'), [
+    'OPENAI_API_KEY=sk-test', 'COLLEAGUE_OWNER_NAME=Robin', 'COLLEAGUE_OWNER_PHONE=+14165550100',
+    'SIGNALWIRE_SPACE=acme.signalwire.com', 'SIGNALWIRE_PROJECT_ID=1a2b3c4d-0000', 'SIGNALWIRE_API_TOKEN=PT-secret',
+  ].join('\n'));
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push([String(url), options?.headers?.Authorization]);
+    if (String(url).includes('api.openai.com')) return new Response('{}', { status: 200 });
+    if (String(url).endsWith('/Accounts/1a2b3c4d-0000.json')) return Response.json({ status: 'active', type: 'Trial' });
+    if (String(url).includes('IncomingPhoneNumbers')) return Response.json({ incoming_phone_numbers: [{ phone_number: '+16475550123' }] });
+    return Response.json({ outgoing_caller_ids: [] });
+  };
+  const runner = fakeRunner({ 'docker info': 0, 'python3 -c': 0 });
+  const status = await setupStatus({ root, env: {}, fetchImpl, runner, find: () => null });
+  const account = status.checks.find((c) => c.id === 'phone_account');
+  assert.equal(account.label, 'SignalWire account');
+  assert.equal(account.ok, true);
+  assert.match(account.detail, /trial: calls only numbers you bought or verified/);
+  const accountRequest = requests.find(([url]) => url.includes('/Accounts/1a2b3c4d-0000.json'));
+  assert.equal(accountRequest[0], 'https://acme.signalwire.com/api/laml/2010-04-01/Accounts/1a2b3c4d-0000.json');
+  assert.equal(accountRequest[1], `Basic ${Buffer.from('1a2b3c4d-0000:PT-secret').toString('base64')}`);
+  const caller = status.next.find((item) => item.id === 'caller_id');
+  assert.deepEqual(caller.suggest, { key: 'SIGNALWIRE_FROM_NUMBER', value: '+16475550123' });
+  assert.match(status.checks.find((c) => c.id === 'owner_phone').detail, /verified in SignalWire/);
+  assert.equal(validateSetting('SIGNALWIRE_SPACE', 'https://Acme.signalwire.com/dashboard'), 'acme.signalwire.com');
+  assert.equal(validateSetting('SIGNALWIRE_SPACE', 'acme'), 'acme.signalwire.com');
+  assert.throws(() => validateSetting('SIGNALWIRE_API_TOKEN', 'PT-1'), /secret/);
+  assert.throws(() => validateSetting('COLLEAGUE_PHONE_PROVIDER', 'vonage'), /twilio or signalwire/);
+});
+
+test('the setup page offers SignalWire first and folds Twilio away', () => {
+  const html = renderSecretsPage({}, '/setup/x');
+  assert.ok(html.indexOf('SignalWire (free trial)') < html.indexOf('Twilio (upgraded account)'));
+  assert.match(html, /<details class="card"><summary>Twilio \(upgraded account\)<\/summary>/);
+  assert.match(html, /name="SIGNALWIRE_API_TOKEN" type="password"/);
+  assert.match(html, /name="SIGNALWIRE_SIGNING_KEY" type="password"/);
+  assert.match(html, /href="https:\/\/signalwire.com"/);
+  const saved = renderSecretsPage({ SIGNALWIRE_API_TOKEN: 'PT-very-secret' }, '/setup/x');
+  assert.ok(!saved.includes('PT-very-secret'));
 });

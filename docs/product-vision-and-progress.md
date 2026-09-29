@@ -415,6 +415,7 @@ When updating this file, use these rules:
   - Setup: status checks Python venv support, suggests the only Twilio number instead of asking, reports `firstCallReady`, and keeps phone steps optional; the setup page runs in the background, accepts several saves and a Done, and collects the caller ID and Tavily key; `setup start` shows progress and readable errors; `setup voice --preview` calls the owner in another voice; registration from WSL covers Windows apps and installs the skills. SETUP.md was rewritten around this flow.
   - UI: the calls view, setup page, connector approval page, and CLI output were reworked to match the console in light and dark, with plain-language states and results.
   - The runtime daemon runs in Docker when this computer cannot make a Python venv (`Dockerfile.daemon`: Python, aiohttp, the Docker CLI for meeting containers, and cloudflared for the phone tunnel). A new user needs only Node and Docker. Host Python stays the choice when available, because coding agents run on the host with the user's logins.
+  - Phone calls also work through SignalWire, whose free trial allows live audio streaming (Twilio's 2026 trial strips `<Stream>`, found in the first new-user walkthrough). Same REST, webhook, and media-stream code; setup status flags a Twilio trial as unusable.
   - Still open: a real phone call and a real meeting on this build. Everything above is covered by fixture, HTTP, and local WebSocket tests only.
 
 ### 2026-09-18
