@@ -483,3 +483,29 @@ test('approval APIs require ids and do not leak secrets', { timeout: 8000 }, asy
     await meeting.cancel();
   });
 });
+
+test('profile reads and updates, and silent notes, use the daemon routes', async () => {
+  const seen = [];
+  const transport = createLoopbackTransport({
+    root: os.tmpdir(),
+    autostart: false,
+    spawnDaemon: null,
+    isPortOpen: async () => true,
+    readAuth: async () => 'tok',
+    fetchImpl: async (url, init) => {
+      seen.push([init.method, new URL(url).pathname, init.body ? JSON.parse(init.body) : null]);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  const colleague = new Colleague({ transport });
+  await colleague.getProfile();
+  await colleague.updateProfile({ about: 'Robin builds Colleague AI.' });
+  await colleague.instructCall('call-0123456789abcdef', 'He tried it yesterday', { silent: true });
+  await colleague.instructCall('call-0123456789abcdef', 'Ask about parking');
+  assert.deepEqual(seen, [
+    ['GET', '/v1/profile', null],
+    ['PATCH', '/v1/profile', { about: 'Robin builds Colleague AI.' }],
+    ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'He tried it yesterday', silent: true }],
+    ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'Ask about parking' }],
+  ]);
+});

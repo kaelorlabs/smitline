@@ -743,8 +743,14 @@ export function createLoopbackTransport(options = {}) {
     listCalls(limit = 20) {
       return json('GET', `/v1/calls?limit=${Math.max(1, Math.min(Number(limit) || 20, 100))}`);
     },
-    instructCall(callId, text) {
-      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/instructions`, { text });
+    instructCall(callId, text, { silent = false } = {}) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/instructions`, silent ? { text, silent: true } : { text });
+    },
+    getProfile() {
+      return json('GET', '/v1/profile');
+    },
+    updateProfile(update) {
+      return json('PATCH', '/v1/profile', update);
     },
     endCall(callId) {
       return json('POST', `/v1/calls/${encodeURIComponent(callId)}/end`, {});
@@ -1132,8 +1138,19 @@ export class Colleague {
     return (await this._transport.listCalls(limit)).calls;
   }
 
-  async instructCall(callId, text) {
-    return this._transport.instructCall(callId, text);
+  /** Guidance for a call in progress; `{ silent: true }` sends a note it uses when relevant. */
+  async instructCall(callId, text, options = {}) {
+    return this._transport.instructCall(callId, text, options);
+  }
+
+  /** The owner's profile: who they are, the people they know, how they come across. */
+  async getProfile() {
+    return this._transport.getProfile();
+  }
+
+  /** Merge into the profile: fields replace, people upsert by name, removePeople drops names. */
+  async updateProfile(update) {
+    return this._transport.updateProfile(update);
   }
 
   async endCall(callId) {

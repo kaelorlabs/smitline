@@ -242,7 +242,8 @@ class PhoneSession:
         return session_config(
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording, contact=contact,
-                                            has_notes=bool(notes)),
+                                            has_notes=bool(notes),
+                                            boundaries=(profile or {}).get('boundaries') or ()),
             audio_format=PCMU8,
             voice=self.brief.voice or default_voice(env),
             delegation=delegation_config(

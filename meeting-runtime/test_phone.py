@@ -360,6 +360,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
+        self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
         self.assertNotIn('Pricing', instructions)
         backend = config['delegation']['responses']['instructions']
         self.assertIn('Pricing: about 6 cents a minute.', backend)

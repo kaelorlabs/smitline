@@ -52,7 +52,8 @@ def _who_line(brief, contact, *, inbound):
     return f"You are calling {contact['name']}{relation}. Greet them by name after the disclosure."
 
 
-def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False):
+def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
+                       boundaries=()):
     who = brief.on_behalf_of
     disclosure = disclosure_line(brief)
     if inbound:
@@ -77,6 +78,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
         opening,
         _who_line(brief, contact, inbound=inbound),
         brief_block(brief),
+        _bullets(f'{who} always wants these kept, on every call:', boundaries).rstrip(),
         tone,
         ('How to talk: like a person on the phone, not an assistant reading notes. Keep turns '
          'short, one idea or question at a time; react to what they just said, and let them lead '
