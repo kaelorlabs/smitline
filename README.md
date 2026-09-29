@@ -14,7 +14,7 @@ Give any AI agent a phone line and a seat in Zoom, Microsoft Teams, and Google M
 
 ---
 
-Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Colleague AI holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your Twilio account; meetings are joined by a browser participant on your computer.
+Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Colleague AI holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your SignalWire or Twilio account; meetings are joined by a browser participant on your computer.
 
 Colleague AI is also another interface to the coding-agent conversation you already have. A host integration (or the local portal) joins a meeting with context and permissions; GPT-Live listens continuously and speaks selectively; delegated work resumes the originating coding-agent session when the host supplies that session’s real id. When the meeting ends, a structured handoff is appended once and the session lease is released.
 
@@ -23,6 +23,8 @@ Read the [product vision, decisions, and progress ledger](docs/product-vision-an
 The supported production path is a **loopback daemon on this computer** (`127.0.0.1`). There is no production hosted control plane. The [hosted runtime](docs/hosted-runtime.md) module is a foundation for later pairing tests, not a cloud deployment.
 
 The current product has been exercised in live Zoom calls. Teams and Google Meet share the same local browser/audio runtime; live tenant policies still need acceptance testing. Conversational timing is still being improved.
+
+Phone calls were first placed live on 2026-09-29 through SignalWire: a setup call to the owner and a call that scheduled a meeting with a colleague both came back with the right result. Phone conversation is not yet as natural as ChatGPT voice, because call audio currently passes through this computer; connecting the phone provider straight to OpenAI over SIP is in progress. See [Limitations](#limitations).
 
 ## What you can do
 
@@ -86,9 +88,15 @@ Copy this prompt into your coding agent (Claude Code, Codex, Cursor, OpenClaw, H
 Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-The agent follows [SETUP.md](SETUP.md). It checks your computer, opens a page in your browser where you enter your keys, your name, and (for phone calls) your Twilio details and phone number, rings your phone so you hear Colleague AI, and then connects itself. You change the voice any time by asking your agent. Keys stay in the ignored `.env` file and never pass through the agent.
+The agent follows [SETUP.md](SETUP.md). It checks your computer, opens a page in your browser where you enter your keys, your name, and (for phone calls) your SignalWire details and phone number, rings your phone so you hear Colleague AI, and then connects itself. You change the voice any time by asking your agent. Keys stay in the ignored `.env` file and never pass through the agent.
 
 Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
+
+**What phone calls need.** You need Node.js 22 and Docker, plus an OpenAI key with GPT-Live access for calls and meetings. For phone calls, you also need a phone provider account:
+
+- **SignalWire, free trial.** No card needed. The trial calls only numbers you verify in SignalWire (up to 10, US and Canada): your own phone, and friends who read back a code.
+- **SignalWire, paid.** Adding $5 of credit lets Colleague AI call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05.
+- **Twilio.** Works only with an upgraded (funded) account. Twilio's free trial blocks the live audio Colleague AI needs.
 
 To follow a call live, read its transcript as it happens, or take it over on your phone, run `./start-control-panel.sh` and open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
 
@@ -303,10 +311,13 @@ Unit tests do not establish live admission, audio quality, or file delivery. Tes
 - Outgoing screen share from this computer is not implemented.
 - Chart delivery into Zoom chat is experimental.
 - Browser fixture tests are not production compatibility proof.
+- Phone call audio currently travels phone provider → Cloudflare tunnel → this computer → OpenAI and back. The detour adds delay to every turn, so conversation feels less natural than ChatGPT voice. Talking over Colleague AI does not cut it off straight away, and a call can go quiet for a few seconds while it hangs up. Direct SIP, with audio straight between the provider and OpenAI, is being built.
+- An automated call screener (on iPhone or Android) can be mistaken for voicemail, which makes the call end early and be reported as `voicemail`. A fix is in progress.
+- Trial phone accounts call only verified numbers, and Twilio's free trial cannot carry a call at all. See [What phone calls need](#get-started).
 
 ## Roadmap
 
-See the [product roadmap](docs/product-roadmap.md). Near-term work is latency, conversational timing, reliable chart delivery, summaries, and live tenant acceptance tests for Teams and Meet.
+See the [product roadmap](docs/product-roadmap.md). Near-term work is direct SIP for phone calls (provider to OpenAI, with Colleague AI steering over a text side channel), latency, conversational timing, reliable chart delivery, summaries, and live tenant acceptance tests for Teams and Meet.
 
 ## Credits and upstream work
 
