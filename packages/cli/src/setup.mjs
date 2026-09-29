@@ -584,7 +584,9 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   for (const error of errors) {
     const field = fieldFor(error);
     // Nothing typed is kept after an error, so say so next to the field.
-    if (field && !fieldErrors.has(field.key)) fieldErrors.set(field.key, `${friendly(error)} Enter it again.`);
+    if (field && !fieldErrors.has(field.key)) {
+      fieldErrors.set(field.key, / is required/.test(error) ? friendly(error) : `${friendly(error)} Enter it again.`);
+    }
   }
   const head = (title) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title><style>
@@ -694,10 +696,14 @@ export function sanitizeSubmission(form) {
   const updates = {};
   const errors = [];
   for (const field of FIELDS) {
-    const value = String(form.get(field.key) || '').trim();
+    let value = String(form.get(field.key) || '').trim();
     if (!value) continue;
-    if (field.secret && (field.spaces ? /[\r\n]/ : /\s/).test(value)) {
-      errors.push(`${field.label} must ${field.spaces ? 'be one line' : 'not contain spaces'}`);
+    if (field.secret && !field.spaces) {
+      // Keys never contain whitespace; copying one from a wrapped display can add line
+      // breaks or invisible spaces, so drop them instead of rejecting the paste.
+      value = value.replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '');
+    } else if (field.secret && /[\r\n]/.test(value)) {
+      errors.push(`${field.label} must be one line`);
       continue;
     }
     if (field.minLength && value.length < field.minLength) {
@@ -711,6 +717,26 @@ export function sanitizeSubmission(form) {
     }
   }
   return { updates, errors };
+}
+
+// Done must not leave a required key missing or a phone provider half set up.
+const REQUIRED_TOGETHER = [
+  ['SignalWire', ['SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY']],
+  ['Twilio', ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN']],
+];
+
+export function missingForDone(env) {
+  const errors = [];
+  for (const field of FIELDS.filter((f) => f.group === 'Required')) {
+    if (!present(env[field.key])) errors.push(`${field.label} is required`);
+  }
+  for (const [name, keys] of REQUIRED_TOGETHER) {
+    if (!keys.some((key) => present(env[key]))) continue;
+    for (const key of keys) {
+      if (!present(env[key])) errors.push(`${FIELDS.find((f) => f.key === key).label} is required for ${name} phone calls`);
+    }
+  }
+  return errors;
 }
 
 /**
@@ -772,6 +798,11 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = SECRETS_PAGE_MINU
           return;
         }
         if (form.get('action') === 'done') {
+          const missing = missingForDone(env);
+          if (missing.length) {
+            response.writeHead(422, headers).end(renderSecretsPage(env, pathName, '', { savedNow: saved, errors: missing, done: true }));
+            return;
+          }
           response.writeHead(200, headers).end(renderSecretsPage(env, pathName, '', { finished: true }));
           finish();
           resolve({ saved: [...savedKeys] });

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  availableVoices, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
+  availableVoices, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv,
 } from '../src/setup.mjs';
 
@@ -72,8 +72,14 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   const { updates, errors } = sanitizeSubmission(new URLSearchParams({
     OPENAI_API_KEY: 'sk-abc', COLLEAGUE_OWNER_PHONE: 'nope', TWILIO_AUTH_TOKEN: 'has space',
   }));
-  assert.deepEqual(updates, { OPENAI_API_KEY: 'sk-abc' });
-  assert.equal(errors.length, 2);
+  // Whitespace pasted into a key (a wrapped display adds line breaks) is dropped, not rejected.
+  assert.deepEqual(updates, { OPENAI_API_KEY: 'sk-abc', TWILIO_AUTH_TOKEN: 'hasspace' });
+  assert.equal(errors.length, 1);
+  const pasted = sanitizeSubmission(new URLSearchParams({
+    SIGNALWIRE_API_TOKEN: ' SWAPI-abc\n def\u200b ', COLLEAGUE_CONNECTOR_PASSPHRASE: 'correct horse\nbattery staple',
+  }));
+  assert.deepEqual(pasted.updates, { SIGNALWIRE_API_TOKEN: 'SWAPI-abcdef' });
+  assert.match(pasted.errors[0], /must be one line/);
   const html = renderSecretsPage({ OPENAI_API_KEY: 'sk-secret-value', COLLEAGUE_OWNER_NAME: 'Robin' }, '/setup/x');
   assert.ok(!html.includes('sk-secret-value'));
   assert.match(html, /Saved: Robin/);
@@ -108,13 +114,18 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.ok(!partialHtml.includes('AC-secret-sid'));
   assert.equal(readEnv(root).TWILIO_ACCOUNT_SID, 'AC-secret-sid');
 
+  // Done refuses to finish while a phone provider is half set up, and keeps what was typed.
+  const refused = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', COLLEAGUE_OWNER_PHONE: '+14155550142', action: 'done' });
+  assert.equal(refused.status, 422);
+  assert.match(await refused.text(), /Twilio Auth Token is required for Twilio phone calls/);
+  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-newer');
   // Done saves what was typed, shows the closing page, and reports every key once.
-  const finished = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', COLLEAGUE_OWNER_PHONE: '+14155550142', action: 'done' });
+  const finished = await postForm(pageUrl, { TWILIO_AUTH_TOKEN: 'tok\n en', action: 'done' });
   assert.equal(finished.status, 200);
   assert.match(await finished.text(), /All set/);
-  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'COLLEAGUE_OWNER_PHONE'] });
-  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_PHONE']]);
-  assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-newer');
+  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'COLLEAGUE_OWNER_PHONE', 'TWILIO_AUTH_TOKEN'] });
+  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_PHONE'], ['TWILIO_AUTH_TOKEN']]);
+  assert.equal(readEnv(root).TWILIO_AUTH_TOKEN, 'token');
   const closed = await fetch(pageUrl).then((response) => response.status, () => 'closed');
   assert.ok([410, 'closed'].includes(closed), String(closed));
 });
@@ -323,7 +334,7 @@ test('setup secrets starts the page in the background and prints its address', a
   const saved = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ COLLEAGUE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
+    body: new URLSearchParams({ OPENAI_API_KEY: 'sk-test', COLLEAGUE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
   });
   assert.equal(saved.status, 200);
   assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
@@ -466,4 +477,13 @@ test('the setup page offers SignalWire first and folds Twilio away', () => {
   assert.match(html, /href="https:\/\/signalwire.com"/);
   const saved = renderSecretsPage({ SIGNALWIRE_API_TOKEN: 'PT-very-secret' }, '/setup/x');
   assert.ok(!saved.includes('PT-very-secret'));
+});
+
+test('Done needs the OpenAI key and a complete SignalWire setup', () => {
+  assert.deepEqual(missingForDone({}), ['OpenAI API key is required', 'Your name is required']);
+  const base = { OPENAI_API_KEY: 'sk-live', COLLEAGUE_OWNER_NAME: 'Robin' };
+  assert.deepEqual(missingForDone(base), []);
+  assert.deepEqual(missingForDone({ ...base, SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p', SIGNALWIRE_SIGNING_KEY: 'PSK' }),
+    ['API token is required for SignalWire phone calls']);
+  assert.deepEqual(missingForDone({ ...base, OPENAI_API_KEY: 'replace_with_your_project_api_key' }), ['OpenAI API key is required']);
 });
