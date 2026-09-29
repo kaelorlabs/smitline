@@ -20,17 +20,11 @@ Colleague AI runs on macOS and Linux. On Windows it runs inside WSL2 (Ubuntu).
 | Needed for | What | Check |
 |---|---|---|
 | Everything | Node.js 22 or newer | `node --version` |
-| Everything | Python 3.10 or newer with `venv` | `python3 -c "import venv, ensurepip"` |
-| Meetings | Docker (Docker Engine in WSL, or Docker Desktop) | `docker info` |
-| Phone calls | A way for Twilio to reach this computer: `cloudflared` (recommended), Docker, or a server with `COLLEAGUE_PUBLIC_URL` | `cloudflared --version` |
+| Everything | Docker running (Docker Engine in WSL or Linux, or Docker Desktop) | `docker info` |
 
-On Ubuntu, Python's `venv` is a separate package. If it is missing, ask the user to run this once, because it needs their password:
+That is all. Colleague AI runs in Docker: the first start builds a small image with Python and the phone tunnel (`cloudflared`) inside, so nothing else needs installing. If this computer already has Python 3.10 or newer with `venv`, Colleague AI uses it instead; that is only required to hand meeting work to Codex, Cursor, or Claude Code, which run on this computer with the user's own logins.
 
-```bash
-sudo apt install -y python3 python3-venv
-```
-
-`cloudflared` starts the phone tunnel in a couple of seconds; without it the tunnel runs from a Docker image, which is slower the first time. If the user wants phone calls, install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/.
+If Docker is missing, help the user install it: Docker Engine inside WSL or Linux (https://docs.docker.com/engine/install/), or Docker Desktop on a Mac. Docker Desktop needs host networking turned on (Settings > Resources > Network) so this computer can reach Colleague AI.
 
 ### When your agent runs on Windows
 
@@ -95,7 +89,7 @@ Phone calls need a Twilio account (twilio.com). If the user has one number there
 colleague setup start
 ```
 
-The first start installs Python packages and can take a minute or two; the command shows progress and prints the error if something is missing.
+The first start builds the Colleague AI image (about a minute) and then starts it in the background; the command shows progress and prints the error if something is missing. It keeps running until the computer restarts; later calls start it again automatically.
 
 ## 6. The first call
 
@@ -131,7 +125,8 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `co
 
 | Symptom | Fix |
 |---|---|
-| `python3 cannot create a virtual environment` | `sudo apt install -y python3-venv`, then `colleague setup start` |
+| `Colleague AI needs Docker (recommended) or Python` | Start Docker (`sudo service docker start` in WSL, or open Docker Desktop), then `colleague setup start` |
+| Want Python on this computer instead of Docker | `sudo apt install -y python3-venv`; the next start uses it. `COLLEAGUE_DAEMON_RUNTIME=docker` or `host` forces one |
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
 | `Twilio can reach this computer` fails | Install `cloudflared` or start Docker; on a server set `COLLEAGUE_PUBLIC_URL` |
 | Calls fail with a tunnel error | Check the network and try again; the tunnel restarts on the next call |
