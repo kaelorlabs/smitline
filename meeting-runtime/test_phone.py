@@ -286,6 +286,13 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((done['endReason'], done['result']['outcome']), ('no_answer', 'not_reached'))
         self.assertEqual(FakeSummarizer.calls, 0)
 
+    def test_voicemail_and_guidance_rules_are_in_the_instructions(self):
+        text = voice_instructions(CallBrief.from_dict(brief()))
+        self.assertIn('reply to Robin directly', text)
+        self.assertIn('Never ask them to call this number back', text)
+        self.assertIn('picks up while you are leaving the message, stop and talk', text)
+        self.assertIn('Never read them out', text)
+
     def test_disclosure_check(self):
         said = [
             ("Hi, I'm an AI assistant calling on behalf of Robin Rao.", 'Robin Rao', True),
@@ -358,6 +365,9 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         # Carriers call screeners "machine"; the model hears a person and carries on.
         self.h.line.on_amd(record['id'], 'machine_end_silence')
         await until(lambda: any('guesses that a machine' in text for _kind, text in live.appends))
+        # Sent as silent context, so the model does not answer it out loud.
+        self.assertEqual(next(kind for kind, text in live.appends if 'guesses that a machine' in text),
+                         'session.thinking.append')
         self.assertIsNone(session.end_reason)
         live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
             'type': 'response.output_item.done', 'item': {

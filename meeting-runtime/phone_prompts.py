@@ -79,9 +79,14 @@ def voice_instructions(brief, *, inbound=False, recording=False):
          'quietly for the person to pick up. When they do, greet them and continue normally.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
-         'them. If a voicemail greeting answers, wait for the beep, leave a short message with the '
-         'disclosure and the reason for the call, without private details, then end the call with '
-         'the reason voicemail_left.'),
+         'them.'),
+        ('Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
+         f'the disclosure, why you called, and that they can reply to {who} directly. Never ask them '
+         'to call this number back, and share no private details. If a person picks up while you '
+         'are leaving the message, stop and talk with them. End the call with the reason '
+         'voicemail_left only after leaving a message on a recording.'),
+        ('Guidance: your system may send you notes during the call, such as reminders or hints about '
+         'who answered. Follow them silently. Never read them out, answer them, or talk about them.'),
     ]
     if brief.language:
         lines.append(f'Speak in the language with tag {brief.language} unless the other person '
@@ -136,8 +141,8 @@ def machine_hint(brief):
     return ('The phone network guesses that a machine may have answered: a voicemail system or an '
             'automated call screener. If a person is talking with you, ignore this and carry on. If '
             'it is a call screener, say who you are and why you are calling, then wait for the '
-            'person. If it is a voicemail recording, wait for the beep, leave a short message with '
-            'the disclosure and why you called, then end the call with the reason voicemail_left.')
+            'person. If it is a voicemail recording, wait for the beep and leave a short message as '
+            'your instructions describe. Do not mention this note.')
 
 
 HANGUP_YIELDED = ('The other person spoke after you said goodbye. Listen and answer them. End the '

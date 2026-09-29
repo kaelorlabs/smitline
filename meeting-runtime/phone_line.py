@@ -594,7 +594,8 @@ class PhoneSession:
         the reason voicemail_left only after leaving a message."""
         self.ctx.event('call.machine_suspected', answeredBy=answered_by)
         if self.live is not None:
-            await self.live.append('session.instructions.append', machine_hint(self.brief))
+            # Silent context: an instruction here made the model announce "I'll wait for the beep".
+            await self.live.append('session.thinking.append', machine_hint(self.brief))
 
     async def instruct(self, text):
         if self.live is None:
