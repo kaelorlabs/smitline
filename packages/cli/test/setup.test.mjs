@@ -183,11 +183,16 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.ok(!empty.next.some((item) => ['caller_id', 'owner_phone', 'public_url'].includes(item.id)));
   assert.deepEqual(empty.optional.map((item) => item.id), ['caller_id', 'owner_phone']);
 
+  assert.match(empty.checks.find((c) => c.id === 'runtime').detail, /^Python on this computer/);
+  // Without a usable Python, Docker runs Colleague AI; without either, that comes first.
   const noVenv = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({ 'docker info': 0 }), find });
-  const python = noVenv.checks.find((c) => c.id === 'python');
-  assert.equal(python.ok, false);
-  assert.match(python.detail, /python3-venv/);
-  assert.equal(noVenv.next[0].id, 'python');
+  const runtime = noVenv.checks.find((c) => c.id === 'runtime');
+  assert.equal(runtime.ok, true);
+  assert.match(runtime.detail, /^Docker/);
+  const neither = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({}), find });
+  assert.equal(neither.checks.find((c) => c.id === 'runtime').ok, false);
+  assert.equal(neither.next[0].id, 'runtime');
+  assert.match(neither.next[0].ask, /Docker/);
   assert.match(empty.next[0].ask, /Do not paste it into this chat/);
 
   const requests = [];

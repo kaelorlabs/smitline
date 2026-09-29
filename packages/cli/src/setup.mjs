@@ -267,22 +267,24 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   checks.push(check('line_endings', 'Unix line endings', !crlf, { fix: 'Clone again inside WSL or Linux' }));
   const docker = runner('docker', ['info'], { timeout: 12_000 });
   checks.push(check('docker', 'Docker is running', docker.status === 0, {
-    group: 'meetings', required: false, detail: 'needed to join meetings and for the laptop tunnel',
+    group: 'meetings', required: false, detail: 'needed to join meetings; also runs Colleague AI when Python is not set up',
     fix: 'Start Docker, or install it inside WSL', ask: 'Please start Docker (or Docker Desktop) and tell me when it is running.',
   }));
   checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(root, 'node_modules', 'mammoth')), { fix: 'npm install' }));
-  // The daemon creates a Python virtual environment on first start; Ubuntu ships without venv.
-  // A venv made without python3-venv has python but no pip, so look for pip.
+  // start-runtime-daemon.sh runs the daemon on this computer's Python when it can make a
+  // venv, otherwise in Docker. A venv made without python3-venv has no pip, so look for pip.
   const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(root, '.venv', 'bin', 'pip'));
   const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
-  const pythonDetail = venvReady ? 'environment ready'
-    : python.status === 0 ? 'the first start creates the environment'
-      : python.status === 3 ? 'Python is older than 3.10'
-        : python.error ? 'python3 is not installed' : 'python3 cannot create a virtual environment (python3-venv is missing)';
-  checks.push(check('python', 'Python 3.10 or newer with venv', python.status === 0, {
-    detail: pythonDetail,
-    fix: process.platform === 'darwin' ? 'brew install python@3.12' : 'sudo apt install -y python3 python3-venv',
-    ask: process.platform === 'darwin' ? undefined : 'Please run this once in a terminal; it needs your password: sudo apt install -y python3 python3-venv',
+  const forced = process.env.COLLEAGUE_DAEMON_RUNTIME;
+  const onHost = python.status === 0 && forced !== 'docker';
+  const inDocker = !onHost && docker.status === 0 && forced !== 'host';
+  const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
+    : inDocker ? 'Docker; the first start builds a small image. Python is not needed, except to hand meeting work to Codex, Cursor, or Claude Code'
+      : 'needs Docker (recommended) or Python 3.10 or newer with venv';
+  checks.push(check('runtime', 'Where Colleague AI runs', onHost || inDocker, {
+    detail: runtimeDetail,
+    fix: 'Start or install Docker (or install Python with venv: sudo apt install -y python3-venv)',
+    ask: 'Colleague AI runs in Docker. Please install or start Docker (Docker Desktop on a Mac) and tell me when it is running.',
   }));
 
   let openai = { ok: present(env.OPENAI_API_KEY) };

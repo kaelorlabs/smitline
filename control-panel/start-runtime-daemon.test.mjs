@@ -32,3 +32,54 @@ test('COLLEAGUE_PYTHON without aiohttp fails closed before the daemon starts', (
   assert.match(result.stderr, /aiohttp/);
   assert.equal(result.stderr.includes('daemon_main.py'), false);
 });
+
+function fakeTools({ python = 1, dockerInfo = 0 } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-launcher-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'python3'), `#!/bin/sh\nexit ${python}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
+echo "$@" >> "$DOCKER_LOG"
+case "$1" in
+  info) [ "$2" = "-f" ] && echo "Ubuntu 24.04"; exit ${dockerInfo} ;;
+  image) exit 1 ;;
+  build) cat > /dev/null; exit 0 ;;
+esac
+exit 0
+`, { mode: 0o755 });
+  const log = path.join(dir, 'docker.log');
+  const env = {
+    PATH: `${bin}:/usr/bin:/bin`,
+    DOCKER_LOG: log,
+    COLLEAGUE_PYTHON_VENV: path.join(dir, 'venv'),
+    COLLEAGUE_DAEMON_PORT: '9876',
+    OPENAI_API_KEY: 'sk-launcher-test-value',
+  };
+  return { env, log: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '') };
+}
+
+test('without a usable Python the launcher builds the image and runs the daemon in Docker', () => {
+  const tools = fakeTools();
+  const result = spawnSync('bash', [SCRIPT], { encoding: 'utf8', env: tools.env });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = tools.log().trim().split('\n');
+  assert.ok(lines.some((line) => /^build --quiet --label colleague\.hash=[0-9a-f]{12} -t colleague-daemon:local -f Dockerfile\.daemon -$/.test(line)));
+  const run = lines.find((line) => line.startsWith('run '));
+  assert.match(run, /--name colleague-daemon-9876 --network host/);
+  assert.ok(run.includes(`-v ${ROOT}:${ROOT} -w ${ROOT}`));
+  assert.match(run, /--user \d+:\d+/);
+  assert.match(run, /-e OPENAI_API_KEY( |$)/);
+  assert.equal(run.includes('sk-launcher-test-value'), false);
+  assert.match(run, /meeting-runtime\/daemon_main\.py --host 127\.0\.0\.1 --port 9876$/);
+});
+
+test('the launcher explains what to install when neither Python nor Docker can run the daemon', () => {
+  const tools = fakeTools({ dockerInfo: 1 });
+  const result = spawnSync('bash', [SCRIPT], { encoding: 'utf8', env: tools.env });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Docker \(recommended\) or Python/);
+  assert.equal(tools.log().includes('run '), false);
+  const bogus = spawnSync('bash', [SCRIPT], { encoding: 'utf8', env: { ...tools.env, COLLEAGUE_DAEMON_RUNTIME: 'cloud' } });
+  assert.equal(bogus.status, 1);
+  assert.match(bogus.stderr, /auto, host, or docker/);
+});

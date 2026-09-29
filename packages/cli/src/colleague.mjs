@@ -574,7 +574,7 @@ async function startDaemon(root, { timeoutMs = 240_000 } = {}) {
   let exitCode = null;
   child.once('exit', (code) => { exitCode = code ?? 1; });
   child.unref();
-  progress('Starting Colleague AI. The first start installs Python packages and can take a minute or two.');
+  progress('Starting Colleague AI. The first start builds a small Docker image or installs Python packages, which can take a minute or two.');
   const started = Date.now();
   let lastNote = started;
   while (Date.now() - started < timeoutMs) {
@@ -585,7 +585,7 @@ async function startDaemon(root, { timeoutMs = 240_000 } = {}) {
     if (exitCode !== null) {
       const recent = tail(log);
       const hint = /ensurepip|venv/.test(recent)
-        ? ' Python cannot create a virtual environment; run: sudo apt install -y python3-venv'
+        ? ' Python cannot create a virtual environment: start Docker to run Colleague AI there, or run: sudo apt install -y python3-venv'
         : '';
       throw new StartupError(`Colleague AI stopped while starting (exit ${exitCode}).${hint}\n${recent}`, { code: 'daemon_unavailable' });
     }

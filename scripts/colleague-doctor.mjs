@@ -96,15 +96,15 @@ if (envHasValue(envFile, 'OPENAI_API_KEY')) result('pass', 'OpenAI API key', '.e
 else result('fail', 'OpenAI API key', openaiKey ? '.env still has the example placeholder' : 'missing from .env');
 result(envHasValue(envFile, 'TAVILY_API_KEY') ? 'pass' : 'warn', 'Tavily key', 'optional for web search');
 
-// start-runtime-daemon.sh creates .venv with python3 -m venv.
-const python = command('python3', ['-c', 'import venv, ensurepip']);
-if (python.status === 0) result('pass', 'Python 3 with venv', 'the daemon can create its virtual environment');
-else if (python.error?.code === 'ENOENT') result('fail', 'Python 3 with venv', 'python3 not found; on Debian/Ubuntu run sudo apt install python3 python3-venv');
-else result('fail', 'Python 3 with venv', 'venv support is missing; on Debian/Ubuntu run sudo apt install python3-venv');
-
 const docker = command('docker', ['info'], { timeout: 12_000 });
 if (docker.error?.code === 'ETIMEDOUT') result('fail', 'Docker', 'docker info timed out');
 else result(docker.status === 0 ? 'pass' : 'fail', 'Docker', docker.status === 0 ? 'daemon is running' : 'daemon is unavailable');
+
+// start-runtime-daemon.sh runs the daemon on python3 with venv, or in Docker without it.
+const python = command('python3', ['-c', 'import venv, ensurepip']);
+if (python.status === 0) result('pass', 'Daemon runtime', 'Python on this computer');
+else if (docker.status === 0) result('pass', 'Daemon runtime', 'Docker; python3 with venv is only needed to hand meeting work to a coding agent');
+else result('fail', 'Daemon runtime', 'start Docker, or install python3 with venv (on Debian/Ubuntu: sudo apt install python3-venv)');
 
 if (docker.status === 0) {
   const compose = command('docker', ['compose', '-f', 'compose.meeting.yaml', 'config', '--quiet']);

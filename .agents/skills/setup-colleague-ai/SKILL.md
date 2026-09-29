@@ -7,7 +7,7 @@ description: Set up Colleague AI for the user so their agent can place phone cal
 
 Follow [SETUP.md](../../../SETUP.md) in the repository root. It is the canonical, step-by-step setup for agents. In short:
 
-1. Check prerequisites (Node 22, Python with venv, Docker for meetings, cloudflared for phone calls). Clone inside the Linux or macOS home directory (WSL2 on Windows), run `npm install`, and link `packages/cli/src/colleague.mjs` as `colleague`. An agent running on Windows runs each command with `wsl.exe -d Ubuntu --exec bash -lc '...'`.
+1. Check prerequisites: Node 22 and Docker. Colleague AI runs in Docker, so Python is not needed. Clone inside the Linux or macOS home directory (WSL2 on Windows), run `npm install`, and link `packages/cli/src/colleague.mjs` as `colleague`. An agent running on Windows runs each command with `wsl.exe -d Ubuntu --exec bash -lc '...'`.
 2. Run `colleague setup status --json` and work through `next` in order: apply each `suggest` without asking, ask each `ask` question, run each `fix`.
 3. Run `colleague setup secrets`. It opens a local page and returns at once. The user enters keys, their name, and phone details there, presses Done, and tells you. Never ask for keys in the chat.
 4. Run `colleague setup start`, then `colleague setup call-me --wait` for the first call when `firstCallReady` is true. Offer `colleague setup voice --preview <name>` to try another voice.

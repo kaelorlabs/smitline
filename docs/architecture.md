@@ -27,6 +27,14 @@ Zoom / Teams / Meet web client     GPT-Live (one gpt-live-1 session)
 
 The meeting browser, virtual display, and audio bridge run in Docker (`compose.meeting.yaml`, service `meeting-agent`). Coding-agent workers run on the host so official CLI logins are not copied into the container.
 
+### Where the daemon runs
+
+`start-runtime-daemon.sh` runs the daemon on this computer's Python when it can create the daemon's venv (Python 3.10+ with `venv`), and otherwise in Docker (`Dockerfile.daemon`). `COLLEAGUE_DAEMON_RUNTIME=host` or `docker` picks one.
+
+In Docker the container uses host networking, so the daemon and phone gateway listen on this computer's loopback exactly as they do without Docker. The checkout is mounted at the same path and the container runs as the host user, so `.colleague/`, `.env`, and call records stay the user's own files, and the meeting containers the daemon starts through the host's Docker socket see the same paths. The image holds only Python, aiohttp, the Docker CLI, and `cloudflared` for the phone tunnel; the code is mounted, so code changes need no rebuild, and the image is rebuilt only when `Dockerfile.daemon` or `requirements-daemon.txt` change. Settings exported in the shell reach the container by name, never by value on the command line.
+
+Coding-agent workers cannot run there: they use the host's `codex`, `cursor-agent`, or `claude` with the user's logins. Handing meeting work to a coding agent therefore needs the daemon on the host's Python. Phone calls, the calls API, and meetings started through `/v1/calls` work in either place. Docker Desktop needs host networking turned on for this computer to reach the daemon.
+
 ## Join and admission
 
 ```mermaid

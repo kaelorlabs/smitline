@@ -70,7 +70,7 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 
 ## Prerequisites
 
-- macOS or Linux, Python 3.10+, Node.js 22+, npm, and Git. Host workers use Unix file locking.
+- macOS or Linux (Windows through WSL2), Node.js 22+, npm, Git, and Docker. The runtime daemon runs in Docker when this computer has no Python 3.10+ with venv; handing meeting work to a coding agent needs that Python, because the agent runs on this computer with your logins. Host workers use Unix file locking.
 - On Windows, use WSL2 with Ubuntu: install Docker inside WSL (or enable Docker Desktop's WSL integration) and clone the repository inside the Linux home directory, not under `/mnt/c` or `/mnt/d`. `npm run doctor` checks for this.
 - Docker with Docker Compose, running locally.
 - An OpenAI project API key with access to `gpt-live-1` and the configured Codex backend model (default `gpt-5.6-terra`).
