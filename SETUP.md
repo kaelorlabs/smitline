@@ -77,7 +77,7 @@ This starts a page on `127.0.0.1`, opens it in the browser, and returns at once 
 
 > I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also add your phone number and your SignalWire details (the free trial works). Press Done when you're finished, then tell me.
 
-If the browser did not open (`"opened": false`), give the user the address. It works only on this computer and stays available for 15 minutes; run the command again for a new one.
+If the browser did not open (`"opened": false`), give the user the address. It works only on this computer and stays available for an hour; run the command again for a new one.
 
 When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
 
@@ -85,7 +85,7 @@ When the user says they are done, run the status again. GPT-Live needs an OpenAI
 
 Colleague AI streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. Offer the user one of these:
 
-- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** with Voice access there and copy the **Signing Key**. All four go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
+- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** there with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). The agent can set the Space URL and Project ID itself with `colleague setup set`; the token and signing key go on the setup page. All four go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
 - **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Colleague AI call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
 
 If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.

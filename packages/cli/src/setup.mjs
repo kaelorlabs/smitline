@@ -460,8 +460,8 @@ const FIELDS = [
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
   { key: 'SIGNALWIRE_PROJECT_ID', label: 'Project ID', group: 'SignalWire (free trial)', hint: 'On the API Credentials page of your SignalWire Dashboard.' },
-  { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > New Token, with access to Voice (calling). It starts with PT.' },
-  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > Signing Key > Show. It lets Colleague AI check that call updates really come from SignalWire.' },
+  { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
+  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Colleague AI check that call updates really come from SignalWire.' },
   { key: 'SIGNALWIRE_FROM_NUMBER', label: 'SignalWire phone number', group: 'SignalWire (free trial)', hint: 'A number from Phone Numbers in SignalWire. You can leave it empty and show a verified number instead ("Show my own number" above).' },
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
@@ -719,7 +719,10 @@ export function sanitizeSubmission(form) {
  * Resolves with every key saved during the session. On timeout it resolves with
  * timedOut: true if anything was saved, and rejects otherwise.
  */
-export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUrl, onSaved } = {}) {
+// Users often sign up for OpenAI or a phone provider while the page waits, so it lasts an hour.
+export const SECRETS_PAGE_MINUTES = 60;
+
+export function serveSecretsPage({ root, port = 0, timeoutMs = SECRETS_PAGE_MINUTES * 60_000, onUrl, onSaved } = {}) {
   const token = crypto.randomBytes(18).toString('base64url');
   const pathName = `/setup/${token}`;
   const savedKeys = [];
