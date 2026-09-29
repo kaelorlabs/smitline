@@ -269,6 +269,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['usage']['voiceSeconds'], 33)
         self.assertEqual(done['usage']['phoneSeconds'], 40)
         self.assertEqual(done['usage']['backendTokens'], {'input': 300, 'output': 20})
+        self.assertEqual(set(done['usage']['audio']), {'maxUnplayedMs', 'interruptionsFollowed',
+                                                       'hangupsYielded', 'replyDelayMs'})
         self.assertEqual([line['speaker'] for line in done['result']['transcript']],
                          ['other', 'agent', 'other'])
         self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
@@ -309,13 +311,15 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
-        live.push({'type': 'session.output_transcript.delta', 'delta': 'Hello there, I would like a table.',
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': 'Hello there, I would like to book a table for four people tonight.',
                    'start_ms': 0, 'end_ms': 900})
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Who is this?', 'start_ms': 1000,
                    'end_ms': 1400})
         await until(lambda: any(kind == 'session.instructions.append' for kind, _ in live.appends))
         # The next utterance is checked again; a second miss is final.
-        live.push({'type': 'session.output_transcript.delta', 'delta': 'Sorry, just a table for four.',
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': 'Sorry about that, I would just like a table for four people tonight.',
                    'start_ms': 3000, 'end_ms': 3900})
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay.', 'start_ms': 5000,
                    'end_ms': 5400})
@@ -327,6 +331,110 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['endReason'], 'remote_hangup')
         self.assertTrue(live.close_requested)
         self.assertIs(done['result']['disclosureVerified'], False)
+
+    async def test_a_screener_splitting_the_opening_is_not_a_missed_disclosure(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        # An iPhone call screener talks over the first word of the opening.
+        live.push({'type': 'session.input_transcript.delta', 'delta': "I'll see if this person is",
+                   'start_ms': 0, 'end_ms': 900})
+        live.push({'type': 'session.output_transcript.delta', 'delta': 'Hi,', 'start_ms': 950, 'end_ms': 1100})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'available', 'start_ms': 1150,
+                   'end_ms': 1500})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "I'm an AI assistant calling on behalf of Robin.", 'start_ms': 1600, 'end_ms': 3500})
+        await until(lambda: any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        disclosure = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
+        self.assertEqual(disclosure, [{'verified': True, 'attempt': 1}])
+        self.assertFalse(any(kind == 'session.instructions.append' for kind, _ in live.appends))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
+    async def test_the_machine_verdict_is_a_hint_not_the_end(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        # Carriers call screeners "machine"; the model hears a person and carries on.
+        self.h.line.on_amd(record['id'], 'machine_end_silence')
+        await until(lambda: any('guesses that a machine' in text for _kind, text in live.appends))
+        self.assertIsNone(session.end_reason)
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        await until(lambda: ws.closed)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_leaving_a_voicemail_is_reported_as_voicemail(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "voicemail_left"}'}}})
+        await until(lambda: ws.closed)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['endReason'], 'voicemail')
+
+    async def test_hangup_gives_way_when_they_keep_talking(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 800).decode()})
+        await until(lambda: any(m['event'] == 'mark' for m in ws.sent))
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        await until(lambda: session._hanging_up)
+        # They answer the goodbye before it has finished playing.
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Wait, one more thing',
+                   'start_ms': 5000, 'end_ms': 5800})
+        await until(lambda: session._other_spoke_at is not None)
+        mark = next(m for m in ws.sent if m['event'] == 'mark')
+        ws.push({'event': 'mark', 'mark': mark['mark']})
+        await until(lambda: any(e['type'] == 'call.hangup_yielded' for e in self.h.service.events(record['id'])))
+        self.assertFalse(ws.closed)
+        self.assertIsNone(session.end_reason)
+        self.assertTrue(any('spoke after you said goodbye' in text for _kind, text in live.appends))
+        # The next goodbye, with nobody talking over it, ends the call.
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc2', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        await until(lambda: ws.closed)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['endReason'], 'hangup')
+        self.assertEqual(done['usage']['audio']['hangupsYielded'], 1)
+
+    async def test_an_interruption_drops_speech_the_model_abandoned(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        # Two seconds of speech arrive at once; only the first 0.3 s go out right away.
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 16000).decode()})
+        await until(lambda: session.pacer.unplayed_seconds() > 1.0)
+        # A short "mhm" is a backchannel, not an interruption.
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Mhm', 'start_ms': 0, 'end_ms': 250})
+        await asyncio.sleep(0.5)
+        self.assertFalse(any(m['event'] == 'clear' for m in ws.sent))
+        # Talking over it for longer, with no new speech from the model, stops playback.
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Actually hold on, I',
+                   'start_ms': 1000, 'end_ms': 1800})
+        await until(lambda: any(m['event'] == 'clear' for m in ws.sent))
+        self.assertLess(session.pacer.unplayed_seconds(), 0.1)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        audio = done['usage']['audio']
+        self.assertEqual(audio['interruptionsFollowed'], 1)
+        self.assertGreaterEqual(audio['maxUnplayedMs'], 1900)
 
     async def test_voicemail_and_transfer(self):
         record, session = await self.h.dial()
@@ -516,6 +624,10 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(joiner.add('agent', 'Hi ', 500, 700), [('other', 'Hello?')])
         self.assertEqual(joiner.add('agent', 'there', 3000, 3200), [('agent', 'Hi')])
         self.assertEqual(joiner.flush(), [('agent', 'there')])
+        # Fragments from separate turns keep a space between sentences.
+        joiner.add('agent', 'Let me check.', 0, 100)
+        joiner.add('agent', 'I can place calls.', 150, 300)
+        self.assertEqual(joiner.flush(), [('agent', 'Let me check. I can place calls.')])
 
 
 class TwilioTests(unittest.IsolatedAsyncioTestCase):

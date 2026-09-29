@@ -16,7 +16,8 @@ from call_brief import CallBrief, default_voice, normalize_phone, validate_webho
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
-    delegation_config, disclosure_reminder, discloses, opening_cue, voice_instructions,
+    HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, machine_hint,
+    opening_cue, voice_instructions,
 )
 from twilio_client import client_for, dial_twiml, stream_twiml
 from voice_core import (
@@ -39,6 +40,17 @@ LIVE_CONNECT_TIMEOUT = 20.0
 OVERRUN_SECONDS = 180.0
 # Characters of the agent's first utterance to hear before judging the disclosure.
 DISCLOSURE_WINDOW = 120
+# A finished utterance this short (for example "Hi," cut off by a call screener) is
+# not judged on its own; the next words are added to it.
+DISCLOSURE_MIN_FINAL = 40
+# GPT-Live stops talking when interrupted but sends no event for it. If the other person
+# talks for this long while speech is still queued, and no new audio arrives for
+# INTERRUPT_SETTLE seconds, it has yielded: the queued rest is dropped.
+INTERRUPT_MIN_SPEECH_MS = 500
+INTERRUPT_MIN_QUEUED = 0.25
+INTERRUPT_SETTLE = 0.35
+# How many times a hang-up may give way to the other person still talking.
+MAX_HANGUP_YIELDS = 2
 TWILIO_TERMINAL = {
     'completed': 'hangup', 'busy': 'busy', 'no-answer': 'no_answer', 'failed': 'error',
     'canceled': 'canceled',
@@ -61,6 +73,9 @@ class UtteranceJoiner:
         if self.parts and (speaker != self.speaker or gap):
             flushed = self.flush()
         self.speaker = speaker
+        previous = self.parts[-1] if self.parts else ''
+        if previous and text and previous[-1] in '.?!,;:' and text[0].isalnum():
+            text = ' ' + text  # "Let me check." + "I can" must not read "check.I can"
         self.parts.append(text)
         if end_ms is not None:
             self.last_end = end_ms
@@ -90,6 +105,8 @@ class OutputPacer:
         self.sleep = sleep
         self.bytes_per_second = bytes_per_second
         self.queue = asyncio.Queue()
+        self.queued_bytes = 0
+        self.max_unplayed = 0.0
         self.play_until = 0.0
         self.sent_marks = 0
         self.played_marks = 0
@@ -102,6 +119,21 @@ class OutputPacer:
         frames = [audio[i:i + self.FRAME_BYTES] for i in range(0, len(audio), self.FRAME_BYTES)]
         for index, frame in enumerate(frames):
             self.queue.put_nowait((base64.b64encode(frame).decode('ascii'), index == len(frames) - 1))
+        self.queued_bytes += len(audio)
+        self.max_unplayed = max(self.max_unplayed, self.unplayed_seconds())
+
+    def unplayed_seconds(self):
+        """Speech not heard yet: queued here, plus sent to the provider but still playing."""
+        return self.queued_bytes / self.bytes_per_second + max(0.0, self.play_until - self.clock())
+
+    def flush(self):
+        """Drop speech the model has stopped saying; the caller also clears the provider."""
+        while not self.queue.empty():
+            self.queue.get_nowait()
+        self.queued_bytes = 0
+        self.play_until = self.clock()
+        self.played_marks = self.sent_marks
+        self._drained.set()
 
     def mark_played(self, name):
         try:
@@ -121,7 +153,9 @@ class OutputPacer:
     async def run(self):
         while True:
             payload, last = await self.queue.get()
-            seconds = len(base64.b64decode(payload)) / self.bytes_per_second
+            size = len(base64.b64decode(payload))
+            self.queued_bytes = max(0, self.queued_bytes - size)
+            seconds = size / self.bytes_per_second
             now = self.clock()
             ahead = self.play_until - now
             if ahead > self.lead:
@@ -169,8 +203,15 @@ class PhoneSession:
         self.backend_tokens = {'input': 0, 'output': 0}
         self.disclosure_checked = False
         self.disclosure_attempts = 0
-        self._failed_opening = None
+        self._agent_opening = ''
         self.heard_other = asyncio.Event()
+        self.last_output_at = None
+        self._other_spoke_at = None
+        self._other_span = None  # [start_ms, end_ms] of what the other person is saying now
+        self._awaiting_reply_since = None
+        self._interrupt_check = None
+        self._hangup_yields = 0
+        self.stats = {'interruptionsFollowed': 0, 'hangupsYielded': 0, 'responseDelaysMs': []}
         self.last_activity = None
         self.started_at = None
         self._hanging_up = False
@@ -201,8 +242,8 @@ class PhoneSession:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    def _start_hangup(self, reason):
-        task = asyncio.create_task(self.hangup(reason))
+    def _start_hangup(self, reason, *, yield_to_speech=False):
+        task = asyncio.create_task(self.hangup(reason, yield_to_speech=yield_to_speech))
         self._hangups.add(task)
         task.add_done_callback(self._hangups.discard)
         return task
@@ -252,7 +293,7 @@ class PhoneSession:
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
                 if speaker == 'agent':
-                    self._check_disclosure(text, final=True)
+                    self._check_disclosure(final=True)
             for task in list(self._tasks):
                 task.cancel()
             if self._hangups:
@@ -320,7 +361,11 @@ class PhoneSession:
         async for event in self.live.events():
             kind = event.get('type')
             if kind == 'session.output_audio.delta':
-                self.last_activity = time.monotonic()
+                now = time.monotonic()
+                self.last_activity = self.last_output_at = now
+                if self._awaiting_reply_since is not None:
+                    self.stats['responseDelaysMs'].append(int((now - self._awaiting_reply_since) * 1000))
+                    self._awaiting_reply_since = None
                 self.pacer.offer(event['delta'])
             elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
                 self._transcript(event)
@@ -334,7 +379,8 @@ class PhoneSession:
                     # Hanging up needs no tool result or further backend turn.
                     reason = call['arguments'].get('reason')
                     self.ctx.event('call.end_requested', reason=reason or 'completed')
-                    self._start_hangup('voicemail' if reason == 'voicemail_left' else 'hangup')
+                    self._start_hangup('voicemail' if reason == 'voicemail_left' else 'hangup',
+                                       yield_to_speech=reason != 'voicemail_left')
             elif kind == 'error':
                 error = event.get('error') or {}
                 self.ctx.event('call.voice_error', code=error.get('code') or 'live_error')
@@ -349,32 +395,83 @@ class PhoneSession:
             self.fail('The voice connection was lost during the call.')
 
     def _transcript(self, event):
-        self.last_activity = time.monotonic()
+        now = self.last_activity = time.monotonic()
         source = 'other' if 'input_transcript' in event['type'] else 'agent'
-        if source == 'other' and (event.get('delta') or '').strip():
+        delta = event.get('delta') or ''
+        if source == 'other' and delta.strip():
             self.heard_other.set()
-        for speaker, text in self.joiner.add(source, event.get('delta') or '',
-                                             event.get('start_ms'), event.get('end_ms')):
+            self._other_spoke_at = now
+            start, end = event.get('start_ms'), event.get('end_ms')
+            if self._other_span is None or self.joiner.speaker != 'other':
+                self._other_span = [start, end]
+            elif end is not None:
+                self._other_span[1] = end
+            if self.pacer is None or self.pacer.unplayed_seconds() < 0.1:
+                self._awaiting_reply_since = now  # the next speech answers these words
+            self._maybe_follow_interruption(now)
+        if source == 'agent' and not self.disclosure_checked:
+            self._agent_opening += delta
+        for speaker, text in self.joiner.add(source, delta, event.get('start_ms'), event.get('end_ms')):
             self.ctx.add_transcript(speaker, text)
             if speaker == 'agent':
-                self._check_disclosure(text, final=True)
+                self._check_disclosure(final=True)
         if source == 'agent' and self.joiner.speaker == 'agent':
-            self._check_disclosure(''.join(self.joiner.parts))
+            self._check_disclosure()
 
-    def _check_disclosure(self, text, *, final=False):
-        """Check, early in the agent's first utterance, that it said it is an AI acting for NAME.
+    def _maybe_follow_interruption(self, spoke_at):
+        """Stop playing when GPT-Live has stopped talking because the other person interrupted.
+
+        GPT-Live owns barge-in but sends no event for it, and it produces speech faster
+        than it is played, so speech it has abandoned can still be queued. When the other
+        person has talked for a moment and no new audio follows, the rest is dropped here
+        and at the provider. A short backchannel ("mhm") does not count.
+        """
+        if self.pacer is None or self.pacer.unplayed_seconds() < INTERRUPT_MIN_QUEUED:
+            return
+        span = self._other_span or [None, None]
+        if span[0] is not None and span[1] is not None and span[1] - span[0] < INTERRUPT_MIN_SPEECH_MS:
+            return
+        if self._interrupt_check is not None and not self._interrupt_check.done():
+            return
+        self._interrupt_check = self._spawn(self._follow_interruption(spoke_at))
+
+    async def _follow_interruption(self, spoke_at):
+        await asyncio.sleep(INTERRUPT_SETTLE)
+        if self.last_output_at is not None and self.last_output_at > spoke_at:
+            return  # still talking: GPT-Live chose to continue
+        if self.pacer is None or self.pacer.unplayed_seconds() < INTERRUPT_MIN_QUEUED:
+            return
+        self.pacer.flush()
+        await self._twilio_send({'event': 'clear'})
+        self.stats['interruptionsFollowed'] += 1
+        self.ctx.event('call.interrupted')
+
+    def audio_stats(self):
+        delays = sorted(self.stats['responseDelaysMs'])
+        stats = {
+            'maxUnplayedMs': int((self.pacer.max_unplayed if self.pacer else 0) * 1000),
+            'interruptionsFollowed': self.stats['interruptionsFollowed'],
+            'hangupsYielded': self.stats['hangupsYielded'],
+        }
+        if delays:
+            stats['replyDelayMs'] = {'median': delays[len(delays) // 2], 'max': delays[-1],
+                                     'count': len(delays)}
+        return stats
+
+    def _check_disclosure(self, *, final=False):
+        """Check, early in the agent's speech, that it said it is an AI acting for NAME.
 
         GPT-Live cannot be forced to say a fixed sentence, so the opening is checked
-        as it is spoken. A miss triggers an instruction to disclose at once, and the
-        next thing the agent says is checked again. The verdict goes into the result.
+        as it is spoken, over everything the agent has said so far: a call screener or
+        a quick "hello" can split the opening, and a fragment is not a miss. A miss
+        triggers an instruction to disclose at once, and what the agent says next is
+        checked again. The verdict goes into the result.
         """
         if self.disclosure_checked or self.inbound:
             return
-        text = text.strip()
-        if self._failed_opening and text.startswith(self._failed_opening):
-            return  # the rest of the utterance that already failed
+        text = ' '.join(self._agent_opening.split())
         verified = discloses(text, self.brief.on_behalf_of, self.brief.language)
-        if not verified and not final and len(text) < DISCLOSURE_WINDOW:
+        if not verified and len(text) < (DISCLOSURE_MIN_FINAL if final else DISCLOSURE_WINDOW):
             return
         self.disclosure_attempts += 1
         self.ctx.disclosure = verified
@@ -382,7 +479,7 @@ class PhoneSession:
         if verified or self.disclosure_attempts >= 2:
             self.disclosure_checked = True
             return
-        self._failed_opening = text[:60]
+        self._agent_opening = ''  # judge what is said after the reminder
         if self.live is not None:
             self._spawn(self.live.append(
                 'session.instructions.append', disclosure_reminder(self.brief)))
@@ -425,14 +522,29 @@ class PhoneSession:
 
     # Actions -------------------------------------------------------------
 
-    async def hangup(self, reason):
+    async def hangup(self, reason, *, yield_to_speech=False):
         if self._hanging_up:
             return
         self._hanging_up = True
-        if self.end_reason is None:
+        requested_at = time.monotonic()
+        set_reason = self.end_reason is None
+        if set_reason:
             self.end_reason = reason
         if self.pacer is not None:
             await self.pacer.drained()
+        if (yield_to_speech and self._hangup_yields < MAX_HANGUP_YIELDS
+                and self._other_spoke_at is not None and self._other_spoke_at > requested_at
+                and not self.finished.is_set()):
+            # They kept talking after the goodbye: stay on the line and let the model answer.
+            self._hanging_up = False
+            self._hangup_yields += 1
+            self.stats['hangupsYielded'] += 1
+            if set_reason:
+                self.end_reason = None
+            self.ctx.event('call.hangup_yielded')
+            if self.live is not None:
+                await self.live.append('session.instructions.append', HANGUP_YIELDED)
+            return
         await self._close_stream()
         if self.call_sid:
             try:
@@ -448,16 +560,13 @@ class PhoneSession:
             except Exception:
                 pass
 
-    async def voicemail(self):
-        if self.end_reason is None:
-            self.end_reason = 'voicemail'
-        self.ctx.event('call.voicemail')
+    async def machine_suspected(self, answered_by):
+        """The network guessed that a machine answered. It mistakes call screeners for
+        voicemail, so the model, which hears the call, decides; it ends the call with
+        the reason voicemail_left only after leaving a message."""
+        self.ctx.event('call.machine_suspected', answeredBy=answered_by)
         if self.live is not None:
-            await self.live.append(
-                'session.commentary.append',
-                'You reached voicemail and the beep has sounded. Leave a short message now: the '
-                'disclosure, who it is for, and why you called, without private details. Then '
-                'end the call.')
+            await self.live.append('session.instructions.append', machine_hint(self.brief))
 
     async def instruct(self, text):
         if self.live is None:
@@ -679,6 +788,8 @@ class PhoneLine:
             usage['phoneSeconds'] = session.phone_seconds
         if any(session.backend_tokens.values()):
             usage['backendTokens'] = dict(session.backend_tokens)
+        if session.connected.is_set():
+            usage['audio'] = session.audio_stats()
         return usage
 
     # Twilio callbacks ----------------------------------------------------
@@ -714,7 +825,7 @@ class PhoneLine:
             return False
         session.ctx.event('call.answered_by', answeredBy=answered_by or 'unknown')
         if (answered_by or '').startswith('machine') or answered_by == 'fax':
-            session._spawn(session.voicemail())
+            session._spawn(session.machine_suspected(answered_by))
         return True
 
     # Line interface --------------------------------------------------------
