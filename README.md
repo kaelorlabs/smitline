@@ -28,7 +28,7 @@ The current product has been exercised in live Zoom calls. Teams and Google Meet
 
 | Capability | Experience |
 | --- | --- |
-| **Make phone calls** | Your agent sends a brief; Colleague AI calls through Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
+| **Make phone calls** | Your agent sends a brief; Colleague AI calls through SignalWire (free trial works) or Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
 | **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API. |
 | **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone after a short opening AI disclosure. |
 | **Bring a coding agent in** | Codex is the default. Cursor and Claude Code are optional adapters that only use flags documented by their CLIs. |
@@ -62,7 +62,7 @@ The meeting browser, virtual display, virtual camera, and audio bridge run in Do
 ## Security model
 
 - **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's Twilio routes, which check Twilio signatures, are exposed through a tunnel.
-- **Host-owned secrets.** OpenAI, Twilio, and Tavily keys stay in ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, jobs, artifacts, and pairing hashes stay on disk and gitignored. They are never uploaded to the mock hosted plane.
+- **Host-owned secrets.** OpenAI, SignalWire or Twilio, and Tavily keys stay in ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, jobs, artifacts, and pairing hashes stay on disk and gitignored. They are never uploaded to the mock hosted plane.
 - **Least privilege.** Hosted/remote requests may only **narrow** local permissions. The local runner is the final enforcement point.
 - **Fail closed.** Unknown provider ids, undocumented CLI flags, `last`/`latest` session ids, and missing job bindings are rejected.
 - **No secret-bearing logs.** Pairing codes and `deviceEnrollment` are revealed once. Tokens are not placed in URLs, query strings, events, or errors.

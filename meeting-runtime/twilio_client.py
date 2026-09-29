@@ -1,4 +1,8 @@
-"""Minimal Twilio Programmable Voice client and request-signature checks."""
+"""Minimal Twilio Programmable Voice client and request-signature checks.
+
+SignalWire's Compatibility API uses the same REST shapes, the same HMAC-SHA1
+webhook signatures (keyed with its signing key), and the same media stream.
+"""
 import base64
 import hashlib
 import hmac
@@ -57,13 +61,28 @@ def hangup_twiml():
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
+def client_for(creds, **kwargs):
+    """A REST client for phone credentials from the call hooks: Twilio or SignalWire."""
+    return TwilioClient(creds['accountSid'], creds['authToken'],
+                        base=creds.get('apiBase') or API_BASE,
+                        flavor=creds.get('provider') or 'twilio', **kwargs)
+
+
+def signing_keys(creds):
+    """Secrets a webhook signature may be keyed with: SignalWire's signing key, then the token."""
+    return [key for key in (creds.get('signingKey'), creds.get('authToken')) if key]
+
+
 class TwilioClient:
-    def __init__(self, account_sid, auth_token, *, request=None, base=API_BASE):
+    def __init__(self, account_sid, auth_token, *, request=None, base=API_BASE, flavor='twilio'):
         if not account_sid or not auth_token:
             raise ValueError('Twilio account SID and auth token are required')
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.base = base
+        # SignalWire documents no TimeLimit or AsyncAmdStatusCallbackMethod; the line
+        # enforces the time limit itself, and AMD callbacks default to POST.
+        self.flavor = flavor
         self._request = request or self._aiohttp_request
 
     async def _aiohttp_request(self, method, url, form=None):
@@ -89,7 +108,7 @@ class TwilioClient:
     async def create_call(self, *, to, from_, twiml, status_callback=None, amd_callback=None,
                           record=False, timeout=30, time_limit=None, recording_callback=None):
         form = [('To', to), ('From', from_), ('Twiml', twiml), ('Timeout', str(int(timeout)))]
-        if time_limit:
+        if time_limit and self.flavor == 'twilio':
             form.append(('TimeLimit', str(int(time_limit))))
         if status_callback:
             form.append(('StatusCallback', status_callback))
@@ -98,8 +117,9 @@ class TwilioClient:
                 form.append(('StatusCallbackEvent', event))
         if amd_callback:
             form += [('MachineDetection', 'DetectMessageEnd'), ('AsyncAmd', 'true'),
-                     ('AsyncAmdStatusCallback', amd_callback),
-                     ('AsyncAmdStatusCallbackMethod', 'POST')]
+                     ('AsyncAmdStatusCallback', amd_callback)]
+            if self.flavor == 'twilio':
+                form.append(('AsyncAmdStatusCallbackMethod', 'POST'))
         if record:
             form.append(('Record', 'true'))
             if recording_callback:

@@ -17,6 +17,7 @@ import {
   validateContext,
 } from '../../sdk-typescript/src/index.mjs';
 import {
+  SECRETS_PAGE_MINUTES,
   availableVoices,
   openBrowser,
   readEnv,
@@ -659,7 +660,7 @@ async function setupCommand(args) {
       root,
       onUrl(url) {
         const opened = args['no-open'] ? false : openBrowser(url);
-        progress(`Enter keys on this page (this computer only; it closes after 15 minutes):\n${url}`);
+        progress(`Enter keys on this page (this computer only; it closes after ${SECRETS_PAGE_MINUTES} minutes):\n${url}`);
         if (!opened && !args['no-open']) progress('Could not open a browser automatically; open the address above.');
       },
       onSaved(keys) {
@@ -675,7 +676,7 @@ async function setupCommand(args) {
       url,
       opened,
       next: `${opened ? 'The setup page is open in your browser' : `Open ${url} in a browser on this computer`}. `
-        + 'Enter your keys there, press Done, then tell me. The page stays available for 15 minutes.',
+        + `Enter your keys there, press Done, then tell me. The page stays available for ${SECRETS_PAGE_MINUTES} minutes.`,
     });
     return EXIT.ok;
   }

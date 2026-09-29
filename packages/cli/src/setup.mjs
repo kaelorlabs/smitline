@@ -11,13 +11,15 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const SECRET_KEYS = Object.freeze([
-  'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE',
+  'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
+  'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE',
 ]);
 export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
   'TWILIO_FROM_NUMBER', 'COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_ALLOWED_CALLING_CODES',
   'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_CONNECTOR_URL',
-  'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND',
+  'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND', 'COLLEAGUE_PHONE_PROVIDER',
+  'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
 ]);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
@@ -29,6 +31,20 @@ const VOICE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;
 const MCP_NAME = 'colleague-ai';
 // Skills a local agent can use without opening this repository.
 const INSTALLED_SKILLS = ['call-with-colleague-ai', 'join-colleague-ai-meeting'];
+
+/** 'twilio' or 'signalwire', chosen the same way as the daemon (call_hooks.phone_provider). */
+export function phoneProvider(env) {
+  const chosen = String(env.COLLEAGUE_PHONE_PROVIDER || '').trim().toLowerCase();
+  if (['twilio', 'signalwire'].includes(chosen)) return chosen;
+  return present(env.SIGNALWIRE_PROJECT_ID) && !present(env.TWILIO_ACCOUNT_SID) ? 'signalwire' : 'twilio';
+}
+
+/** The Space host from 'example', 'example.signalwire.com', or its https URL; '' if unusable. */
+export function signalwireSpace(value) {
+  const text = String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(text)) return '';
+  return text.includes('.') ? text : `${text}.signalwire.com`;
+}
 
 /** GPT-Live voices plus any listed in COLLEAGUE_EXTRA_VOICES (new voices OpenAI adds). */
 export function availableVoices(env = process.env) {
@@ -119,7 +135,7 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   const text = String(value ?? '').trim();
   if (/[\r\n]/.test(text)) throw new Error(`${key} must be one line`);
-  if (['COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_CALLER_ID', 'TWILIO_FROM_NUMBER'].includes(key)) {
+  if (['COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_CALLER_ID', 'TWILIO_FROM_NUMBER', 'SIGNALWIRE_FROM_NUMBER'].includes(key)) {
     const compact = text.replace(/[\s().-]/g, '');
     if (!E164.test(compact)) throw new Error(`${key} must be an E.164 number such as +14155550142`);
     return compact;
@@ -131,6 +147,17 @@ export function validateSetting(key, value, { env = process.env } = {}) {
     const names = text.split(',').map((name) => name.trim()).filter(Boolean);
     if (names.some((name) => !VOICE_NAME.test(name))) throw new Error('COLLEAGUE_EXTRA_VOICES must be voice names separated by commas');
     return names.join(',');
+  }
+  if (key === 'SIGNALWIRE_SPACE') {
+    const space = signalwireSpace(text);
+    if (!space) throw new Error('SIGNALWIRE_SPACE must be your Space URL, such as yourname.signalwire.com');
+    return space;
+  }
+  if (key === 'SIGNALWIRE_PROJECT_ID' && !/^[A-Za-z0-9-]{8,64}$/.test(text)) {
+    throw new Error('SIGNALWIRE_PROJECT_ID must be the Project ID from the API Credentials page, such as 1a2b3c4d-...');
+  }
+  if (key === 'COLLEAGUE_PHONE_PROVIDER' && !['twilio', 'signalwire'].includes(text)) {
+    throw new Error('COLLEAGUE_PHONE_PROVIDER must be twilio or signalwire');
   }
   if (key === 'COLLEAGUE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
     throw new Error('COLLEAGUE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
@@ -195,27 +222,47 @@ async function verifyOpenAi(key, fetchImpl) {
   }
 }
 
-async function verifyTwilio(env, fetchImpl) {
-  const auth = `Basic ${Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString('base64')}`;
-  const base = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(env.TWILIO_ACCOUNT_SID)}`;
+async function verifyPhoneAccount(env, fetchImpl, provider) {
+  const sw = provider === 'signalwire';
+  const name = sw ? 'SignalWire' : 'Twilio';
+  const sid = sw ? env.SIGNALWIRE_PROJECT_ID : env.TWILIO_ACCOUNT_SID;
+  const token = sw ? env.SIGNALWIRE_API_TOKEN : env.TWILIO_AUTH_TOKEN;
+  const origin = sw ? `https://${signalwireSpace(env.SIGNALWIRE_SPACE)}/api/laml` : 'https://api.twilio.com';
+  const auth = `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`;
+  const base = `${origin}/2010-04-01/Accounts/${encodeURIComponent(sid)}`;
   try {
     const account = await fetchImpl(`${base}.json`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) });
-    if (account.status === 401 || account.status === 404) return { ok: false, detail: 'Twilio rejected the account SID or auth token', fix: 'colleague setup secrets' };
-    if (!account.ok) return { ok: null, detail: `Twilio answered ${account.status}` };
+    if (account.status === 401 || account.status === 404) {
+      return { ok: false, detail: `${name} rejected the ${sw ? 'Space, project ID, or API token' : 'account SID or auth token'}`, fix: 'colleague setup secrets' };
+    }
+    if (!account.ok) return { ok: null, detail: `${name} answered ${account.status}` };
     const body = await account.json();
     const [numbers, verified] = await Promise.all([
       fetchImpl(`${base}/IncomingPhoneNumbers.json?PageSize=50`, { headers: { Authorization: auth } }).then((r) => r.json()).catch(() => ({})),
       fetchImpl(`${base}/OutgoingCallerIds.json?PageSize=50`, { headers: { Authorization: auth } }).then((r) => r.json()).catch(() => ({})),
     ]);
-    return {
-      ok: true,
-      detail: `account ${body.status || 'active'}${body.type === 'Trial' ? ' (trial: calls only verified numbers)' : ''}`,
-      trial: body.type === 'Trial',
+    const trial = body.type === 'Trial';
+    const found = {
+      trial,
       numbers: (numbers.incoming_phone_numbers || []).map((item) => item.phone_number),
       verified: (verified.outgoing_caller_ids || []).map((item) => item.phone_number),
     };
+    if (!sw && trial) {
+      // Twilio's trial strips <Stream> from call instructions: the call audio never reaches GPT-Live.
+      return {
+        ...found,
+        ok: false,
+        detail: "Twilio's free trial blocks the live call audio Colleague AI needs; upgrade the Twilio account (add funds), or use SignalWire's free trial",
+        fix: 'Upgrade in the Twilio console, or add SignalWire on the setup page (colleague setup secrets)',
+      };
+    }
+    return {
+      ...found,
+      ok: true,
+      detail: `${name} account ${body.status || 'active'}${trial ? ' (trial: calls only numbers you bought or verified)' : ''}`,
+    };
   } catch {
-    return { ok: null, detail: 'could not reach Twilio to verify the account' };
+    return { ok: null, detail: `could not reach ${name} to verify the account` };
   }
 }
 
@@ -249,7 +296,7 @@ export function registeredAgents(root, { runner = run, home = os.homedir(), find
 
 export async function setupStatus({ root, env: overrides, fetchImpl = globalThis.fetch, verify = true, runner = run, find = which } = {}) {
   // The daemon reads the process environment first, then .env; mirror that here.
-  const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|COLLEAGUE_)/.test(key) && present(value);
+  const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|SIGNALWIRE_|COLLEAGUE_)/.test(key) && present(value);
   const env = { ...readEnv(root), ...Object.fromEntries(Object.entries(overrides || process.env).filter(relevant)) };
   const checks = [];
   const major = Number(process.versions.node.split('.')[0]);
@@ -300,58 +347,69 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_NAME "<name>")',
   }));
 
-  const twilioSaved = present(env.TWILIO_ACCOUNT_SID) && present(env.TWILIO_AUTH_TOKEN);
-  let twilio = { ok: twilioSaved };
-  if (twilioSaved && verify) twilio = await verifyTwilio(env, fetchImpl);
-  checks.push(check('twilio', 'Twilio account', twilio.ok, {
-    group: 'phone', required: false, detail: twilio.detail || (twilioSaved ? 'saved' : 'not set up'),
-    ask: 'Do you want phone calls too? If yes, enter your Twilio Account SID and Auth Token on the setup page.',
-    fix: 'colleague setup secrets',
+  // Phone calls go through SignalWire (free trial works) or Twilio (upgraded account).
+  const provider = phoneProvider(env);
+  const sw = provider === 'signalwire';
+  const providerName = sw ? 'SignalWire' : 'Twilio';
+  const numberKey = sw ? 'SIGNALWIRE_FROM_NUMBER' : 'TWILIO_FROM_NUMBER';
+  const accountSaved = sw
+    ? ['SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN'].every((key) => present(env[key]))
+    : present(env.TWILIO_ACCOUNT_SID) && present(env.TWILIO_AUTH_TOKEN);
+  let account = { ok: accountSaved };
+  if (accountSaved && verify) account = await verifyPhoneAccount(env, fetchImpl, provider);
+  checks.push(check('phone_account', accountSaved ? `${providerName} account` : 'Phone provider account', account.ok, {
+    group: 'phone', required: false, detail: account.detail || (accountSaved ? 'saved' : 'not set up'),
+    ask: 'Do you want phone calls too? SignalWire has a free trial that works with Colleague AI: sign up at https://signalwire.com, then enter its details on the setup page.',
+    fix: account.fix || 'colleague setup secrets',
   }));
-  // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else TWILIO_FROM_NUMBER.
-  // Incoming calls can only ring TWILIO_FROM_NUMBER, a number bought in Twilio.
-  const from = present(env.COLLEAGUE_CALLER_ID) ? env.COLLEAGUE_CALLER_ID : env.TWILIO_FROM_NUMBER;
+  // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else the provider number.
+  // Incoming calls can only ring a number bought from the provider.
+  const from = present(env.COLLEAGUE_CALLER_ID) ? env.COLLEAGUE_CALLER_ID : env[numberKey];
   let callerOk = present(from) && E164.test(from);
   let callerDetail = !present(from) ? 'no number chosen yet' : (callerOk ? from : `${from} is not an E.164 number`);
-  let callerAsk = 'Should calls come from your Twilio number, or show your own mobile number (verified in Twilio)?';
-  let callerFix = 'colleague setup set TWILIO_FROM_NUMBER +1... (or COLLEAGUE_CALLER_ID for a verified mobile)';
+  let callerAsk = `Should calls come from your ${providerName} number, or show your own mobile number (verified in ${providerName})?`;
+  let callerFix = `colleague setup set ${numberKey} +1... (or COLLEAGUE_CALLER_ID for a verified mobile)`;
   let suggest = null;
-  if (Array.isArray(twilio.numbers)) {
-    const verified = twilio.verified || [];
-    if (callerOk && !twilio.numbers.includes(from) && !verified.includes(from)) {
+  if (Array.isArray(account.numbers)) {
+    const verified = account.verified || [];
+    if (callerOk && !account.numbers.includes(from) && !verified.includes(from)) {
       callerOk = false;
-      callerDetail = `${from} is not a number or verified caller ID in this Twilio account`;
-    } else if (!present(from) && twilio.numbers.length === 1) {
+      callerDetail = `${from} is not a number or verified caller ID in this ${providerName} account`;
+    } else if (!present(from) && account.numbers.length === 1) {
       // One number: nothing to ask; the agent sets it.
-      suggest = { key: 'TWILIO_FROM_NUMBER', value: twilio.numbers[0] };
-      callerDetail = `this Twilio account has one number, ${twilio.numbers[0]}`;
+      suggest = { key: numberKey, value: account.numbers[0] };
+      callerDetail = `this ${providerName} account has one number, ${account.numbers[0]}`;
       callerAsk = undefined;
-      callerFix = `colleague setup set TWILIO_FROM_NUMBER ${twilio.numbers[0]}`;
-    } else if (!present(from) && twilio.numbers.length > 1) {
-      callerDetail = `Twilio numbers: ${twilio.numbers.join(', ')}`;
-      callerAsk = `Which number should calls come from: ${twilio.numbers.join(', ')}?`;
+      callerFix = `colleague setup set ${numberKey} ${account.numbers[0]}`;
+    } else if (!present(from) && account.numbers.length > 1) {
+      callerDetail = `${providerName} numbers: ${account.numbers.join(', ')}`;
+      callerAsk = `Which number should calls come from: ${account.numbers.join(', ')}?`;
     } else if (!present(from) && verified.length) {
       suggest = { key: 'COLLEAGUE_CALLER_ID', value: verified[0] };
-      callerDetail = `no Twilio number yet; ${verified[0]} is verified and can be shown on outgoing calls`;
+      callerDetail = `no ${providerName} number yet; ${verified[0]} is verified and can be shown on outgoing calls`;
       callerAsk = undefined;
       callerFix = `colleague setup set COLLEAGUE_CALLER_ID ${verified[0]}`;
     }
   }
-  if (callerOk && !present(env.TWILIO_FROM_NUMBER)) {
-    callerDetail += '; incoming calls also need TWILIO_FROM_NUMBER, a number bought in Twilio';
+  if (callerOk && !present(env[numberKey])) {
+    callerDetail += `; incoming calls also need ${numberKey}, a number bought in ${providerName}`;
   }
   const callerCheck = check('caller_id', 'Number calls come from', callerOk, {
     group: 'phone', required: false, detail: callerDetail, ask: callerAsk, fix: callerFix,
   });
   if (suggest && !callerOk) callerCheck.suggest = suggest;
   checks.push(callerCheck);
+  let ownerDetail = env.COLLEAGUE_OWNER_PHONE || 'missing';
+  if (present(env.COLLEAGUE_OWNER_PHONE) && account.trial && !(account.verified || []).includes(env.COLLEAGUE_OWNER_PHONE)) {
+    ownerDetail += `; a ${providerName} trial can only call it once it is verified in ${providerName} (Verified Caller IDs)`;
+  }
   checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.COLLEAGUE_OWNER_PHONE), {
-    group: 'phone', required: false, detail: env.COLLEAGUE_OWNER_PHONE || 'missing',
+    group: 'phone', required: false, detail: ownerDetail,
     ask: 'Please add your phone number on the setup page; I will call it once so you can hear Colleague AI.',
     fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_PHONE +1...)',
   }));
   const reachable = present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
-  checks.push(check('public_url', 'Twilio can reach this computer', reachable, {
+  checks.push(check('public_url', 'The phone provider can reach this computer', reachable, {
     group: 'phone', required: false,
     detail: present(env.COLLEAGUE_PUBLIC_URL) ? env.COLLEAGUE_PUBLIC_URL : (reachable ? 'Cloudflare quick tunnel on first call' : 'no tunnel available'),
     fix: 'Start Docker or install cloudflared, or set COLLEAGUE_PUBLIC_URL on a server',
@@ -373,10 +431,11 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   const firstCallReady = phoneReady && checks.find((c) => c.id === 'owner_phone').ok === true;
   // Phone steps become next steps once the user has started on phone calls; until then
   // only the question "do you want phone calls?" is asked, and the rest is optional.
-  const wantsPhone = twilioSaved || ['TWILIO_FROM_NUMBER', 'COLLEAGUE_CALLER_ID', 'COLLEAGUE_OWNER_PHONE'].some((key) => present(env[key]));
+  const wantsPhone = accountSaved || [numberKey, 'COLLEAGUE_CALLER_ID', 'COLLEAGUE_OWNER_PHONE', 'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'TWILIO_ACCOUNT_SID']
+    .some((key) => present(env[key]));
   const step = (c) => ({ id: c.id, ask: c.ask, fix: c.fix, ...(c.suggest ? { suggest: c.suggest } : {}) });
   const pending = checks.filter((c) => c.ok !== true);
-  const isNext = (c) => c.required || c.group === 'agents' || (c.group === 'phone' && (wantsPhone || c.id === 'twilio'));
+  const isNext = (c) => c.required || c.group === 'agents' || (c.group === 'phone' && (wantsPhone || c.id === 'phone_account'));
   const next = pending.filter(isNext).map(step);
   const optional = pending.filter((c) => !isNext(c) && ['phone', 'meetings'].includes(c.group)).map(step);
   return {
@@ -397,11 +456,16 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
 const FIELDS = [
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
   { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m an AI assistant calling on behalf of [your name].”' },
-  { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Phone calls (optional)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
-  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Phone calls (optional)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
-  { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Phone calls (optional)', hint: 'A number you bought in Twilio, listed under Phone Numbers. Needed for incoming calls, and for outgoing calls unless you show your own number below. Include the country code, such as +1 415 555 0142.' },
-  { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified in Twilio under Phone Numbers > Verified Caller IDs. Outgoing calls show it instead of the Twilio number. Incoming calls still ring the Twilio number.' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Colleague AI rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
+  { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
+  { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
+  { key: 'SIGNALWIRE_PROJECT_ID', label: 'Project ID', group: 'SignalWire (free trial)', hint: 'On the API Credentials page of your SignalWire Dashboard.' },
+  { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
+  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Colleague AI check that call updates really come from SignalWire.' },
+  { key: 'SIGNALWIRE_FROM_NUMBER', label: 'SignalWire phone number', group: 'SignalWire (free trial)', hint: 'A number from Phone Numbers in SignalWire. You can leave it empty and show a verified number instead ("Show my own number" above).' },
+  { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
+  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
+  { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
   { key: 'TAVILY_API_KEY', label: 'Tavily API key', group: 'Web search in meetings (optional extra)', secret: true, hint: 'Lets Colleague AI look things up on the web during meetings. Get a key at https://app.tavily.com. Leave empty to skip.' },
   { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
@@ -498,7 +562,9 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   const groupTitles = { Required: 'The basics' };
   const groupHints = {
     Required: 'Required for every call and meeting.',
-    'Phone calls (optional)': 'Skip this if you only want Colleague AI in video meetings. For phone calls you need a Twilio account: https://www.twilio.com/try-twilio',
+    'Phone calls (optional)': 'Skip the phone sections if you only want Colleague AI in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Colleague AI.',
+    'SignalWire (free trial)': 'Sign up free at https://signalwire.com (no card needed). A trial calls only numbers you verify in SignalWire (Phone Numbers > Verified Caller IDs), up to 10, in the US and Canada. Adding $5 lifts that.',
+    'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Colleague AI needs, so use Twilio only with an upgraded account.",
     'Remote connector (server mode)': 'Only for running Colleague AI on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',
   };
   const isSaved = (field) => present(saved[field.key]);
@@ -518,7 +584,9 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   for (const error of errors) {
     const field = fieldFor(error);
     // Nothing typed is kept after an error, so say so next to the field.
-    if (field && !fieldErrors.has(field.key)) fieldErrors.set(field.key, `${friendly(error)} Enter it again.`);
+    if (field && !fieldErrors.has(field.key)) {
+      fieldErrors.set(field.key, / is required/.test(error) ? friendly(error) : `${friendly(error)} Enter it again.`);
+    }
   }
   const head = (title) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title><style>
@@ -561,7 +629,7 @@ ${field.hint ? `<p class="hint" id="${id}-hint">${linked(field.hint)}</p>` : ''}
     const rows = fields.map(fieldHtml).join('\n');
     const hint = groupHints[group] ? `<p class="group-hint">${linked(groupHints[group])}</p>` : '';
     // Server-mode settings stay folded away unless they are in use.
-    if (/\((server mode|optional extra)\)$/.test(group)) {
+    if (/\((server mode|optional extra|upgraded account)\)$/.test(group)) {
       const open = fields.some((f) => isSaved(f) || fieldErrors.has(f.key)) ? ' open' : '';
       return `<details class="card"${open}><summary>${escapeHtml(group)}</summary><div class="details-body">${hint}${rows}</div></details>`;
     }
@@ -628,10 +696,14 @@ export function sanitizeSubmission(form) {
   const updates = {};
   const errors = [];
   for (const field of FIELDS) {
-    const value = String(form.get(field.key) || '').trim();
+    let value = String(form.get(field.key) || '').trim();
     if (!value) continue;
-    if (field.secret && (field.spaces ? /[\r\n]/ : /\s/).test(value)) {
-      errors.push(`${field.label} must ${field.spaces ? 'be one line' : 'not contain spaces'}`);
+    if (field.secret && !field.spaces) {
+      // Keys never contain whitespace; copying one from a wrapped display can add line
+      // breaks or invisible spaces, so drop them instead of rejecting the paste.
+      value = value.replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '');
+    } else if (field.secret && /[\r\n]/.test(value)) {
+      errors.push(`${field.label} must be one line`);
       continue;
     }
     if (field.minLength && value.length < field.minLength) {
@@ -647,13 +719,36 @@ export function sanitizeSubmission(form) {
   return { updates, errors };
 }
 
+// Done must not leave a required key missing or a phone provider half set up.
+const REQUIRED_TOGETHER = [
+  ['SignalWire', ['SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY']],
+  ['Twilio', ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN']],
+];
+
+export function missingForDone(env) {
+  const errors = [];
+  for (const field of FIELDS.filter((f) => f.group === 'Required')) {
+    if (!present(env[field.key])) errors.push(`${field.label} is required`);
+  }
+  for (const [name, keys] of REQUIRED_TOGETHER) {
+    if (!keys.some((key) => present(env[key]))) continue;
+    for (const key of keys) {
+      if (!present(env[key])) errors.push(`${FIELDS.find((f) => f.key === key).label} is required for ${name} phone calls`);
+    }
+  }
+  return errors;
+}
+
 /**
  * Serve the one-time secrets page until the user presses Done. Each Save writes
  * what was typed and keeps the page open; onSaved(keys) runs after each save.
  * Resolves with every key saved during the session. On timeout it resolves with
  * timedOut: true if anything was saved, and rejects otherwise.
  */
-export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUrl, onSaved } = {}) {
+// Users often sign up for OpenAI or a phone provider while the page waits, so it lasts an hour.
+export const SECRETS_PAGE_MINUTES = 60;
+
+export function serveSecretsPage({ root, port = 0, timeoutMs = SECRETS_PAGE_MINUTES * 60_000, onUrl, onSaved } = {}) {
   const token = crypto.randomBytes(18).toString('base64url');
   const pathName = `/setup/${token}`;
   const savedKeys = [];
@@ -703,6 +798,11 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = 15 * 60_000, onUr
           return;
         }
         if (form.get('action') === 'done') {
+          const missing = missingForDone(env);
+          if (missing.length) {
+            response.writeHead(422, headers).end(renderSecretsPage(env, pathName, '', { savedNow: saved, errors: missing, done: true }));
+            return;
+          }
           response.writeHead(200, headers).end(renderSecretsPage(env, pathName, '', { finished: true }));
           finish();
           resolve({ saved: [...savedKeys] });

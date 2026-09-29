@@ -20,6 +20,49 @@ class LineNotReady(Exception):
     """A line cannot perform the requested action right now; the message says why."""
 
 
+def phone_provider(env):
+    """'twilio' or 'signalwire': COLLEAGUE_PHONE_PROVIDER, else whichever account is set up."""
+    chosen = str(env.get('COLLEAGUE_PHONE_PROVIDER') or '').strip().lower()
+    if chosen in ('twilio', 'signalwire'):
+        return chosen
+    if _usable(env.get('SIGNALWIRE_PROJECT_ID')) and not _usable(env.get('TWILIO_ACCOUNT_SID')):
+        return 'signalwire'
+    return 'twilio'
+
+
+def signalwire_space(value):
+    """The Space host from 'example', 'example.signalwire.com', or its https URL; '' if unusable."""
+    text = str(value or '').strip().lower()
+    for prefix in ('https://', 'http://'):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    text = text.split('/', 1)[0]
+    if not text or not all(ch.isalnum() or ch in '.-' for ch in text) or text.startswith(('.', '-')):
+        return ''
+    return text if '.' in text else f'{text}.signalwire.com'
+
+
+def _signalwire_credentials(env):
+    """SignalWire's Compatibility API speaks Twilio's REST, webhook, and media-stream formats."""
+    space = signalwire_space(env.get('SIGNALWIRE_SPACE'))
+    number = _usable(env.get('SIGNALWIRE_FROM_NUMBER'))
+    caller_id = _usable(env.get('COLLEAGUE_CALLER_ID'))
+    values = {
+        'apiBase': f'https://{space}/api/laml/2010-04-01' if space else '',
+        'accountSid': str(env.get('SIGNALWIRE_PROJECT_ID') or '').strip(),
+        'authToken': str(env.get('SIGNALWIRE_API_TOKEN') or '').strip(),
+        'fromNumber': caller_id or number,
+    }
+    names = ('SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN',
+             'SIGNALWIRE_FROM_NUMBER or COLLEAGUE_CALLER_ID')
+    missing = [name for name, value in zip(names, values.values()) if not _usable(value)]
+    if missing:
+        raise MissingCredentials('signalwire', missing)
+    values.update(provider='signalwire', twilioNumber=number,
+                  signingKey=_usable(env.get('SIGNALWIRE_SIGNING_KEY')))
+    return values
+
+
 class MissingCredentials(Exception):
     def __init__(self, provider, missing):
         self.provider = provider
@@ -94,6 +137,8 @@ class DefaultCallHooks:
         if provider == 'openai':
             names = ('OPENAI_API_KEY',)
             values = {'apiKey': env.get('OPENAI_API_KEY', '').strip()}
+        elif provider == 'twilio' and phone_provider(env) == 'signalwire':
+            return _signalwire_credentials(env)
         elif provider == 'twilio':
             # Outgoing calls need a number to show: a Twilio number, or the owner's
             # own mobile verified in Twilio. Incoming calls need the Twilio number.

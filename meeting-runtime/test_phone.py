@@ -800,6 +800,67 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.h.service.list()), 1)
 
 
+class SignalWireTests(unittest.IsolatedAsyncioTestCase):
+    SW_ENV = {'OPENAI_API_KEY': 'sk-test', 'SIGNALWIRE_SPACE': 'https://Example.signalwire.com/',
+              'SIGNALWIRE_PROJECT_ID': 'p-123', 'SIGNALWIRE_API_TOKEN': 'PT-secret',
+              'SIGNALWIRE_SIGNING_KEY': 'PSK-signing', 'SIGNALWIRE_FROM_NUMBER': '+15005550199'}
+
+    def test_credentials_choose_signalwire_when_it_is_set_up(self):
+        from call_hooks import MissingCredentials, phone_provider, signalwire_space
+        creds = DefaultCallHooks(environ=dict(self.SW_ENV)).credentials('local', 'twilio')
+        self.assertEqual(creds['provider'], 'signalwire')
+        self.assertEqual(creds['apiBase'], 'https://example.signalwire.com/api/laml/2010-04-01')
+        self.assertEqual((creds['accountSid'], creds['fromNumber'], creds['signingKey']),
+                         ('p-123', '+15005550199', 'PSK-signing'))
+        self.assertEqual(signalwire_space('acme'), 'acme.signalwire.com')
+        self.assertEqual(signalwire_space('bad host!'), '')
+        # Twilio stays the choice when both are set, unless the setting says otherwise.
+        both = {**ENV, **self.SW_ENV}
+        self.assertEqual(phone_provider(both), 'twilio')
+        self.assertEqual(phone_provider({**both, 'COLLEAGUE_PHONE_PROVIDER': 'signalwire'}), 'signalwire')
+        with self.assertRaises(MissingCredentials) as caught:
+            DefaultCallHooks(environ={'SIGNALWIRE_PROJECT_ID': 'p-123'}).credentials('local', 'twilio')
+        self.assertEqual(caught.exception.missing, (
+            'SIGNALWIRE_SPACE', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_FROM_NUMBER or COLLEAGUE_CALLER_ID'))
+
+    async def test_calls_go_to_the_space_with_documented_parameters(self):
+        from twilio_client import client_for
+        captured = {}
+
+        async def request(method, url, form):
+            captured.update(url=url, form=form)
+            return 201, {'sid': 'c-1'}
+        creds = DefaultCallHooks(environ=dict(self.SW_ENV)).credentials('local', 'twilio')
+        client = client_for(creds, request=request)
+        await client.create_call(to='+14155550142', from_='+15005550199', twiml='<Response/>',
+                                 status_callback='https://x/s', amd_callback='https://x/a',
+                                 time_limit=690)
+        self.assertEqual(captured['url'],
+                         'https://example.signalwire.com/api/laml/2010-04-01/Accounts/p-123/Calls.json')
+        form = dict(parse_qsl(captured['form']))
+        self.assertEqual(form['AsyncAmdStatusCallback'], 'https://x/a')
+        self.assertNotIn('TimeLimit', form)
+        self.assertNotIn('AsyncAmdStatusCallbackMethod', form)
+
+    async def test_gateway_accepts_signalwire_signatures(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        h = PhoneHarness(temp.name, env=dict(self.SW_ENV))
+        app = create_gateway_app(h.line, h.service, current_url=lambda: PUBLIC)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+        self.addAsyncCleanup(h.service.shutdown)
+        record, _session = await h.dial()
+        path = f'/twilio/status/{record["id"]}'
+        params = {'CallStatus': 'ringing'}
+        for key, expected in (('wrong', 403), ('PSK-signing', 204)):
+            signature = compute_signature(key, PUBLIC + path, params)
+            response = await client.post(path, data=params, headers={'X-SignalWire-Signature': signature})
+            self.assertEqual(response.status, expected)
+        self.assertEqual(h.store.get(record['id'])['status'], 'ringing')
+
+
 def fake_live_app(record):
     """A GPT-Live WebSocket speaking the documented event protocol."""
     from aiohttp import web

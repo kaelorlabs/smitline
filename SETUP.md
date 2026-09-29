@@ -9,7 +9,7 @@ Agent: follow the steps below. Run the commands yourself, say in one short line 
 ## Rules
 
 - **Never ask for keys in the chat.** Keys go on the local setup page, which writes them to the ignored `.env` file. If the user pastes a key into the chat anyway, do not repeat it or write it anywhere; point them to the page.
-- **Let the page do the asking.** The page collects the OpenAI key, the user's name, and, for phone calls, the Twilio details and the user's phone number. A typical setup needs at most two questions in the chat.
+- **Let the page do the asking.** The page collects the OpenAI key, the user's name, and, for phone calls, the phone provider's details (SignalWire or Twilio) and the user's phone number. A typical setup needs at most two questions in the chat.
 - **Don't ask what the status already answers.** When a step has a `suggest`, apply it with `colleague setup set KEY VALUE` and tell the user what you chose.
 - **Make the first call before asking for a restart.** Restarting the agent app ends this conversation, so the test call comes first.
 
@@ -75,13 +75,20 @@ colleague setup secrets
 
 This starts a page on `127.0.0.1`, opens it in the browser, and returns at once with the address. Tell the user:
 
-> I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also fill in the Twilio section and your phone number. Press Done when you're finished, then tell me.
+> I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also add your phone number and your SignalWire details (the free trial works). Press Done when you're finished, then tell me.
 
-If the browser did not open (`"opened": false`), give the user the address. It works only on this computer and stays available for 15 minutes; run the command again for a new one.
+If the browser did not open (`"opened": false`), give the user the address. It works only on this computer and stays available for an hour; run the command again for a new one.
 
 When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
 
-Phone calls need a Twilio account (twilio.com). If the user has one number there, the status suggests it and you set it. If they have several, ask which one. Outgoing calls can show the user's own mobile instead, once they verify it in Twilio under Verified Caller IDs; they enter it on the page as "Show my own number" (`COLLEAGUE_CALLER_ID`). A trial Twilio account can only call verified numbers, which includes the user's own.
+### Phone calls: SignalWire (free) or Twilio (paid)
+
+Colleague AI streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. Offer the user one of these:
+
+- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** there with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). The agent can set the Space URL and Project ID itself with `colleague setup set`; the token and signing key go on the setup page. All four go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
+- **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Colleague AI call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
+
+If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
 
 ## 5. Start Colleague AI
 
@@ -128,7 +135,9 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `co
 | `Colleague AI needs Docker (recommended) or Python` | Start Docker (`sudo service docker start` in WSL, or open Docker Desktop), then `colleague setup start` |
 | Want Python on this computer instead of Docker | `sudo apt install -y python3-venv`; the next start uses it. `COLLEAGUE_DAEMON_RUNTIME=docker` or `host` forces one |
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
-| `Twilio can reach this computer` fails | Install `cloudflared` or start Docker; on a server set `COLLEAGUE_PUBLIC_URL` |
+| `The phone provider can reach this computer` fails | Start Docker (the image includes `cloudflared`), or install `cloudflared`; on a server set `COLLEAGUE_PUBLIC_URL` |
+| A call fails with "trial accounts have limited parameter access" | That is a Twilio trial; use SignalWire's free trial, or upgrade the Twilio account |
+| A SignalWire trial call is refused | Verify the number you are calling in SignalWire (Phone Numbers > Verified Caller IDs) |
 | Calls fail with a tunnel error | Check the network and try again; the tunnel restarts on the next call |
 | The agent does not show the call tools | Run `colleague setup register` and restart the agent app |
 | Anything else | `.colleague/daemon.log` in the checkout has the daemon's log |
