@@ -716,8 +716,15 @@ class LoopbackTransport:
         limit = max(1, min(int(limit or 20), 100))
         return self._http('GET', f'/v1/calls?limit={limit}')
 
-    def instruct_call(self, call_id, text):
-        return self._http('POST', f'/v1/calls/{quote(call_id)}/instructions', {'text': text})
+    def instruct_call(self, call_id, text, silent=False):
+        body = {'text': text, 'silent': True} if silent else {'text': text}
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/instructions', body)
+
+    def get_profile(self):
+        return self._http('GET', '/v1/profile')
+
+    def update_profile(self, update):
+        return self._http('PATCH', '/v1/profile', update)
 
     def end_call(self, call_id):
         return self._http('POST', f'/v1/calls/{quote(call_id)}/end', {})
@@ -1100,8 +1107,14 @@ class Colleague:
     async def list_calls(self, limit=20):
         return self._transport.list_calls(limit)['calls']
 
-    async def instruct_call(self, call_id, text):
-        return self._transport.instruct_call(call_id, text)
+    async def instruct_call(self, call_id, text, silent=False):
+        return self._transport.instruct_call(call_id, text, silent)
+
+    async def get_profile(self):
+        return self._transport.get_profile()
+
+    async def update_profile(self, update):
+        return self._transport.update_profile(update)
 
     async def end_call(self, call_id):
         return self._transport.end_call(call_id)

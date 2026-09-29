@@ -683,6 +683,12 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[2][1], '/v1/calls?limit=100')
         self.assertEqual(seen[3], ('POST', '/v1/calls/call-0123456789abcdef/instructions',
                                    {'text': 'Ask about parking'}))
+        await client.instruct_call('call-0123456789abcdef', 'He tried it yesterday', silent=True)
+        await client.get_profile()
+        await client.update_profile({'about': 'Robin builds Colleague AI.'})
+        self.assertEqual(seen[4][2], {'text': 'He tried it yesterday', 'silent': True})
+        self.assertEqual(seen[5][:2], ('GET', '/v1/profile'))
+        self.assertEqual(seen[6], ('PATCH', '/v1/profile', {'about': 'Robin builds Colleague AI.'}))
 
     def test_error_details_are_kept(self):
         from colleague_ai.client import _map_http_error

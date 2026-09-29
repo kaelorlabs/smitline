@@ -377,6 +377,9 @@ async function fakeCallsDaemon(root) {
       }
       return send(201, { id: 'call-0123456789abcdef', status: 'queued', brief: body });
     }
+    if (request.url === '/v1/profile') {
+      return send(200, request.method === 'PATCH' ? { version: 1, ...body } : { version: 1 });
+    }
     if (request.url.startsWith('/v1/calls/call-0123456789abcdef/wait')) {
       polls += 1;
       return send(200, { id: 'call-0123456789abcdef', status: polls > 1 ? 'completed' : 'ringing', result: { outcome: 'achieved', summary: 'Booked.' } });
@@ -543,4 +546,36 @@ test('status says how call audio travels and what direct SIP still needs', async
   assert.throws(() => validateSetting('COLLEAGUE_SIP_TRUNK_URL', 'sip:host'), /sips:/);
   assert.throws(() => validateSetting('OPENAI_PROJECT_ID', 'abc'), /proj_/);
   assert.throws(() => validateSetting('COLLEAGUE_SIP_PASSWORD', 'x'), /secret/);
+});
+
+test('profile commands and the new call flags reach the daemon', async (t) => {
+  const root = await tempRoot(t);
+  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\n');
+  const daemon = await fakeCallsDaemon(root);
+  t.after(daemon.close);
+  const common = ['--root', root, '--port', String(daemon.port)];
+  const person = await runCli(['profile', 'person', ...common, '--name', 'Sam', '--relationship', 'close friend',
+    '--phone', '+14155550143']);
+  assert.equal(person.code, 0, person.stderr);
+  const removed = await runCli(['profile', 'person', ...common, '--name', 'Sam', '--remove']);
+  assert.equal(removed.code, 0, removed.stderr);
+  const about = await runCli(['profile', 'set', ...common, '--about', 'Robin builds Colleague AI.', '--boundaries', 'No money talk; No family details']);
+  assert.equal(about.code, 0, about.stderr);
+  const shown = await runCli(['profile', 'show', ...common]);
+  assert.equal(JSON.parse(shown.stdout).version, 1);
+  const patches = daemon.seen.filter((item) => item.method === 'PATCH').map((item) => item.body);
+  assert.deepEqual(patches, [
+    { people: [{ name: 'Sam', relationship: 'close friend', phone: '+14155550143' }] },
+    { removePeople: ['Sam'] },
+    { about: 'Robin builds Colleague AI.', boundaries: ['No money talk', 'No family details'] },
+  ]);
+  const contextFile = path.join(root, 'context.json');
+  await fs.writeFile(contextFile, JSON.stringify({ summary: 'Colleague AI lets agents call.', details: 'Pricing.' }));
+  const placed = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Get feedback',
+    '--questions', 'Launch now or wait?; Who would use it?', '--tone', 'casual', '--context-file', contextFile]);
+  assert.equal(placed.code, 0, placed.stderr);
+  const brief = daemon.seen.find((item) => item.method === 'POST' && item.url === '/v1/calls').body;
+  assert.deepEqual(brief.questions, ['Launch now or wait?', 'Who would use it?']);
+  assert.equal(brief.tone, 'casual');
+  assert.deepEqual(brief.context, { summary: 'Colleague AI lets agents call.', details: 'Pricing.' });
 });

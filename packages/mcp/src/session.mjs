@@ -36,9 +36,38 @@ export const BRIEF_SCHEMA = {
   properties: {
     channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join Zoom, Teams, or Google Meet' },
     to: { type: 'string', description: "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone." },
-    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, I'm an AI assistant calling on behalf of NAME. Defaults to the name given at setup." },
+    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, this is NAME's AI assistant. Defaults to the name given at setup." },
     objective: { type: 'string', description: 'What the call must achieve, in one or two sentences' },
-    context: { type: 'string', description: 'Background the other party may ask about: names, dates, reference numbers, preferences' },
+    context: {
+      description: "What you and the user have been working on that the other party may ask about. Text, or an object: summary (a few sentences), facts, decisions, openQuestions, and details (long reference material). The voice starts with a short version and looks details up when asked; it never recites them.",
+      anyOf: [
+        { type: 'string', maxLength: 6000 },
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            summary: { type: 'string', maxLength: 4000 },
+            facts: { type: 'array', maxItems: 40, items: { type: 'string', maxLength: 400 } },
+            decisions: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 400 } },
+            openQuestions: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 400 } },
+            details: { type: 'string', maxLength: 24000 },
+          },
+        },
+      ],
+    },
+    questions: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 300 }, description: 'What to find out on the call. The result answers each one.' },
+    tone: { type: 'string', maxLength: 200, description: 'How to come across, such as "casual, he is a close friend". Defaults to matching the relationship.' },
+    contact: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name'],
+      description: "Who is being called, when the user's profile does not already know this number.",
+      properties: {
+        name: { type: 'string', maxLength: 80 },
+        relationship: { type: 'string', maxLength: 120 },
+        notes: { type: 'string', maxLength: 600 },
+      },
+    },
     mayAgreeTo: { type: 'array', items: { type: 'string' }, description: 'What the assistant may agree to without checking back, such as acceptable times or prices' },
     mustNotShare: { type: 'array', items: { type: 'string' }, description: 'Information the assistant must never share' },
     successCriteria: { type: 'string', description: 'How to tell the call succeeded' },
@@ -61,7 +90,7 @@ export const BRIEF_SCHEMA = {
 export const CALL_TOOL_DEFINITIONS = [
   {
     name: 'start_call',
-    description: "Place a phone call or join a video meeting for the user. Colleague AI talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, the user's name (spoken in the AI disclosure), background the other party may ask about, what may be agreed to, and what must not be shared. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
+    description: "Place a phone call or join a video meeting for the user. Colleague AI talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
     inputSchema: BRIEF_SCHEMA,
   },
   {
@@ -98,12 +127,12 @@ export const CALL_TOOL_DEFINITIONS = [
   },
   {
     name: 'send_call_instruction',
-    description: 'Give the assistant new guidance during a call in progress, for example an answer the user just provided.',
+    description: 'Give the assistant new guidance during a call in progress, for example an answer the user just provided. With silent: true it is a background note the assistant uses when relevant, instead of acting on it now.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['callId', 'text'],
-      properties: { callId: CALL_ID_SCHEMA, text: { type: 'string', maxLength: 2000 } },
+      properties: { callId: CALL_ID_SCHEMA, text: { type: 'string', maxLength: 2000 }, silent: { type: 'boolean' } },
     },
   },
   {
@@ -120,6 +149,40 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'list_voices',
     description: 'List the GPT-Live voices available for calls.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'get_profile',
+    description: "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries.",
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'update_profile',
+    description: "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. Never put passwords, keys, or payment details here.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        about: { type: 'string', maxLength: 2000, description: 'Who the user is: role, work, what they are building.' },
+        style: { type: 'string', maxLength: 600, description: 'How the user likes to come across on calls.' },
+        boundaries: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 300 } },
+        people: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name'],
+            properties: {
+              name: { type: 'string', maxLength: 80 },
+              relationship: { type: 'string', maxLength: 120 },
+              phone: { type: 'string', description: 'E.164, such as +14155550142' },
+              notes: { type: 'string', maxLength: 600 },
+            },
+          },
+        },
+        removePeople: { type: 'array', items: { type: 'string' } },
+      },
+    },
   },
 ];
 
@@ -523,7 +586,7 @@ export const REMOTE_CALL_TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS.map((tool) => 
   tool.inputSchema === BRIEF_SCHEMA ? { ...tool, inputSchema: REMOTE_BRIEF_SCHEMA } : tool
 ));
 
-export const CALLS_INSTRUCTIONS = 'To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing), then wait_for_call until the call finishes, and report the outcome.';
+export const CALLS_INSTRUCTIONS = 'To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then wait_for_call until the call finishes, and report the outcome.';
 
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {
@@ -543,9 +606,11 @@ export async function callToolFor(colleague, name, args) {
   }
   if (name === 'get_call') return colleague.getCall(requireCallId(args));
   if (name === 'list_calls') return { calls: await colleague.listCalls(args.limit || 20) };
+  if (name === 'get_profile') return colleague.getProfile();
+  if (name === 'update_profile') return colleague.updateProfile(args);
   if (name === 'send_call_instruction') {
     if (typeof args.text !== 'string' || !args.text.trim()) throw new ValidationError('text is required');
-    return colleague.instructCall(requireCallId(args), args.text);
+    return colleague.instructCall(requireCallId(args), args.text, { silent: args.silent === true });
   }
   if (name === 'end_call') return colleague.endCall(requireCallId(args));
   if (name === 'transfer_call_to_me') return colleague.transferCall(requireCallId(args));

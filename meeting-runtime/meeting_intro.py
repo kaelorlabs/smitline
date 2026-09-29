@@ -32,8 +32,8 @@ def owner_name(state=None, environ=None):
 
 
 def intro_line(owner):
-    return (f"Hi, I'm an AI assistant joining on behalf of {owner or FALLBACK_OWNER}. "
-            "I'll mostly listen; say 'Colleague' if you need me.")
+    who = f"{owner}'s AI assistant" if owner else f'an AI assistant for {FALLBACK_OWNER}'
+    return f"Hi everyone, I'm {who}. I'll mostly listen; say 'Colleague' if you need me."
 
 
 def intro_instructions(owner):

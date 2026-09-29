@@ -354,7 +354,7 @@ class HostUnmuteRequestTests(unittest.IsolatedAsyncioTestCase):
 
         def intros():
             return [event for event in socket.sent if event['type'] == 'session.commentary.append'
-                    and 'on behalf of Robin' in event['content']]
+                    and "Robin's AI assistant" in event['content']]
 
         with patch.object(bridge, 'ClientSession', socket.client), \
                 patch.object(bridge, 'record', record), \

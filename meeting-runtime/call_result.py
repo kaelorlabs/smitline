@@ -152,6 +152,8 @@ def brief_text(brief):
     parts = [f'Objective: {brief.get("objective")}', f'Calling on behalf of: {brief.get("onBehalfOf")}']
     if brief.get('successCriteria'):
         parts.append(f'Success criteria: {brief["successCriteria"]}')
+    if brief.get('questions'):
+        parts.append('Questions to answer in details: ' + '; '.join(brief['questions']))
     if brief.get('mayAgreeTo'):
         parts.append('Allowed to agree to: ' + '; '.join(brief['mayAgreeTo']))
     if brief.get('rehearsal'):

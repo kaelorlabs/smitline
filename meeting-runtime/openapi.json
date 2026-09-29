@@ -77,7 +77,7 @@
       "post": {
         "summary": "Add guidance to a call in progress",
         "operationId": "instructCall",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string", "maxLength": 2000 } }, "required": ["text"], "additionalProperties": false } } } },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string", "maxLength": 2000 }, "silent": { "type": "boolean", "default": false, "description": "A background note the voice uses when relevant, instead of guidance it acts on at once." } }, "required": ["text"], "additionalProperties": false } } } },
         "responses": {
           "200": { "description": "Whether the line accepted the guidance", "content": { "application/json": { "schema": { "type": "object", "properties": { "delivered": { "type": "boolean" } }, "required": ["delivered"] } } } },
           "409": { "$ref": "#/components/responses/Error" }
@@ -109,6 +109,26 @@
         "operationId": "listVoices",
         "responses": { "200": { "description": "Voices", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "voices"] } } } } }
       }
+    },
+    "/v1/profile": {
+      "get": {
+        "summary": "Get the owner's profile, which every phone call gets as background",
+        "operationId": "getProfile",
+        "responses": {
+          "200": { "description": "The profile", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Profile" } } } },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "summary": "Update the owner's profile",
+        "operationId": "updateProfile",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProfileUpdate" } } } },
+        "responses": {
+          "200": { "description": "The saved profile", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Profile" } } } },
+          "422": { "$ref": "#/components/responses/Error" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
     }
   },
   "components": {
@@ -132,7 +152,13 @@
           "to": { "type": "string", "description": "E.164 phone number for phone calls, or a Zoom, Teams, or Google Meet invite URL." },
           "onBehalfOf": { "type": "string", "maxLength": 120, "description": "Name spoken in the AI disclosure at the start of the call." },
           "objective": { "type": "string", "maxLength": 1000 },
-          "context": { "type": "string", "maxLength": 6000 },
+          "context": {
+            "description": "What the calling agent and the owner have been working on. The voice starts with a short version and the backend model gets it all. See docs/calls.md#context.",
+            "oneOf": [{ "type": "string", "maxLength": 6000 }, { "$ref": "#/components/schemas/SessionContext" }]
+          },
+          "questions": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20, "description": "What to find out. The result's details answer each one." },
+          "tone": { "type": "string", "maxLength": 200, "description": "How to come across. Defaults to matching the relationship." },
+          "contact": { "$ref": "#/components/schemas/Contact" },
           "mayAgreeTo": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "mustNotShare": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "successCriteria": { "type": "string", "maxLength": 500 },
@@ -142,6 +168,62 @@
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
           "agentSession": { "type": "object", "description": "Meeting only: coding-agent session for exact continuity. See /v1/meetings." }
+        }
+      },
+      "SessionContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "type": "string", "maxLength": 4000, "description": "A few sentences the voice starts with." },
+          "facts": { "type": "array", "items": { "type": "string", "maxLength": 400 }, "maxItems": 40 },
+          "decisions": { "type": "array", "items": { "type": "string", "maxLength": 400 }, "maxItems": 20 },
+          "openQuestions": { "type": "array", "items": { "type": "string", "maxLength": 400 }, "maxItems": 20 },
+          "details": { "type": "string", "maxLength": 24000, "description": "Long reference material, given only to the backend model the voice consults." }
+        }
+      },
+      "Contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "description": "Who is being called, when the profile does not know the number.",
+        "properties": {
+          "name": { "type": "string", "maxLength": 80 },
+          "relationship": { "type": "string", "maxLength": 120 },
+          "notes": { "type": "string", "maxLength": 600 }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 80 },
+          "relationship": { "type": "string", "maxLength": 120 },
+          "phone": { "type": "string", "description": "E.164, such as +14155550142. Spaces, dots, dashes, and parentheses are removed." },
+          "notes": { "type": "string", "maxLength": 600 }
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "required": ["version"],
+        "properties": {
+          "version": { "type": "integer" },
+          "about": { "type": "string", "maxLength": 2000 },
+          "style": { "type": "string", "maxLength": 600 },
+          "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
+          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 }
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Fields present replace the saved ones; people are added or updated by name (ignoring case); removePeople drops names.",
+        "properties": {
+          "about": { "type": "string", "maxLength": 2000 },
+          "style": { "type": "string", "maxLength": 600 },
+          "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
+          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
+          "removePeople": { "type": "array", "items": { "type": "string" } }
         }
       },
       "CheckResult": {

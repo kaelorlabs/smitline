@@ -13,14 +13,19 @@ Colleague AI talks with people in real time and returns a structured result. Use
 | --- | --- |
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link |
 | `to` | E.164 number such as `+14155550142`, or the invite URL |
-| `onBehalfOf` | The user's name. The call opens with "Hi, I'm an AI assistant calling on behalf of NAME." Leave it out to use the name from setup. |
+| `onBehalfOf` | The user's name. The call opens with "Hi, this is NAME's AI assistant." Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
-| `context` | What the other side may ask: names, dates, reference numbers, preferences |
+| `context` | What you and the user have been working on that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |
+| `questions` | What to find out. The result answers each one. |
+| `tone` | How to come across, such as "casual; he is a close friend". Leave it out to match the relationship. |
+| `contact` | Who you are calling (`name`, `relationship`, `notes`), when the profile does not know the number |
 | `mayAgreeTo` | What may be accepted without checking back, such as times or a price ceiling |
 | `mustNotShare` | What must never be said, such as payment details |
 | `successCriteria` | How to tell the call worked |
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
+
+Every phone call also gets the user's profile: who they are, the people they know, how they like to come across, and standing boundaries. Read it with `get_profile`. When the user tells you about someone ("Sam is my close friend"), save it with `update_profile` so later calls know them too.
 
 ## 2. Offer a rehearsal the first time
 
@@ -32,7 +37,7 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 2. Tell the user in one line: "Calling Luigi's now. I'll tell you when it's done."
 3. `wait_for_call` until the status is `completed`, `failed`, or `canceled`, calling again while it is still running.
 
-While the call runs, `send_call_instruction` passes on new guidance from the user, `transfer_call_to_me` hands a phone call to the user's phone, and `end_call` wraps up politely.
+While the call runs, `send_call_instruction` passes on new guidance from the user (with `silent: true` for a fact the assistant should know without acting on it right away), `transfer_call_to_me` hands a phone call to the user's phone, and `end_call` wraps up politely.
 
 ## 4. Report the result
 

@@ -42,12 +42,16 @@ const USAGE = `Usage:
   colleague call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
                [--language <tag>] [--max-minutes <n>] [--rehearsal] [--webhook <url>]
+               [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--check] [--wait]
   colleague call --meeting <url> --objective <text> [...same options] [--wait]
   colleague call --brief <json> | --brief-file <path> [--check] [--wait]
   colleague calls list [--limit <n>]
   colleague calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
-  colleague calls instruct --call-id <id> --text <guidance>
+  colleague calls instruct --call-id <id> --text <guidance> [--silent]
+  colleague profile show
+  colleague profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
+  colleague profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
   colleague voices
   colleague setup status [--json] [--no-verify]
   colleague setup secrets [--no-open] [--wait]
@@ -339,6 +343,18 @@ function splitList(value) {
   return String(value).split(';').map((item) => item.trim()).filter(Boolean);
 }
 
+async function contextFromArgs(args, text) {
+  // --context-file takes a JSON object (summary, facts, decisions, openQuestions, details) or plain text.
+  const file = text(args['context-file']);
+  if (!file) return text(args.context);
+  const content = await fs.readFile(path.resolve(file), 'utf8');
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch { /* plain text */ }
+  return content.trim();
+}
+
 async function briefFromArgs(args, root) {
   if (args.brief || args['brief-file']) {
     const text = args.brief ? String(args.brief) : await fs.readFile(path.resolve(String(args['brief-file'])), 'utf8');
@@ -356,7 +372,9 @@ async function briefFromArgs(args, root) {
     to: text(args.meeting) || text(args.to),
     onBehalfOf: text(args['on-behalf-of']) || process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME,
     objective: text(args.objective),
-    context: text(args.context),
+    context: await contextFromArgs(args, text),
+    questions: splitList(args.questions),
+    tone: text(args.tone),
     mayAgreeTo: splitList(args.agree),
     mustNotShare: splitList(args['never-share']),
     successCriteria: text(args.success),
@@ -491,7 +509,7 @@ async function callsCommand(args) {
   else if (action === 'transfer') printJson(await client.transferCall(callId));
   else if (action === 'instruct') {
     if (!args.text || args.text === true) throw new ValidationError('--text is required');
-    printJson(await client.instructCall(callId, String(args.text)));
+    printJson(await client.instructCall(callId, String(args.text), { silent: args.silent === true }));
   } else throw new ValidationError('unknown calls command');
   return EXIT.ok;
 }
@@ -776,6 +794,43 @@ async function setupCommand(args) {
   throw new ValidationError('unknown setup command');
 }
 
+// The owner's profile: level-1 context every call gets (who they are, people they know).
+async function profileCommand(args) {
+  const { client } = colleagueFromArgs(args);
+  const action = args._[1] || 'show';
+  const text = (value) => (value === undefined || value === true ? undefined : String(value));
+  if (action === 'show') {
+    printJson(await client.getProfile());
+    return EXIT.ok;
+  }
+  let update;
+  if (action === 'set') {
+    update = Object.fromEntries(Object.entries({
+      about: text(args.about),
+      style: text(args.style),
+      boundaries: args.boundaries === undefined ? undefined : splitList(args.boundaries) || [],
+    }).filter(([, value]) => value !== undefined));
+    if (!Object.keys(update).length) throw new ValidationError('usage: colleague profile set --about <text> | --style <text> | --boundaries <a; b>');
+  } else if (action === 'person') {
+    const name = text(args.name);
+    if (!name) throw new ValidationError('--name is required');
+    update = args.remove === true ? { removePeople: [name] } : {
+      people: [Object.fromEntries(Object.entries({
+        name, relationship: text(args.relationship), phone: text(args.phone), notes: text(args.notes),
+      }).filter(([, value]) => value !== undefined))],
+    };
+  } else {
+    throw new ValidationError('unknown profile command');
+  }
+  try {
+    printJson(await client.updateProfile(update));
+  } catch (error) {
+    explainValidation(error);
+    throw error;
+  }
+  return EXIT.ok;
+}
+
 // Remote connector grants: listed and revoked without showing any token.
 async function connectorCommand(args) {
   const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
@@ -823,6 +878,7 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'calls') return await callsCommand(args);
     if (command === 'setup') return await setupCommand(args);
     if (command === 'connector') return await connectorCommand(args);
+    if (command === 'profile') return await profileCommand(args);
     if (command === 'voices') {
       const { client } = colleagueFromArgs(args);
       printJson(await client.listVoices());

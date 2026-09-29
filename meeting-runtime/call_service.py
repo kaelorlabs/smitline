@@ -47,6 +47,16 @@ class CallContext:
     def credentials(self, provider):
         return self.service.hooks.credentials(self.owner, provider)
 
+    def profile(self):
+        """The owner's profile (level-1 context); empty when the hooks keep none."""
+        getter = getattr(self.service.hooks, 'profile', None)
+        if getter is None:
+            return {}
+        try:
+            return getter(self.owner) or {}
+        except Exception:
+            return {}
+
     def set_status(self, status, **fields):
         return self.service._set_status(self.call_id, status, **fields)
 
@@ -248,6 +258,23 @@ class CallService:
         self.store.update(call_id, recording=recording)
         self._event(call_id, 'call.recording', **recording)
 
+    def profile(self, owner):
+        getter = getattr(self.hooks, 'profile', None)
+        if getter is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no profile')
+        return getter(owner) or {}
+
+    def update_profile(self, owner, update):
+        from briefing import merge_profile
+        saver = getattr(self.hooks, 'save_profile', None)
+        if saver is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no profile')
+        try:
+            merged = merge_profile(self.profile(owner), update)
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
+        return saver(owner, merged)
+
     def get(self, call_id, *, owner=None):
         record = self.store.get(call_id)
         if owner is not None and record.get('owner') != owner:
@@ -282,7 +309,7 @@ class CallService:
         except asyncio.TimeoutError:
             pass
 
-    async def instruct(self, call_id, text, *, owner=None):
+    async def instruct(self, call_id, text, *, owner=None, silent=False):
         record = self.get(call_id, owner=owner)
         if record['status'] in TERMINAL or record['status'] == 'summarizing':
             raise CallError(409, 'conflict', 'the call has already ended')
@@ -290,8 +317,11 @@ class CallService:
         if not text:
             raise CallError(422, 'invalid_request', 'instruction text is required')
         line = self.lines[record['channel']]
-        delivered = await line.instruct(call_id, text[:2000])
-        self._event(call_id, 'call.instruction', text=text[:2000], delivered=bool(delivered))
+        # Lines that predate silent notes take (call_id, text); pass the flag only when set.
+        delivered = await (line.instruct(call_id, text[:2000], silent=True) if silent
+                           else line.instruct(call_id, text[:2000]))
+        self._event(call_id, 'call.instruction', text=text[:2000], delivered=bool(delivered),
+                    silent=bool(silent))
         return {'delivered': bool(delivered)}
 
     async def end(self, call_id, *, owner=None):

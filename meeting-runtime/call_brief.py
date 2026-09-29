@@ -13,9 +13,9 @@ from schema_validation import (
 
 CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
-    'channel', 'to', 'onBehalfOf', 'objective', 'context', 'mayAgreeTo', 'mustNotShare',
-    'successCriteria', 'language', 'voice', 'maxMinutes', 'rehearsal', 'notify',
-    'agentSession',
+    'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
+    'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
+    'rehearsal', 'notify', 'agentSession',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
@@ -102,12 +102,21 @@ class CallBrief:
     may_agree_to: tuple = ()
     must_not_share: tuple = ()
     success_criteria: str = None
+    questions: tuple = ()
+    tone: str = None
+    contact: dict = field(default=None, compare=False)
     language: str = None
     voice: str = None
     max_minutes: int = None
     rehearsal: bool = False
     webhook_url: str = None
     agent_session: dict = field(default=None, compare=False)
+
+    @property
+    def session_context(self):
+        """Level-2 context as a structured object, whether the brief gave text or an object."""
+        from briefing import parse_session_context
+        return parse_session_context(self.context)
 
     @property
     def platform(self):
@@ -120,6 +129,9 @@ class CallBrief:
             'onBehalfOf': self.on_behalf_of,
             'objective': self.objective,
             'context': self.context,
+            'questions': list(self.questions) or None,
+            'tone': self.tone,
+            'contact': self.contact,
             'mayAgreeTo': list(self.may_agree_to),
             'mustNotShare': list(self.must_not_share),
             'successCriteria': self.success_criteria,
@@ -176,13 +188,27 @@ class CallBrief:
             reject_unknown_fields(notify, NOTIFY_FIELDS, 'notify')
             if optional_field(notify, 'webhookUrl') is not None:
                 webhook_url = validate_webhook_url(notify['webhookUrl'])
+        context = optional_field(data, 'context')
+        if isinstance(context, dict):
+            from briefing import parse_session_context
+            context = parse_session_context(context) or None
+        else:
+            context = _optional_text(data, 'context', MAX_CONTEXT)
+        contact = optional_field(data, 'contact')
+        if contact is not None:
+            from briefing import _person
+            contact = _person(require_mapping(contact, 'contact'))
+        tone = _optional_text(data, 'tone', 200)
         return cls(
             channel=channel,
             to=to,
             on_behalf_of=require_string(data['onBehalfOf'], 'onBehalfOf', max_length=120),
             objective=require_string(data['objective'], 'objective', allow_newlines=True,
                                      max_length=1000),
-            context=_optional_text(data, 'context', MAX_CONTEXT),
+            context=context,
+            questions=_optional_list(data, 'questions'),
+            tone=tone,
+            contact=contact,
             may_agree_to=_optional_list(data, 'mayAgreeTo'),
             must_not_share=_optional_list(data, 'mustNotShare'),
             success_criteria=_optional_text(data, 'successCriteria', 500),
@@ -213,6 +239,7 @@ def default_voice(environ=None):
     return voice if voice in available_voices(env) else DEFAULT_VOICE
 
 
-def disclosure_line(brief):
-    """The fixed opening sentence every phone call starts with."""
-    return f"Hi, I'm an AI assistant calling on behalf of {brief.on_behalf_of}."
+def disclosure_line(brief, name=None):
+    """How a phone call opens: a normal hello that says whose AI assistant is calling."""
+    hello = f'Hey {name}' if name else 'Hi'
+    return f"{hello}, this is {brief.on_behalf_of}'s AI assistant."

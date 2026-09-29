@@ -162,6 +162,23 @@ class DefaultCallHooks:
     def owner_for(self, request):
         return 'local'
 
+    @property
+    def profile_path(self):
+        """The owner's profile sits next to .env, in the private .colleague folder."""
+        from pathlib import Path
+        return Path(self.env_file).parent / '.colleague' / 'profile.json' if self.env_file else None
+
+    def profile(self, owner):
+        from briefing import PROFILE_VERSION, load_profile
+        path = self.profile_path
+        return load_profile(path) if path else {'version': PROFILE_VERSION}
+
+    def save_profile(self, owner, profile):
+        from briefing import save_profile
+        if self.profile_path is None:
+            raise ValueError('no place to keep the profile')
+        return save_profile(self.profile_path, profile)
+
     def credentials(self, owner, provider):
         env = self.environ
         if provider == 'openai':

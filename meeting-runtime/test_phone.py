@@ -231,7 +231,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config['audio']['output'], {'voice': 'quartz'})
         self.assertEqual(config['delegation']['type'], 'responses')
         self.assertEqual(config['delegation']['responses']['tools'][0]['name'], 'end_call')
-        self.assertIn("calling on behalf of Robin", config['instructions'])
+        self.assertIn("Hi, this is Robin's AI assistant.", config['instructions'])
         self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
 
         live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
@@ -296,6 +296,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
     def test_disclosure_check(self):
         said = [
             ("Hi, I'm an AI assistant calling on behalf of Robin Rao.", 'Robin Rao', True),
+            ("Hey Sam, this is Robin's AI assistant. He asked me to call.", 'Robin', True),
+            ("Hey, it's Robin's assistant, calling about the launch.", 'Robin', False),
             ('Hola, soy un asistente de IA y llamo de parte de Robin.', 'Robin', True),
             ('Hallo, hier ist ein KI-Assistent im Auftrag von Robin.', 'Robin', True),
             ('Bonjour, je suis une intelligence artificielle qui appelle pour Robin.', 'Robin', True),
@@ -338,6 +340,49 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['endReason'], 'remote_hangup')
         self.assertTrue(live.close_requested)
         self.assertIs(done['result']['disclosureVerified'], False)
+
+    async def test_the_session_gets_the_three_levels_of_context(self):
+        from briefing import save_profile
+        self.h.hooks.env_file = Path(self.temp.name) / '.env'
+        save_profile(Path(self.temp.name) / '.colleague' / 'profile.json', {
+            'about': 'Robin builds Colleague AI.', 'boundaries': ['Never discuss money.'],
+            'people': [{'name': 'Sam', 'relationship': 'close friend', 'phone': '+14155550143'}]})
+        record, session = await self.h.dial(
+            to='+14155550143', objective='Ask Sam whether to launch now or wait',
+            questions=['Launch now or wait, and why?'],
+            context={'summary': 'Colleague AI lets agents make calls.',
+                     'details': 'Pricing: about 6 cents a minute.'})
+        ws, live, task = await self.h.connect(record, session)
+        config = live.config
+        notes = config['input'][0]['content'][0]['text']
+        self.assertIn('Colleague AI lets agents make calls.', notes)
+        self.assertIn("Speaking with: Sam, Robin's close friend", notes)
+        self.assertNotIn('Pricing', notes)
+        instructions = config['instructions']
+        self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
+        self.assertIn('"Hey Sam, this is Robin\'s AI assistant. I\'m calling about..."', instructions)
+        self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
+        self.assertIn('your context holds reference notes', instructions)
+        self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
+        self.assertNotIn('Pricing', instructions)
+        backend = config['delegation']['responses']['instructions']
+        self.assertIn('Pricing: about 6 cents a minute.', backend)
+        self.assertIn('- Never discuss money.', backend)
+        # A note from the agent mid-call is silent context, not an instruction.
+        live.push({'type': 'session.started', 'session': {}})
+        self.assertEqual(await self.h.service.instruct(record['id'], 'He tried it yesterday.', silent=True),
+                         {'delivered': True})
+        self.assertIn(('session.thinking.append', 'He tried it yesterday.'), live.appends)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
+    async def test_without_background_the_voice_gets_no_reference_notes(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        self.assertNotIn('input', live.config)
+        self.assertNotIn('reference notes', live.config['instructions'])
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
 
     async def test_a_screener_splitting_the_opening_is_not_a_missed_disclosure(self):
         record, session = await self.h.dial()
@@ -571,7 +616,8 @@ class PromptTests(unittest.TestCase):
         parsed = CallBrief.from_dict(brief(mayAgreeTo=['6:30 to 7:30pm'], mustNotShare=['card number'],
                                            language='es'))
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm an AI assistant calling on behalf of Robin.", text)
+        self.assertIn("Hi, this is Robin's AI assistant.", text)
+        self.assertNotIn('on behalf of', text)
         self.assertIn('- 6:30 to 7:30pm', text)
         self.assertIn('- card number', text)
         self.assertIn('language with tag es', text)

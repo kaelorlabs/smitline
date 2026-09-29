@@ -90,6 +90,10 @@ Colleague AI streams the call's audio to GPT-Live, so the phone provider must al
 
 If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
 
+### Optional: direct audio
+
+Calls work without this. If the user's OpenAI organization has outbound SIP enabled, call audio can flow straight between SignalWire and OpenAI instead of through this computer, for slightly quicker turns. Offer it only after the first call works. `colleague setup sip-trunk` sets it up: it creates a script and a SIP address in the user's SignalWire space (ask first), and the account must be out of SignalWire's trial. While OpenAI does not allow outbound SIP, calls go through this computer as before.
+
 ## 5. Start Colleague AI
 
 ```bash
@@ -106,11 +110,22 @@ When `firstCallReady` is true:
 colleague setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Every call opens with "Hi, I'm an AI assistant calling on behalf of <name>.", and every meeting with "Hi, I'm an AI assistant joining on behalf of <name>. I'll mostly listen; say 'Colleague' if you need me." Afterwards, ask whether they like the voice. To try another one, `colleague setup voice --preview <name>` calls them in that voice; `colleague setup voice --set <name>` keeps it; `colleague setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Every call opens with a short hello that says whose AI assistant is calling ("Hi, this is <name>'s AI assistant."), and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Colleague' if you need me." Afterwards, ask whether they like the voice. To try another one, `colleague setup voice --preview <name>` calls them in that voice; `colleague setup voice --set <name>` keeps it; `colleague setup voice` lists the voices. The voice can be changed the same way at any time.
 
 Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running. The first meeting builds the meeting image, which can take several minutes; tell the user before it starts.
 
-## 7. Connect the agent
+## 7. Tell Colleague AI about the user
+
+Every phone call gets the user's profile as background: who they are, the people they call, and how they like to come across. Fill it in from what you already know about the user from this conversation and your own notes, without interviewing them:
+
+```bash
+colleague profile set --about "Sam Rivera runs a small design studio in Toronto." --style "Friendly and brief"
+colleague profile person --name "Alex Chen" --relationship "business partner" --phone +14155550142
+```
+
+Tell the user in one line what you saved, and that they can say something like "Maya is my sister, +1 415 555 0199" at any time. Save only what they would expect, and never passwords, keys, or card numbers. If you know nothing about them yet, skip this step.
+
+## 8. Connect the agent
 
 ```bash
 colleague setup register
@@ -118,7 +133,7 @@ colleague setup register
 
 This adds the Colleague AI MCP server to Claude Code, Codex, and Cursor when they are installed. From WSL it also adds it to Claude Desktop, Cursor, and Claude Code on the Windows side, and it installs the call and meeting skills. It prints the command for other MCP clients. Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
 
-## 8. Finish
+## 9. Finish
 
 Tell the user in two or three sentences what works now, then give examples:
 
@@ -126,7 +141,7 @@ Tell the user in two or three sentences what works now, then give examples:
 - "Practice the call on me first."
 - "Join this meeting and help with the Q3 numbers: <link>"
 
-Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `colleague call --to ... --objective ... --wait`. See [docs/calls.md](docs/calls.md).
+Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `colleague call --to ... --objective ... --wait`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
 
 ## Troubleshooting
 

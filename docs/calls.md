@@ -35,6 +35,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
   "onBehalfOf": "Robin",
   "objective": "Book a table for 4 at 7pm tonight",
   "context": "Indoor is fine if the patio is full.",
+  "questions": ["How long will they hold the table?"],
   "mayAgreeTo": ["times between 6:30 and 7:30pm", "indoor seating"],
   "mustNotShare": ["payment details"],
   "successCriteria": "A confirmed booking with a confirmation number",
@@ -50,6 +51,40 @@ Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup pro
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
+## Context
+
+A phone call gets three levels of context, so the voice can talk like someone who knows the story without being steered by it:
+
+| Level | Comes from | Holds |
+| --- | --- | --- |
+| Profile | `GET` and `PATCH /v1/profile`, kept in `.colleague/profile.json` (owner-only) | Who the owner is, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries |
+| Session | The brief's `context` | What the agent and the owner have been working on: text (at most 6,000 characters), or an object with `summary`, `facts`, `decisions`, `openQuestions`, and long `details` (at most 24,000 characters) |
+| Goal | The rest of the brief | `objective`, `questions`, `mayAgreeTo`, `mustNotShare`, `successCriteria`, `tone`, and `contact` |
+
+The goal leads: it goes into GPT-Live's instructions, together with the profile's standing boundaries. The voice also starts with short reference notes: the owner, the person called, and the session's summary, facts, decisions, and open questions, cut to about 1,800 tokens. They are marked as background rather than an agenda, so the voice uses them when they help and does not recite them. The backend model the voice consults for harder questions gets everything, `details` included, up to about 12,000 tokens.
+
+The person called comes from `contact`, or else from the profile entry with the same phone number. The voice greets them by name and matches the relationship unless `tone` says otherwise. The result's `details` answer each of the `questions`.
+
+```json
+{
+  "channel": "phone",
+  "to": "+14155550199",
+  "objective": "Ask Sam whether Robin should launch Colleague AI now or wait",
+  "questions": ["Launch now or wait, and why?", "What would make him use it?"],
+  "tone": "casual; he is a close friend",
+  "context": {
+    "summary": "Robin built Colleague AI, which lets any agent phone people or join meetings for its user.",
+    "facts": ["Phone calls work today with SignalWire or Twilio", "Meetings work on Zoom, Teams, and Google Meet"],
+    "openQuestions": ["Pricing"],
+    "details": "Longer notes, such as a changelog or a spec, that the voice can look things up in."
+  }
+}
+```
+
+During a call, `POST /v1/calls/{id}/instructions` with `"silent": true` adds a background note, such as something the owner just remembered. The voice uses it when it becomes relevant instead of acting on it at once.
+
+Meetings get the session context and `questions` as their starting context, with the summary, facts, and details cut to 8,000 characters together; the profile is used on phone calls. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
+
 ## Result
 
 ```json
@@ -63,7 +98,7 @@ Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup pro
   "decisions": [],
   "actionItems": [],
   "openQuestions": [],
-  "transcript": [{ "speaker": "agent", "text": "Hi, I'm an AI assistant calling on behalf of Robin." }],
+  "transcript": [{ "speaker": "agent", "text": "Hi, this is Robin's AI assistant. I'm calling to book a table for four tonight." }],
   "durationSeconds": 252
 }
 ```
@@ -95,10 +130,12 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `POST /v1/calls` | Start a call from a brief. |
 | `GET /v1/calls` | List recent calls, newest first. |
 | `POST /v1/calls/check` | Validate a brief and report missing configuration without starting a call. |
-| `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions. Meetings do not accept live instructions yet (`delivered: false`). |
+| `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions; with `"silent": true` it is a background note the voice uses when relevant. Meetings do not accept live instructions yet (`delivered: false`). |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |
 | `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
+| `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
+| `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
 | `GET /v1/openapi.json` | The machine-readable API description. |
 
 ## Hooks
@@ -112,6 +149,7 @@ The call service calls a small hooks object so a managed deployment can add acco
 | `precheck(owner, brief)` | Allows the call, applying the configured country allow-list for phone calls. |
 | `record_usage(owner, call, usage)` | Appends a line to `usage.jsonl` in the call store. |
 | `notify(owner, call)` | Sends the brief's webhook, if any. |
+| `profile(owner)`, `save_profile(owner, profile)` | Read and write `.colleague/profile.json` next to `.env`. Without them, calls get no profile and `/v1/profile` returns `501`. |
 
 Set `COLLEAGUE_CALL_HOOKS=module:factory` to load different hooks.
 

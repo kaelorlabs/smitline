@@ -80,7 +80,7 @@ sequenceDiagram
 
 The platform microphone is unmuted once when the voice session starts and muted when it ends. Between replies only the local virtual gate closes, so participants hear silence while the platform shows Colleague AI as unmuted. If a host or participant mutes it, generated audio is discarded and the runtime never reopens the microphone on its own. If the host disables "Allow participants to unmute themselves" in Zoom, the start-of-session unmute fails and Colleague AI cannot speak until the host asks it to unmute; the Zoom adapter accepts the host's "The host would like you to unmute" dialog, because that is the host's explicit request.
 
-Once the microphone can carry speech, the session speaks one short AI disclosure naming the person it acts for ("Hi, I'm an AI assistant joining on behalf of NAME. I'll mostly listen; say 'Colleague' if you need me."), then returns to listening. The name comes from the runtime state (`onBehalfOf`, or the call task "Take part in this meeting on behalf of NAME."), then `COLLEAGUE_OWNER_NAME`, then "the person who invited me". `COLLEAGUE_MEETING_INTRO=0` turns it off.
+Once the microphone can carry speech, the session speaks one short AI disclosure naming the person it acts for ("Hi everyone, I'm NAME's AI assistant. I'll mostly listen; say 'Colleague' if you need me."), then returns to listening. The name comes from the runtime state (`onBehalfOf`, or the call task "Take part in this meeting on behalf of NAME."), then `COLLEAGUE_OWNER_NAME`, then "the person who invited me". `COLLEAGUE_MEETING_INTRO=0` turns it off.
 
 GPT-Live owns pauses, backchannels, and interruptions. The local runtime does not classify meeting speech or add a silence delay.
 

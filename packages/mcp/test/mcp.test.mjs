@@ -303,6 +303,7 @@ test('initialize advertises tools and the tasks extension', async () => {
     'get_runner_status', 'pair_runner', 'complete_runner_pair', 'unpair_runner',
     'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
     'send_call_instruction', 'end_call', 'transfer_call_to_me', 'list_voices',
+    'get_profile', 'update_profile',
   ]);
   const joinCurrent = listed.result.tools.find((tool) => tool.name === 'join_current_meeting');
   assert.deepEqual(joinCurrent.inputSchema.required, ['url', 'sessionId', 'workspace', 'context']);
@@ -602,10 +603,12 @@ test('call tools map to the SDK and surface brief questions', async () => {
     },
     async getCall(id) { return { id, status: 'ringing' }; },
     async listCalls(limit) { calls.push(['list', limit]); return []; },
-    async instructCall(id, text) { calls.push(['instruct', id, text]); return { delivered: true }; },
+    async instructCall(id, text, options) { calls.push(['instruct', id, text, options]); return { delivered: true }; },
     async endCall(id) { return { id, status: 'summarizing' }; },
     async transferCall() { return { transferred: true }; },
     async listVoices() { return { default: 'marin', voices: ['marin'] }; },
+    async getProfile() { calls.push(['profile']); return { version: 1 }; },
+    async updateProfile(update) { calls.push(['update-profile', update]); return { version: 1, ...update }; },
   };
   const session = createMcpSession({ colleague, log() {} });
   const brief = { channel: 'phone', to: '+14155550142', onBehalfOf: 'Robin', objective: 'Book a table' };
@@ -617,8 +620,22 @@ test('call tools map to the SDK and surface brief questions', async () => {
   await call(session, 'tools/call', {
     name: 'send_call_instruction', arguments: { callId, text: 'Ask about parking' },
   });
-  assert.deepEqual(calls[2], ['instruct', callId, 'Ask about parking']);
+  assert.deepEqual(calls[2], ['instruct', callId, 'Ask about parking', { silent: false }]);
+  await call(session, 'tools/call', {
+    name: 'send_call_instruction', arguments: { callId, text: 'He tried it yesterday', silent: true },
+  });
+  assert.deepEqual(calls[3], ['instruct', callId, 'He tried it yesterday', { silent: true }]);
+  await call(session, 'tools/call', { name: 'get_profile', arguments: {} });
+  const people = [{ name: 'Sam', relationship: 'close friend', phone: '+14155550143' }];
+  await call(session, 'tools/call', { name: 'update_profile', arguments: { people } });
+  assert.deepEqual(calls.slice(4), [['profile'], ['update-profile', { people }]]);
+  const listed = await call(session, 'tools/list', {});
+  const startTool = listed.result.tools.find((tool) => tool.name === 'start_call');
+  assert.ok(startTool.inputSchema.properties.questions);
+  assert.equal(startTool.inputSchema.properties.context.anyOf[1].properties.details.maxLength, 24000);
+  calls.length = 0;
   const bad = await call(session, 'tools/call', { name: 'get_call', arguments: { callId: '../etc' } });
+  assert.deepEqual(calls, []);
   assert.equal(bad.result.isError, true);
 
   colleague.startCall = async () => {

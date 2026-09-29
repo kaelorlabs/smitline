@@ -418,7 +418,8 @@ When updating this file, use these rules:
   - Phone calls also work through SignalWire, whose free trial allows live audio streaming (Twilio's 2026 trial strips `<Stream>`, found in the first new-user walkthrough). Same REST, webhook, and media-stream code; setup status flags a Twilio trial as unusable.
   - Direct SIP for phone calls (`COLLEAGUE_PHONE_AUDIO=sip` or `sip-webhook`): call audio flows between the provider and OpenAI, and Colleague AI steers over GPT-Live's text sideband. OpenAI dialing out needs outbound SIP enabled for the organization; until then calls fall back to the relay. `colleague setup sip-trunk` creates the SignalWire trunk. Covered by fixture tests; no live SIP call yet.
   - The relay now follows interruptions (drops speech GPT-Live abandoned), lets a hang-up give way to someone still talking, treats the carrier's machine verdict as a hint, and records reply delays and queued speech per call.
-  - Still open: a real phone call and a real meeting on this build. Everything above is covered by fixture, HTTP, and local WebSocket tests only.
+  - Three levels of call context: the owner's profile (`/v1/profile`, `colleague profile`, and the MCP `get_profile` and `update_profile` tools), the session context in the brief (text, or a summary, facts, decisions, open questions, and long details), and the goal (objective, questions, tone, contact). The goal and the profile's standing boundaries go into the voice instructions; a short reference version of the rest starts the GPT-Live session as a developer message marked as background, not an agenda; the backend model gets everything. Agents can add silent notes mid-call. Covered by tests; not yet heard on a live call.
+  - Still open: a live direct-SIP call (waiting for OpenAI to enable outbound SIP) and a real meeting on this build. Relayed SignalWire calls to real people worked on 2026-09-29.
 
 ### 2026-09-18
 
