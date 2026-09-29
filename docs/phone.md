@@ -63,9 +63,11 @@ Whichever is set up is used; with both, Twilio is used unless `COLLEAGUE_PHONE_P
 
 Only the gateway routes are public: `/twilio/status/{id}`, `/twilio/amd/{id}`, `/twilio/recording/{id}`, `/twilio/media`, `/twilio/inbound`, and `/healthz`. HTTP callbacks must carry a valid `X-Twilio-Signature`. A media stream is accepted only with the call ID and random token placed in that call's TwiML, and only once.
 
-## Direct audio over SIP
+## Direct audio over SIP (optional)
 
-By default the call's audio is relayed: provider → tunnel → this computer → GPT-Live and back. The detour adds delay to every turn, and GPT-Live sends no event when it is interrupted, so the relay has to guess when to stop playing. With direct SIP the audio flows between the provider and OpenAI, and OpenAI's own voice stack handles interruptions, echo, and timing. Colleague AI steers the call over a text-only "sideband" WebSocket: call progress, transcripts, backend tool calls such as `end_call`, instructions from your agent, hang-up (`/hangup`), and transfer (`/refer`). The brief, disclosure check, hang-up rules, time limits, and result are the same as for relayed calls.
+Setup does not use this, and calls do not need it. It is for deployments whose OpenAI organization already has outbound SIP, which OpenAI turns on only by request.
+
+By default the call's audio is relayed: provider → tunnel → this computer → GPT-Live and back. From a home connection in Canada the detour measured about 30 to 50 ms each way, so roughly 50 to 100 ms per turn. With direct SIP the audio flows between the provider and OpenAI, and OpenAI's own voice stack handles interruptions, echo, and timing. Colleague AI steers the call over a text-only "sideband" WebSocket: call progress, transcripts, backend tool calls such as `end_call`, instructions from your agent, hang-up (`/hangup`), and transfer (`/refer`). The brief, disclosure check, hang-up rules, time limits, and result are the same as for relayed calls.
 
 `COLLEAGUE_PHONE_AUDIO` picks how audio travels:
 
