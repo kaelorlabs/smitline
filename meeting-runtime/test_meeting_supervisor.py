@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -222,6 +223,14 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored['cameraAvatarDataUri'], 'data:image/png;base64,abc')
         self.assertNotIn('cameraAvatarPath', stored)
         self.assertNotIn('/Users/Taylor/secret.png', json.dumps(stored))
+        await self.supervisor.cancel(meeting.id)
+
+    async def test_on_behalf_of_metadata_reaches_the_runtime_state(self):
+        meeting = session(agentSession=agent_session_payload(
+            metadata={'source': 'call-api', 'onBehalfOf': 'Maya Shah'}))
+        await self.supervisor.start(meeting)
+        stored = read_json(meeting_state_path(self.runtime, meeting.id))
+        self.assertEqual(stored['onBehalfOf'], 'Maya Shah')
         await self.supervisor.cancel(meeting.id)
 
     async def test_launch_to_live_context_cancel_and_heartbeat(self):
@@ -598,6 +607,107 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(file_mode(daemon_data_path(self.root)), 0o700)
         finally:
             app.runtime_daemon.close()
+
+
+class FakeRunner:
+    """Records host commands; answers `docker image inspect` from `base_present`."""
+
+    def __init__(self, base_present=True, build_fails=False):
+        from meeting_supervisor import CommandResult
+        self.result = CommandResult
+        self.base_present = base_present
+        self.build_fails = build_fails
+        self.calls = []
+
+    async def run(self, args, *, env=None):
+        self.calls.append((list(args), dict(env) if env else None))
+        if args[:3] == ['docker', 'image', 'inspect']:
+            return self.result(0 if self.base_present else 1, '', 'No such image')
+        if 'build' in args and 'up' not in args:
+            if self.build_fails:
+                return self.result(1, '', 'step 3/9\nfailed to solve: network unreachable\n')
+            self.base_present = True
+        return self.result(0, '', '')
+
+
+class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fresh_machine_builds_the_joinly_base_before_up(self):
+        from meeting_supervisor import ComposeMeetingAgent
+        runner = FakeRunner(base_present=False)
+        agent = ComposeMeetingAgent(runner, environ={})
+        await agent.up({'MEETING_URL': ZOOM_URL})
+        commands = [args for args, _env in runner.calls]
+        self.assertEqual(commands[0][:3], ['docker', 'image', 'inspect'])
+        self.assertIn('meeting-agent-joinly:local', commands[0])
+        self.assertEqual(commands[1], ['docker', 'compose', '-f', 'compose.yaml', 'build', 'joinly'])
+        self.assertEqual(commands[2], ['docker', 'compose', '-f', 'compose.meeting.yaml',
+                                       'up', '-d', '--build', 'meeting-agent'])
+
+    async def test_existing_base_is_not_rebuilt(self):
+        from meeting_supervisor import ComposeMeetingAgent
+        runner = FakeRunner(base_present=True)
+        await ComposeMeetingAgent(runner, environ={}).up({})
+        commands = [args for args, _env in runner.calls]
+        self.assertEqual(len(commands), 2)
+        self.assertNotIn('joinly', commands[1])
+        self.assertIn('up', commands[1])
+
+    async def test_base_build_failure_is_reported_without_starting(self):
+        from meeting_supervisor import ComposeMeetingAgent
+        runner = FakeRunner(base_present=False, build_fails=True)
+        with self.assertRaises(RuntimeError) as raised:
+            await ComposeMeetingAgent(runner, environ={}).up({})
+        self.assertIn('network unreachable', str(raised.exception))
+        self.assertFalse(any('up' in args for args, _env in runner.calls))
+
+    async def test_up_runs_the_container_as_the_host_user(self):
+        from meeting_supervisor import ComposeMeetingAgent
+        runner = FakeRunner()
+        await ComposeMeetingAgent(runner, environ={}).up({'MEETING_URL': ZOOM_URL})
+        env = runner.calls[-1][1]
+        self.assertEqual(env['COLLEAGUE_UID'], str(os.getuid()))
+        self.assertEqual(env['COLLEAGUE_GID'], str(os.getgid()))
+        self.assertEqual(env['MEETING_URL'], ZOOM_URL)
+        runner = FakeRunner()
+        await ComposeMeetingAgent(runner, environ={'COLLEAGUE_UID': '0', 'COLLEAGUE_GID': '0'}).up({})
+        self.assertEqual(runner.calls[-1][1]['COLLEAGUE_UID'], '0')
+        self.assertEqual(runner.calls[-1][1]['COLLEAGUE_GID'], '0')
+
+
+class MountPreparationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_creates_private_mount_sources_before_compose(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'meeting-runtime'
+            runtime.mkdir()
+            (runtime / 'jobs').mkdir(mode=0o755)
+            seen = {}
+
+            class Launcher(FakeLauncher):
+                async def up(self, env):
+                    seen.update({name: file_mode(runtime / name)
+                                 for name in ('jobs', 'recordings', 'profiles')})
+                    await super().up(env)
+
+            supervisor = ProductionMeetingSupervisor(
+                root, runtime_root=runtime, launcher=Launcher(), health=FakeHealth(),
+                host_worker=FakeHostWorker(), wants_codex=lambda _session: False,
+                poll_interval=0.02, start_timeout=0.4, stop_timeout=0.4)
+            meeting = session()
+            await supervisor.start(meeting)
+            self.assertEqual(seen, {'jobs': 0o700, 'recordings': 0o700, 'profiles': 0o700})
+            await supervisor.shutdown()
+
+    def test_foreign_owned_mount_source_explains_the_fix(self):
+        from meeting_supervisor import ProductionMeetingSupervisor as Supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = Supervisor(directory, runtime_root=directory, launcher=FakeLauncher(),
+                                    health=FakeHealth(), host_worker=FakeHostWorker())
+            with mock.patch('meeting_supervisor.ensure_private_dir',
+                            side_effect=PermissionError('Operation not permitted')):
+                with self.assertRaises(RuntimeError) as raised:
+                    supervisor._prepare_mounts()
+            self.assertIn('sudo chown -R', str(raised.exception))
 
 
 class HostWorkerEnvTests(unittest.TestCase):

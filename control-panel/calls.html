@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calls · Colleague AI</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/calls.css">
+</head>
+<body>
+  <a class="skip-link" href="#detail">Skip to call details</a>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Colleague AI home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-name">Colleague <b>AI</b></span>
+      </a>
+      <nav class="topnav" aria-label="Console">
+        <a href="/">Meetings</a>
+        <a href="/calls" aria-current="page">Calls</a>
+      </nav>
+      <div class="connection" id="connection">
+        <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Workspace / Calls</p>
+        <h1>Calls</h1>
+        <p class="hero-copy">Follow your agent’s phone calls and meetings as they happen. Read the result when one ends, or take over a live call on your phone.</p>
+      </section>
+
+      <div id="banner" class="banner" role="alert" hidden></div>
+
+      <div class="layout" id="layout" data-mode="list">
+        <nav class="list-pane" aria-labelledby="list-title">
+          <h2 id="list-title" class="label">Recent calls</h2>
+          <p id="list-loading" class="muted loading">Loading calls…</p>
+          <ol id="call-list" class="call-list"></ol>
+          <p id="list-empty" class="muted" hidden>No calls yet.</p>
+        </nav>
+
+        <section id="detail" class="detail-pane" tabindex="-1" aria-label="Call details">
+          <div id="welcome" class="card welcome" hidden>
+            <h2>No calls yet</h2>
+            <p>When your agent places a phone call or joins a meeting, it appears here right away. You can read along as people talk, take over the call on your phone, or end it.</p>
+            <h3>Try asking your agent</h3>
+            <ul class="examples">
+              <li>“Call Luigi’s at +1 415 555 0142 and book a table for 4 at 7 tonight.”</li>
+              <li>“Practice the call on me first.”</li>
+              <li>“Join this meeting and help with the Q3 numbers: &lt;link&gt;”</li>
+            </ul>
+            <p class="muted">Nothing happens when you ask? Ask your agent to check Colleague AI’s setup.</p>
+          </div>
+
+          <p id="pick" class="card pick muted" hidden>Choose a call to see what was said and how it ended.</p>
+
+          <article id="call" class="card call" hidden aria-labelledby="call-title">
+            <button type="button" id="back-button" class="back">← All calls</button>
+            <header class="call-head">
+              <div class="call-heading">
+                <h2 id="call-title" tabindex="-1"></h2>
+                <p id="call-meta" class="meta"></p>
+              </div>
+              <span id="call-status" class="chip"></span>
+            </header>
+            <p class="objective"><span class="objective-label">Goal</span> <span id="call-objective"></span></p>
+
+            <div id="live-panel" class="live-panel" hidden>
+              <div class="actions">
+                <button type="button" id="join-button" class="button primary" aria-describedby="join-help">Take over the call</button>
+                <button type="button" id="end-button" class="button danger">End call</button>
+              </div>
+              <p id="join-help" class="help">Take over the call: rings your phone and hands you the call.</p>
+              <p id="action-note" class="action-note" role="status"></p>
+            </div>
+
+            <div id="problem" class="callout bad" hidden>
+              <h3 id="problem-title" class="callout-title">This call did not go through</h3>
+              <p id="problem-text"></p>
+              <p class="muted">Ask your agent to try again. If it keeps failing, ask it to check Colleague AI’s setup.</p>
+            </div>
+
+            <p id="handed-over" class="callout good" hidden>You took over this call on your phone.</p>
+
+            <p id="result-pending" class="pending" hidden><span class="spinner" aria-hidden="true"></span>Writing the result. This usually takes a few seconds.</p>
+
+            <section id="result" class="result" hidden aria-labelledby="result-title">
+              <h3 id="result-title" class="section-title">Result</h3>
+              <div id="result-outcome-box" class="outcome callout">
+                <p class="outcome-label"><span id="result-icon" class="outcome-icon" aria-hidden="true"></span><span id="result-outcome"></span></p>
+                <p id="result-summary" class="summary"></p>
+              </div>
+              <dl id="result-details" class="details"></dl>
+              <div id="result-questions" class="callout warn" hidden>
+                <h4 class="callout-title">Open questions</h4>
+                <ul></ul>
+              </div>
+              <div id="result-actions" class="result-list" hidden>
+                <h4>For you to do</h4>
+                <ul></ul>
+              </div>
+              <div id="result-decisions" class="result-list" hidden>
+                <h4>Agreed</h4>
+                <ul></ul>
+              </div>
+            </section>
+
+            <p id="recording" class="recording" hidden><span class="recording-label">Recorded in your Twilio account</span> <span id="recording-text"></span> <code id="recording-url"></code></p>
+
+            <section class="transcript-section" aria-labelledby="transcript-title">
+              <div class="section-head">
+                <h3 id="transcript-title" class="section-title">Transcript</h3>
+                <span id="transcript-hint" class="muted small"></span>
+              </div>
+              <div class="transcript-wrap">
+                <ol id="transcript" class="transcript" role="log" aria-live="off" aria-labelledby="transcript-title" tabindex="0"></ol>
+                <button type="button" id="jump-button" class="jump" hidden>New lines below ↓</button>
+              </div>
+              <p id="transcript-empty" class="muted"></p>
+            </section>
+          </article>
+        </section>
+      </div>
+      <p id="announcer" class="visually-hidden" role="status"></p>
+    </main>
+    <footer><span>Colleague AI runs locally on this computer.</span><span>Calls use your own OpenAI and Twilio accounts.</span></footer>
+  </div>
+  <script type="module" src="/calls.js"></script>
+</body>
+</html>

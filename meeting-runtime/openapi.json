@@ -138,7 +138,7 @@
           "successCriteria": { "type": "string", "maxLength": 500 },
           "language": { "type": "string", "examples": ["en", "pt-BR"] },
           "voice": { "type": "string", "examples": ["marin"] },
-          "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240 },
+          "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
           "agentSession": { "type": "object", "description": "Meeting only: coding-agent session for exact continuity. See /v1/meetings." }
@@ -169,6 +169,8 @@
           "endedAt": { "type": "string", "format": "date-time" },
           "line": { "type": "object", "description": "Line references such as meetingId." },
           "result": { "oneOf": [{ "$ref": "#/components/schemas/Result" }, { "type": "null" }] },
+          "direction": { "type": "string", "enum": ["outbound", "inbound"] },
+          "recording": { "type": "object", "description": "Phone calls recorded with COLLEAGUE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
           "usage": { "type": "object" },
           "error": { "type": "string" }
         }
@@ -185,7 +187,8 @@
           "openQuestions": { "type": "array", "items": { "type": "string" } },
           "transcript": { "type": "array", "items": { "type": "object", "required": ["speaker", "text"], "properties": { "speaker": { "type": "string" }, "text": { "type": "string" } } } },
           "durationSeconds": { "type": "integer" },
-          "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] }
+          "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
+          "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the opening was heard saying it is an AI calling for onBehalfOf; false when it was not, even after a reminder; null when the agent never spoke." }
         }
       },
       "Error": {

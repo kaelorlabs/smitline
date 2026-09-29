@@ -1388,9 +1388,11 @@ class RuntimeDaemon:
         from screen_share import public_status
         merged = dict(stored.get('status') or {})
         for key in ('available', 'active', 'capturing', 'paused', 'lastObservationAt',
-                    'degradedReason', 'analyzerAvailable'):
+                    'degradedReason'):
             if key in payload:
                 merged[key] = payload[key]
+        # The analyzer runs here on the host; the container cannot know about it.
+        merged['analyzerAvailable'] = self.screen_share_host.analyzer_available()
         if stored.get('paused'):
             merged['paused'] = True
             merged['active'] = False

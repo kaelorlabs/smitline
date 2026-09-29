@@ -51,6 +51,10 @@ class MeetingPlatformAdapter(ABC):
     async def chat_available(self):
         return False
 
+    async def accept_unmute_request(self):
+        """Accept a visible host request to unmute. Return True only when one was accepted."""
+        return False
+
     async def get_participant_count(self):
         """Confirmed in-call count including self, or None when unavailable."""
         return None

@@ -1759,6 +1759,22 @@ class ScreenShareDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('screen_share.started', events)
         self.assertIn('screen_share.observation', events)
 
+    async def test_container_health_does_not_override_host_analyzer(self):
+        created = await self.client.post(
+            '/v1/meetings', json=create_payload(
+                screenShare={'enabled': True},
+                agentSession=agent_session_payload(sessionId='thread-share-4')),
+            headers=self.headers())
+        meeting_id = (await created.json())['id']
+        path = '/v1/meetings/' + meeting_id + '/screen-share'
+        before = await (await self.client.get(path, headers=self.headers())).json()
+        self.assertTrue(before['status']['analyzerAvailable'])
+        self.daemon.apply_screen_share_health(meeting_id, {
+            'available': True, 'active': True, 'capturing': True, 'analyzerAvailable': False})
+        after = await (await self.client.get(path, headers=self.headers())).json()
+        self.assertTrue(after['status']['analyzerAvailable'])
+        self.assertTrue(after['status']['capturing'])
+
     async def test_revisited_screen_reuses_observation(self):
         created = await self.client.post(
             '/v1/meetings', json=create_payload(

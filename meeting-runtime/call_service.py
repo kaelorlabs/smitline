@@ -12,7 +12,14 @@ from call_store import TERMINAL, CallNotFound, new_call_id
 
 
 MAX_WAIT_SECONDS = 300
-MAX_LIVE_TRANSCRIPT = 400
+# Long calls keep their opening (disclosure, early details) and the most recent lines.
+TRANSCRIPT_HEAD = 60
+TRANSCRIPT_TAIL = 340
+# Statuses only move forward; a late Twilio callback must not undo progress.
+STATUS_RANK = {
+    'queued': 0, 'connecting': 1, 'ringing': 2, 'waiting': 2, 'in_progress': 3,
+    'summarizing': 4, 'completed': 5, 'failed': 5, 'canceled': 5,
+}
 
 
 class CallError(Exception):
@@ -34,6 +41,8 @@ class CallContext:
         self.owner = owner
         self.transcript = []
         self.ended = False
+        # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
+        self.disclosure = None
 
     def credentials(self, provider):
         return self.service.hooks.credentials(self.owner, provider)
@@ -56,7 +65,8 @@ class CallContext:
             return
         entry = {'speaker': speaker, 'text': text}
         self.transcript.append(entry)
-        del self.transcript[:-MAX_LIVE_TRANSCRIPT]
+        if len(self.transcript) > TRANSCRIPT_HEAD + TRANSCRIPT_TAIL:
+            del self.transcript[TRANSCRIPT_HEAD]
         self.service._event(self.call_id, 'call.transcript', **entry)
 
     async def finish(self, end_reason, *, usage=None, handoff=None, error=None):
@@ -105,6 +115,8 @@ class CallService:
         record = self.store.get(call_id)
         if record['status'] in TERMINAL or (record['status'] == status and not fields):
             return record
+        if STATUS_RANK[status] < STATUS_RANK[record['status']]:
+            return record
         changes = dict(fields)
         now = self.store.now()
         if status == 'in_progress' and not record.get('answeredAt'):
@@ -118,24 +130,47 @@ class CallService:
 
     # Public operations ---------------------------------------------------
 
-    def check(self, payload):
-        brief = CallBrief.from_dict(payload)
+    def _brief(self, owner, payload):
+        """Parse a brief after filling in what setup already knows (the owner's name, phone)."""
+        if isinstance(payload, dict):
+            defaults = getattr(self.hooks, 'brief_defaults', None)
+            filled = dict(defaults(owner, payload) or {}) if defaults else {}
+            filled.update({key: value for key, value in payload.items() if value not in (None, '')})
+            payload = filled
+        return CallBrief.from_dict(payload, environ=self.environ)
+
+    async def check(self, payload, *, request=None):
+        """Everything create() would refuse, reported instead of raised."""
+        owner = await maybe_await(self.hooks.owner_for(request))
+        brief = self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         problems = []
         if line is None:
             problems.append(f'{brief.channel} calls are not available on this installation')
         else:
-            try:
-                line.ready(self.hooks, 'local', brief)
-            except MissingCredentials as error:
-                problems.append(str(error))
-            except CallRefused as error:
-                problems.append(error.message)
+            for step in (lambda: self.hooks.precheck(owner, brief),
+                         lambda: line.ready(self.hooks, owner, brief)):
+                try:
+                    await maybe_await(step())
+                except MissingCredentials as error:
+                    problems.append(str(error))
+                except CallRefused as error:
+                    problems.append(error.message)
         return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems}
 
+    def reconcile(self):
+        """At startup, close calls a previous daemon left unfinished; nothing will finish them."""
+        closed = []
+        for record in self.store.list(limit=1000):
+            if record['status'] in TERMINAL or record['id'] in self._contexts:
+                continue
+            self._close_unfinished(record['id'], 'The daemon stopped before the call finished.')
+            closed.append(record['id'])
+        return closed
+
     async def create(self, payload, *, request=None):
-        brief = CallBrief.from_dict(payload)
         owner = await maybe_await(self.hooks.owner_for(request))
+        brief = self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         if line is None:
             raise CallError(503, 'channel_unavailable',
@@ -183,10 +218,35 @@ class CallService:
         try:
             await start(context)
         except asyncio.CancelledError:
-            await context.finish('canceled')
+            # Only shutdown cancels a call task; ending a call goes through the line.
+            if not context.ended:
+                context.ended = True
+                self._close_unfinished(context.call_id, 'The daemon stopped before the call finished.')
+                self._contexts.pop(context.call_id, None)
             raise
         except Exception as error:
             await context.finish('error', error=f'{type(error).__name__}: {str(error)[:200]}')
+
+    def active_count(self, *, direction=None):
+        count = 0
+        for call_id in list(self._contexts):
+            try:
+                record = self.store.get(call_id)
+            except CallNotFound:
+                continue
+            if direction is None or record.get('direction') == direction:
+                count += 1
+        return count
+
+    def attach_recording(self, call_id, *, sid, url, seconds=None):
+        """Twilio finished a recording. Fetching it needs the Twilio account credentials."""
+        recording = {'sid': sid, 'url': str(url) + '.mp3'}
+        try:
+            recording['seconds'] = int(seconds)
+        except (TypeError, ValueError):
+            pass
+        self.store.update(call_id, recording=recording)
+        self._event(call_id, 'call.recording', **recording)
 
     def get(self, call_id, *, owner=None):
         record = self.store.get(call_id)
@@ -253,10 +313,13 @@ class CallService:
         transfer = getattr(line, 'transfer', None)
         if transfer is None:
             raise CallError(409, 'unsupported', f'{record["channel"]} calls cannot be transferred')
+        from twilio_client import TwilioError
         try:
             return await transfer(call_id)
         except LineNotReady as error:
             raise CallError(409, 'not_ready', str(error)) from error
+        except TwilioError as error:
+            raise CallError(502, 'provider_error', f'Twilio refused the transfer: {error.message}') from error
 
     # Finishing -----------------------------------------------------------
 
@@ -295,7 +358,15 @@ class CallService:
             self._set_status(call_id, 'failed', endReason='error', error=error, usage=usage)
         else:
             self._set_status(call_id, 'summarizing', endReason=end_reason)
-            result = await self._build_result(context, end_reason, usage, handoff)
+            try:
+                result = await self._build_result(context, end_reason, usage, handoff)
+            except asyncio.CancelledError:
+                # Shutting down mid-summary: never leave the call in 'summarizing'.
+                self._close_unfinished(call_id, 'The daemon stopped while writing the result.')
+                self._contexts.pop(call_id, None)
+                raise
+            if record['channel'] == 'phone' and record.get('direction') == 'outbound':
+                result['disclosureVerified'] = context.disclosure
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
             status = 'canceled' if result['outcome'] == 'canceled' else 'completed'
@@ -317,7 +388,8 @@ class CallService:
             self._event(call_id, 'call.webhook', **delivery)
 
     async def shutdown(self):
-        for call_id in list(self._contexts):
+        active = list(self._contexts)
+        for call_id in active:
             try:
                 await self.end(call_id)
             except Exception:
@@ -326,3 +398,16 @@ class CallService:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+        for call_id in active:
+            if self.store.get(call_id)['status'] not in TERMINAL:
+                self._close_unfinished(call_id, 'The daemon stopped before the call finished.')
+        self._contexts.clear()
+
+    def _close_unfinished(self, call_id, message):
+        """Mark a call that can no longer finish as failed, keeping what was said."""
+        transcript = [{'speaker': e['data'].get('speaker'), 'text': e['data'].get('text')}
+                      for e in self.store.events(call_id) if e['type'] == 'call.transcript']
+        result = fallback_result('error', transcript, 0, message.rstrip('.').lower())
+        result['outcome'] = 'failed'
+        self.store.update(call_id, result=result, error=message)
+        self._set_status(call_id, 'failed', endReason='error')

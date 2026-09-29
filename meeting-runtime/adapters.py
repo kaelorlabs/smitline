@@ -5,7 +5,7 @@ import re
 from urllib.parse import urlsplit
 from adapters_base import MeetingPlatformAdapter, Capabilities, AuthenticationRequired
 from meeting_urls import platform_for_url, normalize_url
-from zoom_controls import microphone_is_muted
+from zoom_controls import accept_host_unmute, microphone_is_muted
 from zoom_join import join_zoom, connect_audio
 
 async def visible(locator):
@@ -55,6 +55,9 @@ class ZoomAdapter(MeetingPlatformAdapter):
         raise RuntimeError(f'Zoom microphone could not be confirmed {desired}')
     async def mute(self): await self._set_mute(True)
     async def unmute(self): await self._set_mute(False)
+    async def accept_unmute_request(self):
+        # The host's "Ask to unmute" is an explicit request, so accepting keeps host mute authoritative.
+        return await accept_host_unmute(self.page)
     async def get_camera_state(self):
         return await _camera_state(self.page, zoom=True)
     async def enable_camera(self):

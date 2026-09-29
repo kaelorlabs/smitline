@@ -6,7 +6,7 @@ Requires Node.js 22+. Not published to npm. Talks only to the loopback daemon.
 
 ## Join
 
-Exact continuity requires `--thread` (the real originating coding-agent session id). Never pass `last`, `latest`, or `--last`. Zoom, Teams, and Google Meet HTTPS invites are accepted. The microphone joins muted and opens automatically only while Colleague AI delivers selected speech; an always-unmuted launch mode is intentionally unsupported.
+Exact continuity requires `--thread` (the real originating coding-agent session id). Never pass `last`, `latest`, or `--last`. Zoom, Teams, and Google Meet HTTPS invites are accepted. The microphone joins muted, unmutes once when the voice session starts, and a local audio gate sends silence between replies; it mutes when the session ends, respects a host mute, and in Zoom accepts the host's "Ask to unmute". There is no separate always-unmuted launch mode.
 
 Inside Codex, `--agent` defaults to `codex`, `--thread` defaults to the host-provided `CODEX_THREAD_ID`, and `--workspace` defaults to the current directory. The installed launcher resolves its daemon and auth files from the Colleague AI checkout, independently of the caller's current project:
 

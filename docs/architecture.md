@@ -52,7 +52,7 @@ sequenceDiagram
 
 Portal joins always use `sessionId: local-portal` and `continuity: context`. Exact continuity is only for host integrations that pass the real originating thread id.
 
-## Selective speech (unmute / remute)
+## Selective speech (platform microphone and virtual gate)
 
 ```mermaid
 sequenceDiagram
@@ -60,15 +60,19 @@ sequenceDiagram
     participant Gate as Virtual microphone gate
     participant Adapter as Platform adapter
     participant Meet as Meeting toolbar
-    Note over Adapter,Meet: Platform mic stays connected; gate carries model audio
-    Live->>Gate: generated speech
-    Gate->>Adapter: transport speech (gate open)
-    Adapter->>Meet: platform unmute if still locally muted
-    Meet-->>Adapter: participants hear reply
-    Gate->>Adapter: silence (gate closed)
-    Adapter->>Meet: remute after playback
+    Adapter->>Meet: unmute once when the voice session starts
+    Live->>Gate: AI disclosure, then only selected replies
+    Gate->>Meet: speech (gate open)
+    Gate->>Meet: silence after each reply (gate closed, no toolbar click)
     Note over Meet: Host/participant mute is authoritative and is not auto-reopened
+    Meet-->>Adapter: Zoom host clicks "Ask to unmute"
+    Adapter->>Meet: accept that explicit request, then arm the gate again
+    Adapter->>Meet: mute when the session ends
 ```
+
+The platform microphone is unmuted once when the voice session starts and muted when it ends. Between replies only the local virtual gate closes, so participants hear silence while the platform shows Colleague AI as unmuted. If a host or participant mutes it, generated audio is discarded and the runtime never reopens the microphone on its own. If the host disables "Allow participants to unmute themselves" in Zoom, the start-of-session unmute fails and Colleague AI cannot speak until the host asks it to unmute; the Zoom adapter accepts the host's "The host would like you to unmute" dialog, because that is the host's explicit request.
+
+Once the microphone can carry speech, the session speaks one short AI disclosure naming the person it acts for ("Hi, I'm an AI assistant joining on behalf of NAME. I'll mostly listen; say 'Colleague' if you need me."), then returns to listening. The name comes from the runtime state (`onBehalfOf`, or the call task "Take part in this meeting on behalf of NAME."), then `COLLEAGUE_OWNER_NAME`, then "the person who invited me". `COLLEAGUE_MEETING_INTRO=0` turns it off.
 
 GPT-Live owns pauses, backchannels, and interruptions. The local runtime does not classify meeting speech or add a silence delay.
 
@@ -209,5 +213,13 @@ All of these paths are gitignored. Stop the meeting or daemon before deleting fi
 | API keys / meeting invite | `.env`, `.env.meeting` | Edit or delete; never commit |
 
 Screenshots from incoming shared-content capture are stored as artifacts (`kind: screenshot` / `observation`), not as a separate public dump. Pairing codes and `deviceEnrollment` are shown once and are not written to these files.
+
+### Container user and file permissions
+
+The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `jobs/`, `recordings/`, and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
+
+Before starting the container, the daemon creates `jobs/`, `recordings/`, and `profiles/` as 0700 directories, because Docker would create missing ones as root. If an earlier run left them owned by root or by uid 1001 (the image's `app` user), run `sudo chown -R "$(id -u):$(id -g)" meeting-runtime/jobs meeting-runtime/recordings meeting-runtime/profiles`.
+
+With rootless Docker or Podman, container root is your user: export `COLLEAGUE_UID=0 COLLEAGUE_GID=0` before starting the daemon or `start-meeting-agent.sh`; values already in the environment are kept.
 
 Restarting the meeting participant starts a **new** GPT-Live voice context even when a coding-agent session can be resumed.

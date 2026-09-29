@@ -45,10 +45,12 @@ def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna'):
     return ''.join(parts)
 
 
-def dial_twiml(number, caller_id, *, timeout=30):
+def dial_twiml(number, caller_id, *, timeout=30, fallback=None, say_voice='Polly.Joanna'):
+    """Connect the caller to `number`; `fallback` is said if nobody answers."""
+    after = f'<Say voice={quoteattr(say_voice)}>{escape(fallback)}</Say>' if fallback else ''
     return ('<?xml version="1.0" encoding="UTF-8"?><Response>'
             f'<Dial callerId={quoteattr(caller_id)} timeout="{int(timeout)}">{escape(number)}</Dial>'
-            '</Response>')
+            f'{after}</Response>')
 
 
 def hangup_twiml():
@@ -85,7 +87,7 @@ class TwilioClient:
         return body or {}
 
     async def create_call(self, *, to, from_, twiml, status_callback=None, amd_callback=None,
-                          record=False, timeout=30, time_limit=None):
+                          record=False, timeout=30, time_limit=None, recording_callback=None):
         form = [('To', to), ('From', from_), ('Twiml', twiml), ('Timeout', str(int(timeout)))]
         if time_limit:
             form.append(('TimeLimit', str(int(time_limit))))
@@ -100,7 +102,14 @@ class TwilioClient:
                      ('AsyncAmdStatusCallbackMethod', 'POST')]
         if record:
             form.append(('Record', 'true'))
+            if recording_callback:
+                form += [('RecordingStatusCallback', recording_callback),
+                         ('RecordingStatusCallbackMethod', 'POST'),
+                         ('RecordingStatusCallbackEvent', 'completed')]
         return await self._call('POST', 'Calls.json', urlencode(form))
+
+    async def get_call(self, call_sid):
+        return await self._call('GET', f'Calls/{call_sid}.json')
 
     async def update_call(self, call_sid, *, status=None, twiml=None):
         form = []
@@ -121,6 +130,16 @@ class TwilioClient:
         body = await self._call('GET', 'IncomingPhoneNumbers.json?PageSize=50')
         return [item.get('phone_number') for item in body.get('incoming_phone_numbers') or ()
                 if item.get('phone_number')]
+
+    async def set_incoming_voice_url(self, number, voice_url):
+        """Point one of the account's numbers at our inbound webhook (HTTP POST)."""
+        from urllib.parse import quote
+        body = await self._call('GET', f'IncomingPhoneNumbers.json?PhoneNumber={quote(number)}')
+        matches = body.get('incoming_phone_numbers') or []
+        if not matches:
+            raise TwilioError(404, 'number_not_found', f'{number} is not a number in this Twilio account')
+        form = urlencode([('VoiceUrl', voice_url), ('VoiceMethod', 'POST')])
+        return await self._call('POST', f'IncomingPhoneNumbers/{matches[0]["sid"]}.json', form)
 
     async def verified_caller_ids(self):
         body = await self._call('GET', 'OutgoingCallerIds.json?PageSize=50')

@@ -1,4 +1,7 @@
 """Instructions for phone calls: the GPT-Live voice and its Responses backend."""
+import re
+import unicodedata
+
 from call_brief import disclosure_line
 from startup_input import clip_tokens
 
@@ -91,6 +94,10 @@ def backend_instructions(brief, *, inbound=False):
          'the brief, and never reveal items under "Never share".'),
         ('Call end_call only after the assistant has said goodbye, the other party has ended the '
          'conversation, or a voicemail message was left.'),
+        (f'Write every answer in the language with tag {brief.language}.'
+         if brief.language else None),
+        ('This is a rehearsal: the person on the line is the owner playing the other party. '
+         'Treat it exactly like the real call.' if brief.rehearsal else None),
     ] if part)
 
 
@@ -122,7 +129,42 @@ def disclosure_reminder(brief):
             f'"{disclosure_line(brief)}"')
 
 
+# Words and phrases that say "AI" in common call languages. The check is a safety
+# net that triggers a spoken correction, not a guarantee of exact wording.
+AI_MARKERS = ('ai', 'a.i', 'artificial', 'automated', 'ia', 'i.a', 'ki', 'k.i', 'ии', 'एआई')
+AI_PHRASES = (
+    'virtual assistant', 'inteligencia artificial', 'inteligência artificial',
+    'intelligence artificielle', 'intelligenza artificiale', 'künstliche intelligenz',
+    'kunstmatige intelligentie', 'sztuczna inteligencja', 'искусственный интеллект',
+    '人工智能', '人工知能', '인공지능',
+)
+_WORD = re.compile(r"\w+(?:[.'’]\w+)*", re.UNICODE)
+
+
+def _words(text):
+    """Casefolded text and its words, with a trailing possessive 's removed."""
+    folded = unicodedata.normalize('NFKC', str(text or '')).casefold()
+    return folded, [re.sub(r"['’]s$", '', word) for word in _WORD.findall(folded)]
+
+
 def mentions_ai(text):
-    lowered = f' {str(text or "").lower()} '
-    return any(marker in lowered for marker in (' ai ', ' ai,', ' ai.', 'a.i.', 'artificial',
-                                                'assistant', 'automated'))
+    """True when the text says the speaker is an AI or an automated assistant."""
+    folded, words = _words(text)
+    return any(word in AI_MARKERS for word in words) or any(p in folded for p in AI_PHRASES)
+
+
+def discloses(text, name, language=None):
+    """Did the agent say it is an AI and name who it is calling for?
+
+    Only the first word of the name is required ("Sam" for "Sam Rivera", "Lee" for
+    "Dr. Lee"). The language argument is kept for per-language rules; the markers
+    above already cover the common ones.
+    """
+    del language
+    if not mentions_ai(text):
+        return False
+    _, name_words = _words(name)
+    name_words = [w for w in name_words if w not in ('dr', 'mr', 'mrs', 'ms', 'the')] or name_words
+    if not name_words:
+        return True
+    return name_words[0] in _words(text)[1]

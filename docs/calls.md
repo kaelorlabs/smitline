@@ -46,7 +46,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 }
 ```
 
-Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL and may pass `agentSession` for exact coding-agent continuity; everything else about meetings stays in `/v1/meetings`.
+Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL and may pass `agentSession` for exact coding-agent continuity (local agents only; the remote connector refuses it); everything else about meetings stays in `/v1/meetings`.
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
@@ -68,7 +68,7 @@ Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.16
 }
 ```
 
-`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. Meeting results come from the meeting handoff. `source` records which path produced the result.
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once Twilio finishes the file. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. Meeting results come from the meeting handoff. `source` records which path produced the result.
 
 ## Delivery
 
@@ -76,10 +76,17 @@ Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.16
 | --- | --- |
 | `GET /v1/calls/{id}` | Poll the call. |
 | `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. |
-| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. |
+| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
 
-Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents. Delivery is retried three times with backoff; the outcome is recorded as a call event.
+Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents; an https URL may not name a private, loopback, or link-local IP address, and a host name that resolves to one is refused at delivery (`rejected`, with no request sent) unless `COLLEAGUE_WEBHOOK_ALLOW_PRIVATE=1`. Delivery is retried three times with backoff. The outcome is recorded as a `call.webhook` event with `delivered`, `attempts`, and a coarse `error` (`rejected`, `failed`, or `unreachable`), never the receiver's exact response.
+
+## Reliability
+
+- Statuses only move forward; a late provider callback cannot move a call back.
+- `POST /v1/calls/check` applies the same checks as starting a call, including the destination allow-list.
+- When the daemon stops, calls still in progress are closed as `failed` with the transcript so far. At startup, any call a previous daemon left unfinished is closed the same way, so a waiting agent always gets an answer.
+- Long transcripts keep their first 60 and last 340 lines, so the opening (with the disclosure) survives.
 
 ## Other endpoints
 

@@ -1,10 +1,27 @@
 """Validated runtime configuration for a Colleague AI meeting participant."""
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 
 from codex_tool import CODEX_MODELS
+from meeting_intro import owner_name
 from runtime_state import environ_from_state, read_json
+
+
+logger = logging.getLogger('colleague.meeting')
+
+
+def _voice(env):
+    """COLLEAGUE_VOICE when it names a GPT-Live voice; anything else keeps the default."""
+    name = (env.get('COLLEAGUE_VOICE') or '').strip()
+    if not name:
+        return ''
+    from call_brief import available_voices
+    if name in available_voices(env):
+        return name
+    logger.warning('Ignoring COLLEAGUE_VOICE=%r: not a GPT-Live voice', name[:40])
+    return ''
 
 
 def _boolean(value, default=False):
@@ -32,6 +49,9 @@ class RuntimeConfig:
     camera_logo_data_uri: str = ''
     screen_share_enabled: bool = False
     screen_share_settings: dict = None
+    voice: str = ''
+    meeting_intro: bool = True
+    owner_name: str = ''
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -91,7 +111,10 @@ class RuntimeConfig:
             screen_share = parse_screen_share_settings({'enabled': True})
         return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
                    camera_enabled, camera_default_on, camera_logo,
-                   screen_share['enabled'], screen_share)
+                   screen_share['enabled'], screen_share,
+                   voice=_voice(env),
+                   meeting_intro=_boolean(env.get('COLLEAGUE_MEETING_INTRO'), True),
+                   owner_name=owner_name(state, env))
 
 
 def meeting_state_from_environ(environ=None):

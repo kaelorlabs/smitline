@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +16,17 @@ import {
   InterruptError,
   validateContext,
 } from '../../sdk-typescript/src/index.mjs';
+import {
+  availableVoices,
+  openBrowser,
+  readEnv,
+  registerAgents,
+  serveSecretsPage,
+  setupStatus,
+  validateSetting,
+  writeEnv,
+} from './setup.mjs';
+import { openConnectorStore } from '../../mcp/src/connector-store.mjs';
 
 const interruptState = { requested: false, handler: null };
 const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
@@ -24,6 +37,25 @@ function requestInterrupt() {
 }
 
 const USAGE = `Usage:
+  colleague call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
+               [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--webhook <url>]
+               [--check] [--wait]
+  colleague call --meeting <url> --objective <text> [...same options] [--wait]
+  colleague call --brief <json> | --brief-file <path> [--check] [--wait]
+  colleague calls list [--limit <n>]
+  colleague calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
+  colleague calls instruct --call-id <id> --text <guidance>
+  colleague voices
+  colleague setup status [--json] [--no-verify]
+  colleague setup secrets [--no-open] [--wait]
+  colleague setup set <KEY> <value>
+  colleague setup start
+  colleague setup register [--agents claude-code,codex,cursor,claude-desktop]
+  colleague setup voice [--set <name>] [--preview <name>]
+  colleague setup call-me [--wait]
+  colleague connector status
+  colleague connector revoke --all | --client <id>
   colleague join --meeting <url> [--agent <provider>] [--workspace <path>]
                [--thread <id>] [--model <name>] [--context-file <path>]
                [--context-text <json>] [--context-continuity] [--wait] [--no-camera]
@@ -80,9 +112,21 @@ function parseArgs(argv) {
   return args;
 }
 
+// A next step for errors a person can act on; agents read the exit code.
+function hintFor(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error?.code === 'daemon_unavailable') return 'Colleague AI\'s background service did not answer. Check the setup with: colleague setup status';
+  if (error?.code === 'not_configured') return 'See what is missing with: colleague setup status';
+  if (error?.code === 'not_found' && /call/i.test(message)) return 'List recent calls with: colleague calls list';
+  if (/^unknown (command|\w+ command)/.test(message)) return 'See all commands with: colleague help';
+  return '';
+}
+
 function fail(error, code) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
+  const hint = hintFor(error);
+  const prefix = error instanceof InterruptError ? '' : 'Error: ';
+  process.stderr.write(`${prefix}${message}\n${hint ? `Hint: ${hint}\n` : ''}`);
   process.exit(code);
 }
 
@@ -287,6 +331,456 @@ async function daemonCall(args, method, ...rest) {
   return { root, meetingId, result: await transport[method](meetingId, ...rest) };
 }
 
+function splitList(value) {
+  if (value === undefined || value === true) return undefined;
+  return String(value).split(';').map((item) => item.trim()).filter(Boolean);
+}
+
+async function briefFromArgs(args, root) {
+  if (args.brief || args['brief-file']) {
+    const text = args.brief ? String(args.brief) : await fs.readFile(path.resolve(String(args['brief-file'])), 'utf8');
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new ValidationError('the brief must be JSON');
+    }
+  }
+  const env = readEnv(root);
+  // A flag given without a value parses as true; treat it as absent for text fields.
+  const text = (value) => (value === undefined || value === true ? undefined : String(value));
+  const brief = {
+    channel: text(args.meeting) ? 'meeting' : 'phone',
+    to: text(args.meeting) || text(args.to),
+    onBehalfOf: text(args['on-behalf-of']) || process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME,
+    objective: text(args.objective),
+    context: text(args.context),
+    mayAgreeTo: splitList(args.agree),
+    mustNotShare: splitList(args['never-share']),
+    successCriteria: text(args.success),
+    language: text(args.language),
+    voice: text(args.voice),
+    maxMinutes: text(args['max-minutes']) === undefined ? undefined : Number(args['max-minutes']),
+    rehearsal: args.rehearsal === true ? true : undefined,
+    notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
+  };
+  return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
+}
+
+function printJson(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function explainValidation(error) {
+  const missing = error?.details?.missing;
+  if (Array.isArray(missing) && missing.length) {
+    for (const item of missing) progress(`missing ${item.field}: ${item.question}`);
+  }
+}
+
+const TERMINAL = new Set(['completed', 'failed', 'canceled']);
+const OUTCOME_TEXT = {
+  achieved: 'Achieved', partial: 'Partly achieved', not_reached: 'Not reached', voicemail: 'Left a voicemail',
+  declined: 'Declined', failed: 'Failed', canceled: 'Canceled',
+};
+const END_REASON_TEXT = {
+  hangup: 'ended normally', remote_hangup: 'they hung up', no_answer: 'no answer', busy: 'the line was busy',
+  voicemail: 'left a voicemail', max_duration: 'time limit reached', canceled: 'canceled', meeting_ended: 'the meeting ended',
+  transferred: 'handed to you', error: 'something went wrong',
+};
+
+function formatPhone(value) {
+  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(String(value || ''));
+  return match ? `+1 ${match[1]} ${match[2]} ${match[3]}` : String(value || '');
+}
+
+function stamp(line) {
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return `${time}  ${line}`;
+}
+
+// One plain line per status change, for a person reading over the agent's shoulder.
+function describeCallStatus(call) {
+  const meeting = call.channel === 'meeting';
+  const reason = END_REASON_TEXT[call.endReason] || (call.endReason ? String(call.endReason).replace(/_/g, ' ') : '');
+  switch (call.status) {
+    case 'queued': return meeting ? 'Queued. Joining the meeting shortly.' : 'Queued. Dialing shortly.';
+    case 'connecting': return meeting ? 'Joining the meeting…' : 'Dialing…';
+    case 'ringing': return 'Ringing…';
+    case 'waiting': return 'Waiting to be let into the meeting…';
+    case 'in_progress': return meeting ? 'In the meeting. Colleague AI is listening.' : 'Connected. Colleague AI is talking with them.';
+    case 'summarizing': return `Call ended${reason ? ` (${reason})` : ''}. Writing the result…`;
+    case 'completed': return `Done${reason ? ` (${reason})` : ''}.`;
+    case 'failed': return `The call failed${call.error ? `: ${call.error}` : reason ? ` (${reason}).` : '.'}`;
+    case 'canceled': return 'Canceled.';
+    default: return `Status: ${call.status}`;
+  }
+}
+
+async function waitUntilDone(client, callId) {
+  let last = '';
+  for (;;) {
+    if (interruptState.requested) {
+      throw new InterruptError(`Stopped following call ${callId}. The call keeps going; check it with: colleague calls get --call-id ${callId}`);
+    }
+    // Short long-polls keep Ctrl-C responsive; the request cannot be aborted mid-wait.
+    const call = await client.waitForCall(callId, 10);
+    if (call.status !== last) {
+      progress(stamp(describeCallStatus(call)));
+      last = call.status;
+    }
+    if (TERMINAL.has(call.status)) {
+      const result = call.result;
+      if (result?.outcome) progress(`Result: ${OUTCOME_TEXT[result.outcome] || result.outcome}.${result.summary ? ` ${result.summary}` : ''}`);
+      return call;
+    }
+  }
+}
+
+async function callCommand(args) {
+  const { root, client } = colleagueFromArgs(args);
+  const brief = await briefFromArgs(args, root);
+  try {
+    if (args.check) {
+      const report = await client.checkCall(brief);
+      printJson(report);
+      return report.ok ? EXIT.ok : EXIT.startup;
+    }
+    const call = await client.startCall(brief);
+    const target = call.brief || brief;
+    progress(target.channel === 'meeting'
+      ? `Joining the meeting (call ${call.id}).`
+      : `Calling ${formatPhone(target.to)} (call ${call.id}).`);
+    progress(args.wait
+      ? 'Following the call until it ends. Ctrl-C stops following; the call keeps going.'
+      : `Follow it with: colleague calls wait --call-id ${call.id}`);
+    if (!args.wait) {
+      printJson(call);
+      return EXIT.ok;
+    }
+    const done = await waitUntilDone(client, call.id);
+    printJson(done);
+    return done.status === 'completed' ? EXIT.ok : EXIT.runtime;
+  } catch (error) {
+    explainValidation(error);
+    throw error;
+  }
+}
+
+function requireCallId(args) {
+  const callId = args['call-id'] || args._[2];
+  if (!callId || callId === true) throw new ValidationError('--call-id is required');
+  return String(callId);
+}
+
+async function callsCommand(args) {
+  const { client } = colleagueFromArgs(args);
+  const action = args._[1] || 'list';
+  if (action === 'list') {
+    printJson({ calls: await client.listCalls(Number(args.limit || 20)) });
+    return EXIT.ok;
+  }
+  const callId = requireCallId(args);
+  if (action === 'get') printJson(await client.getCall(callId));
+  else if (action === 'wait') {
+    const timeout = args.timeout === undefined ? null : Number(args.timeout);
+    printJson(timeout === null ? await waitUntilDone(client, callId) : await client.waitForCall(callId, timeout));
+  } else if (action === 'end') printJson(await client.endCall(callId));
+  else if (action === 'transfer') printJson(await client.transferCall(callId));
+  else if (action === 'instruct') {
+    if (!args.text || args.text === true) throw new ValidationError('--text is required');
+    printJson(await client.instructCall(callId, String(args.text)));
+  } else throw new ValidationError('unknown calls command');
+  return EXIT.ok;
+}
+
+const STATUS_GROUPS = [
+  ['core', 'The basics'],
+  ['phone', 'Phone calls (optional)'],
+  ['meetings', 'Meetings (optional)'],
+  ['agents', 'Your agents'],
+];
+
+// Human-readable setup status, grouped, with one mark per check and the fix under
+// anything that is not done. Colors only on a terminal, and never with NO_COLOR.
+function printStatus(report, { stream = process.stdout } = {}) {
+  const color = Boolean(stream.isTTY) && !process.env.NO_COLOR;
+  const paint = (code, text) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);
+  const marks = {
+    ok: paint('32', '✓'), missing: paint('31', '✗'), optional: paint('33', '○'), unknown: paint('33', '?'),
+  };
+  const lines = [paint('1', 'Colleague AI setup'), ''];
+  const known = new Set(STATUS_GROUPS.map(([id]) => id));
+  const groups = [...STATUS_GROUPS, ...[...new Set(report.checks.map((c) => c.group))]
+    .filter((id) => !known.has(id)).map((id) => [id, id[0].toUpperCase() + id.slice(1)])];
+  for (const [id, title] of groups) {
+    const checks = report.checks.filter((c) => (c.group || 'core') === id);
+    if (!checks.length) continue;
+    lines.push(paint('1', title));
+    for (const item of checks) {
+      const mark = item.ok === true ? marks.ok : item.ok === null ? marks.unknown : item.required ? marks.missing : marks.optional;
+      lines.push(`  ${mark} ${item.label}${item.detail ? paint('2', ` — ${item.detail}`) : ''}`);
+      if (item.ok !== true && item.fix) lines.push(`      Fix: ${item.fix}`);
+    }
+    lines.push('');
+  }
+  const blocking = report.checks.filter((c) => c.required && c.ok !== true).length;
+  lines.push(report.ready
+    ? paint('32', 'Ready. Your agent can use Colleague AI.')
+    : paint('31', `Not ready yet: ${blocking} required ${blocking === 1 ? 'item needs' : 'items need'} a fix (marked ✗).`));
+  const phone = report.checks.filter((c) => c.group === 'phone');
+  const phoneText = report.phoneReady ? 'ready' : phone.some((c) => c.ok === true && c.id !== 'public_url') ? 'not finished' : 'not set up';
+  const docker = report.checks.find((c) => c.id === 'docker');
+  const meetingsText = report.meetingsReady ? 'ready' : docker && docker.ok !== true ? 'need Docker' : 'ready once the basics are done';
+  lines.push(`Phone calls: ${phoneText}. Meetings: ${meetingsText}.`);
+  const next = (report.next || []).find((item) => item.fix);
+  if (next) lines.push(`Next: ${next.fix}`);
+  else if (report.firstCallReady) lines.push('Try it: colleague setup call-me --wait');
+  stream.write(`${lines.join('\n')}\n`);
+}
+
+function portOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host });
+    socket.setTimeout(400);
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('timeout', () => { socket.destroy(); resolve(false); });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+function tail(file, lines = 15) {
+  try {
+    return readFileSync(file, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/** Start the runtime daemon in the background and wait for it, showing progress. */
+async function startDaemon(root, { timeoutMs = 240_000 } = {}) {
+  const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+  if (await portOpen(port)) return { running: true, started: false, port };
+  const dir = path.join(root, '.colleague');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const log = path.join(dir, 'daemon.log');
+  const fd = openSync(log, 'a', 0o600);
+  const child = spawn('bash', [path.join(root, 'start-runtime-daemon.sh')], {
+    cwd: root,
+    detached: true,
+    stdio: ['ignore', fd, fd],
+    env: { ...process.env, COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) },
+  });
+  closeSync(fd);
+  let exitCode = null;
+  child.once('exit', (code) => { exitCode = code ?? 1; });
+  child.unref();
+  progress('Starting Colleague AI. The first start installs Python packages and can take a minute or two.');
+  const started = Date.now();
+  let lastNote = started;
+  while (Date.now() - started < timeoutMs) {
+    if (await portOpen(port)) {
+      progress(`Colleague AI is running (log: ${log}).`);
+      return { running: true, started: true, port, log };
+    }
+    if (exitCode !== null) {
+      const recent = tail(log);
+      const hint = /ensurepip|venv/.test(recent)
+        ? ' Python cannot create a virtual environment; run: sudo apt install -y python3-venv'
+        : '';
+      throw new StartupError(`Colleague AI stopped while starting (exit ${exitCode}).${hint}\n${recent}`, { code: 'daemon_unavailable' });
+    }
+    if (Date.now() - lastNote >= 15_000) {
+      lastNote = Date.now();
+      progress(`Still starting (${Math.round((Date.now() - started) / 1000)} s)...`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new StartupError(`Colleague AI did not start within ${Math.round(timeoutMs / 1000)} s. Recent log:\n${tail(log)}`, { code: 'daemon_unavailable' });
+}
+
+/** Run the setup page in a background process, so the agent gets the address at once. */
+function launchSecretsPage(root, { open }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'setup', 'secrets', '--serve', '--root', root], {
+      cwd: root,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let buffered = '';
+    const timer = setTimeout(() => { child.kill(); reject(new StartupError('the setup page did not start', { code: 'setup_page' })); }, 15_000);
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk;
+      const line = buffered.split('\n')[0];
+      if (!buffered.includes('\n')) return;
+      clearTimeout(timer);
+      child.stdout.destroy();
+      child.unref();
+      try {
+        const { url } = JSON.parse(line);
+        resolve({ url, opened: open ? openBrowser(url) : false });
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new StartupError(`the setup page exited early (${code})`, { code: 'setup_page' }));
+    });
+    child.once('error', reject);
+  });
+}
+
+async function setupCommand(args) {
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const action = args._[1] || 'status';
+  if (action === 'status') {
+    const report = await setupStatus({ root, verify: !args['no-verify'] });
+    if (args.json) printJson(report);
+    else printStatus(report);
+    return report.ready ? EXIT.ok : EXIT.startup;
+  }
+  if (['secrets', 'start'].includes(action)) {
+    // Nothing to clean up: stop at once (a daemon that is starting keeps starting).
+    interruptState.handler = () => process.exit(EXIT.interrupt);
+  }
+  if (action === 'secrets' && args.serve) {
+    // Background page process: announce the address on stdout, then stay quiet.
+    await serveSecretsPage({
+      root,
+      timeoutMs: Number(process.env.COLLEAGUE_SETUP_PAGE_TIMEOUT_MS) || undefined,
+      onUrl(url) {
+        process.stdout.write(`${JSON.stringify({ url })}\n`);
+      },
+    }).catch(() => {});
+    return EXIT.ok;
+  }
+  if (action === 'secrets' && args.wait) {
+    const result = await serveSecretsPage({
+      root,
+      onUrl(url) {
+        const opened = args['no-open'] ? false : openBrowser(url);
+        progress(`Enter keys on this page (this computer only; it closes after 15 minutes):\n${url}`);
+        if (!opened && !args['no-open']) progress('Could not open a browser automatically; open the address above.');
+      },
+      onSaved(keys) {
+        progress(`Saved: ${keys.join(', ')}`);
+      },
+    });
+    printJson({ saved: result.saved });
+    return EXIT.ok;
+  }
+  if (action === 'secrets') {
+    const { url, opened } = await launchSecretsPage(root, { open: !args['no-open'] });
+    printJson({
+      url,
+      opened,
+      next: `${opened ? 'The setup page is open in your browser' : `Open ${url} in a browser on this computer`}. `
+        + 'Enter your keys there, press Done, then tell me. The page stays available for 15 minutes.',
+    });
+    return EXIT.ok;
+  }
+  if (action === 'start') {
+    printJson(await startDaemon(root));
+    return EXIT.ok;
+  }
+  if (action === 'set') {
+    const key = args._[2];
+    const value = args._[3];
+    if (!key || value === undefined) throw new ValidationError('usage: colleague setup set <KEY> <value>');
+    let clean;
+    try {
+      clean = validateSetting(String(key), String(value));
+    } catch (error) {
+      throw new ValidationError(error.message);
+    }
+    writeEnv(root, { [key]: clean });
+    printJson({ saved: [key] });
+    return EXIT.ok;
+  }
+  if (action === 'register') {
+    const agents = args.agents && args.agents !== true ? String(args.agents).split(',').map((a) => a.trim()) : undefined;
+    printJson(registerAgents(root, { agents }));
+    return EXIT.ok;
+  }
+  if (action === 'voice') {
+    const env = { ...readEnv(root), ...process.env };
+    const voices = availableVoices(env);
+    const pick = (value, flag) => {
+      if (!voices.includes(String(value))) throw new ValidationError(`--${flag} must be one of: ${voices.join(', ')}`);
+      return String(value);
+    };
+    if (args.set && args.set !== true) {
+      writeEnv(root, { COLLEAGUE_VOICE: pick(args.set, 'set') });
+    }
+    if (args.preview && args.preview !== true) {
+      // A short call to the owner's phone in that voice; nothing is saved.
+      const voice = pick(args.preview, 'preview');
+      const phone = env.COLLEAGUE_OWNER_PHONE;
+      const name = env.COLLEAGUE_OWNER_NAME;
+      if (!phone || !name) {
+        throw new ValidationError('a voice preview calls your phone; set your name and phone first on the setup page');
+      }
+      return callCommand({
+        ...args,
+        brief: JSON.stringify({
+          channel: 'phone',
+          to: phone,
+          onBehalfOf: name,
+          voice,
+          objective: `This is a voice preview for ${name}. In two or three sentences, say this is the ${voice} voice for Colleague AI, and ask whether they would like to keep it. Then say goodbye and end the call.`,
+          maxMinutes: 2,
+        }),
+      });
+    }
+    printJson({ voice: readEnv(root).COLLEAGUE_VOICE || 'marin', voices });
+    return EXIT.ok;
+  }
+  if (action === 'call-me') {
+    const env = readEnv(root);
+    const phone = process.env.COLLEAGUE_OWNER_PHONE || env.COLLEAGUE_OWNER_PHONE;
+    const name = process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME;
+    if (!phone || !name) {
+      throw new ValidationError('set your name and phone first: colleague setup set COLLEAGUE_OWNER_NAME "<name>" and COLLEAGUE_OWNER_PHONE +1...');
+    }
+    return callCommand({
+      ...args,
+      brief: JSON.stringify({
+        channel: 'phone',
+        to: phone,
+        onBehalfOf: name,
+        objective: `This is the setup test call to ${name}, the owner. Say that Colleague AI is set up and working and that this is your voice. Tell them they can ask their agent for a different voice at any time, and that from now on they can ask their agent to call someone or join a meeting. Answer a quick question if they have one, then say goodbye. Keep it under a minute.`,
+        maxMinutes: 3,
+      }),
+    });
+  }
+  throw new ValidationError('unknown setup command');
+}
+
+// Remote connector grants: listed and revoked without showing any token.
+async function connectorCommand(args) {
+  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const store = openConnectorStore(root);
+  const action = args._[1] || 'status';
+  if (action === 'status') {
+    const url = process.env.COLLEAGUE_CONNECTOR_URL || readEnv(root).COLLEAGUE_CONNECTOR_URL || null;
+    printJson({ connectorUrl: url ? `${url.replace(/\/$/, '')}/mcp` : null, ...store.summary() });
+    return EXIT.ok;
+  }
+  if (action === 'revoke') {
+    if (args.all === true) {
+      printJson({ revoked: store.revoke({ all: true }) });
+      return EXIT.ok;
+    }
+    if (!args.client || args.client === true) throw new ValidationError('usage: colleague connector revoke --all | --client <id>');
+    const clientId = String(args.client);
+    const known = store.getClient(clientId) || store.summary().grants.some((grant) => grant.clientId === clientId);
+    if (!known) throw new ValidationError(`no registered client ${clientId}; see colleague connector status`);
+    printJson({ revoked: store.revoke({ clientId }) });
+    return EXIT.ok;
+  }
+  throw new ValidationError('unknown connector command');
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
@@ -305,6 +799,15 @@ async function main(argv = process.argv.slice(2)) {
       return EXIT.ok;
     }
     if (command === 'join') return await joinCommand(args);
+    if (command === 'call') return await callCommand(args);
+    if (command === 'calls') return await callsCommand(args);
+    if (command === 'setup') return await setupCommand(args);
+    if (command === 'connector') return await connectorCommand(args);
+    if (command === 'voices') {
+      const { client } = colleagueFromArgs(args);
+      printJson(await client.listVoices());
+      return EXIT.ok;
+    }
     if (command === 'status') {
       const { result } = await daemonCall(args, 'getMeeting');
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

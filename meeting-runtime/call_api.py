@@ -8,7 +8,6 @@ from aiohttp import web
 from call_brief import BriefIncomplete, available_voices
 from call_service import CallError
 from call_store import TERMINAL, CallNotFound
-from voice_core import DEFAULT_VOICE
 
 
 OPENAPI_PATH = Path(__file__).with_name('openapi.json')
@@ -42,7 +41,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     @handle
     async def check_call(request):
         payload = await read_json(request)
-        return public_json(service.check(payload))
+        return public_json(await service.check(payload, request=request))
 
     @handle
     async def create_call(request):
@@ -96,6 +95,10 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     async def call_events(request):
         call_id = request.match_info['callId']
         service.get(call_id, owner=await owner(request))
+        if request.query.get('format') == 'json':
+            # Polling clients (the local console) read a page of events after a cursor.
+            events = service.events(call_id, after=request.query.get('after'))
+            return public_json({'events': events[:500]})
         response = web.StreamResponse(status=200, headers={
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -127,7 +130,9 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         return response
 
     async def list_voices(_request):
-        return public_json({'default': DEFAULT_VOICE, 'voices': list(available_voices())})
+        from call_brief import default_voice
+        env = service.environ
+        return public_json({'default': default_voice(env), 'voices': list(available_voices(env))})
 
     async def openapi(_request):
         return web.json_response(json.loads(OPENAPI_PATH.read_text(encoding='utf-8')))

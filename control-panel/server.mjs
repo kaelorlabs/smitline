@@ -27,6 +27,11 @@ const CONTEXT_INDEX = path.join(ROOT, 'meeting-runtime', 'context', 'index.json'
 const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
 export const DOCKER_INFO_TIMEOUT_MS = 8000;
 
+export function loopbackHost(host) {
+  const name = String(host || '').replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1').toLowerCase();
+  return name === '127.0.0.1' || name === 'localhost' || name === '::1';
+}
+
 function headers(type = 'application/json; charset=utf-8') {
   return {
     'Content-Type': type,
@@ -342,7 +347,7 @@ export function createServer({
       dockerTimeoutMs,
       { code: -1, stdout: '', stderr: 'timed out' },
     );
-    if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker Desktop and try again.';
+    if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker (Docker Desktop, or Docker Engine inside WSL) and try again.';
     const codex = await runCommand('/bin/bash', ['-lc', 'if command -v codex >/dev/null 2>&1; then codex login status; elif [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then /Applications/ChatGPT.app/Contents/Resources/codex login status; else exit 127; fi'], { cwd: root });
     if (settings.tools?.codex && codex.code !== 0) errors.codex = 'Codex is unavailable or signed out. Run codex login.';
     if (settings.tools?.cursor) {
@@ -430,8 +435,35 @@ export function createServer({
         handoffId: archive.handoffId,
       });
     }
+    // Call reads follow the transcript routes above: same-origin GETs carry no Origin header.
+    const callMatch = pathname.match(/^\/api\/calls(?:\/(call-[0-9a-f]{16})(?:\/(end|transfer|events))?)?$/);
+    if (callMatch && request.method === 'GET') {
+      const [, callId, action] = callMatch;
+      try {
+        if (!callId) return json(response, 200, await daemonClient.listCalls(30));
+        if (!action) return json(response, 200, await daemonClient.getCall(callId));
+        if (action === 'events') {
+          const after = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('after') || '';
+          return json(response, 200, await daemonClient.callEvents(callId, after));
+        }
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+      return json(response, 405, { error: 'Method not allowed.' });
+    }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
-    const artifactMatch = pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
+    if (callMatch && request.method === 'POST' && ['end', 'transfer'].includes(callMatch[2])) {
+      try {
+        const callId = callMatch[1];
+        const payload = callMatch[2] === 'end'
+          ? await daemonClient.endCall(callId)
+          : await daemonClient.transferCall(callId);
+        return json(response, 200, payload);
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
+    const artifactMatch =pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
     if (request.method === 'GET' && artifactMatch) {
       const meetingId = decodeURIComponent(artifactMatch[1]);
       const artifactId = artifactMatch[2] ? decodeURIComponent(artifactMatch[2]) : '';
@@ -679,6 +711,12 @@ export function createServer({
 
   return http.createServer(async (request, response) => {
     try {
+      // DNS rebinding: a page served from another name that resolves to 127.0.0.1
+      // must not read this console, so only loopback host names are served.
+      if (!loopbackHost(request.headers.host)) {
+        response.writeHead(421, headers('text/plain; charset=utf-8'));
+        return response.end('Misdirected request');
+      }
       const pathname = new URL(request.url, `http://127.0.0.1:${PORT}`).pathname;
       if (pathname.startsWith('/api/')) return await api(request, response, pathname);
       const assets = {
@@ -688,6 +726,9 @@ export function createServer({
         '/visual-preview.mjs': ['visual-preview.mjs', 'text/javascript; charset=utf-8'],
         '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
         '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+        '/calls': ['calls.html', 'text/html; charset=utf-8'],
+        '/calls.js': ['calls.js', 'text/javascript; charset=utf-8'],
+        '/calls.css': ['calls.css', 'text/css; charset=utf-8'],
       };
       const asset = assets[pathname];
       if (!asset) { response.writeHead(404, headers('text/plain; charset=utf-8')); return response.end('Not found'); }

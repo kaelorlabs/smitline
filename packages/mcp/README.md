@@ -2,6 +2,8 @@
 
 Local stdio MCP server (`@colleague-ai/mcp` 1.0.0) over the TypeScript SDK. It does not own a second meeting runtime. All tools call the loopback daemon through `@colleague-ai/sdk`.
 
+`src/remote.mjs` is the remote connector: the call tools only, over MCP Streamable HTTP with OAuth sign-in, for cloud agents such as ChatGPT and Claude. Start it with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
+
 Do not publish this package and do not install it globally.
 
 ## Tools
@@ -19,6 +21,8 @@ Do not publish this package and do not install it globally.
 | `list_meeting_artifacts` / `get_meeting_artifact` | Metadata; content is local |
 | `list_coding_providers` | Truthful capability records |
 | `get_runner_status` / `pair_runner` / `complete_runner_pair` / `unpair_runner` | Foundation pairing; loopback remains supported |
+| `start_call` / `check_call_brief` / `wait_for_call` / `get_call` / `list_calls` | Phone calls and meetings from a brief; see [calls](../../docs/calls.md) |
+| `send_call_instruction` / `end_call` / `transfer_call_to_me` / `list_voices` | Steer, end, or take over a call |
 
 `start_meeting` requires `url`, `provider`, `workspace`, `context`, and `permissions`. Exact continuity also requires the **real originating `sessionId`**. This server never reads the host conversation id, never invents a thread, and rejects `last` / `latest` / `--last`. `cameraEnabled` defaults true. `screenShareEnabled` defaults false and cannot be turned on by voice.
 

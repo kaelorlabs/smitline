@@ -656,6 +656,43 @@ class LoopbackHttpTests(unittest.TestCase):
         self.assertNotIn('host-token', json.dumps({'meetingId': 'mtg-1'}))
 
 
+class CallTests(unittest.IsolatedAsyncioTestCase):
+    async def test_call_methods_use_the_calls_api(self):
+        seen = []
+
+        def request(method, path, body=None, token=None, last_event_id=''):
+            seen.append((method, path, body))
+            if path == '/v1/calls':
+                return {'id': 'call-0123456789abcdef', 'status': 'queued'}
+            if path.startswith('/v1/calls?'):
+                return {'calls': [{'id': 'call-0123456789abcdef'}]}
+            return {'id': 'call-0123456789abcdef', 'status': 'completed'}
+
+        transport = LoopbackTransport(request=request, read_auth=lambda: 't',
+                                      is_port_open=lambda: True, autostart=False)
+        client = Colleague(transport=transport)
+        brief = {'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Robin',
+                 'objective': 'Book a table'}
+        self.assertEqual((await client.start_call(brief))['status'], 'queued')
+        self.assertEqual((await client.wait_for_call('call-0123456789abcdef', 999))['status'],
+                         'completed')
+        self.assertEqual(len(await client.list_calls(500)), 1)
+        await client.instruct_call('call-0123456789abcdef', 'Ask about parking')
+        self.assertEqual(seen[0], ('POST', '/v1/calls', brief))
+        self.assertEqual(seen[1][1], '/v1/calls/call-0123456789abcdef/wait?timeout=300')
+        self.assertEqual(seen[2][1], '/v1/calls?limit=100')
+        self.assertEqual(seen[3], ('POST', '/v1/calls/call-0123456789abcdef/instructions',
+                                   {'text': 'Ask about parking'}))
+
+    def test_error_details_are_kept(self):
+        from colleague_ai.client import _map_http_error
+        error = _map_http_error(422, {'error': {
+            'code': 'brief_incomplete', 'message': 'brief is missing objective',
+            'missing': [{'field': 'objective', 'question': 'What should the call achieve?'}]}}, 'x')
+        self.assertIsInstance(error, ValidationError)
+        self.assertEqual(error.details['missing'][0]['field'], 'objective')
+
+
 class ExampleTests(unittest.TestCase):
     def test_example_imports(self):
         example = ROOT / 'examples' / 'join.py'

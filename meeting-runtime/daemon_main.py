@@ -1,6 +1,7 @@
 """Production daemon entrypoint: loopback by default, server mode on request."""
 from pathlib import Path
 import argparse
+import asyncio
 import os
 import secrets
 import sys
@@ -34,7 +35,7 @@ def build_parser():
 
 def build_call_service(project_root, runtime_root, data_root, daemon, lines=None,
                        gateway_port=None):
-    from call_hooks import load_hooks
+    from call_hooks import load_hooks, read_env_file
     from call_notify import WebhookNotifier, load_or_create_secret
     from call_service import CallService
     from call_store import CallStore
@@ -43,14 +44,18 @@ def build_call_service(project_root, runtime_root, data_root, daemon, lines=None
     from phone_line import PhoneLine
     from tunnel import PublicUrl
 
+    # Startup settings honor .env like everything else; the environment wins.
+    startup_env = {**read_env_file(project_root / '.env'), **os.environ}
     store = CallStore(data_root / 'calls')
-    notifier = WebhookNotifier(load_or_create_secret(data_root / 'webhook.secret'))
-    hooks = load_hooks(os.environ.get('COLLEAGUE_CALL_HOOKS'), env_file=project_root / '.env',
+    # Receivers on the local network (https://nas.lan) need COLLEAGUE_WEBHOOK_ALLOW_PRIVATE=1.
+    notifier = WebhookNotifier(load_or_create_secret(data_root / 'webhook.secret'),
+                               allow_private=startup_env.get('COLLEAGUE_WEBHOOK_ALLOW_PRIVATE') == '1')
+    hooks = load_hooks(startup_env.get('COLLEAGUE_CALL_HOOKS'), env_file=project_root / '.env',
                        store=store, notifier=notifier)
     environ = lambda: getattr(hooks, 'environ', os.environ)
     workspace = runtime_root / 'codex-workspace'
     workspace.mkdir(parents=True, exist_ok=True)
-    port = gateway_port or int(os.environ.get('COLLEAGUE_GATEWAY_PORT') or GATEWAY_PORT)
+    port = gateway_port or int(startup_env.get('COLLEAGUE_GATEWAY_PORT') or GATEWAY_PORT)
     public = PublicUrl(environ, port)
     phone = PhoneLine(public_url=public.get, public_available=public.available, environ=environ)
     available = {'meeting': MeetingLine(daemon, workspace=workspace), 'phone': phone}
@@ -62,19 +67,58 @@ def build_call_service(project_root, runtime_root, data_root, daemon, lines=None
     return service
 
 
+async def configure_inbound(service, *, twilio_factory=None, log=print):
+    """With inbound calls on, point the Twilio number at this gateway's current address.
+
+    A laptop's quick-tunnel address changes on every start, so this runs at startup.
+    """
+    from call_hooks import MissingCredentials
+    from twilio_client import TwilioClient, TwilioError
+    from tunnel import TunnelError
+    try:
+        creds = service.hooks.credentials('local', 'twilio')
+        number = creds.get('twilioNumber') or ''
+        if not number:
+            log('incoming calls need TWILIO_FROM_NUMBER, a number you bought in Twilio; '
+                'a verified caller ID cannot receive calls', flush=True)
+            return False
+        base = (await service.public_url.get()).rstrip('/')
+        client = (twilio_factory or (lambda c: TwilioClient(c['accountSid'], c['authToken'])))(creds)
+        await client.set_incoming_voice_url(number, f'{base}/twilio/inbound')
+    except (MissingCredentials, TunnelError, TwilioError, OSError) as error:
+        log(f'incoming calls are not configured: {error}', flush=True)
+        return False
+    log(f'incoming calls to {number} reach this computer', flush=True)
+    return True
+
+
 def attach_phone_gateway(app, service):
     """Serve the Twilio-facing gateway on its own loopback port alongside the daemon."""
     from aiohttp import web
     from phone_gateway import create_gateway_app
 
-    gateway = create_gateway_app(service.phone_line, service, public_url=service.public_url.get)
+    gateway = create_gateway_app(service.phone_line, service,
+                                 current_url=service.public_url.current)
     runner = web.AppRunner(gateway)
 
     async def start_gateway(_app):
+        service.reconcile()
         await runner.setup()
-        await web.TCPSite(runner, '127.0.0.1', service.gateway_port).start()
+        try:
+            await web.TCPSite(runner, '127.0.0.1', service.gateway_port).start()
+        except OSError as error:
+            # Meetings must keep working even if the phone gateway's port is taken.
+            service.phone_line.gateway_ready = False
+            print(f'phone gateway could not listen on 127.0.0.1:{service.gateway_port} '
+                  f'({error.strerror}); phone calls are disabled', flush=True)
+            return
+        if service.phone_line.environ().get('COLLEAGUE_ACCEPT_INBOUND') == '1':
+            service.inbound_task = asyncio.create_task(configure_inbound(service))
 
     async def stop_gateway(_app):
+        task = getattr(service, 'inbound_task', None)
+        if task is not None:
+            task.cancel()
         await service.public_url.close()
         await runner.cleanup()
 

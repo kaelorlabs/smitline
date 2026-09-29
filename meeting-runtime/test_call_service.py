@@ -177,10 +177,49 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((caught.exception.status, caught.exception.code), (403, 'insufficient_credit'))
 
     async def test_check_reports_problems(self):
-        self.assertEqual(self.h.service.check(brief())['ok'], True)
-        report = self.h.service.check(brief(channel='meeting', to=ZOOM))
+        self.assertEqual((await self.h.service.check(brief()))['ok'], True)
+        report = await self.h.service.check(brief(channel='meeting', to=ZOOM))
         self.assertFalse(report['ok'])
         self.assertIn('not available', report['problems'][0])
+        self.h.service.hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k',
+                                                         'COLLEAGUE_ALLOWED_CALLING_CODES': '44'})
+        blocked = await self.h.service.check(brief())
+        self.assertFalse(blocked['ok'])
+        self.assertIn('COLLEAGUE_ALLOWED_CALLING_CODES', blocked['problems'][0])
+
+    async def test_statuses_never_move_backwards(self):
+        record = await self.h.service.create(brief())
+        await asyncio.sleep(0)
+        await self.h.service.wait(record['id'], timeout=0.05)
+        self.h.service._set_status(record['id'], 'ringing')
+        self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
+
+    async def test_shutdown_and_restart_close_unfinished_calls(self):
+        record = await self.h.service.create(brief())
+        await asyncio.sleep(0)
+        await self.h.service.wait(record['id'], timeout=0.05)
+        self.h.line.proceed = asyncio.Event()  # never finishes on its own
+        await self.h.service.shutdown()
+        done = self.h.store.get(record['id'])
+        self.assertEqual(done['status'], 'failed')
+        self.assertEqual(done['result']['outcome'], 'failed')
+        self.assertEqual(len(done['result']['transcript']), 2)
+        # A record left behind by a crashed daemon is closed at the next start.
+        orphan = dict(done, id='call-00000000000000aa', status='in_progress', result=None)
+        self.h.store.create(orphan)
+        restarted = ServiceHarness(self.temp.name)
+        self.assertEqual(restarted.service.reconcile(), ['call-00000000000000aa'])
+        self.assertEqual(restarted.store.get('call-00000000000000aa')['status'], 'failed')
+
+    def test_long_transcripts_keep_their_opening(self):
+        from call_service import CallContext, TRANSCRIPT_HEAD, TRANSCRIPT_TAIL
+        context = CallContext(self.h.service, 'x', None, 'local')
+        context.service = type('S', (), {'_event': lambda *a, **k: None})()
+        for index in range(1000):
+            context.add_transcript('other', f'line {index}')
+        self.assertEqual(len(context.transcript), TRANSCRIPT_HEAD + TRANSCRIPT_TAIL)
+        self.assertEqual(context.transcript[0]['text'], 'line 0')
+        self.assertEqual(context.transcript[-1]['text'], 'line 999')
 
 
 class FakeSession(SimpleNamespace):
@@ -242,10 +281,55 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(h.summarizer.calls, 0)
             await h.service.shutdown()
 
+    async def test_ending_before_the_meeting_exists_still_stops_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            daemon.states = ['joining']
+            gate = asyncio.Event()
+            original = daemon.create_meeting
+
+            async def slow_create(payload):
+                await gate.wait()
+                return await original(payload)
+            daemon.create_meeting = slow_create
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep)
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            await asyncio.sleep(0)
+            await h.service.end(record['id'])
+            self.assertEqual(h.store.get(record['id'])['status'], 'connecting')
+            gate.set()
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(daemon.canceled, ['mtg-1'])
+            self.assertEqual(done['endReason'], 'canceled')
+            await h.service.shutdown()
+
+    async def test_meetings_end_at_max_minutes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            daemon.states = ['live']
+            ticks = iter(range(0, 100000, 20))
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep,
+                               monotonic=lambda: next(ticks))
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM, maxMinutes=1))
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(daemon.canceled, ['mtg-1'])
+            self.assertEqual(done['endReason'], 'max_duration')
+            await h.service.shutdown()
+
     def test_payload_keeps_host_agent_session(self):
         session = {'provider': 'codex', 'sessionId': 'thread-1', 'workspace': '/w'}
         parsed = CallBrief.from_dict(brief(channel='meeting', to=ZOOM, agentSession=session))
-        self.assertEqual(meeting_payload(parsed, 'call-x', '/ws')['agentSession'], session)
+        # The host session is kept; the metadata adds who the meeting disclosure names.
+        self.assertEqual(meeting_payload(parsed, 'call-x', '/ws')['agentSession'],
+                         {**session, 'metadata': {'onBehalfOf': 'Robin'}})
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
@@ -281,6 +365,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         resumed = await self.client.get(f'/v1/calls/{call["id"]}/events',
                                         headers={**self.auth, 'Last-Event-ID': '2'})
         self.assertNotIn('event: call.created', await resumed.text())
+        page = await self.client.get(f'/v1/calls/{call["id"]}/events?format=json&after=1',
+                                     headers=self.auth)
+        events = (await page.json())['events']
+        self.assertEqual(events[0]['id'], '2')
+        self.assertIn('call.transcript', [event['type'] for event in events])
 
     async def test_brief_problems_and_errors(self):
         response = await self.client.post('/v1/calls', json={'channel': 'phone'}, headers=self.auth)
@@ -306,6 +395,50 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(voices['default'], 'marin')
         spec = await (await self.client.get('/v1/openapi.json', headers=api)).json()
         self.assertIn('/v1/calls', spec['paths'])
+
+
+class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
+    """The meeting line's payload must pass the real daemon's meeting validation."""
+
+    async def test_meeting_call_runs_through_the_daemon(self):
+        from test_runtime_daemon import FakeSupervisor
+        from test_schemas import handoff_payload
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = FakeSupervisor()
+            workspace = Path(temp) / 'workspace'
+            workspace.mkdir()
+            harness = ServiceHarness(temp)
+
+            def lines(daemon):
+                line = MeetingLine(daemon, workspace=workspace, poll_interval=0.01, handoff_timeout=5)
+                harness.service.lines = {'meeting': line}
+                return harness.service
+            app = create_app(root=Path(temp) / 'daemon', auth_token='t', supervisor=supervisor,
+                             call_service_factory=lines)
+            daemon = app.runtime_daemon
+            record = await harness.service.create(brief(
+                channel='meeting', to=ZOOM, context='Q3 sales review',
+                mustNotShare=['salaries'], mayAgreeTo=['moving the deadline a week']))
+            call = await harness.service.wait(record['id'], timeout=0.2)
+            meeting_id = call['line']['meetingId']
+            self.assertEqual(supervisor.started, [meeting_id])
+            session = await daemon.get_meeting(meeting_id)
+            self.assertEqual(session.agent_session.provider, 'generic')
+            context = session.context.to_dict()
+            self.assertEqual(context['objective'], 'Book a table for 4 at 7pm')
+            self.assertIn('Do not share: salaries', context['constraints'])
+            daemon.transition(meeting_id, 'live')
+            await asyncio.sleep(0.05)
+            self.assertEqual(harness.store.get(record['id'])['status'], 'in_progress')
+            daemon.transition(meeting_id, 'ended')
+            daemon.store_handoff(handoff_payload(meetingId=meeting_id, startedAt=session.started_at,
+                                                 summary='Agreed on Q3.'))
+            done = await harness.service.wait(record['id'], timeout=5)
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(done['result']['summary'], 'Agreed on Q3.')
+            self.assertEqual(done['result']['actionItems'], ['dev: Implement leases'])
+            await harness.service.shutdown()
+            app.runtime_daemon.close()
 
 
 class ServerModeTests(unittest.TestCase):

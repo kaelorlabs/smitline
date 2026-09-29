@@ -13,7 +13,7 @@ chmod 600 .env .env.meeting
 npm install
 ```
 
-Add `OPENAI_API_KEY` to `.env`. Add `TAVILY_API_KEY` when web search will be enabled. Install Docker Desktop. Sign in to the coding-agent CLI you will enable (`codex login`, Cursor `cursor-agent`, or `claude login`) and confirm that login with the CLI's documented status command.
+Add `OPENAI_API_KEY` to `.env`. Add `TAVILY_API_KEY` when web search will be enabled. Install Docker: Docker Desktop, or Docker Engine inside WSL on Windows. Sign in to the coding-agent CLI you will enable (`codex login`, Cursor `cursor-agent`, or `claude login`) and confirm that login with the CLI's documented status command.
 
 The control panel never returns API keys to the browser. `.env`, `.env.meeting`, uploaded context, meeting transcripts, job files, artifacts, profiles, and pairing hashes are ignored by Git.
 
@@ -22,6 +22,10 @@ The control panel never returns API keys to the browser. `.env`, `.env.meeting`,
 ```bash
 bash start-control-panel.sh
 ```
+
+## Follow calls
+
+`http://127.0.0.1:8095/calls` (**Calls** in the console's top bar) lists recent phone calls and meetings started through the call API. Choosing one shows its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Colleague AI leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
 Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open while operating the meeting agent.
 
@@ -57,7 +61,7 @@ Use **Clear saved context** when the material should no longer be available. Thi
 
 The console reports the join stage, platform microphone state, listening state, selected tools, runtime log, and recorded sessions. Admit **Colleague AI** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, asked for a tool result, or able to establish an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
 
-The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically.
+The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Colleague AI's tile; it accepts that explicit request.
 
 Stop the colleague from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory. Exact coding-agent resume happens only when a host integration supplied a real session id at join; the portal does not derive a thread from the meeting URL.
 
@@ -82,9 +86,9 @@ It reads `.env.meeting`, validates the configuration, builds and starts the Dock
 ## Troubleshooting
 
 - If the console cannot start, run `npm install` and confirm Node.js 22 or later is active.
-- If preflight reports Docker unavailable, start Docker Desktop and rerun the checks.
+- If preflight reports Docker unavailable, start Docker (Docker Desktop, or the Docker Engine service inside WSL) and rerun the checks.
 - If Codex is unavailable, run `codex login` or set `CODEX_BIN`. For Cursor, install `cursor-agent` and complete its official login. For Claude Code, run `claude login`.
-- If the participant is silent, address it directly with a question or task and inspect `floorState`, `microphoneState`, the runtime log, and health state. If the platform microphone was externally muted, unmute it through the meeting UI before expecting audio.
+- If the participant is silent, address it directly with a question or task and inspect `floorState`, `microphoneState`, the runtime log, and health state. If the platform microphone was externally muted, unmute it through the meeting UI before expecting audio; in Zoom the host can click **Ask to unmute** on its tile.
 - If the meeting does not admit the participant, inspect the browser viewer for a waiting-room, sign-in, passcode, or host-removal message.
 - If supplied context is not available, add the source before starting the meeting or restart the participant after changing sources.
 - If chart delivery fails, inspect the saved artifact in the call record. Direct Zoom chat attachment depends on host settings and Zoom web-client support.

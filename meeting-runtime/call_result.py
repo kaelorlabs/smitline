@@ -118,6 +118,9 @@ def result_without_conversation(end_reason, *, transcript=(), duration_seconds=0
     if end_reason == 'canceled' and not entries:
         return build_result(outcome='canceled', summary='The call was canceled before anyone spoke.',
                             duration_seconds=duration_seconds, source='status')
+    if end_reason == 'voicemail' and not entries:
+        return build_result(outcome='voicemail', summary='Reached voicemail; no message was left.',
+                            duration_seconds=duration_seconds, source='status')
     if not entries:
         return build_result(outcome='not_reached', summary='The call connected but nobody spoke.',
                             duration_seconds=duration_seconds, source='status')
