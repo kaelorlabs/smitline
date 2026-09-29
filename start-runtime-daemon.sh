@@ -28,4 +28,8 @@ else
 fi
 
 export PYTHON
-exec "$PYTHON" -u "$ROOT/meeting-runtime/daemon_main.py" --host "$HOST" --port "$PORT"
+MODE=()
+if [[ "${COLLEAGUE_SERVER_MODE:-}" == 1 ]]; then
+  MODE=(--server)
+fi
+exec "$PYTHON" -u "$ROOT/meeting-runtime/daemon_main.py" --host "$HOST" --port "$PORT" ${MODE[@]+"${MODE[@]}"}

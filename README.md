@@ -161,7 +161,8 @@ Old Zoom-specific paths (`compose.zoom.yaml`, `.env.zoom`, `start-zoom-agent.sh`
 
 | Surface | Role |
 | --- | --- |
-| **Daemon** | `./start-runtime-daemon.sh` — loopback HTTP + SSE, bearer auth, meetings, approvals, artifacts, git, screen-share, providers, runner pairing |
+| **Daemon** | `./start-runtime-daemon.sh` — loopback HTTP + SSE, bearer auth, calls, meetings, approvals, artifacts, git, screen-share, providers, runner pairing |
+| **Calls API** | `/v1/calls` — any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md) and `/v1/openapi.json`. |
 | **Portal** | `./start-control-panel.sh` — operator UI; context continuity only |
 | **TypeScript SDK** | `@colleague-ai/sdk` — host integrations; not published to npm |
 | **Python SDK** | `colleague-ai` — same contract; not published to PyPI |

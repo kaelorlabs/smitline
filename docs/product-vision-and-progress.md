@@ -1,7 +1,7 @@
 # Colleague AI: product vision, decisions, and progress
 
 **Document status:** canonical product brief and progress ledger  
-**Last reviewed:** 2026-09-18  
+**Last reviewed:** 2026-09-28  
 **Current stage:** advanced local alpha / developer preview  
 **Primary implementation branch at this snapshot:** `developer-platform`
 
@@ -146,6 +146,9 @@ These decisions should not be reversed casually. A proposal to change one should
 18. **Screen observation is opt-in.** Incoming shared-content capture is off by default, bounded, locally retained, and cannot be enabled by voice.
 19. **Truthful capabilities.** Optional provider and platform features are reported only when detected or tested. Unsupported resume flags or model names are never guessed.
 20. **No hardcoded demo scenario.** The runtime must support general meetings and user-provided company/project context rather than fixed sales data or scripted hackathon behavior.
+21. **Brief in, result out.** Any agent, local or cloud, starts a phone call or meeting through the call API with a brief and reads a structured result. Meetings keep the richer `/v1/meetings` contract underneath. (Added 2026-09-28.)
+22. **Server mode is opt-in.** Loopback with a per-launch token stays the default. A non-loopback bind requires at least one long-lived API token (stored as a digest) and a TLS-terminating proxy; it exists so cloud agents can reach a self-hosted installation. (Added 2026-09-28; narrows decision 13 rather than replacing it.)
+23. **Phone calls use Responses delegation driven by the brief.** Decision 6 still governs meetings with a coding-agent provider. A phone call's backend is a Responses model that knows the brief, because most phone callers are cloud agents that cannot be reached mid-call. (Added 2026-09-28.)
 
 ## Current implementation snapshot
 
@@ -163,7 +166,8 @@ Status meanings:
 | Google Meet adapter | Partial | Guest-first join and Google profile fallback exist with fixture coverage. Full live acceptance remains outstanding. |
 | Continuous GPT-Live voice | Implemented | One `gpt-live-1` session, `store: false`, audio context, transcript events, and client delegation exist. Conversational quality and platform audio reliability still need evaluation. |
 | Selective speech and mute transport | Partial | GPT-Live-driven participation, virtual audio gating, and public drain/discard of queued playback exist, with automated tests. Zoom mute prefers a visible control and falls back to the in-meeting shortcut. Cross-platform live unmute/remute acceptance is still open. |
-| Local runtime daemon | Implemented | Authenticated loopback HTTP/SSE API owns sessions, events, leases, approvals, artifacts, providers, and supervision. |
+| Local runtime daemon | Implemented | Authenticated loopback HTTP/SSE API owns sessions, events, leases, approvals, artifacts, providers, and supervision. Opt-in server mode accepts long-lived API tokens. |
+| Calls API | Partial | `/v1/calls` accepts a brief, runs it on a line, and publishes a result through polling, long-polling, SSE, or a signed webhook. Meetings run through it as ordinary meetings. Hooks for owner, credentials, pre-call policy, usage, and notification exist. Not yet exercised against a live meeting or live OpenAI summary. See [calls](calls.md). |
 | Durable event and meeting storage | Implemented | Versioned schemas, append-only events, transcript/archive records, validation, recovery, and local retention paths exist. |
 | Exact Codex continuity | Partial | Real thread IDs, leasing, resumed delegated turns, and final handoff append are implemented. The installed Codex skill launches a CLI child of the active task so it inherits `CODEX_THREAD_ID` directly; the full live round trip still needs acceptance testing. |
 | Cursor provider | Partial | Capability-detected adapter exists. Exact resume depends on documented capabilities of the installed Cursor CLI and host-provided session identity. |
@@ -390,7 +394,11 @@ When updating this file, use these rules:
 
 ### 2026-09-28
 
+- Product direction widened: Colleague AI becomes a phone and meeting tool that any agent can use through a brief, self-hosted under Apache-2.0 first and managed later. Recorded decisions 21 to 23.
+- Licensed the project under Apache-2.0 with a NOTICE for vendored Joinly (MIT). Added LF line-ending rules so Windows checkouts keep working scripts, documented Windows through WSL2, and taught the doctor to check both.
 - Shared-content change detection now compares 64x36 tile signatures (luminance and edge strength), selects a frame only after it settles (`settleTicks`, default 1), masks regions that keep animating, and reuses the observation for any of the last 32 analyzed screens instead of calling the analyzer again (`reused: true`). Live acceptance on real Zoom/Teams/Meet shares stays open.
+- Added the calls core: brief validation with questions for missing fields, durable call records and events, results from a strict-schema summary or the meeting handoff, signed webhooks with retries, extension hooks, a transport-neutral GPT-Live session module, the meeting line, `/v1/calls` routes with an OpenAPI description, and opt-in server mode with API tokens. Covered by unit and HTTP tests; no live acceptance yet.
+- The meeting bridge still drives GPT-Live directly. Moving it onto the shared voice module waits for a live meeting to verify the change.
 
 ### 2026-09-18
 

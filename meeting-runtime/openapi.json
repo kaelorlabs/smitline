@@ -1,0 +1,208 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Colleague AI calls API",
+    "version": "1.0.0",
+    "description": "Start phone calls and meetings from a brief and read structured results. Meetings also have the richer /v1/meetings API. See docs/calls.md.",
+    "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
+  },
+  "servers": [{ "url": "http://127.0.0.1:8765" }],
+  "security": [{ "bearer": [] }],
+  "paths": {
+    "/v1/calls/check": {
+      "post": {
+        "summary": "Validate a brief without starting a call",
+        "operationId": "checkCall",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Brief" } } } },
+        "responses": {
+          "200": { "description": "Validation result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CheckResult" } } } },
+          "422": { "$ref": "#/components/responses/BriefProblem" }
+        }
+      }
+    },
+    "/v1/calls": {
+      "post": {
+        "summary": "Start a call",
+        "operationId": "startCall",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Brief" } } } },
+        "responses": {
+          "201": { "description": "Call accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
+          "403": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/BriefProblem" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "get": {
+        "summary": "List recent calls, newest first",
+        "operationId": "listCalls",
+        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }],
+        "responses": {
+          "200": { "description": "Calls", "content": { "application/json": { "schema": { "type": "object", "properties": { "calls": { "type": "array", "items": { "$ref": "#/components/schemas/Call" } } }, "required": ["calls"] } } } }
+        }
+      }
+    },
+    "/v1/calls/{callId}": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "get": {
+        "summary": "Get a call",
+        "operationId": "getCall",
+        "responses": {
+          "200": { "description": "The call", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/calls/{callId}/wait": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "get": {
+        "summary": "Wait until the call finishes or the timeout passes",
+        "operationId": "waitForCall",
+        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }],
+        "responses": {
+          "200": { "description": "The call, terminal or not", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/calls/{callId}/events": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "get": {
+        "summary": "Stream call events (server-sent events, resumable with Last-Event-ID)",
+        "operationId": "streamCallEvents",
+        "responses": { "200": { "description": "text/event-stream of call events", "content": { "text/event-stream": { "schema": { "type": "string" } } } } }
+      }
+    },
+    "/v1/calls/{callId}/instructions": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "post": {
+        "summary": "Add guidance to a call in progress",
+        "operationId": "instructCall",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string", "maxLength": 2000 } }, "required": ["text"], "additionalProperties": false } } } },
+        "responses": {
+          "200": { "description": "Whether the line accepted the guidance", "content": { "application/json": { "schema": { "type": "object", "properties": { "delivered": { "type": "boolean" } }, "required": ["delivered"] } } } },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/calls/{callId}/end": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "post": {
+        "summary": "End the call politely and build the result",
+        "operationId": "endCall",
+        "responses": { "200": { "description": "The call", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } } }
+      }
+    },
+    "/v1/calls/{callId}/transfer": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "post": {
+        "summary": "Hand a connected phone call to the owner's phone",
+        "operationId": "transferCall",
+        "responses": {
+          "200": { "description": "Transfer started", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/voices": {
+      "get": {
+        "summary": "List GPT-Live voices",
+        "operationId": "listVoices",
+        "responses": { "200": { "description": "Voices", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "voices"] } } } } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer", "description": "The per-launch token in .colleague/daemon.auth, or an API token in server mode." }
+    },
+    "parameters": {
+      "CallId": { "name": "callId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" } }
+    },
+    "responses": {
+      "Error": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "BriefProblem": { "description": "The brief is invalid or incomplete", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    },
+    "schemas": {
+      "Brief": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["channel", "to", "objective", "onBehalfOf"],
+        "properties": {
+          "channel": { "type": "string", "enum": ["phone", "meeting"] },
+          "to": { "type": "string", "description": "E.164 phone number for phone calls, or a Zoom, Teams, or Google Meet invite URL." },
+          "onBehalfOf": { "type": "string", "maxLength": 120, "description": "Name spoken in the AI disclosure at the start of the call." },
+          "objective": { "type": "string", "maxLength": 1000 },
+          "context": { "type": "string", "maxLength": 6000 },
+          "mayAgreeTo": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
+          "mustNotShare": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
+          "successCriteria": { "type": "string", "maxLength": 500 },
+          "language": { "type": "string", "examples": ["en", "pt-BR"] },
+          "voice": { "type": "string", "examples": ["marin"] },
+          "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240 },
+          "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
+          "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
+          "agentSession": { "type": "object", "description": "Meeting only: coding-agent session for exact continuity. See /v1/meetings." }
+        }
+      },
+      "CheckResult": {
+        "type": "object",
+        "required": ["ok", "brief", "problems"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "brief": { "$ref": "#/components/schemas/Brief" },
+          "problems": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Call": {
+        "type": "object",
+        "required": ["id", "channel", "status", "brief", "createdAt"],
+        "properties": {
+          "id": { "type": "string" },
+          "owner": { "type": "string" },
+          "channel": { "type": "string", "enum": ["phone", "meeting"] },
+          "status": { "type": "string", "enum": ["queued", "connecting", "ringing", "waiting", "in_progress", "summarizing", "completed", "failed", "canceled"] },
+          "endReason": { "type": "string", "enum": ["hangup", "remote_hangup", "no_answer", "busy", "voicemail", "max_duration", "canceled", "meeting_ended", "transferred", "error"] },
+          "brief": { "$ref": "#/components/schemas/Brief" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "answeredAt": { "type": "string", "format": "date-time" },
+          "endedAt": { "type": "string", "format": "date-time" },
+          "line": { "type": "object", "description": "Line references such as meetingId." },
+          "result": { "oneOf": [{ "$ref": "#/components/schemas/Result" }, { "type": "null" }] },
+          "usage": { "type": "object" },
+          "error": { "type": "string" }
+        }
+      },
+      "Result": {
+        "type": "object",
+        "required": ["outcome", "summary", "details", "decisions", "actionItems", "openQuestions", "transcript", "durationSeconds"],
+        "properties": {
+          "outcome": { "type": "string", "enum": ["achieved", "partial", "not_reached", "voicemail", "declined", "failed", "canceled"] },
+          "summary": { "type": "string" },
+          "details": { "type": "array", "items": { "type": "object", "required": ["label", "value"], "properties": { "label": { "type": "string" }, "value": { "type": "string" } } } },
+          "decisions": { "type": "array", "items": { "type": "string" } },
+          "actionItems": { "type": "array", "items": { "type": "string" } },
+          "openQuestions": { "type": "array", "items": { "type": "string" } },
+          "transcript": { "type": "array", "items": { "type": "object", "required": ["speaker", "text"], "properties": { "speaker": { "type": "string" }, "text": { "type": "string" } } } },
+          "durationSeconds": { "type": "integer" },
+          "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "missing": { "type": "array", "items": { "type": "object", "properties": { "field": { "type": "string" }, "question": { "type": "string" } } } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

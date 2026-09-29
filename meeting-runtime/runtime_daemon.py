@@ -98,6 +98,17 @@ def require_loopback_bind(host):
     return host
 
 
+def require_server_bind(host, api_tokens):
+    """Server mode may bind any IP, but only with at least one long-lived API token."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError as error:
+        raise ValueError('daemon bind address must be an IP address') from error
+    if api_tokens is None or len(api_tokens) == 0:
+        raise ValueError('server mode requires an API token: run api_tokens.py create --name NAME')
+    return host
+
+
 def _utcnow():
     return datetime.now(timezone.utc)
 
@@ -1707,8 +1718,15 @@ def create_app(
     jobs_dir=None,
     visual_analyzer=None,
     provider_registry=None,
+    call_service=None,
+    call_service_factory=None,
+    api_tokens=None,
+    server_mode=False,
 ):
-    require_loopback_bind(bind_host)
+    if server_mode:
+        require_server_bind(bind_host, api_tokens)
+    else:
+        require_loopback_bind(bind_host)
     token = secrets.token_urlsafe(32) if auth_token is None else auth_token
     if not isinstance(token, str) or not token:
         raise ValueError('auth_token must be a non-empty string')
@@ -1733,7 +1751,10 @@ def create_app(
         if request.path.startswith('/v1/'):
             header = request.headers.get('Authorization', '')
             scheme, _, credential = header.partition(' ')
-            if scheme != 'Bearer' or not credential or not _bearer_matches(credential, token):
+            accepted = scheme == 'Bearer' and bool(credential) and (
+                _bearer_matches(credential, token)
+                or (api_tokens is not None and api_tokens.verify(credential) is not None))
+            if not accepted:
                 # A competing startup can rotate the host-only file before it
                 # discovers that this daemon already owns the port. Restore the
                 # live daemon's credential so local clients can reread and retry.
@@ -2033,8 +2054,17 @@ def create_app(
     app.router.add_post('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_heartbeat)
     app.router.add_delete('/v1/agent-sessions/{provider}/{sessionId}/lease', lease_release)
     app.router.add_get('/v1/agent-sessions/{provider}/{sessionId}/status', lease_status)
+    if call_service is None and call_service_factory is not None:
+        call_service = call_service_factory(daemon)
+    app.call_service = call_service
+    if call_service is not None:
+        from call_api import register_call_routes
+        register_call_routes(app, call_service, read_json=read_json, public_json=_public_json,
+                             sse_heartbeat_interval=sse_heartbeat_interval)
 
     async def on_cleanup(_app):
+        if call_service is not None:
+            await call_service.shutdown()
         daemon.close()
 
     app.on_cleanup.append(on_cleanup)

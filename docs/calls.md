@@ -1,0 +1,115 @@
+# Calls
+
+A **call** is one conversation Colleague AI holds with people on behalf of an agent: a phone call or a meeting. Any agent starts a call with a **brief** and later reads a **result**. This is the contract every surface uses (REST, SDKs, CLI, MCP, remote connector).
+
+Meetings keep their existing, richer API under `/v1/meetings`. A meeting started through `/v1/calls` is an ordinary meeting underneath; the call record links to it.
+
+## Lifecycle
+
+```text
+queued ─► connecting ─► ringing / waiting ─► in_progress ─► summarizing ─► completed
+   │           │                │                 │
+   └───────────┴────────────────┴─────────────────┴──────────► failed / canceled
+```
+
+| Status | Meaning |
+| --- | --- |
+| `queued` | Accepted; the line has not started yet. |
+| `connecting` | Dialing a phone number or joining a meeting. |
+| `ringing` | Phone only: the callee's phone is ringing. |
+| `waiting` | Meeting only: waiting in a lobby or for admission. |
+| `in_progress` | Connected; GPT-Live is in the conversation. |
+| `summarizing` | The conversation ended; the result is being built. |
+| `completed` | Terminal. `result` is present, including for unanswered calls. |
+| `failed` | Terminal. A system error prevented a result. `error` explains it. |
+| `canceled` | Terminal. Ended by the caller before a result was possible. |
+
+`endReason` records how the conversation ended: `hangup`, `remote_hangup`, `no_answer`, `busy`, `voicemail`, `max_duration`, `canceled`, `meeting_ended`, `transferred`, `error`.
+
+## Brief
+
+```json
+{
+  "channel": "phone",
+  "to": "+14155550142",
+  "onBehalfOf": "Robin",
+  "objective": "Book a table for 4 at 7pm tonight",
+  "context": "Indoor is fine if the patio is full.",
+  "mayAgreeTo": ["times between 6:30 and 7:30pm", "indoor seating"],
+  "mustNotShare": ["payment details"],
+  "successCriteria": "A confirmed booking with a confirmation number",
+  "language": "en",
+  "voice": "marin",
+  "maxMinutes": 10,
+  "rehearsal": false,
+  "notify": { "webhookUrl": "https://example.com/hooks/colleague" }
+}
+```
+
+Required: `channel`, `to`, `objective`, and `onBehalfOf`. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL and may pass `agentSession` for exact coding-agent continuity; everything else about meetings stays in `/v1/meetings`.
+
+`POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
+
+## Result
+
+```json
+{
+  "outcome": "achieved",
+  "summary": "Booked an indoor booth for 4 at 7:00 pm tonight under Robin.",
+  "details": [
+    { "label": "Confirmation", "value": "LG-2291" },
+    { "label": "Table held", "value": "15 minutes" }
+  ],
+  "decisions": [],
+  "actionItems": [],
+  "openQuestions": [],
+  "transcript": [{ "speaker": "agent", "text": "Hi, I'm an AI assistant calling on behalf of Robin." }],
+  "durationSeconds": 252
+}
+```
+
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. Meeting results come from the meeting handoff. `source` records which path produced the result.
+
+## Delivery
+
+| Method | Use |
+| --- | --- |
+| `GET /v1/calls/{id}` | Poll the call. |
+| `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. |
+| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. |
+| `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
+
+Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents. Delivery is retried three times with backoff; the outcome is recorded as a call event.
+
+## Other endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/calls` | Start a call from a brief. |
+| `GET /v1/calls` | List recent calls, newest first. |
+| `POST /v1/calls/check` | Validate a brief and report missing configuration without starting a call. |
+| `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions. Meetings do not accept live instructions yet (`delivered: false`). |
+| `POST /v1/calls/{id}/end` | End the call politely and build the result. |
+| `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
+| `GET /v1/voices` | GPT-Live voices this installation accepts. |
+| `GET /v1/openapi.json` | The machine-readable API description. |
+
+## Hooks
+
+The call service calls a small hooks object so a managed deployment can add accounts and billing without forking the core. The default hooks serve a single local owner.
+
+| Hook | Default |
+| --- | --- |
+| `owner_for(request)` | `local` |
+| `credentials(owner, provider)` | Reads `OPENAI_API_KEY` and `TWILIO_*` from the environment. |
+| `precheck(owner, brief)` | Allows the call, applying the configured country allow-list for phone calls. |
+| `record_usage(owner, call, usage)` | Appends a line to `usage.jsonl` in the call store. |
+| `notify(owner, call)` | Sends the brief's webhook, if any. |
+
+Set `COLLEAGUE_CALL_HOOKS=module:factory` to load different hooks.
+
+## Access
+
+The daemon listens on loopback with a per-launch token by default. Server mode (`COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`) also accepts long-lived API tokens created with `python3 meeting-runtime/api_tokens.py create --name NAME`; only SHA-256 digests are stored. Server mode refuses to start without at least one API token and must sit behind a TLS-terminating proxy.
+
+Credentials come from the process environment first, then the project's ignored `.env`, which is reread for every call, so keys added during setup work without a restart.
