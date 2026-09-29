@@ -16,7 +16,7 @@ from call_brief import CallBrief, default_voice, normalize_phone, validate_webho
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
-    HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, machine_hint,
+    HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, greeting_name, machine_hint,
     opening_cue, voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
@@ -208,6 +208,7 @@ class PhoneSession:
         self.backend_tokens = {'input': 0, 'output': 0}
         self.disclosure_checked = False
         self.disclosure_attempts = 0
+        self.greet_name = None  # the person's name for the hello, when the profile or brief knows it
         self._agent_opening = ''
         self.heard_other = asyncio.Event()
         self.last_output_at = None
@@ -236,6 +237,7 @@ class PhoneSession:
         profile = self.ctx.profile()
         # The brief can name the person; otherwise the profile may know the number.
         contact = self.brief.contact or contact_for(profile, self.brief.to)
+        self.greet_name = greeting_name(contact)
         session = self.brief.session_context
         owner = self.brief.on_behalf_of
         notes = voice_notes(profile, contact, session, owner)
@@ -527,7 +529,7 @@ class PhoneSession:
             pass
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
-                               opening_cue(self.brief, inbound=self.inbound))
+                               opening_cue(self.brief, inbound=self.inbound, name=self.greet_name))
         await asyncio.Event().wait()
 
     async def _watch(self):

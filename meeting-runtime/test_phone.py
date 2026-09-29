@@ -231,7 +231,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config['audio']['output'], {'voice': 'quartz'})
         self.assertEqual(config['delegation']['type'], 'responses')
         self.assertEqual(config['delegation']['responses']['tools'][0]['name'], 'end_call')
-        self.assertIn("calling on behalf of Robin", config['instructions'])
+        self.assertIn("Hi, this is Robin's AI assistant.", config['instructions'])
         self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
 
         live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
@@ -296,6 +296,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
     def test_disclosure_check(self):
         said = [
             ("Hi, I'm an AI assistant calling on behalf of Robin Rao.", 'Robin Rao', True),
+            ("Hey Sam, this is Robin's AI assistant. He asked me to call.", 'Robin', True),
+            ("Hey, it's Robin's assistant, calling about the launch.", 'Robin', False),
             ('Hola, soy un asistente de IA y llamo de parte de Robin.', 'Robin', True),
             ('Hallo, hier ist ein KI-Assistent im Auftrag von Robin.', 'Robin', True),
             ('Bonjour, je suis une intelligence artificielle qui appelle pour Robin.', 'Robin', True),
@@ -358,6 +360,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
+        self.assertIn('"Hey Sam, this is Robin\'s AI assistant. I\'m calling about..."', instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
         self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
@@ -613,7 +616,8 @@ class PromptTests(unittest.TestCase):
         parsed = CallBrief.from_dict(brief(mayAgreeTo=['6:30 to 7:30pm'], mustNotShare=['card number'],
                                            language='es'))
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm an AI assistant calling on behalf of Robin.", text)
+        self.assertIn("Hi, this is Robin's AI assistant.", text)
+        self.assertNotIn('on behalf of', text)
         self.assertIn('- 6:30 to 7:30pm', text)
         self.assertIn('- card number', text)
         self.assertIn('language with tag es', text)

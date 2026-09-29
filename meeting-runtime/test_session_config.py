@@ -74,8 +74,7 @@ class SessionConfigTests(unittest.TestCase):
 
 
 class MeetingIntroTests(unittest.TestCase):
-    INTRO = ("Hi, I'm an AI assistant joining on behalf of {}. "
-             "I'll mostly listen; say 'Colleague' if you need me.")
+    INTRO = "Hi everyone, I'm {}'s AI assistant. I'll mostly listen; say 'Colleague' if you need me."
 
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
@@ -113,7 +112,8 @@ class MeetingIntroTests(unittest.TestCase):
 
     def test_missing_name_uses_the_person_who_invited_me(self):
         runtime = RuntimeConfig.from_environ({})
-        self.assertIn(self.INTRO.format('the person who invited me'), intro_event(runtime)['content'])
+        self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
+                      intro_event(runtime)['content'])
 
     def test_intro_can_be_switched_off(self):
         runtime = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0',

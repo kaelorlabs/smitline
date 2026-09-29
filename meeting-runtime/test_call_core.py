@@ -39,8 +39,8 @@ class BriefTests(unittest.TestCase):
         self.assertEqual(brief.to, '+14155550142')
         self.assertEqual(brief.max_minutes, 10)
         self.assertEqual(brief.to_dict()['mayAgreeTo'], ['6:30 to 7:30pm'])
-        self.assertEqual(disclosure_line(brief),
-                         "Hi, I'm an AI assistant calling on behalf of Robin.")
+        self.assertEqual(disclosure_line(brief), "Hi, this is Robin's AI assistant.")
+        self.assertEqual(disclosure_line(brief, 'Sam'), "Hey Sam, this is Robin's AI assistant.")
 
     def test_missing_fields_come_with_questions(self):
         with self.assertRaises(BriefIncomplete) as caught:

@@ -354,7 +354,7 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   }));
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
     detail: present(env.COLLEAGUE_OWNER_NAME) ? env.COLLEAGUE_OWNER_NAME : 'missing',
-    ask: 'Please add your name on the setup page; every call says it is calling on behalf of that name.',
+    ask: "Please add your name on the setup page; every call opens with \"this is [your name]'s AI assistant\".",
     fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_NAME "<name>")',
   }));
 
@@ -554,7 +554,7 @@ export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch,
 
 const FIELDS = [
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
-  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m an AI assistant calling on behalf of [your name].”' },
+  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, this is [your name]’s AI assistant.”' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Colleague AI rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },

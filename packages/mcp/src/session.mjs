@@ -36,7 +36,7 @@ export const BRIEF_SCHEMA = {
   properties: {
     channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join Zoom, Teams, or Google Meet' },
     to: { type: 'string', description: "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone." },
-    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, I'm an AI assistant calling on behalf of NAME. Defaults to the name given at setup." },
+    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, this is NAME's AI assistant. Defaults to the name given at setup." },
     objective: { type: 'string', description: 'What the call must achieve, in one or two sentences' },
     context: {
       description: "What you and the user have been working on that the other party may ask about. Text, or an object: summary (a few sentences), facts, decisions, openQuestions, and details (long reference material). The voice starts with a short version and looks details up when asked; it never recites them.",

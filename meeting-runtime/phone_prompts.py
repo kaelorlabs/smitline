@@ -43,19 +43,31 @@ def brief_block(brief):
     return '\n'.join(part for part in parts if part)
 
 
+TITLES = ('dr', 'mr', 'mrs', 'ms', 'prof')
+
+
+def greeting_name(contact):
+    """What to call the person in the hello: the first name, or the full name after a title."""
+    name = ' '.join(str((contact or {}).get('name') or '').split())
+    if not name:
+        return None
+    first = name.split()[0]
+    return name if first.rstrip('.').casefold() in TITLES else first
+
+
 def _who_line(brief, contact, *, inbound):
     if not contact:
         return ''
     relation = f", {brief.on_behalf_of}'s {contact['relationship']}" if contact.get('relationship') else ''
     if inbound:
         return f"The caller is {contact['name']}{relation}. Greet them by name."
-    return f"You are calling {contact['name']}{relation}. Greet them by name after the disclosure."
+    return f"You are calling {contact['name']}{relation}. Greet them by name."
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
                        boundaries=()):
     who = brief.on_behalf_of
-    disclosure = disclosure_line(brief)
+    disclosure = disclosure_line(brief, greeting_name(contact))
     if inbound:
         opening = (f'You are answering a phone call as the AI assistant of {who}. '
                    f'Start by saying: "Hi, you have reached {who}\'s AI assistant." '
@@ -63,12 +75,14 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
                    'if they want one. Do not promise anything on the owner\'s behalf.')
     elif brief.rehearsal:
         opening = (f'This is a rehearsal. The person on the phone is {who} practicing the other '
-                   'side of the call. Run the call exactly as you would for real, starting with '
-                   f'the disclosure: "{disclosure}"')
+                   'side of the call. Run the call exactly as you would for real, opening the same '
+                   f'way: "{disclosure}"')
     else:
-        opening = (f'You are an AI assistant placing a phone call on behalf of {who}. '
-                   f'When the person answers, start with exactly this disclosure: "{disclosure}" '
-                   'Then say briefly why you are calling.')
+        opening = (f"You are {who}'s AI assistant, making a phone call for them. When the person "
+                   'answers, open the way a person would, in one easy breath: hello, who you are, '
+                   f'and why you are calling. For example: "{disclosure} I\'m calling about..." '
+                   f"Always say that you are {who}'s AI assistant in that first sentence, in plain "
+                   'words, and keep it relaxed rather than formal.')
     if recording:
         opening += ' Also say that the call is recorded.'
     tone = (f'Tone: {brief.tone}' if brief.tone else
@@ -96,7 +110,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
         ('Call screening: if an automated assistant answers and asks who is calling and why, say in '
-         f'one sentence that you are an AI assistant calling on behalf of {who} and why, then wait '
+         f"one sentence that you are {who}'s AI assistant and why you are calling, then wait "
          'quietly for the person to pick up. When they do, greet them and continue normally.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
@@ -152,12 +166,13 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
     }
 
 
-def opening_cue(brief, *, inbound=False):
+def opening_cue(brief, *, inbound=False, name=None):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
     if inbound:
         return f"Greet the caller: say they have reached {brief.on_behalf_of}'s AI assistant."
-    return (f'The call just connected. Open with the disclosure "{disclosure_line(brief)}" '
-            'and then say why you are calling.')
+    return (f"The call just connected. Open with a relaxed hello that says you are "
+            f'{brief.on_behalf_of}\'s AI assistant, like "{disclosure_line(brief, name)}", then say '
+            'why you are calling.')
 
 
 def machine_hint(brief):
@@ -174,8 +189,9 @@ HANGUP_YIELDED = ('The other person spoke after you said goodbye. Listen and ans
 
 
 def disclosure_reminder(brief):
-    return (f'You have not yet said that you are an AI assistant. Say now: '
-            f'"{disclosure_line(brief)}"')
+    who = brief.on_behalf_of
+    return (f"You have not yet said that you are {who}'s AI assistant. Say it now, naturally, "
+            f'for example: "By the way, I\'m {who}\'s AI assistant."')
 
 
 # Words and phrases that say "AI" in common call languages. The check is a safety

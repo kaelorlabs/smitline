@@ -98,7 +98,7 @@ Meetings get the session context and `questions` as their starting context, with
   "decisions": [],
   "actionItems": [],
   "openQuestions": [],
-  "transcript": [{ "speaker": "agent", "text": "Hi, I'm an AI assistant calling on behalf of Robin." }],
+  "transcript": [{ "speaker": "agent", "text": "Hi, this is Robin's AI assistant. I'm calling to book a table for four tonight." }],
   "durationSeconds": 252
 }
 ```
