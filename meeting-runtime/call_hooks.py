@@ -20,6 +20,17 @@ class LineNotReady(Exception):
     """A line cannot perform the requested action right now; the message says why."""
 
 
+PHONE_AUDIO_MODES = ('relay', 'sip', 'sip-webhook')
+
+
+def phone_audio(env):
+    """How call audio travels: 'relay' (through this computer), 'sip' (OpenAI dials out
+    through the provider's SIP trunk), or 'sip-webhook' (the provider dials and hands the
+    call to OpenAI, which announces it with a webhook)."""
+    mode = str(env.get('COLLEAGUE_PHONE_AUDIO') or '').strip().lower()
+    return mode if mode in PHONE_AUDIO_MODES else 'relay'
+
+
 def phone_provider(env):
     """'twilio' or 'signalwire': COLLEAGUE_PHONE_PROVIDER, else whichever account is set up."""
     chosen = str(env.get('COLLEAGUE_PHONE_PROVIDER') or '').strip().lower()
@@ -40,6 +51,25 @@ def signalwire_space(value):
     if not text or not all(ch.isalnum() or ch in '.-' for ch in text) or text.startswith(('.', '-')):
         return ''
     return text if '.' in text else f'{text}.signalwire.com'
+
+
+def _sip_credentials(env):
+    mode = phone_audio(env)
+    values = {'mode': mode}
+    if mode == 'sip':
+        names = ('COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'COLLEAGUE_SIP_PASSWORD')
+        keys = ('trunkUrl', 'username', 'password')
+    elif mode == 'sip-webhook':
+        names = ('OPENAI_PROJECT_ID', 'OPENAI_WEBHOOK_SECRET')
+        keys = ('projectId', 'webhookSecret')
+    else:
+        return values
+    for name, key in zip(names, keys):
+        values[key] = str(env.get(name) or '').strip()
+    missing = [name for name, key in zip(names, keys) if not _usable(values[key])]
+    if missing:
+        raise MissingCredentials('sip', missing)
+    return values
 
 
 def _signalwire_credentials(env):
@@ -137,6 +167,8 @@ class DefaultCallHooks:
         if provider == 'openai':
             names = ('OPENAI_API_KEY',)
             values = {'apiKey': env.get('OPENAI_API_KEY', '').strip()}
+        elif provider == 'sip':
+            return _sip_credentials(env)
         elif provider == 'twilio' and phone_provider(env) == 'signalwire':
             return _signalwire_credentials(env)
         elif provider == 'twilio':

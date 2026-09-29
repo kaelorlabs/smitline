@@ -12,7 +12,7 @@ import path from 'node:path';
 
 export const SECRET_KEYS = Object.freeze([
   'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
-  'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE',
+  'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE', 'COLLEAGUE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
 ]);
 export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
@@ -20,7 +20,9 @@ export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_CONNECTOR_URL',
   'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND', 'COLLEAGUE_PHONE_PROVIDER',
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
+  'COLLEAGUE_PHONE_AUDIO', 'COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
 ]);
+export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
   'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
@@ -155,6 +157,15 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   if (key === 'SIGNALWIRE_PROJECT_ID' && !/^[A-Za-z0-9-]{8,64}$/.test(text)) {
     throw new Error('SIGNALWIRE_PROJECT_ID must be the Project ID from the API Credentials page, such as 1a2b3c4d-...');
+  }
+  if (key === 'COLLEAGUE_PHONE_AUDIO' && !PHONE_AUDIO_MODES.includes(text)) {
+    throw new Error(`COLLEAGUE_PHONE_AUDIO must be one of: ${PHONE_AUDIO_MODES.join(', ')}`);
+  }
+  if (key === 'COLLEAGUE_SIP_TRUNK_URL' && !/^sips:[a-z0-9.-]+(:\d{1,5})?$/i.test(text)) {
+    throw new Error('COLLEAGUE_SIP_TRUNK_URL must be a sips: address such as sips:sip.example.com:5061');
+  }
+  if (key === 'OPENAI_PROJECT_ID' && !/^proj_[A-Za-z0-9]+$/.test(text)) {
+    throw new Error('OPENAI_PROJECT_ID must be your OpenAI project ID, which starts with proj_');
   }
   if (key === 'COLLEAGUE_PHONE_PROVIDER' && !['twilio', 'signalwire'].includes(text)) {
     throw new Error('COLLEAGUE_PHONE_PROVIDER must be twilio or signalwire');
@@ -408,7 +419,22 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     ask: 'Please add your phone number on the setup page; I will call it once so you can hear Colleague AI.',
     fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_PHONE +1...)',
   }));
-  const reachable = present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
+  // Direct SIP keeps call audio between the provider and OpenAI; the relay passes it through here.
+  const audioMode = PHONE_AUDIO_MODES.includes(env.COLLEAGUE_PHONE_AUDIO) ? env.COLLEAGUE_PHONE_AUDIO : 'relay';
+  const audioNeeds = { sip: ['COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'COLLEAGUE_SIP_PASSWORD'],
+    'sip-webhook': ['OPENAI_PROJECT_ID', 'OPENAI_WEBHOOK_SECRET'], relay: [] }[audioMode];
+  const audioMissing = audioNeeds.filter((key) => !present(env[key]));
+  const audioDetail = {
+    relay: 'relayed through this computer; direct SIP sounds more natural: colleague setup sip-trunk',
+    sip: 'direct SIP: OpenAI dials out through the provider trunk. Until OpenAI enables outbound SIP for your organization, calls are relayed',
+    'sip-webhook': 'direct SIP: the provider hands answered calls to OpenAI, which notifies Colleague AI with a webhook',
+  }[audioMode];
+  checks.push(check('phone_audio', 'How call audio travels', audioMissing.length === 0, {
+    group: 'phone', required: false,
+    detail: audioMissing.length ? `${audioDetail}; missing ${audioMissing.join(', ')}` : audioDetail,
+    fix: audioMode === 'sip' ? 'colleague setup sip-trunk' : 'colleague setup secrets',
+  }));
+  const reachable = audioMode === 'sip' || present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
   checks.push(check('public_url', 'The phone provider can reach this computer', reachable, {
     group: 'phone', required: false,
     detail: present(env.COLLEAGUE_PUBLIC_URL) ? env.COLLEAGUE_PUBLIC_URL : (reachable ? 'Cloudflare quick tunnel on first call' : 'no tunnel available'),
@@ -451,6 +477,79 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   };
 }
 
+// Direct SIP ---------------------------------------------------------------
+
+/**
+ * Create what OpenAI needs to dial out through SignalWire: a SWML script that calls the
+ * requested number from the account's number, and a password-protected SIP address that
+ * runs it (encryption required, Opus offered). Returns the trunk settings to save; the
+ * password is generated here and never shown.
+ */
+export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch, password = crypto.randomBytes(24).toString('base64url'), name = 'colleague-ai-openai' }) {
+  const space = signalwireSpace(env.SIGNALWIRE_SPACE);
+  const number = env.COLLEAGUE_CALLER_ID || env.SIGNALWIRE_FROM_NUMBER;
+  if (!space || !present(env.SIGNALWIRE_PROJECT_ID) || !present(env.SIGNALWIRE_API_TOKEN)) {
+    throw new Error('Set up SignalWire first: colleague setup secrets');
+  }
+  if (!E164.test(String(number || ''))) throw new Error('Choose the number calls come from first (SIGNALWIRE_FROM_NUMBER)');
+  const auth = `Basic ${Buffer.from(`${env.SIGNALWIRE_PROJECT_ID}:${env.SIGNALWIRE_API_TOKEN}`).toString('base64')}`;
+  const post = async (path, body) => {
+    const response = await fetchImpl(`https://${space}${path}`, {
+      method: 'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const text = await response.text();
+    let json = {};
+    try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
+    if (!response.ok) {
+      const reason = json.errors?.[0]?.detail || json.message || json.error || text.slice(0, 200);
+      throw new Error(`SignalWire refused ${path} (${response.status}): ${reason}`);
+    }
+    return json;
+  };
+  const script = await post('/api/fabric/resources/swml_scripts', {
+    name: `${name}-outbound`,
+    contents: {
+      version: '1.0.0',
+      sections: {
+        main: [{
+          connect: {
+            answer_on_bridge: true,
+            from: number,
+            // OpenAI dials sips:+1…@host; keep only the number.
+            to: "%{call.to.replace(/^sips?:/i, '').replace(/@.*/, '')}",
+          },
+        }],
+      },
+    },
+  });
+  const scriptId = script.id || script.data?.id;
+  if (!scriptId) throw new Error('SignalWire did not return the script id');
+  const address = await post('/api/fabric/sip_addresses', {
+    name,
+    calling_handler_resource_id: scriptId,
+    user: '*',
+    encryption: 'required',
+    codecs: ['OPUS', 'PCMU', 'PCMA'],
+    password,
+  });
+  const uri = String(address.uri || address.data?.uri || '');
+  const host = uri.replace(/^sips?:/i, '').replace(/^[^@]*@/, '').replace(/[;:?].*$/, '');
+  if (!/^[a-z0-9.-]+$/i.test(host)) throw new Error('SignalWire did not return the SIP address');
+  return {
+    settings: {
+      COLLEAGUE_SIP_TRUNK_URL: `sips:${host}:5061`,
+      COLLEAGUE_SIP_USERNAME: number,
+      COLLEAGUE_SIP_PASSWORD: password,
+      COLLEAGUE_PHONE_AUDIO: 'sip',
+    },
+    scriptId,
+    addressId: address.id || address.data?.id || null,
+  };
+}
+
 // Secrets page -------------------------------------------------------------
 
 const FIELDS = [
@@ -466,6 +565,8 @@ const FIELDS = [
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
+  { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (COLLEAGUE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
+  { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
   { key: 'TAVILY_API_KEY', label: 'Tavily API key', group: 'Web search in meetings (optional extra)', secret: true, hint: 'Lets Colleague AI look things up on the web during meetings. Get a key at https://app.tavily.com. Leave empty to skip.' },
   { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
@@ -629,7 +730,7 @@ ${field.hint ? `<p class="hint" id="${id}-hint">${linked(field.hint)}</p>` : ''}
     const rows = fields.map(fieldHtml).join('\n');
     const hint = groupHints[group] ? `<p class="group-hint">${linked(groupHints[group])}</p>` : '';
     // Server-mode settings stay folded away unless they are in use.
-    if (/\((server mode|optional extra|upgraded account)\)$/.test(group)) {
+    if (/\((server mode|optional extra|upgraded account|advanced)\)$/.test(group)) {
       const open = fields.some((f) => isSaved(f) || fieldErrors.has(f.key)) ? ' open' : '';
       return `<details class="card"${open}><summary>${escapeHtml(group)}</summary><div class="details-body">${hint}${rows}</div></details>`;
     }

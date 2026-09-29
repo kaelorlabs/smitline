@@ -416,6 +416,8 @@ When updating this file, use these rules:
   - UI: the calls view, setup page, connector approval page, and CLI output were reworked to match the console in light and dark, with plain-language states and results.
   - The runtime daemon runs in Docker when this computer cannot make a Python venv (`Dockerfile.daemon`: Python, aiohttp, the Docker CLI for meeting containers, and cloudflared for the phone tunnel). A new user needs only Node and Docker. Host Python stays the choice when available, because coding agents run on the host with the user's logins.
   - Phone calls also work through SignalWire, whose free trial allows live audio streaming (Twilio's 2026 trial strips `<Stream>`, found in the first new-user walkthrough). Same REST, webhook, and media-stream code; setup status flags a Twilio trial as unusable.
+  - Direct SIP for phone calls (`COLLEAGUE_PHONE_AUDIO=sip` or `sip-webhook`): call audio flows between the provider and OpenAI, and Colleague AI steers over GPT-Live's text sideband. OpenAI dialing out needs outbound SIP enabled for the organization; until then calls fall back to the relay. `colleague setup sip-trunk` creates the SignalWire trunk. Covered by fixture tests; no live SIP call yet.
+  - The relay now follows interruptions (drops speech GPT-Live abandoned), lets a hang-up give way to someone still talking, treats the carrier's machine verdict as a hint, and records reply delays and queued speech per call.
   - Still open: a real phone call and a real meeting on this build. Everything above is covered by fixture, HTTP, and local WebSocket tests only.
 
 ### 2026-09-18

@@ -90,6 +90,14 @@ Colleague AI streams the call's audio to GPT-Live, so the phone provider must al
 
 If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
 
+### Natural conversation: direct audio (SignalWire)
+
+Relayed call audio passes through this computer, which adds delay to every turn. For a conversation that feels like ChatGPT voice, send the audio straight between SignalWire and OpenAI:
+
+1. The account must be out of SignalWire's trial (the $5 top-up), because trial SIP traffic is blocked.
+2. Run `colleague setup sip-trunk`. It creates the SIP trunk in SignalWire that OpenAI dials out through, saves its settings, and switches calls to direct audio. Tell the user it creates two items in their SignalWire space (a script and a SIP address), and ask before running it.
+3. The user asks OpenAI (support, or their account contact) to enable **outbound SIP** for their organization. Until it is enabled, each call is relayed as before, so nothing breaks while they wait.
+
 ## 5. Start Colleague AI
 
 ```bash

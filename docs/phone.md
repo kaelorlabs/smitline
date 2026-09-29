@@ -63,6 +63,28 @@ Whichever is set up is used; with both, Twilio is used unless `COLLEAGUE_PHONE_P
 
 Only the gateway routes are public: `/twilio/status/{id}`, `/twilio/amd/{id}`, `/twilio/recording/{id}`, `/twilio/media`, `/twilio/inbound`, and `/healthz`. HTTP callbacks must carry a valid `X-Twilio-Signature`. A media stream is accepted only with the call ID and random token placed in that call's TwiML, and only once.
 
+## Direct audio over SIP
+
+By default the call's audio is relayed: provider → tunnel → this computer → GPT-Live and back. The detour adds delay to every turn, and GPT-Live sends no event when it is interrupted, so the relay has to guess when to stop playing. With direct SIP the audio flows between the provider and OpenAI, and OpenAI's own voice stack handles interruptions, echo, and timing. Colleague AI steers the call over a text-only "sideband" WebSocket: call progress, transcripts, backend tool calls such as `end_call`, instructions from your agent, hang-up (`/hangup`), and transfer (`/refer`). The brief, disclosure check, hang-up rules, time limits, and result are the same as for relayed calls.
+
+`COLLEAGUE_PHONE_AUDIO` picks how audio travels:
+
+| Value | How a call is placed | Needs |
+| --- | --- | --- |
+| `relay` (default) | The provider streams the call to this computer (`<Connect><Stream>`). | A public URL (quick tunnel or `COLLEAGUE_PUBLIC_URL`). |
+| `sip` | OpenAI dials out through your provider's SIP trunk (`POST /v1/live/sessions` with a SIP transport). Nothing on this computer has to be reachable. | OpenAI enabling outbound SIP for your organization, and a SIP trunk: `COLLEAGUE_SIP_TRUNK_URL` (`sips:host:5061`), `COLLEAGUE_SIP_USERNAME`, `COLLEAGUE_SIP_PASSWORD`. |
+| `sip-webhook` | The provider dials the person, then hands the answered call to OpenAI's SIP address (`sip:PROJECT@sip.api.openai.com;transport=tls`). OpenAI announces it with a signed `live.transport.incoming` webhook, and Colleague AI accepts it. | `OPENAI_PROJECT_ID`, an OpenAI project webhook for `live.transport.incoming` pointing at `https://PUBLIC/openai/webhook`, its signing secret in `OPENAI_WEBHOOK_SECRET`, and a public URL. |
+
+With SignalWire, `colleague setup sip-trunk` creates the trunk for `sip`: a SWML script that calls the requested number from your SignalWire number, and a password-protected SIP address that runs it with encryption required and Opus offered. It saves the three trunk settings (the password is generated and never shown) and sets `COLLEAGUE_PHONE_AUDIO=sip`. Until OpenAI enables outbound SIP, OpenAI answers `403 outbound_sip_not_enabled`, and each call is relayed instead (the call records a `call.sip_unavailable` event).
+
+Differences from the relay:
+
+- There is no carrier voicemail detection; the model hears voicemail greetings and call screeners and follows the instructions for them.
+- Taking over the call uses a SIP REFER to `tel:` your number (`sip`), or redirects the provider's call leg (`sip-webhook`).
+- The webhook route accepts only calls this installation placed: each carries `X-Colleague-Call` and a random `X-Colleague-Token` SIP header, and any other call announced to the project is rejected with 486.
+
+Not yet verified with a live call: SignalWire accepting OpenAI's `sips:` INVITE and which digest username it expects (the setup uses your SignalWire number), the caller ID that goes out, REFER through SignalWire, and whether cXML `<Dial><Sip>` offers SRTP to OpenAI in `sip-webhook` mode.
+
 ## Incoming calls
 
 Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEAGUE_NOTIFY_WEBHOOK`, then restart the daemon. At startup it points `TWILIO_FROM_NUMBER`'s voice webhook at `https://PUBLIC/twilio/inbound` (HTTP POST) through the Twilio API, starting the quick tunnel if needed; the daemon log says whether that worked. The agent answers as your assistant, takes a message, and the result is delivered like any other call with `direction: "inbound"`. Incoming calls are rejected while the setting is off, and callers get a busy signal while `COLLEAGUE_MAX_INBOUND` calls (default 2) are already in progress. A quick tunnel only works while the daemon runs, so incoming calls suit server installs best.
@@ -75,6 +97,9 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 | `TWILIO_FROM_NUMBER` | none | A number bought in Twilio. Needed for incoming calls, and for outgoing calls unless `COLLEAGUE_CALLER_ID` is set. |
 | `SIGNALWIRE_SPACE`, `SIGNALWIRE_PROJECT_ID`, `SIGNALWIRE_API_TOKEN`, `SIGNALWIRE_SIGNING_KEY`, `SIGNALWIRE_FROM_NUMBER` | none | The same, through SignalWire's Compatibility API. The signing key checks webhook signatures. |
 | `COLLEAGUE_PHONE_PROVIDER` | detected | `signalwire` or `twilio` when both are set up. |
+| `COLLEAGUE_PHONE_AUDIO` | `relay` | `relay`, `sip`, or `sip-webhook`; see [Direct audio over SIP](#direct-audio-over-sip). |
+| `COLLEAGUE_SIP_TRUNK_URL`, `COLLEAGUE_SIP_USERNAME`, `COLLEAGUE_SIP_PASSWORD` | none | The SIP trunk OpenAI dials out through (`sip`). `colleague setup sip-trunk` creates one on SignalWire. |
+| `OPENAI_PROJECT_ID`, `OPENAI_WEBHOOK_SECRET` | none | For `sip-webhook`: the project in the SIP address, and the webhook signing secret. |
 | `COLLEAGUE_CALLER_ID` | `TWILIO_FROM_NUMBER` | Caller ID for outgoing calls, such as your verified mobile. |
 | `COLLEAGUE_OWNER_NAME` | none | Default `onBehalfOf`, and the name in the inbound greeting. |
 | `COLLEAGUE_OWNER_PHONE` | none | Rehearsals, the setup test call, and transfers. |

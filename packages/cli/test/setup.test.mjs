@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  availableVoices, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
+  availableVoices, createSignalWireTrunk, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv,
 } from '../src/setup.mjs';
 
@@ -486,4 +486,61 @@ test('Done needs the OpenAI key and a complete SignalWire setup', () => {
   assert.deepEqual(missingForDone({ ...base, SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p', SIGNALWIRE_SIGNING_KEY: 'PSK' }),
     ['API token is required for SignalWire phone calls']);
   assert.deepEqual(missingForDone({ ...base, OPENAI_API_KEY: 'replace_with_your_project_api_key' }), ['OpenAI API key is required']);
+});
+
+test('sip-trunk creates the SignalWire script and SIP address OpenAI dials out through', async () => {
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push([String(url), JSON.parse(options.body), options.headers.Authorization]);
+    if (String(url).endsWith('/swml_scripts')) return Response.json({ id: 'res_1' });
+    return Response.json({ id: 'addr_1', uri: 'sip:*@acme-colleague-ai-openai.dapp.signalwire.com' });
+  };
+  const env = { SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p-1', SIGNALWIRE_API_TOKEN: 'PT-x',
+    SIGNALWIRE_FROM_NUMBER: '+14155550124' };
+  const trunk = await createSignalWireTrunk({ env, fetchImpl, password: 'generated-secret' });
+  assert.deepEqual(trunk.settings, {
+    COLLEAGUE_SIP_TRUNK_URL: 'sips:acme-colleague-ai-openai.dapp.signalwire.com:5061',
+    COLLEAGUE_SIP_USERNAME: '+14155550124',
+    COLLEAGUE_SIP_PASSWORD: 'generated-secret',
+    COLLEAGUE_PHONE_AUDIO: 'sip',
+  });
+  const [script, address] = requests;
+  assert.equal(script[0], 'https://acme.signalwire.com/api/fabric/resources/swml_scripts');
+  assert.equal(script[2], `Basic ${Buffer.from('p-1:PT-x').toString('base64')}`);
+  const connect = script[1].contents.sections.main[0].connect;
+  assert.equal(connect.from, '+14155550124');
+  assert.match(connect.to, /sips\?:/);
+  assert.equal(address[0], 'https://acme.signalwire.com/api/fabric/sip_addresses');
+  assert.deepEqual({ ...address[1], password: 'hidden' }, {
+    name: 'colleague-ai-openai', calling_handler_resource_id: 'res_1', user: '*', encryption: 'required',
+    codecs: ['OPUS', 'PCMU', 'PCMA'], password: 'hidden' });
+
+  await assert.rejects(createSignalWireTrunk({ env: { ...env, SIGNALWIRE_API_TOKEN: '' }, fetchImpl }), /Set up SignalWire first/);
+  const refusing = async () => new Response(JSON.stringify({ errors: [{ detail: 'Name has already been taken' }] }), { status: 422 });
+  await assert.rejects(createSignalWireTrunk({ env, fetchImpl: refusing }), /422\): Name has already been taken/);
+});
+
+test('status says how call audio travels and what direct SIP still needs', async (t) => {
+  const root = await tempRoot(t);
+  await fs.writeFile(path.join(root, 'start-runtime-daemon.sh'), '#!/bin/sh\n');
+  const runner = fakeRunner({ 'python3 -c': 0 });
+  const find = () => null;
+  const relay = await setupStatus({ root, env: {}, verify: false, runner, find });
+  assert.match(relay.checks.find((c) => c.id === 'phone_audio').detail, /^relayed through this computer/);
+  await fs.writeFile(path.join(root, '.env'), [
+    'COLLEAGUE_PHONE_AUDIO=sip',
+    'COLLEAGUE_SIP_TRUNK_URL=sips:a.dapp.signalwire.com:5061',
+    'COLLEAGUE_SIP_USERNAME=+14155550124',
+  ].join('\n'));
+  const partial = await setupStatus({ root, env: {}, verify: false, runner, find });
+  const audio = partial.checks.find((c) => c.id === 'phone_audio');
+  assert.equal(audio.ok, false);
+  assert.match(audio.detail, /missing COLLEAGUE_SIP_PASSWORD/);
+  // OpenAI dials out, so nothing here has to be reachable from the internet.
+  assert.equal(partial.checks.find((c) => c.id === 'public_url').ok, true);
+  assert.equal(validateSetting('COLLEAGUE_PHONE_AUDIO', 'sip-webhook'), 'sip-webhook');
+  assert.throws(() => validateSetting('COLLEAGUE_PHONE_AUDIO', 'webrtc'), /relay, sip, sip-webhook/);
+  assert.throws(() => validateSetting('COLLEAGUE_SIP_TRUNK_URL', 'sip:host'), /sips:/);
+  assert.throws(() => validateSetting('OPENAI_PROJECT_ID', 'abc'), /proj_/);
+  assert.throws(() => validateSetting('COLLEAGUE_SIP_PASSWORD', 'x'), /secret/);
 });

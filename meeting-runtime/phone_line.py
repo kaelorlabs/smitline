@@ -19,7 +19,8 @@ from phone_prompts import (
     HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, machine_hint,
     opening_cue, voice_instructions,
 )
-from twilio_client import client_for, dial_twiml, stream_twiml
+from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
+from twilio_client import client_for, dial_twiml, sip_dial_twiml, stream_twiml
 from voice_core import (
     PCMU8, LiveSession, backend_usage_from, function_call_from, session_config,
 )
@@ -51,6 +52,9 @@ INTERRUPT_MIN_QUEUED = 0.25
 INTERRUPT_SETTLE = 0.35
 # How many times a hang-up may give way to the other person still talking.
 MAX_HANGUP_YIELDS = 2
+# On direct SIP the model's speech plays at OpenAI; its reflected copy going quiet for
+# this long means the goodbye has finished.
+SIP_SPEECH_TAIL = 1.2
 TWILIO_TERMINAL = {
     'completed': 'hangup', 'busy': 'busy', 'no-answer': 'no_answer', 'failed': 'error',
     'canceled': 'canceled',
@@ -219,6 +223,8 @@ class PhoneSession:
         self._tasks = set()
         self._hangups = set()
         self._pending_hangup = None
+        self._accept_done = asyncio.Event()
+        self._accepted = None
 
     # Configuration -------------------------------------------------------
 
@@ -359,37 +365,53 @@ class PhoneSession:
 
     async def _read_live(self):
         async for event in self.live.events():
-            kind = event.get('type')
-            if kind == 'session.output_audio.delta':
-                now = time.monotonic()
-                self.last_activity = self.last_output_at = now
-                if self._awaiting_reply_since is not None:
-                    self.stats['responseDelaysMs'].append(int((now - self._awaiting_reply_since) * 1000))
-                    self._awaiting_reply_since = None
-                self.pacer.offer(event['delta'])
-            elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
-                self._transcript(event)
-            elif kind == 'response.event':
-                usage = backend_usage_from(event)
-                if usage:
-                    self.backend_tokens['input'] += usage['input']
-                    self.backend_tokens['output'] += usage['output']
-                call = function_call_from(event)
-                if call and call['name'] == 'end_call':
-                    # Hanging up needs no tool result or further backend turn.
-                    reason = call['arguments'].get('reason')
-                    self.ctx.event('call.end_requested', reason=reason or 'completed')
-                    self._start_hangup('voicemail' if reason == 'voicemail_left' else 'hangup',
-                                       yield_to_speech=reason != 'voicemail_left')
-            elif kind == 'error':
-                error = event.get('error') or {}
-                self.ctx.event('call.voice_error', code=error.get('code') or 'live_error')
-            elif kind == 'session.closed':
-                if event.get('reason') in ('content', 'connection_lost', 'expired'):
-                    self.fail(f'The voice session closed ({event.get("reason")}).')
-                elif self.end_reason is None:
-                    self.end_reason = 'hangup'
+            if event.get('type') == 'session.output_audio.delta':
+                self._output_audio(event)
+            elif self._handle_live_event(event):
                 return
+        self._live_ended()
+
+    def _output_audio(self, event):
+        now = time.monotonic()
+        self.last_activity = self.last_output_at = now
+        if self._awaiting_reply_since is not None:
+            self.stats['responseDelaysMs'].append(int((now - self._awaiting_reply_since) * 1000))
+            self._awaiting_reply_since = None
+        if self.pacer is not None:
+            self.pacer.offer(event['delta'])
+
+    def _handle_live_event(self, event):
+        """Events every transport handles the same way; True once the session has closed."""
+        kind = event.get('type')
+        if kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
+            self._transcript(event)
+        elif kind == 'response.event':
+            usage = backend_usage_from(event)
+            if usage:
+                self.backend_tokens['input'] += usage['input']
+                self.backend_tokens['output'] += usage['output']
+            call = function_call_from(event)
+            if call and call['name'] == 'end_call':
+                # Hanging up needs no tool result or further backend turn.
+                reason = call['arguments'].get('reason')
+                self.ctx.event('call.end_requested', reason=reason or 'completed')
+                self._start_hangup('voicemail' if reason == 'voicemail_left' else 'hangup',
+                                   yield_to_speech=reason != 'voicemail_left')
+        elif kind == 'error':
+            error = event.get('error') or {}
+            self.ctx.event('call.voice_error', code=error.get('code') or 'live_error')
+        elif kind == 'session.closed':
+            reason = event.get('reason')
+            if reason in ('content', 'connection_lost', 'expired'):
+                self.fail(f'The voice session closed ({reason}).')
+            elif reason == 'remote_hangup':
+                self.end_reason = self.end_reason or 'remote_hangup'
+            elif self.end_reason is None:
+                self.end_reason = 'hangup'
+            return True
+        return False
+
+    def _live_ended(self):
         if self.end_reason is None:
             self.ctx.event('call.voice_error', code='connection_lost')
             self.fail('The voice connection was lost during the call.')
@@ -530,8 +552,7 @@ class PhoneSession:
         set_reason = self.end_reason is None
         if set_reason:
             self.end_reason = reason
-        if self.pacer is not None:
-            await self.pacer.drained()
+        await self._let_speech_finish()
         if (yield_to_speech and self._hangup_yields < MAX_HANGUP_YIELDS
                 and self._other_spoke_at is not None and self._other_spoke_at > requested_at
                 and not self.finished.is_set()):
@@ -545,6 +566,13 @@ class PhoneSession:
             if self.live is not None:
                 await self.live.append('session.instructions.append', HANGUP_YIELDED)
             return
+        await self._end_call()
+
+    async def _let_speech_finish(self):
+        if self.pacer is not None:
+            await self.pacer.drained()
+
+    async def _end_call(self):
         await self._close_stream()
         if self.call_sid:
             try:
@@ -596,29 +624,194 @@ class PhoneSession:
             await self.live.append(
                 'session.commentary.append',
                 f'Tell them briefly that you are connecting them with {self.brief.on_behalf_of} now.')
-        if self.pacer is not None:
-            await asyncio.sleep(1.0)
-            await self.pacer.drained(6.0)
+        await asyncio.sleep(1.0)
+        await self._let_speech_finish()
+        await self._hand_over()
+        self.end_reason = 'transferred'
+        self.ctx.event('call.transferred')
+        return {'transferred': True}
+
+    async def _hand_over(self):
+        """Redirect the provider's call leg to the owner's phone."""
         fallback = (f'Sorry, I could not reach {self.brief.on_behalf_of} right now. '
                     'They will get back to you. Goodbye.')
         await self.twilio.update_call(
             self.call_sid, twiml=dial_twiml(self.owner_phone, self.from_number, fallback=fallback))
-        self.end_reason = 'transferred'
-        self.ctx.event('call.transferred')
-        return {'transferred': True}
+
+
+class SipPhoneSession(PhoneSession):
+    """A call whose audio flows between the provider and OpenAI; this side only steers.
+
+    The sideband carries call progress, transcripts, backend tool calls, and commands.
+    Everything about the conversation (opening, disclosure check, hang-up rules, time
+    limits, results) is shared with the relayed PhoneSession.
+    """
+
+    def __init__(self, line, ctx, *, api_key, client, from_number, twilio=None, owner_phone=None,
+                 bridged=False):
+        super().__init__(line, ctx, api_key=api_key, twilio=twilio, from_number=from_number,
+                         token=secrets.token_urlsafe(24), recording=False, owner_phone=owner_phone)
+        self.client = client
+        self.bridged = bridged
+        self.session_id = None
+        self.answered_at = None
+        self.incoming = asyncio.get_running_loop().create_future()
+
+    def config(self):
+        return sip_session(super().config())
+
+    async def run_sip(self, session_id, *, answered=False):
+        """Steer the call until the session closes."""
+        self.session_id = session_id
+        self.ctx.link(liveSessionId=session_id)
+        manager = self.line.sideband_factory(self.api_key, session_id)
+        try:
+            live = await asyncio.wait_for(manager.__aenter__(), LIVE_CONNECT_TIMEOUT)
+        except Exception as error:
+            self.fail(f'The call control channel could not connect ({_error_code(error)}).')
+            await self._end_call()
+            self.finished.set()
+            return
+        self.live = live
+        reader = asyncio.create_task(self._read_live(), name='sip-sideband')
+        try:
+            if answered:
+                self._answered()
+            else:
+                self._spawn(self._ring_watch())
+            limit = RING_SECONDS + 30 + self.brief.max_minutes * 60 + OVERRUN_SECONDS
+            try:
+                await asyncio.wait_for(asyncio.shield(reader), limit)
+            except asyncio.TimeoutError:
+                self.fail('The call ran past its time limit and was ended.')
+                await self._end_call()
+                try:
+                    await asyncio.wait_for(asyncio.shield(reader), 15)
+                except asyncio.TimeoutError:
+                    pass
+            except Exception as error:
+                self.fail(f'The call broke ({_error_code(error)}).')
+                await self._end_call()
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            await manager.__aexit__(None, None, None)
+            for speaker, text in self.joiner.flush():
+                self.ctx.add_transcript(speaker, text)
+                if speaker == 'agent':
+                    self._check_disclosure(final=True)
+            for task in list(self._tasks):
+                task.cancel()
+            if self._hangups:
+                await asyncio.wait(list(self._hangups), timeout=5)
+            if self.answered_at is not None and self.phone_seconds is None:
+                self.phone_seconds = int(time.monotonic() - self.answered_at)
+            self.finished.set()
+
+    async def _read_live(self):
+        async for event in self.live.events():
+            kind = event.get('type')
+            if kind == 'transport.ringing':
+                self.ctx.set_status('ringing')
+            elif kind == 'transport.answered':
+                self._answered()
+            elif kind == 'transport.failed':
+                self._transport_failed(event)
+            elif kind == 'session.output_audio.delta':
+                self._output_audio(event)  # a reflected copy: timing only
+            elif kind == 'session.input_audio.append':
+                continue  # reflected caller audio
+            elif self._handle_live_event(event):
+                return
+        self._live_ended()
+
+    def _answered(self):
+        if self.answered_at is not None:
+            return
+        now = time.monotonic()
+        self.answered_at = self.started_at = self.last_activity = now
+        self.connected.set()
+        self.ctx.set_status('in_progress')
+        self._spawn(self._watch())
+        self._spawn(self._open())
+
+    def _transport_failed(self, event):
+        error = event.get('error') or {}
+        message = str(error.get('message') or error.get('code') or 'the call could not be placed')
+        self.ctx.event('call.transport_failed', code=error.get('code') or 'call_error')
+        lowered = message.lower()
+        if 'busy' in lowered:
+            self.end_reason = self.end_reason or 'busy'
+        elif any(word in lowered for word in ('no answer', 'no_answer', 'not answered', 'timeout')):
+            self.end_reason = self.end_reason or 'no_answer'
+        else:
+            self.fail(f'The call could not be placed: {message}.')
+        self._spawn(self._end_call())
+
+    async def _ring_watch(self):
+        await asyncio.sleep(RING_SECONDS + 15)
+        if self.answered_at is None:
+            self.end_reason = self.end_reason or 'no_answer'
+            await self._end_call()
+
+    async def _let_speech_finish(self):
+        """OpenAI plays the speech; wait until its reflected copy has gone quiet."""
+        deadline = time.monotonic() + DRAIN_TIMEOUT
+        while time.monotonic() < deadline:
+            if self.last_output_at is None or time.monotonic() - self.last_output_at >= SIP_SPEECH_TAIL:
+                return
+            await asyncio.sleep(0.1)
+
+    async def _end_call(self):
+        if self.session_id:
+            try:
+                await self.client.hangup(self.session_id)
+            except Exception:
+                pass
+        if self.bridged and self.call_sid:
+            try:
+                await self.twilio.update_call(self.call_sid, status='completed')
+            except Exception:
+                pass
+
+    async def _hand_over(self):
+        if self.bridged and self.call_sid:
+            return await super()._hand_over()
+        await self.client.refer(self.session_id, f'tel:{self.owner_phone}')
+
+    def accept_incoming(self, session_id):
+        """The provider handed the call to OpenAI: accept it with this call's configuration."""
+        if self.incoming.done():
+            return False
+        self.incoming.set_result(None)  # claimed: webhook retries are ignored from here on
+        self._accepting = self._spawn(self._accept(session_id))
+        return True
+
+    async def _accept(self, session_id):
+        try:
+            await self.client.accept(session_id, sip_session(super().config(), accept=True))
+        except Exception as error:
+            self.fail(f'OpenAI did not take the call ({_error_code(error)}).')
+            self._accepted = None
+        else:
+            self._accepted = session_id
+        self._accept_done.set()
 
 
 class PhoneLine:
     channel = 'phone'
 
     def __init__(self, *, public_url, environ, twilio_factory=None, live_factory=None,
-                 status_grace=5.0, public_available=None, connect_timeout=CONNECT_TIMEOUT):
+                 status_grace=5.0, public_available=None, connect_timeout=CONNECT_TIMEOUT,
+                 sip_client_factory=None, sideband_factory=None):
         """public_url: async callable returning the https base URL Twilio can reach."""
         self._public_url = public_url
         self._public_available = public_available
         self.environ = environ
         self.twilio_factory = twilio_factory or client_for
         self.live_factory = live_factory or (lambda key, config: LiveSession(key, config))
+        self.sip_client_factory = sip_client_factory or (lambda key: LiveSipClient(key))
+        self.sideband_factory = sideband_factory or (lambda key, session_id: LiveSideband(key, session_id))
         self.status_grace = status_grace
         self.connect_timeout = connect_timeout
         self.gateway_ready = True
@@ -627,6 +820,8 @@ class PhoneLine:
     def ready(self, hooks, owner, brief):
         hooks.credentials(owner, 'openai')
         hooks.credentials(owner, 'twilio')
+        if hooks.credentials(owner, 'sip')['mode'] == 'sip':
+            return  # OpenAI dials out: nothing on this computer has to be reachable
         if not self.gateway_ready:
             raise CallRefused('gateway_unavailable', 'The phone gateway could not start; see the '
                               'daemon log. Set COLLEAGUE_GATEWAY_PORT to a free port.')
@@ -644,13 +839,114 @@ class PhoneLine:
     def claim(self, call_id, token):
         """Match a Twilio stream to the session waiting for it."""
         session = self.sessions.get(call_id)
-        if session is None or not secrets.compare_digest(session.token, token or ''):
+        if session is None or isinstance(session, SipPhoneSession):
+            return None
+        if not secrets.compare_digest(session.token, token or ''):
             return None
         if session.connected.is_set() or session.canceled or session.finished.is_set():
             return None
         return session
 
     async def start(self, ctx):
+        mode = ctx.credentials('sip')['mode']
+        if mode == 'sip':
+            return await self._start_sip(ctx)
+        if mode == 'sip-webhook':
+            return await self._start_bridged(ctx)
+        return await self._start_relay(ctx)
+
+    def _sip_session(self, ctx, *, bridged=False):
+        openai = ctx.credentials('openai')
+        phone = ctx.credentials('twilio')
+        env = self.environ()
+        return SipPhoneSession(
+            self, ctx, api_key=openai['apiKey'], client=self.sip_client_factory(openai['apiKey']),
+            twilio=self.twilio_factory(phone) if bridged else None,
+            from_number=env.get('COLLEAGUE_CALLER_ID') or phone['fromNumber'],
+            owner_phone=env.get('COLLEAGUE_OWNER_PHONE'), bridged=bridged)
+
+    async def _start_sip(self, ctx):
+        """OpenAI dials out through the provider's SIP trunk; audio never touches this computer."""
+        sip = ctx.credentials('sip')
+        session = self._sip_session(ctx)
+        self.sessions[ctx.call_id] = session
+        try:
+            ctx.set_status('connecting')
+            if session.canceled:
+                return await self._finish(ctx, session)
+            trunk = {'provider_url': sip['trunkUrl'],
+                     'auth': {'type': 'digest', 'username': sip['username'], 'password': sip['password']},
+                     'caller_number': session.from_number}
+            try:
+                session_id = await session.client.create_outbound(
+                    session.config(), destination=ctx.brief.to, trunk=trunk)
+            except LiveSipError as error:
+                if error.code == 'outbound_sip_not_enabled':
+                    # Not enabled for this OpenAI organization yet: relay this call instead.
+                    ctx.event('call.sip_unavailable', code=error.code)
+                    self.sessions.pop(ctx.call_id, None)
+                    return await self._start_relay(ctx)
+                session.fail(f'OpenAI could not place the call ({error.code}).')
+                return await self._finish(ctx, session)
+            ctx.link(fromNumber=session.from_number)
+            if session.canceled:
+                session.session_id = session_id
+                await session._end_call()
+            await session.run_sip(session_id)
+            return await self._finish(ctx, session)
+        finally:
+            self.sessions.pop(ctx.call_id, None)
+
+    async def _start_bridged(self, ctx):
+        """The provider dials the person, then hands the answered call to OpenAI's SIP address."""
+        sip = ctx.credentials('sip')
+        session = self._sip_session(ctx, bridged=True)
+        self.sessions[ctx.call_id] = session
+        try:
+            ctx.set_status('connecting')
+            base = (await self._public_url()).rstrip('/')
+            if session.canceled:
+                return await self._finish(ctx, session)
+            uri = openai_sip_uri(sip['projectId'], {'X-Colleague-Call': ctx.call_id,
+                                                    'X-Colleague-Token': session.token})
+            created = await session.twilio.create_call(
+                to=ctx.brief.to, from_=session.from_number, twiml=sip_dial_twiml(uri),
+                status_callback=f'{base}/twilio/status/{ctx.call_id}', timeout=RING_SECONDS,
+                time_limit=ctx.brief.max_minutes * 60 + 90)
+            session.call_sid = created.get('sid')
+            ctx.link(providerCallSid=session.call_sid, fromNumber=session.from_number)
+            if session.canceled:
+                await self._cancel_remote(session)
+                return await self._finish(ctx, session)
+            # The webhook route calls on_sip_incoming, which accepts the call.
+            waits = [asyncio.create_task(session._accept_done.wait()),
+                     asyncio.create_task(session.finished.wait())]
+            done, pending = await asyncio.wait(waits, timeout=self.connect_timeout,
+                                               return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            if session._accepted:
+                await session.run_sip(session._accepted, answered=True)
+            elif not done:
+                await self._resolve_silent_call(session)
+            else:
+                session.finished.set()
+            return await self._finish(ctx, session)
+        finally:
+            self.sessions.pop(ctx.call_id, None)
+
+    def on_sip_incoming(self, session_id, headers):
+        """OpenAI announced a call handed over by the provider; True if it is ours to accept."""
+        session = self.sessions.get(headers.get('X-Colleague-Call') or '')
+        if not isinstance(session, SipPhoneSession) or not session.bridged:
+            return False
+        if not secrets.compare_digest(session.token, headers.get('X-Colleague-Token') or ''):
+            return False
+        if session.incoming.done():
+            return True  # a retried webhook for a call already claimed
+        return session.accept_incoming(session_id)
+
+    async def _start_relay(self, ctx):
         openai = ctx.credentials('openai')
         twilio_creds = ctx.credentials('twilio')
         env = self.environ()
@@ -845,6 +1141,11 @@ class PhoneLine:
         # still being set up is never dialed, and one already dialed is canceled.
         session.canceled = True
         session.end_reason = session.end_reason or 'canceled'
+        if isinstance(session, SipPhoneSession):
+            await session._end_call()
+            if not session.session_id:
+                session.finished.set()
+            return True
         await self._cancel_remote(session)
         session.finished.set()
         return True

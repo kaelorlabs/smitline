@@ -973,6 +973,226 @@ class SignalWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.store.get(record['id'])['status'], 'ringing')
 
 
+class FakeSipClient:
+    def __init__(self, *, refuse=None):
+        self.calls = []
+        self.refuse = refuse
+
+    async def create_outbound(self, session, *, destination, trunk):
+        self.calls.append(('create', session, destination, trunk))
+        if self.refuse:
+            from live_sip import LiveSipError
+            raise LiveSipError(403, self.refuse, 'not enabled')
+        return 'live_sip_1'
+
+    async def accept(self, session_id, session):
+        self.calls.append(('accept', session_id, session))
+
+    async def reject(self, session_id, status_code=486):
+        self.calls.append(('reject', session_id, status_code))
+
+    async def hangup(self, session_id):
+        self.calls.append(('hangup', session_id))
+        for side in FakeSideband.instances:
+            if side.session_id == session_id:
+                side.push({'type': 'session.closed', 'reason': 'close_requested', 'usage': {'seconds': 21}})
+
+    async def refer(self, session_id, target_uri):
+        self.calls.append(('refer', session_id, target_uri))
+
+
+class FakeSideband(FakeLive):
+    instances = []
+
+    def __init__(self, key, session_id):
+        super().__init__(key, {})
+        self.session_id = session_id
+        self.started.set()
+        FakeSideband.instances.append(self)
+
+
+SIP_ENV = {**ENV, 'COLLEAGUE_PHONE_AUDIO': 'sip', 'COLLEAGUE_SIP_TRUNK_URL': 'sips:acme-openai.dapp.signalwire.com:5061',
+           'COLLEAGUE_SIP_USERNAME': '+15005550006', 'COLLEAGUE_SIP_PASSWORD': 'sip-secret',
+           'COLLEAGUE_OWNER_PHONE': '+14155550199'}
+
+
+class SipPhoneTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        FakeSideband.instances = []
+        FakeSummarizer.calls = 0
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name, env=dict(SIP_ENV))
+        self.client = FakeSipClient()
+        self.h.line.sip_client_factory = lambda key: self.client
+        self.h.line.sideband_factory = FakeSideband
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def sideband(self):
+        await until(lambda: FakeSideband.instances)
+        return FakeSideband.instances[-1]
+
+    async def test_openai_dials_out_and_this_side_only_steers(self):
+        # Nothing on this computer needs to be reachable for OpenAI to dial out.
+        self.h.line.gateway_ready = False
+        record = await self.h.service.create(brief())
+        side = await self.sideband()
+        kind, session, destination, trunk = self.client.calls[0]
+        self.assertEqual((kind, destination), ('create', '+14155550142'))
+        self.assertNotIn('format', session['audio'])
+        self.assertNotIn('type', session)
+        self.assertEqual(trunk, {'provider_url': 'sips:acme-openai.dapp.signalwire.com:5061',
+                                 'auth': {'type': 'digest', 'username': '+15005550006', 'password': 'sip-secret'},
+                                 'caller_number': '+15005550006'})
+        self.assertEqual(self.h.twilio.created, [])
+        side.push({'type': 'transport.ringing', 'event_id': 'e1'})
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'ringing')
+        side.push({'type': 'transport.answered', 'event_id': 'e2'})
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
+        side.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?', 'start_ms': 0, 'end_ms': 400})
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in side.appends))
+        side.push({'type': 'session.output_transcript.delta',
+                   'delta': "Hi, I'm an AI assistant calling on behalf of Robin.", 'start_ms': 600, 'end_ms': 2500})
+        side.push({'type': 'session.output_audio.delta', 'delta': 'AAAA', 'start_ms': 600, 'end_ms': 620})
+        side.push({'type': 'session.input_audio.append', 'audio': 'AAAA'})
+        # An instruction from the agent reaches the call through the sideband.
+        self.assertEqual(await self.h.service.instruct(record['id'], 'Mention the patio.'), {'delivered': True})
+        side.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        done = await self.h.service.wait(record['id'], timeout=8)
+        self.assertEqual(done['status'], 'completed')
+        self.assertEqual(done['endReason'], 'hangup')
+        self.assertIn(('hangup', 'live_sip_1'), self.client.calls)
+        self.assertEqual(done['line']['liveSessionId'], 'live_sip_1')
+        self.assertEqual(done['usage']['voiceSeconds'], 21)
+        self.assertIn('phoneSeconds', done['usage'])
+        self.assertIs(done['result']['disclosureVerified'], True)
+        self.assertEqual([line['speaker'] for line in done['result']['transcript']], ['other', 'agent'])
+
+    async def test_the_callee_hanging_up_ends_the_call(self):
+        record = await self.h.service.create(brief())
+        side = await self.sideband()
+        side.push({'type': 'transport.answered', 'event_id': 'e2'})
+        side.push({'type': 'session.input_transcript.delta', 'delta': 'No thanks.', 'start_ms': 0, 'end_ms': 400})
+        side.push({'type': 'session.closed', 'reason': 'remote_hangup', 'usage': {'seconds': 9}})
+        done = await self.h.service.wait(record['id'], timeout=8)
+        self.assertEqual(done['endReason'], 'remote_hangup')
+
+    async def test_a_call_nobody_answers(self):
+        record = await self.h.service.create(brief())
+        side = await self.sideband()
+        side.push({'type': 'transport.failed', 'event_id': 'e3',
+                   'error': {'type': 'call_error', 'code': 'provider_invite_failed', 'message': 'No answer'}})
+        done = await self.h.service.wait(record['id'], timeout=8)
+        self.assertEqual((done['endReason'], done['result']['outcome']), ('no_answer', 'not_reached'))
+        self.assertIn(('hangup', 'live_sip_1'), self.client.calls)
+
+    async def test_without_outbound_sip_the_call_is_relayed_instead(self):
+        self.client.refuse = 'outbound_sip_not_enabled'
+        record = await self.h.service.create(brief())
+        await until(lambda: self.h.twilio.created)
+        events = [e['type'] for e in self.h.service.events(record['id'])]
+        self.assertIn('call.sip_unavailable', events)
+        self.assertIn('<Connect><Stream', self.h.twilio.created[0]['twiml'])
+        await self.h.service.end(record['id'])
+
+    async def test_missing_trunk_settings_are_named(self):
+        self.h.env.pop('COLLEAGUE_SIP_PASSWORD')
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.create(brief())
+        self.assertEqual(caught.exception.details['missing'], ['COLLEAGUE_SIP_PASSWORD'])
+
+    async def test_taking_over_refers_the_call_to_the_owner(self):
+        record = await self.h.service.create(brief())
+        side = await self.sideband()
+        side.push({'type': 'transport.answered', 'event_id': 'e2'})
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
+        result = await self.h.service.transfer(record['id'])
+        self.assertEqual(result, {'transferred': True})
+        self.assertIn(('refer', 'live_sip_1', 'tel:+14155550199'), self.client.calls)
+        side.push({'type': 'session.closed', 'reason': 'close_requested', 'usage': {'seconds': 30}})
+        done = await self.h.service.wait(record['id'], timeout=8)
+        self.assertEqual(done['endReason'], 'transferred')
+
+
+class SipWebhookTests(unittest.IsolatedAsyncioTestCase):
+    SECRET = 'whsec_' + base64.b64encode(b'sixteen-byte-key').decode()
+
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        FakeSideband.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        env = {**ENV, 'COLLEAGUE_PHONE_AUDIO': 'sip-webhook', 'OPENAI_PROJECT_ID': 'proj_abc',
+               'OPENAI_WEBHOOK_SECRET': self.SECRET}
+        self.h = PhoneHarness(self.temp.name, env=env)
+        self.client = FakeSipClient()
+        self.h.line.sip_client_factory = lambda key: self.client
+        self.h.line.sideband_factory = FakeSideband
+        app = create_gateway_app(self.h.line, self.h.service, current_url=lambda: PUBLIC)
+        self.gateway = TestClient(TestServer(app))
+        await self.gateway.start_server()
+
+    async def asyncTearDown(self):
+        await self.gateway.close()
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    def signed(self, event):
+        import hashlib, hmac, time
+        body = json.dumps(event)
+        stamp = str(int(time.time()))
+        key = base64.b64decode(self.SECRET[6:])
+        digest = hmac.new(key, f'wh_1.{stamp}.{body}'.encode(), hashlib.sha256).digest()
+        return body, {'webhook-id': 'wh_1', 'webhook-timestamp': stamp,
+                      'webhook-signature': 'v1,' + base64.b64encode(digest).decode(),
+                      'Content-Type': 'application/json'}
+
+    async def test_the_provider_dials_and_openai_hands_the_call_back(self):
+        record = await self.h.service.create(brief())
+        await until(lambda: self.h.twilio.created)
+        twiml = self.h.twilio.created[0]['twiml']
+        self.assertIn('<Sip codecs="PCMU,PCMA,OPUS">sip:proj_abc@sip.api.openai.com;transport=tls?X-Colleague-Call=' + record['id'], twiml)
+        token = self.h.line.session(record['id']).token
+        self.assertIn('X-Colleague-Token=' + token, twiml.replace('&amp;', '&'))
+        # A forged webhook is refused.
+        body, headers = self.signed({'type': 'live.transport.incoming', 'data': {'session_id': 'live_x'}})
+        bad = dict(headers, **{'webhook-signature': 'v1,AAAA'})
+        self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=bad)).status, 403)
+        # OpenAI announces the call with our headers: it is accepted and steered.
+        event = {'type': 'live.transport.incoming', 'data': {'type': 'sip', 'session_id': 'live_in_1', 'sip_headers': [
+            {'name': 'X-Colleague-Call', 'value': record['id']}, {'name': 'X-Colleague-Token', 'value': token}]}}
+        body, headers = self.signed(event)
+        self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=headers)).status, 200)
+        side = await until_value(lambda: FakeSideband.instances and FakeSideband.instances[-1])
+        accept = next(call for call in self.client.calls if call[0] == 'accept')
+        self.assertEqual(accept[1], 'live_in_1')
+        self.assertEqual(accept[2]['type'], 'live')
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
+        # A retried webhook for the same call changes nothing.
+        self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=headers)).status, 200)
+        self.assertEqual(sum(call[0] == 'accept' for call in self.client.calls), 1)
+        side.push({'type': 'session.closed', 'reason': 'remote_hangup', 'usage': {'seconds': 12}})
+        done = await self.h.service.wait(record['id'], timeout=8)
+        self.assertEqual(done['endReason'], 'remote_hangup')
+
+    async def test_calls_this_installation_did_not_place_are_turned_away(self):
+        event = {'type': 'live.transport.incoming', 'data': {'type': 'sip', 'session_id': 'live_stranger',
+                                                            'sip_headers': [{'name': 'X-Colleague-Call', 'value': 'call-0000000000000000'}]}}
+        body, headers = self.signed(event)
+        self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=headers)).status, 200)
+        await until(lambda: ('reject', 'live_stranger', 486) in self.client.calls)
+
+
+async def until_value(getter, timeout=3.0):
+    await until(lambda: bool(getter()), timeout)
+    return getter()
+
+
 def fake_live_app(record):
     """A GPT-Live WebSocket speaking the documented event protocol."""
     from aiohttp import web

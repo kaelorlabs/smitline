@@ -19,6 +19,7 @@ import {
 import {
   SECRETS_PAGE_MINUTES,
   availableVoices,
+  createSignalWireTrunk,
   openBrowser,
   readEnv,
   registerAgents,
@@ -54,6 +55,7 @@ const USAGE = `Usage:
   colleague setup start
   colleague setup register [--agents claude-code,codex,cursor,claude-desktop]
   colleague setup voice [--set <name>] [--preview <name>]
+  colleague setup sip-trunk
   colleague setup call-me [--wait]
   colleague connector status
   colleague connector revoke --all | --client <id>
@@ -696,6 +698,23 @@ async function setupCommand(args) {
     }
     writeEnv(root, { [key]: clean });
     printJson({ saved: [key] });
+    return EXIT.ok;
+  }
+  if (action === 'sip-trunk') {
+    // Direct SIP: create the SignalWire trunk OpenAI dials out through, and switch calls to it.
+    const env = { ...readEnv(root), ...process.env };
+    let trunk;
+    try {
+      trunk = await createSignalWireTrunk({ env });
+    } catch (error) {
+      throw new ValidationError(error.message);
+    }
+    writeEnv(root, trunk.settings);
+    printJson({
+      saved: Object.keys(trunk.settings),
+      trunk: trunk.settings.COLLEAGUE_SIP_TRUNK_URL,
+      next: 'Calls now use direct SIP. OpenAI must enable outbound SIP for your organization; until then each call is relayed as before.',
+    });
     return EXIT.ok;
   }
   if (action === 'register') {
