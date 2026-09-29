@@ -357,15 +357,24 @@ class SdkTests(unittest.IsolatedAsyncioTestCase):
         enabled_share = validate_join_request({
             'url': ZOOM,
             'agentSession': agent_session(),
-            'screenShare': {'enabled': True, 'captureIntervalMs': 5000},
+            'screenShare': {'enabled': True, 'captureIntervalMs': 5000, 'minChange': 0.05,
+                            'settleTicks': 0},
         })
         self.assertTrue(enabled_share['screenShare']['enabled'])
+        self.assertEqual(enabled_share['screenShare']['settleTicks'], 0)
         with self.assertRaises(ValidationError):
             validate_join_request({
                 'url': ZOOM,
                 'agentSession': agent_session(),
                 'screenShare': {'enabled': True, 'argv': ['ffmpeg']},
             })
+        for ticks in (6, -1, True, 1.5):
+            with self.assertRaises(ValidationError):
+                validate_join_request({
+                    'url': ZOOM,
+                    'agentSession': agent_session(),
+                    'screenShare': {'enabled': True, 'settleTicks': ticks},
+                })
         with self.assertRaises(ValidationError):
             validate_join_request({
                 'url': ZOOM,

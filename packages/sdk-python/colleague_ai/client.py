@@ -303,7 +303,8 @@ def validate_join_request(request):
 def _validate_screen_share(value):
     if not _is_mapping(value):
         raise ValidationError('screenShare must be an object')
-    known = {'enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds'}
+    known = {'enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds',
+             'settleTicks'}
     extra = set(value) - known
     if extra:
         raise ValidationError(f'screenShare.{next(iter(extra))} is not allowed')
@@ -337,6 +338,11 @@ def _validate_screen_share(value):
         if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 30 or seconds > 6 * 3600:
             raise ValidationError('screenShare.retentionSeconds is out of bounds')
         out['retentionSeconds'] = seconds
+    if 'settleTicks' in value:
+        ticks = value['settleTicks']
+        if not isinstance(ticks, int) or isinstance(ticks, bool) or ticks < 0 or ticks > 5:
+            raise ValidationError('screenShare.settleTicks is out of bounds')
+        out['settleTicks'] = ticks
     return out
 
 

@@ -388,6 +388,10 @@ When updating this file, use these rules:
 
 ## Progress log
 
+### 2026-09-28
+
+- Shared-content change detection now compares 64x36 tile signatures (luminance and edge strength), selects a frame only after it settles (`settleTicks`, default 1), masks regions that keep animating, and reuses the observation for any of the last 32 analyzed screens instead of calling the analyzer again (`reused: true`). Live acceptance on real Zoom/Teams/Meet shares stays open.
+
 ### 2026-09-18
 
 - Marked the participation and microphone fix complete: queued playback now drains and discards through the public microphone API, with automated coverage. Live cross-platform acceptance stays open.

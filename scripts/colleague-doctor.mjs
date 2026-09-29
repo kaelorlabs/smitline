@@ -31,8 +31,33 @@ function envHasValue(file, key) {
   });
 }
 
+function runningInWsl() {
+  if (process.platform !== 'linux') return false;
+  try {
+    return /microsoft/i.test(fs.readFileSync('/proc/version', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 const major = Number(process.versions.node.split('.')[0]);
 result(major >= 22 ? 'pass' : 'fail', 'Node.js', process.version);
+
+if (process.platform === 'win32') {
+  result('fail', 'Operating system', 'Windows is supported through WSL2: clone and run Colleague AI inside Ubuntu on WSL2');
+} else if (runningInWsl()) {
+  result('pass', 'Operating system', 'Linux on WSL2');
+  if (root.startsWith('/mnt/')) {
+    result('warn', 'Checkout location', 'clone inside the Linux home directory; Docker may not see /mnt drives and file access is slow');
+  }
+} else {
+  result(['linux', 'darwin'].includes(process.platform) ? 'pass' : 'fail', 'Operating system', process.platform);
+}
+
+const launcher = path.join(root, 'start-runtime-daemon.sh');
+if (fs.existsSync(launcher) && fs.readFileSync(launcher, 'utf8').includes('\r\n')) {
+  result('fail', 'Line endings', 'shell scripts have Windows line endings; clone again inside WSL, or stash your changes and run git rm -r -q --cached . && git reset --hard');
+}
 
 for (const relative of [
   'compose.meeting.yaml',

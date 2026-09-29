@@ -32,16 +32,29 @@ class HostUnmuteTests(unittest.IsolatedAsyncioTestCase):
 class MicStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_hidden_toolbar_and_unrelated_buttons(self):
         from zoom_controls import microphone_is_muted
+        class Control:
+            def __init__(self, visible): self.visible = visible
+            async def is_visible(self): return self.visible
         class Matches:
-            def __init__(self, labels): self.labels = labels
-            async def count(self): return len(self.labels)
+            def __init__(self, controls): self.controls = controls
+            async def count(self): return len(self.controls)
+            async def all(self): return [Control(visible) for _label, visible in self.controls]
         class Toolbar:
-            def __init__(self, labels): self.labels = labels
+            def __init__(self, controls): self.controls = controls
             def get_by_role(self, role, *, name, include_hidden):
                 self.outer.assertTrue(include_hidden)
-                return Matches([label for label in self.labels if name.search(label)])
-        for labels, expected in [(['Mute my microphone (Alt+A)'], False), (['Unmute my microphone (Alt+A)'], True), (['Mute All', 'Unmute All'], None)]:
-            page = Toolbar(labels); page.outer = self
+                return Matches([c for c in self.controls if name.search(c[0])])
+        cases = [
+            # Hidden toolbar: fall back to the accessible labels.
+            ([('Mute my microphone (Alt+A)', False)], False),
+            ([('Unmute my microphone (Alt+A)', False)], True),
+            ([('Mute All', True), ('Unmute All', True)], None),
+            # A stale hidden copy must not override the visible control.
+            ([('Mute my microphone (Alt+A)', False), ('Unmute my microphone (Alt+A)', True)], True),
+            ([('Unmute my microphone (Alt+A)', False), ('Mute my microphone (Alt+A)', True)], False),
+        ]
+        for controls, expected in cases:
+            page = Toolbar(controls); page.outer = self
             self.assertEqual(await microphone_is_muted(page), expected)
 
 if __name__ == '__main__': unittest.main()

@@ -347,6 +347,11 @@ function renderScreenShare(share, meetingId) {
     const when = document.createElement('span');
     when.textContent = item.timestamp || '';
     meta.append(confidence, when);
+    if (item.reused) {
+      const reused = document.createElement('span');
+      reused.textContent = 'earlier screen, analysis reused';
+      meta.append(reused);
+    }
     card.append(title, meta);
     const artifactId = item.frameArtifactId;
     if (artifactId) {

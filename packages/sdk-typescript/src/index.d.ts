@@ -116,6 +116,7 @@ export interface JoinMeetingRequest {
     maxFrames?: number;
     maxBytes?: number;
     retentionSeconds?: number;
+    settleTicks?: number;
   };
 }
 

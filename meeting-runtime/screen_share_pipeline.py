@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import secrets
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,12 +13,15 @@ from screen_share import (
 )
 from startup_input import clip_tokens
 from visual_analysis import VisualAnalysisUnavailable, VisualAnalysisProvider
-from visual_hash import average_hash, change_score, sha256_hex
+from visual_diff import ScreenChangeTracker, compare, frame_signature, is_significant, parse_mask
+from visual_hash import sha256_hex
 
 
 CONTROL_NAME = 'control.json'
 INBOX = 'inbox'
 OUTBOX = 'outbox'
+SEEN_SCREENS = 32
+SEEN_MEETINGS = 16
 
 
 def _now():
@@ -143,9 +147,11 @@ class ScreenShareCaptureLoop:
         self._now = now or _now
         self._sleep = sleep
         self.send = send
-        self.last_hash = None
-        self.last_digest = None
+        self.tracker = ScreenChangeTracker(
+            min_change=self.settings['minChange'], settle_ticks=self.settings['settleTicks'])
         self.inflight = False
+        self._capture_digest = None
+        self._capture_signature = None
         self._publish_status()
 
     def _stopped(self):
@@ -215,12 +221,11 @@ class ScreenShareCaptureLoop:
                 degradedReason='backpressure')
             return self.state['screenShare']
         digest = sha256_hex(png)
-        hashed = average_hash(png)
-        if self.last_digest == digest:
-            self._publish_status(available=True, active=True, capturing=True, paused=False,
-                                 degradedReason=None)
-            return self.state['screenShare']
-        if self.last_hash is not None and change_score(self.last_hash, hashed) < self.settings['minChange']:
+        if digest != self._capture_digest:
+            self._capture_signature = await asyncio.to_thread(frame_signature, png)
+            self._capture_digest = digest
+        signature = self._capture_signature
+        if self.tracker.observe(signature) is None:
             self._publish_status(available=True, active=True, capturing=True, paused=False,
                                  degradedReason=None)
             return self.state['screenShare']
@@ -229,16 +234,19 @@ class ScreenShareCaptureLoop:
                 available=True, active=True, capturing=False, paused=False,
                 degradedReason='oversized')
             return self.state['screenShare']
-        self.last_digest = digest
-        self.last_hash = hashed
+        self.tracker.select(signature)
         frame_id = 'frm-' + secrets.token_hex(6)
-        self.bus.write_inbox(png, {
+        meta = {
             'id': frame_id,
             'meetingId': self.bus.meeting_id,
             'sha256': digest,
             'capturedAt': self._now() if not callable(self._now) else self._now(),
             'bytes': len(png),
-        })
+        }
+        masked = self.tracker.masked()
+        if masked:
+            meta['maskedTiles'] = sorted(masked)
+        self.bus.write_inbox(png, meta)
         self._publish_status(
             available=True, active=True, capturing=True, paused=False, degradedReason=None)
         return self.state['screenShare']
@@ -258,7 +266,8 @@ class ScreenShareCaptureLoop:
             return
         if self.state.get('floorState') == 'speaking':
             return
-        text = clip_tokens('Shared content: ' + observation.summary, 240)
+        prefix = 'Shared content (earlier screen again): ' if observation.reused else 'Shared content: '
+        text = clip_tokens(prefix + observation.summary, 240)
         if not text:
             return
         payload = {
@@ -277,30 +286,51 @@ class ScreenShareHost:
         self.analyzer = analyzer or VisualAnalysisProvider()
         self._now = now or _now
         self._inflight = set()
-        self._last_hash = {}
+        self._last_signature = {}
         self._last_digest = {}
+        self._seen = OrderedDict()
 
     def analyzer_available(self):
         return bool(getattr(self.analyzer, 'available', lambda: False)())
 
     async def ingest_png(self, meeting_id, png, *, settings, emit, store_observation,
-                         captured_at=None, context='', cancel=None):
+                         captured_at=None, context='', cancel=None, masked_tiles=None):
         settings = parse_screen_share_settings(settings)
         if meeting_id in self._inflight:
             return {'skipped': 'backpressure'}
         digest = sha256_hex(png)
-        hashed = average_hash(png)
         if self._last_digest.get(meeting_id) == digest:
             return {'skipped': 'duplicate'}
-        previous = self._last_hash.get(meeting_id)
-        if previous is not None and change_score(previous, hashed) < settings['minChange']:
+        self._inflight.add(meeting_id)
+        try:
+            return await self._ingest(
+                meeting_id, png, digest, settings=settings, emit=emit,
+                store_observation=store_observation, captured_at=captured_at, context=context,
+                cancel=cancel, masked_tiles=masked_tiles)
+        finally:
+            self._inflight.discard(meeting_id)
+
+    async def _ingest(self, meeting_id, png, digest, *, settings, emit, store_observation,
+                      captured_at, context, cancel, masked_tiles):
+        signature = await asyncio.to_thread(frame_signature, png)
+        mask = parse_mask(masked_tiles, signature)
+        previous = self._last_signature.get(meeting_id)
+        if previous is not None and not is_significant(
+                compare(previous, signature, mask), settings['minChange']):
             return {'skipped': 'unchanged'}
         if len(png) > min(settings['maxBytes'], 2_000_000):
             emit('screen_share.failed', reason='oversized')
             return {'skipped': 'oversized'}
         self._last_digest[meeting_id] = digest
-        self._last_hash[meeting_id] = hashed
+        self._last_signature[meeting_id] = signature
         timestamp = captured_at or (self._now() if not callable(self._now) else self._now())
+        seen = self._recall(meeting_id, signature, mask, settings['minChange'])
+        if seen is not None:
+            payload = VisualObservation.from_dict(dict(
+                seen, id='obs-' + secrets.token_hex(5), timestamp=timestamp, reused=True)).to_dict()
+            emit('screen_share.observation', observation=payload)
+            store_observation(payload)
+            return {'artifact': None, 'observation': payload, 'reused': True}
         meta = self.artifacts.put(
             meeting_id, kind='screenshot', body=bytes(png), media_type='image/png',
             description='Selected shared-content frame')
@@ -317,25 +347,50 @@ class ScreenShareHost:
         if not self.analyzer_available():
             emit('screen_share.failed', reason='analyzer_unavailable')
             return {'artifact': meta, 'observation': None, 'reason': 'analyzer_unavailable'}
-        self._inflight.add(meeting_id)
         try:
             observation = await self.analyzer.analyze(
                 png, meeting_id=meeting_id, frame_artifact_id=meta['id'], context=context,
                 timestamp=timestamp, observation_id='obs-' + secrets.token_hex(5), cancel=cancel)
-            payload = observation.to_dict()
-            stored = self.artifacts.put(
-                meeting_id, kind='observation', body=payload,
-                description=payload.get('summary'))
-            emit('artifact.created', artifact={
-                'id': stored['id'], 'kind': 'observation', 'path': stored['path'],
-                'createdAt': timestamp, 'mediaType': 'application/json',
-                'description': payload.get('summary'),
-            })
-            emit('screen_share.observation', observation=payload)
-            store_observation(payload)
-            return {'artifact': meta, 'observation': payload, 'observationArtifact': stored}
         except VisualAnalysisUnavailable:
             emit('screen_share.failed', reason='analyzer_unavailable')
             return {'artifact': meta, 'observation': None, 'reason': 'analyzer_unavailable'}
-        finally:
-            self._inflight.discard(meeting_id)
+        payload = observation.to_dict()
+        stored = self.artifacts.put(
+            meeting_id, kind='observation', body=payload,
+            description=payload.get('summary'))
+        emit('artifact.created', artifact={
+            'id': stored['id'], 'kind': 'observation', 'path': stored['path'],
+            'createdAt': timestamp, 'mediaType': 'application/json',
+            'description': payload.get('summary'),
+        })
+        emit('screen_share.observation', observation=payload)
+        store_observation(payload)
+        self._remember(meeting_id, signature, payload)
+        return {'artifact': meta, 'observation': payload, 'observationArtifact': stored}
+
+    def _recall(self, meeting_id, signature, mask, min_change):
+        entries = self._seen.get(meeting_id) or []
+        best = None
+        for index, (known, observation) in enumerate(entries):
+            change = compare(known, signature, mask)
+            if is_significant(change, min_change):
+                continue
+            if best is None or len(change.changed) < best[1]:
+                best = (index, len(change.changed))
+        if best is None:
+            return None
+        entry = entries.pop(best[0])
+        try:
+            self.artifacts.get(meeting_id, entry[1]['frameArtifactId'])
+        except (OSError, ValueError):
+            return None
+        entries.append(entry)
+        self._seen.move_to_end(meeting_id)
+        return entry[1]
+
+    def _remember(self, meeting_id, signature, observation):
+        entries = self._seen.pop(meeting_id, [])
+        entries.append((signature, observation))
+        self._seen[meeting_id] = entries[-SEEN_SCREENS:]
+        while len(self._seen) > SEEN_MEETINGS:
+            self._seen.popitem(last=False)

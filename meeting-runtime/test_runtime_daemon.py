@@ -1759,6 +1759,39 @@ class ScreenShareDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('screen_share.started', events)
         self.assertIn('screen_share.observation', events)
 
+    async def test_revisited_screen_reuses_observation(self):
+        created = await self.client.post(
+            '/v1/meetings', json=create_payload(
+                screenShare={'enabled': True},
+                agentSession=agent_session_payload(sessionId='thread-share-3')),
+            headers=self.headers())
+        meeting_id = (await created.json())['id']
+        from screen_share_pipeline import ScreenShareBus
+        from visual_hash import solid_png
+        bus = ScreenShareBus(self.daemon.jobs_dir, meeting_id)
+        other = solid_png(32, 32, 200, 40, 40)
+        for index, png in enumerate((self.png, other, self.png)):
+            bus.write_inbox(png, {
+                'id': 'frm-reuse%d' % index, 'capturedAt': TIMESTAMP, 'maskedTiles': [1, 2]})
+        results = await self.daemon.ingest_screen_share_inbox(meeting_id)
+        self.assertEqual([result.get('reused') for result in results], [None, None, True])
+        self.assertEqual(len(self.daemon.screen_share_host.analyzer.calls), 2)
+        listed = await (await self.client.get(
+            '/v1/meetings/' + meeting_id + '/screen-share/observations',
+            headers=self.headers())).json()
+        self.assertEqual(len(listed['observations']), 3)
+        self.assertTrue(listed['observations'][-1]['reused'])
+        self.assertEqual(listed['observations'][-1]['frameArtifactId'],
+                         listed['observations'][0]['frameArtifactId'])
+        shots = [event for event in self.daemon.events.replay(meeting_id)
+                 if event.type == 'screen_share.frame_selected']
+        self.assertEqual(len(shots), 2)
+        observed = [event.payload['observation'] for event in self.daemon.events.replay(meeting_id)
+                    if event.type == 'screen_share.observation']
+        self.assertEqual([item.reused for item in observed], [False, False, True])
+        outbox = bus.take_outbox()
+        self.assertEqual(sorted(item.reused for item in outbox), [False, False, True])
+
 
 if __name__ == '__main__':
     unittest.main()

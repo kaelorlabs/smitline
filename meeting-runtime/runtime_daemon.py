@@ -1410,6 +1410,7 @@ class RuntimeDaemon:
                 emit=lambda event_type, **payload: self._append(meeting_id, event_type, **payload),
                 store_observation=lambda observation: self._store_observation(meeting_id, observation, bus),
                 captured_at=meta.get('capturedAt'),
+                masked_tiles=meta.get('maskedTiles'),
             )
             bus.drop_inbox(path)
             results.append(result)

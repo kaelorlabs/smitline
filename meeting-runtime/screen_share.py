@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from schema_validation import (
-    omit_none, optional_field, reject_secrets, reject_unknown_fields, require_bool,
+    omit_none, optional_bool, optional_field, reject_secrets, reject_unknown_fields, require_bool,
     require_enum, require_field, require_id, require_int, require_mapping,
     require_meeting_id, require_string, require_timestamp,
 )
@@ -10,6 +10,7 @@ from schema_validation import (
 
 SETTINGS_FIELDS = (
     'enabled', 'captureIntervalMs', 'minChange', 'maxFrames', 'maxBytes', 'retentionSeconds',
+    'settleTicks',
 )
 STATUS_FIELDS = (
     'enabled', 'available', 'active', 'paused', 'capturing', 'lastObservationAt',
@@ -17,6 +18,7 @@ STATUS_FIELDS = (
 )
 OBSERVATION_FIELDS = (
     'id', 'meetingId', 'timestamp', 'summary', 'frameArtifactId', 'confidence', 'visibleText',
+    'reused',
 )
 DEGRADED_REASONS = (
     'disabled', 'unavailable', 'selector_ambiguous', 'paused', 'analyzer_unavailable',
@@ -28,7 +30,10 @@ PRIVATE_SNIPPET_TOKENS = (
 DEFAULT_INTERVAL_MS = 4000
 MIN_INTERVAL_MS = 2000
 MAX_INTERVAL_MS = 15000
+# minChange is compared with sqrt(changed-tile fraction); see visual_diff.
 DEFAULT_MIN_CHANGE = 0.08
+DEFAULT_SETTLE_TICKS = 1
+MAX_SETTLE_TICKS = 5
 DEFAULT_MAX_FRAMES = 20
 MAX_FRAMES = 50
 DEFAULT_MAX_BYTES = 8_000_000
@@ -67,6 +72,7 @@ def default_settings():
         'maxFrames': DEFAULT_MAX_FRAMES,
         'maxBytes': DEFAULT_MAX_BYTES,
         'retentionSeconds': DEFAULT_RETENTION_SECONDS,
+        'settleTicks': DEFAULT_SETTLE_TICKS,
     }
 
 
@@ -95,6 +101,9 @@ def parse_screen_share_settings(payload=None):
         settings['retentionSeconds'] = require_int(
             data['retentionSeconds'], 'screenShare.retentionSeconds',
             min_value=30, max_value=MAX_RETENTION_SECONDS)
+    if optional_field(data, 'settleTicks') is not None:
+        settings['settleTicks'] = require_int(
+            data['settleTicks'], 'screenShare.settleTicks', min_value=0, max_value=MAX_SETTLE_TICKS)
     return settings
 
 
@@ -137,6 +146,7 @@ class VisualObservation:
     frame_artifact_id: str
     confidence: float
     visible_text: tuple = ()
+    reused: bool = False
 
     def to_dict(self):
         return omit_none({
@@ -147,6 +157,7 @@ class VisualObservation:
             'frameArtifactId': self.frame_artifact_id,
             'confidence': self.confidence,
             'visibleText': list(self.visible_text) or None,
+            'reused': True if self.reused else None,
         })
 
     @classmethod
@@ -180,6 +191,7 @@ class VisualObservation:
                 require_field(payload, 'frameArtifactId', 'observation'), 'frameArtifactId'),
             confidence=confidence,
             visible_text=tuple(visible),
+            reused=bool(optional_bool(optional_field(payload, 'reused'), 'observation.reused')),
         )
 
 
