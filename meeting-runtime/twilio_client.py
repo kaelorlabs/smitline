@@ -57,6 +57,17 @@ def dial_twiml(number, caller_id, *, timeout=30, fallback=None, say_voice='Polly
             f'{after}</Response>')
 
 
+def sip_dial_twiml(sip_uri, *, timeout=30):
+    """Bridge the answered call to a SIP address (used to hand calls to GPT-Live).
+
+    TLS is the default for <Sip>. G.711 comes first: the phone leg is 8 kHz anyway, and it
+    avoids transcoding; Opus stays available because OpenAI prefers it.
+    """
+    return ('<?xml version="1.0" encoding="UTF-8"?><Response>'
+            f'<Dial answerOnBridge="true" timeout="{int(timeout)}"><Sip codecs="PCMU,PCMA,OPUS">{escape(sip_uri)}</Sip></Dial>'
+            '</Response>')
+
+
 def hangup_twiml():
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 

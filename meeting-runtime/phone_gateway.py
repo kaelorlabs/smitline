@@ -1,4 +1,5 @@
-"""The only routes Twilio (or SignalWire) reaches: call status, voicemail detection, recordings, media, inbound calls.
+"""The only public routes: Twilio (or SignalWire) call status, voicemail detection, recordings,
+media, and inbound calls, plus OpenAI's signed webhook for calls handed to it over SIP.
 
 Runs as its own listener on loopback (default 127.0.0.1:8766) so a tunnel or
 proxy can expose it without exposing the daemon API. Every HTTP callback must
@@ -13,6 +14,7 @@ from aiohttp import WSMsgType, web
 
 from call_hooks import MissingCredentials
 from call_store import CallNotFound
+from live_sip import incoming_call, verify_webhook
 from phone_line import inbound_brief
 from twilio_client import signing_keys, stream_twiml, valid_signature
 
@@ -130,6 +132,32 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
         twiml = stream_twiml(stream_url, {'callId': record['id'], 'token': token})
         return web.Response(text=twiml, content_type=XML)
 
+    async def openai_webhook(request):
+        """OpenAI announces calls the provider handed to its SIP address (sip-webhook mode)."""
+        raw = await request.text()
+        try:
+            secret = service.hooks.credentials(owner, 'sip').get('webhookSecret')
+        except MissingCredentials:
+            secret = None
+        if not secret:
+            raise web.HTTPForbidden(text='webhooks are not configured')
+        try:
+            event = verify_webhook(raw, request.headers, secret)
+        except ValueError:
+            raise web.HTTPForbidden(text='invalid signature')
+        found = incoming_call(event)
+        if found is not None and not line.on_sip_incoming(*found):
+            # Not a call this installation placed: turn it away so it does not wait.
+            asyncio.get_running_loop().create_task(reject_call(found[0]))
+        return web.Response(status=200)
+
+    async def reject_call(session_id):
+        try:
+            api_key = service.hooks.credentials(owner, 'openai')['apiKey']
+            await line.sip_client_factory(api_key).reject(session_id, 486)
+        except Exception:
+            pass
+
     async def healthz(_request):
         return web.Response(text='ok')
 
@@ -139,5 +167,6 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
     app.router.add_post('/twilio/recording/{callId}', recording)
     app.router.add_get('/twilio/media', media)
     app.router.add_post('/twilio/inbound', inbound)
+    app.router.add_post('/openai/webhook', openai_webhook)
     app.router.add_get('/healthz', healthz)
     return app
