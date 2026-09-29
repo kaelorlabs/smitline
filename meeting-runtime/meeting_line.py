@@ -14,14 +14,20 @@ def context_from_brief(brief):
     constraints += [f'May agree to: {item}' for item in brief.may_agree_to]
     if brief.success_criteria:
         constraints.append(f'Success criteria: {brief.success_criteria}')
+    session = brief.session_context
+    summary = '\n\n'.join(part for part in (
+        session.get('summary'),
+        '\n'.join(f'- {fact}' for fact in session.get('facts') or ()),
+        session.get('details'),
+    ) if part)
     return {
         'version': 1,
         'objective': brief.objective,
         'currentTask': f'Take part in this meeting on behalf of {brief.on_behalf_of}.',
-        'summary': brief.context or '',
-        'decisions': [],
+        'summary': summary[:8000],  # the meeting handoff allows 8,000 characters
+        'decisions': list(session.get('decisions') or ()),
         'constraints': constraints,
-        'openQuestions': [],
+        'openQuestions': list(brief.questions) + list(session.get('openQuestions') or ()),
         'importantFiles': [],
         'recentConversation': [],
     }
@@ -130,7 +136,7 @@ class MeetingLine:
             return handoff.to_dict() if hasattr(handoff, 'to_dict') else dict(handoff)
         return None
 
-    async def instruct(self, call_id, text):
+    async def instruct(self, call_id, text, *, silent=False):
         # Meetings take guidance through the meeting context and the portal; a
         # live instruction channel for meetings is not implemented yet.
         return False

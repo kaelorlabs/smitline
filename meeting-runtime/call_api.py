@@ -74,11 +74,14 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     @handle
     async def instruct_call(request):
         payload = await read_json(request)
-        extra = set(payload) - {'text'}
+        extra = set(payload) - {'text', 'silent'}
         if extra:
             return _error(422, 'invalid_request', 'unknown fields: ' + ', '.join(sorted(extra)))
+        if not isinstance(payload.get('silent', False), bool):
+            return _error(422, 'invalid_request', 'silent must be true or false')
         result = await service.instruct(request.match_info['callId'], payload.get('text'),
-                                        owner=await owner(request))
+                                        owner=await owner(request),
+                                        silent=payload.get('silent', False))
         return public_json(result)
 
     @handle
@@ -129,6 +132,15 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             pass
         return response
 
+    @handle
+    async def get_profile(request):
+        return public_json(service.profile(await owner(request)))
+
+    @handle
+    async def update_profile(request):
+        payload = await read_json(request)
+        return public_json(service.update_profile(await owner(request), payload))
+
     async def list_voices(_request):
         from call_brief import default_voice
         env = service.environ
@@ -147,4 +159,6 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_post('/v1/calls/{callId}/end', end_call)
     app.router.add_post('/v1/calls/{callId}/transfer', transfer_call)
     app.router.add_get('/v1/voices', list_voices)
+    app.router.add_get('/v1/profile', get_profile)
+    app.router.add_patch('/v1/profile', update_profile)
     app.router.add_get('/v1/openapi.json', openapi)
