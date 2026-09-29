@@ -163,6 +163,7 @@ Old Zoom-specific paths (`compose.zoom.yaml`, `.env.zoom`, `start-zoom-agent.sh`
 | --- | --- |
 | **Daemon** | `./start-runtime-daemon.sh` — loopback HTTP + SSE, bearer auth, calls, meetings, approvals, artifacts, git, screen-share, providers, runner pairing |
 | **Calls API** | `/v1/calls` — any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md) and `/v1/openapi.json`. |
+| **Phone gateway** | `127.0.0.1:8766` — the only Twilio-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
 | **Portal** | `./start-control-panel.sh` — operator UI; context continuity only |
 | **TypeScript SDK** | `@colleague-ai/sdk` — host integrations; not published to npm |
 | **Python SDK** | `colleague-ai` — same contract; not published to PyPI |

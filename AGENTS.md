@@ -8,6 +8,7 @@ Read these before proposing product, architecture, or runtime changes:
 | [docs/product-vision-and-progress.md](docs/product-vision-and-progress.md) | Canonical product brief, settled decisions, progress ledger |
 | [docs/architecture.md](docs/architecture.md) | Runtime layout, sequences, retention and deletion |
 | [docs/calls.md](docs/calls.md) | Call API: briefs, lifecycle, results, delivery, hooks, server mode |
+| [docs/phone.md](docs/phone.md) | Phone calls through Twilio and GPT-Live: setup, gateway, tunnel, settings |
 | [docs/capabilities.md](docs/capabilities.md) | Platform and provider capability matrices |
 | [docs/coding-providers.md](docs/coding-providers.md) | Codex, Cursor, and Claude Code integration rules |
 | [docs/meeting-adapters.md](docs/meeting-adapters.md) | Zoom, Teams, and Meet adapter behavior |

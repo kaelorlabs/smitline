@@ -16,6 +16,10 @@ class CallRefused(Exception):
         self.message = message
 
 
+class LineNotReady(Exception):
+    """A line cannot perform the requested action right now; the message says why."""
+
+
 class MissingCredentials(Exception):
     def __init__(self, provider, missing):
         self.provider = provider
@@ -88,7 +92,8 @@ class DefaultCallHooks:
             }
         else:
             raise MissingCredentials(provider, ())
-        missing = [name for name, value in zip(names, values.values()) if not value]
+        missing = [name for name, value in zip(names, values.values())
+                   if not value or value.startswith('replace_with')]
         if missing:
             raise MissingCredentials(provider, missing)
         return values
