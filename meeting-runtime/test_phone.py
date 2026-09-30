@@ -556,6 +556,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((audio['pauses'], audio['backchannels'], audio['interruptionsFollowed']), (2, 1, 1))
         self.assertEqual(audio['stopDelayMs'], {'median': 160, 'max': 160, 'count': 2})
         self.assertEqual(audio['replyDelayMs']['count'], 1)
+        self.assertGreaterEqual(audio['replyDelayMs']['median'], 450)  # from their last word
 
     async def test_voicemail_and_transfer(self):
         record, session = await self.h.dial()

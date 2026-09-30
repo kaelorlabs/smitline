@@ -481,7 +481,9 @@ class PhoneSession:
                 self.stats['backchannels'] += 1
             self._barge = None
             if self.detector.last_speech_ms >= TURN_MIN_MS:
-                self._awaiting_reply_since = now  # the reply delay runs from here
+                # The reply delay runs from their last word, not from when the quiet after it
+                # was long enough to call the turn over.
+                self._awaiting_reply_since = now - self.detector.end_ms / 1000
         elif self._barge == 'paused' and self.detector.speech_ms >= BARGE_COMMIT_MS:
             self.pacer.flush()
             self._barge = 'dropped'
