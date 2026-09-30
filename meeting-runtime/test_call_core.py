@@ -442,3 +442,12 @@ class MeetingPayloadTests(unittest.TestCase):
             "objective": "Take notes"}), "call-0123456789abcdef", "/tmp/w")
         self.assertEqual(plain["agentSession"]["metadata"]["source"], "call-api")
         self.assertNotIn("voice", plain["agentSession"]["metadata"])
+
+
+class OutcomeRulesTests(unittest.TestCase):
+    def test_the_summary_rules_keep_failed_for_technical_problems(self):
+        from call_result import SUMMARY_INSTRUCTIONS
+        self.assertIn('never because the other person hung up', SUMMARY_INSTRUCTIONS)
+        self.assertIn('answered but was busy or ended the call', SUMMARY_INSTRUCTIONS)
+        self.assertIn('with no message left is not_reached, not voicemail', SUMMARY_INSTRUCTIONS)
+        self.assertIn('Never say a message was left', SUMMARY_INSTRUCTIONS)
