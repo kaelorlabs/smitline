@@ -297,6 +297,10 @@ export function createLoopbackTransport(options = {}) {
     listVoices() {
       return json('GET', '/v1/voices');
     },
+    // Operations, not calls: used by colleague setup stop, not part of the public SDK.
+    stopDaemon() {
+      return json('POST', '/v1/daemon/stop', {});
+    },
   };
 }
 

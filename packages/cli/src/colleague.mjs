@@ -70,6 +70,7 @@ const USAGE = `Usage:
   colleague setup secrets [--no-open] [--wait]
   colleague setup set <KEY> <value>
   colleague setup start
+  colleague setup stop [--force]
   colleague setup register [--agents claude-code,codex,cursor,claude-desktop] [--json]
   colleague setup voice [--set <name>] [--preview <name>]
   colleague setup sip-trunk
@@ -532,6 +533,34 @@ async function setupCommand(args) {
     }
     printJson(await startDaemon(root));
     return EXIT.ok;
+  }
+  if (action === 'stop') {
+    // Stops the daemon, and with it the phone tunnel. It starts again on the next call
+    // or with colleague setup start.
+    const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+    if (isManaged()) {
+      printJson({ stopped: false, managed: true, next: 'Colleague AI runs in its container; on this computer run: docker stop colleague' });
+      return EXIT.ok;
+    }
+    if (!(await portOpen(port))) {
+      printJson({ running: false, stopped: false, port });
+      return EXIT.ok;
+    }
+    const { client } = colleagueFromArgs(args);
+    if (args.force !== true) {
+      const active = (await client.listCalls(100)).filter((call) => !TERMINAL.has(call.status));
+      if (active.length) {
+        throw new ValidationError(`A call is in progress (${active.map((call) => call.id).join(', ')}). `
+          + 'End it first with colleague calls end --call-id <id>, or run colleague setup stop --force to end it now.');
+      }
+    }
+    await client._transport.stopDaemon();
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && await portOpen(port)) await new Promise((resolve) => setTimeout(resolve, 250));
+    const stopped = !(await portOpen(port));
+    progress(stopped ? 'Colleague AI stopped. It starts again on the next call, or with: colleague setup start' : 'Colleague AI is still stopping.');
+    printJson({ running: !stopped, stopped, port });
+    return stopped ? EXIT.ok : EXIT.startup;
   }
   if (action === 'set') {
     const key = args._[2];

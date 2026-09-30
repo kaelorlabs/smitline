@@ -22,6 +22,8 @@ START_TIMEOUT = 90.0
 PROBE_TIMEOUT = 45.0
 # A quick tunnel that never becomes reachable is replaced by a fresh one this many times.
 QUICK_TUNNEL_ATTEMPTS = 2
+# Before reuse, a running quick tunnel must still answer within this long.
+REUSE_PROBE_TIMEOUT = 6.0
 # Public DNS over HTTPS (JSON form), asked in order: Cloudflare, then Google.
 PUBLIC_DNS = ('https://1.1.1.1/dns-query', 'https://dns.google/resolve')
 
@@ -197,7 +199,14 @@ class PublicUrl:
             return url
         async with self._lock:
             if self._url and self._process is not None and self._process.returncode is None:
-                return self._url
+                # A quick tunnel does not survive sleep or a network change, though cloudflared
+                # keeps running and retrying: check it still answers before handing it out.
+                problems = []
+                if await self._probe(self._url + '/healthz', REUSE_PROBE_TIMEOUT, problems):
+                    return self._url
+                why = problems[-1] if problems else 'no reply'
+                self._log(f'quick tunnel {self._url} stopped answering ({why}); starting a fresh one', flush=True)
+                self._url = None
             for attempt in range(1, self.attempts + 1):
                 url, problem = await self._start_locked()
                 if url:

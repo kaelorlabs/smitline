@@ -861,5 +861,33 @@ class MeetingRepositoryUnitTests(unittest.TestCase):
         self.assertIsNone(self.store.get('mtg-missing'))
 
 
+
+@unittest.skipUnless(HAS_AIOHTTP, 'aiohttp is required')
+class DaemonStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_the_local_token_can_stop_the_daemon(self):
+        from api_tokens import ApiTokenStore
+        with tempfile.TemporaryDirectory() as temp:
+            tokens = ApiTokenStore(Path(temp) / 'api-tokens.json')
+            api_token, _ = tokens.create('ci')
+            stops = []
+            app = create_app(root=Path(temp) / 'daemon', auth_token='launch-token', api_tokens=tokens,
+                             on_stop=lambda: stops.append(True))
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post('/v1/daemon/stop')
+                self.assertEqual(response.status, 401)
+                response = await client.post('/v1/daemon/stop', headers={'Authorization': f'Bearer {api_token}'})
+                self.assertEqual(response.status, 403)
+                self.assertEqual((await response.json())['error']['code'], 'forbidden')
+                self.assertEqual(stops, [])
+                response = await client.post('/v1/daemon/stop', headers={'Authorization': 'Bearer launch-token'})
+                self.assertEqual(response.status, 202)
+                self.assertEqual(await response.json(), {'stopping': True})
+                self.assertEqual(stops, [True])
+            finally:
+                await client.close()
+
+
 if __name__ == '__main__':
     unittest.main()
