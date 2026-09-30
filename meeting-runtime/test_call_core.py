@@ -431,18 +431,21 @@ class MeetingPayloadTests(unittest.TestCase):
         brief = CallBrief.from_dict({
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
             "objective": "Take notes", "voice": "cinder",
-            "agentSession": {"provider": "codex", "sessionId": "thread-1", "workspace": "/w"},
         })
-        payload = meeting_payload(brief, "call-0123456789abcdef", "/tmp/w")
-        self.assertEqual(payload["agentSession"]["sessionId"], "thread-1")
-        self.assertEqual(payload["agentSession"]["metadata"], {"onBehalfOf": "Sam", "voice": "cinder"})
-        self.assertIsNone(brief.agent_session.get("metadata"))
+        payload = meeting_payload(brief)
+        self.assertEqual(set(payload), {"meetingUrl", "context", "onBehalfOf", "voice"})
+        self.assertEqual(payload["onBehalfOf"], "Sam")
+        self.assertEqual(payload["voice"], "cinder")
         self.assertEqual(environ_from_state({"voice": "cinder"})["COLLEAGUE_VOICE"], "cinder")
         plain = meeting_payload(CallBrief.from_dict({
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
-            "objective": "Take notes"}), "call-0123456789abcdef", "/tmp/w")
-        self.assertEqual(plain["agentSession"]["metadata"]["source"], "call-api")
-        self.assertNotIn("voice", plain["agentSession"]["metadata"])
+            "objective": "Take notes"}))
+        self.assertEqual(set(plain), {"meetingUrl", "context", "onBehalfOf"})
+        with self.assertRaises(ValueError):
+            CallBrief.from_dict({
+                "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
+                "objective": "Take notes",
+                "agentSession": {"provider": "codex", "sessionId": "thread-1", "workspace": "/w"}})
 
 
 class OutcomeRulesTests(unittest.TestCase):

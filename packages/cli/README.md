@@ -1,75 +1,50 @@
 # colleague CLI
 
-Blocking lifecycle CLI for the local Colleague AI daemon. It wraps the TypeScript SDK and does not print meeting transcript text by default.
+Command-line client for the local Colleague AI daemon: phone calls and Zoom, Teams, and Google Meet meetings from a brief, plus setup. It wraps the TypeScript SDK and talks only to the loopback daemon.
 
-Requires Node.js 22+. Not published to npm. Talks only to the loopback daemon.
+Requires Node.js 22+. Not published to npm. Run `colleague help` for every option.
 
-## Join
-
-Exact continuity requires `--thread` (the real originating coding-agent session id). Never pass `last`, `latest`, or `--last`. Zoom, Teams, and Google Meet HTTPS invites are accepted. The microphone joins muted, unmutes once when the voice session starts, and a local audio gate sends silence between replies; it mutes when the session ends, respects a host mute, and in Zoom accepts the host's "Ask to unmute". There is no separate always-unmuted launch mode.
-
-Inside Codex, `--agent` defaults to `codex`, `--thread` defaults to the host-provided `CODEX_THREAD_ID`, and `--workspace` defaults to the current directory. The installed launcher resolves its daemon and auth files from the Colleague AI checkout, independently of the caller's current project:
+## Phone calls
 
 ```bash
-~/.codex/bin/colleague join --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID"
+colleague call --to +14155550142 --objective "Book a table for two at 7pm Friday" \
+  --agree "6:30pm; 7:30pm" --never-share "card number" --wait
 ```
 
-Validate a context handoff before making any daemon request:
+## Meetings
+
+A meeting is a call on the `meeting` channel whose `to` is the invite URL. Any of these joins it:
 
 ```bash
-~/.codex/bin/colleague context validate --file /private/tmp/context.json
+colleague call --meeting "https://zoom.us/j/123456789" --objective "Take notes on the roadmap review" --wait
+colleague call --channel meeting --to "https://zoom.us/j/123456789" --objective "Take notes on the roadmap review"
+colleague call --to "https://meet.google.com/abc-defg-hij" --objective "Take notes on the roadmap review"
 ```
 
-The context object requires string fields `objective`, `currentTask`, and `summary`; string arrays `decisions`, `constraints`, `openQuestions`, and `importantFiles`; and `recentConversation` entries shaped as `{ "role": "user" | "assistant", "text": "..." }`. Optional `git` accepts only `branch`, `commit`, and `dirty`.
+A `--to` that starts with `http://` or `https://` is treated as a meeting.
 
-Outside Codex, or when selecting another provider, pass the values explicitly:
+## Following a call
+
+`call` returns at once with the call id; `--wait` follows it until it ends and prints the result JSON on stdout, with one progress line per status change on stderr. Ctrl-C stops following; the call keeps going.
 
 ```bash
-colleague join \
-  --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
-  --agent codex \
-  --thread "$CODEX_THREAD_ID" \
-  --workspace "$PWD" \
-  --wait
+colleague calls list
+colleague calls wait --call-id <id>
+colleague calls instruct --call-id <id> --text "Ask whether Friday works" [--silent]
+colleague calls end --call-id <id>
+colleague calls transfer --call-id <id>
 ```
 
-`--agent` may be `codex`, `cursor`, or `claude-code` when that CLI is installed and capable. `--context-continuity` joins without an originating thread (`sessionId=local-portal`). `--no-camera` is audio-only. `--screen-share` opts in to incoming shared-content capture (off by default).
-
-`--wait` stays in the foreground, prints concise lifecycle and delegation progress on stderr, and writes the final handoff JSON (plus archive path) to stdout. Ctrl-C requests a clean cancel and still waits for the durable handoff. Agent-native Codex launches omit `--wait` so the originating task becomes idle and can be resumed for meeting delegations.
-
-If a participant is already running, `join` reports its meeting id and cancellation command. Pass `--replace` only when switching meetings is authorized; it cancels the active meeting and then starts the new one. `status` checks the daemon-owned active meeting record before the CLI's previous-meeting record.
-
-## Other commands
-
-```bash
-colleague status
-colleague cancel
-colleague context add --file context.json
-colleague handoff get
-colleague handoff retry
-colleague approvals list --meeting-id <id>
-colleague artifacts list --meeting-id <id>
-colleague commits list --meeting-id <id>
-colleague screen-share status --meeting-id <id>
-colleague providers
-colleague runner status
-colleague runner pair
-colleague runner complete --pairing-id <id> --pairing-code <code>
-colleague runner unpair
-```
-
-Meeting-scoped commands use the id saved under `.colleague/cli-meeting.json` after `join`, or `--meeting-id`. Runner pairing reveals the code once; status never includes it. Local loopback remains the supported path.
+Other commands: `colleague profile`, `colleague voices`, `colleague setup …`, and `colleague connector …`.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Durable handoff ready |
-| 2 | Validation / usage |
-| 3 | Startup (daemon or supervisor) |
-| 4 | Runtime failure |
-| 5 | Partial finalization |
-| 6 | Unrecoverable finalization |
-| 130 | Interrupt after cancel+handoff wait |
+| 0 | Done (for `--wait`: the call completed) |
+| 2 | Validation / usage; an incomplete brief prints a question for each missing field |
+| 3 | Startup (daemon) or setup not ready |
+| 4 | Runtime failure, or the call did not complete |
+| 130 | Interrupted |
 
 Tokens and other secrets are never written to argv diagnostics, logs, or progress lines.

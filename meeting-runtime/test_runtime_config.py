@@ -6,23 +6,26 @@ from runtime_config import RuntimeConfig
 class RuntimeConfigTests(unittest.TestCase):
     def test_product_defaults_are_scenario_independent(self):
         config = RuntimeConfig.from_environ({})
+        from phone_prompts import DEFAULT_BACKEND_MODEL
         self.assertEqual(config.participant_name, 'Colleague AI')
-        self.assertTrue(config.web_search_enabled)
-        self.assertTrue(config.codex_enabled)
-        self.assertFalse(config.charts_enabled)
         self.assertEqual(config.meeting_instructions, '')
         self.assertTrue(config.camera_enabled)
         self.assertTrue(config.camera_default_on)
-        self.assertFalse(config.screen_share_enabled)
+        self.assertEqual(config.backend_model, DEFAULT_BACKEND_MODEL)
+        self.assertFalse(config.web_search)
+
+    def test_backend_model_and_web_search_come_from_env(self):
+        config = RuntimeConfig.from_environ({
+            'COLLEAGUE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'COLLEAGUE_MEETING_WEB_SEARCH': '1'})
+        self.assertEqual(config.backend_model, 'gpt-5.6-mini')
+        self.assertTrue(config.web_search)
 
     def test_accepts_operator_meeting_guidance(self):
         config = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on launch readiness.'})
         self.assertEqual(config.meeting_instructions, 'Focus on launch readiness.')
 
     def test_invalid_values_fail_at_startup(self):
-        for env in ({'COLLEAGUE_CODEX_MODEL': 'anything'},
-                    {'COLLEAGUE_ENABLE_CHARTS': '1', 'COLLEAGUE_ENABLE_CODEX': '0'},
-                    {'COLLEAGUE_WORKSPACE': 'relative/path'},
+        for env in ({'COLLEAGUE_MEETING_BACKEND_MODEL': 'two words'},
                     {'COLLEAGUE_MEETING_INSTRUCTIONS': 'x' * 2001},
                     {'COLLEAGUE_PARTICIPANT_NAME': ''}):
             with self.assertRaises(ValueError):
@@ -57,10 +60,6 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertFalse(config.camera_default_on)
             self.assertTrue(config.camera_logo_data_uri.startswith('data:image/png'))
             self.assertNotIn('/etc/passwd', config.camera_logo_data_uri)
-
-    def test_screen_share_cannot_be_enabled_from_env(self):
-        config = RuntimeConfig.from_environ({'COLLEAGUE_SCREEN_SHARE': '1'})
-        self.assertFalse(config.screen_share_enabled)
 
 
 if __name__ == '__main__':

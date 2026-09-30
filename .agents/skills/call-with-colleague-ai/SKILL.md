@@ -5,7 +5,9 @@ description: Place a phone call or join a video meeting for the user with Collea
 
 # Calls with Colleague AI
 
-Colleague AI talks with people in real time and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `colleague call ... --wait`.
+Colleague AI talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `colleague call ... --wait`.
+
+Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `colleague call --meeting <url> --objective "..." --wait`). Colleague AI joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`.
 
 ## 1. Write a complete brief
 
@@ -34,7 +36,7 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 ## 3. Start, then wait
 
 1. `start_call` with the brief. If it returns `brief_incomplete`, ask the user the listed questions, then retry.
-2. Tell the user in one line: "Calling Luigi's now. I'll tell you when it's done."
+2. Tell the user in one line: "Calling Luigi's now. I'll tell you when it's done." (or "Joining the meeting now.")
 3. `wait_for_call` until the status is `completed`, `failed`, or `canceled`, calling again while it is still running.
 
 While the call runs, `send_call_instruction` passes on new guidance from the user (with `silent: true` for a fact the assistant should know without acting on it right away), `transfer_call_to_me` hands a phone call to the user's phone, and `end_call` wraps up politely.

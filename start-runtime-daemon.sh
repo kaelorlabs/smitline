@@ -95,7 +95,7 @@ run_in_docker() {
   # Settings exported in this shell reach the daemon by name; values stay off the command line.
   for name in $(compgen -e); do
     case "$name" in
-      OPENAI_*|TWILIO_*|TAVILY_*|COLLEAGUE_*) args+=(-e "$name") ;;
+      OPENAI_*|TWILIO_*|SIGNALWIRE_*|COLLEAGUE_*) args+=(-e "$name") ;;
     esac
   done
   docker rm -f "colleague-daemon-$PORT" >/dev/null 2>&1 || true

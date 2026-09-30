@@ -275,7 +275,7 @@ test('register adds the stdio server to detected agents', async (t) => {
 
 test('register from WSL also adds Windows apps and installs the call skills', async (t) => {
   const repo = await tempRoot(t);
-  for (const name of ['call-with-colleague-ai', 'join-colleague-ai-meeting', 'setup-colleague-ai']) {
+  for (const name of ['call-with-colleague-ai', 'setup-colleague-ai']) {
     await fs.mkdir(path.join(repo, '.agents', 'skills', name), { recursive: true });
     await fs.writeFile(path.join(repo, '.agents', 'skills', name, 'SKILL.md'), `# ${name}\n`);
   }
@@ -301,9 +301,9 @@ test('register from WSL also adds Windows apps and installs the call skills', as
   const windowsClaude = calls.find((c) => c[0] === 'cmd.exe' && c.includes('add'));
   assert.deepEqual(windowsClaude.slice(-6), ['wsl.exe', '-d', 'Ubuntu', '--exec', process.execPath, server]);
   assert.deepEqual(skills.map((s) => s.id), ['claude', 'claude-windows']);
-  assert.deepEqual(skills[0].installed, ['call-with-colleague-ai', 'join-colleague-ai-meeting']);
+  assert.deepEqual(skills[0].installed, ['call-with-colleague-ai']);
   await fs.access(path.join(home, '.claude', 'skills', 'call-with-colleague-ai', 'SKILL.md'));
-  await fs.access(path.join(userProfile, '.claude', 'skills', 'join-colleague-ai-meeting', 'SKILL.md'));
+  await fs.access(path.join(userProfile, '.claude', 'skills', 'call-with-colleague-ai', 'SKILL.md'));
   assert.equal(manual.windows.command, 'wsl.exe');
 
   // Outside WSL there is no Windows side.
@@ -330,7 +330,7 @@ test('setup secrets starts the page in the background and prints its address', a
   const page = await fetch(url);
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /default-src 'none'/);
-  assert.match(await page.text(), /Tavily API key/);
+  assert.doesNotMatch(await page.text(), /Tavily/);
   const saved = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -434,7 +434,6 @@ test('setup secrets --wait stops on SIGTERM', async (t) => {
   const exited = new Promise((resolve) => child.on('close', resolve));
   child.kill('SIGTERM');
   assert.equal(await exited, 130);
-  assert.deepEqual(sanitizeSubmission(new URLSearchParams({ TAVILY_API_KEY: 'tvly-abc' })).updates, { TAVILY_API_KEY: 'tvly-abc' });
 });
 
 test('status verifies a SignalWire account on its Space and suggests its number', async (t) => {

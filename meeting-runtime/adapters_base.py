@@ -8,11 +8,8 @@ class AuthenticationRequired(RuntimeError):
 @dataclass(frozen=True)
 class Capabilities:
     text_chat: bool = True
-    file_delivery: bool = False
-    screen_sharing: bool = False
     participant_discovery: bool = False
     camera: bool = False
-    shared_content: bool = False
     def public(self):
         return asdict(self)
 
@@ -70,13 +67,3 @@ class MeetingPlatformAdapter(ABC):
     async def disable_camera(self):
         """Turn the meeting camera off. May raise if the control is missing."""
         return None
-
-    async def get_shared_content_state(self):
-        """Return whether a meeting shared-content surface is confidently visible."""
-        from shared_content import SharedContentState
-        return SharedContentState(False, 'none', 'unavailable')
-
-    async def capture_shared_content(self):
-        """Screenshot only the shared-content surface, or (None, state) when unsure."""
-        state = await self.get_shared_content_state()
-        return None, state

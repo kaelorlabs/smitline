@@ -1,8 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
-export const MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'];
-
 export function parseEnv(text = '') {
   const values = {};
   for (const raw of text.split(/\r?\n/)) {
@@ -20,45 +15,28 @@ export function parseEnv(text = '') {
   return values;
 }
 
-function bool(value, fallback) {
-  if (value === undefined || value === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
-}
-
 export function publicSettings(values = {}) {
   return {
     platform: detectPlatform(values.MEETING_URL),
     meetingUrl: values.MEETING_URL || '',
     hasPasscode: Boolean(values.MEETING_PASSCODE),
     participantName: values.COLLEAGUE_PARTICIPANT_NAME || 'Colleague AI',
-    model: values.COLLEAGUE_CODEX_MODEL || 'gpt-5.6-terra',
-    workspace: values.COLLEAGUE_WORKSPACE || '',
     meetingInstructions: values.COLLEAGUE_MEETING_INSTRUCTIONS || '',
-    tools: {
-      webSearch: bool(values.COLLEAGUE_ENABLE_WEB_SEARCH, true),
-      codex: bool(values.COLLEAGUE_ENABLE_CODEX, true),
-      cursor: bool(values.COLLEAGUE_ENABLE_CURSOR, false),
-      claudeCode: bool(values.COLLEAGUE_ENABLE_CLAUDE_CODE, false),
-      charts: bool(values.COLLEAGUE_ENABLE_CHARTS, false),
-    },
   };
 }
 
-export function validateSettings(input, { isDirectory = value => fs.existsSync(value) && fs.statSync(value).isDirectory() } = {}) {
+// The person Colleague AI acts for in meetings, from COLLEAGUE_OWNER_NAME. Empty when unset.
+export function ownerName(values = {}) {
+  const name = String(values.COLLEAGUE_OWNER_NAME || '').replace(/\s+/g, ' ').trim();
+  return name && name.length <= 80 && !/[\u0000-\u001f]/.test(name) ? name : '';
+}
+
+export function validateSettings(input) {
   const errors = {};
-    if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom, Teams, or Google Meet meeting invite.';
+  if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom, Teams, or Google Meet meeting invite.';
   const participantName = String(input.participantName || '').trim();
   if (!participantName || participantName.length > 80 || /[\u0000-\u001f]/.test(participantName)) {
     errors.participantName = 'Use 1–80 printable characters.';
-  }
-  if (!MODELS.includes(input.model)) errors.model = 'Choose a supported Codex model.';
-  const tools = input.tools || {};
-  if (tools.charts && !tools.codex) errors.charts = 'Charts require the Codex tool.';
-  const codingAgents = [tools.codex, tools.cursor, tools.claudeCode].filter(Boolean).length;
-  if (codingAgents > 1) errors.codex = 'Choose one coding agent.';
-  const workspace = String(input.workspace || '').trim();
-  if ((tools.codex || tools.cursor || tools.claudeCode) && workspace && (!path.isAbsolute(workspace) || !isDirectory(workspace))) {
-    errors.workspace = 'Choose an existing absolute directory.';
   }
   const meetingInstructions = String(input.meetingInstructions || '').trim();
   if (meetingInstructions.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(meetingInstructions)) {
@@ -84,13 +62,6 @@ export function serializeSettings(input, previous = {}) {
     `MEETING_URL=${clean(input.meetingUrl)}`,
     `MEETING_PASSCODE=${clean(input.passcode || (input.keepPasscode ? previous.MEETING_PASSCODE : ''))}`,
     `COLLEAGUE_PARTICIPANT_NAME=${clean(input.participantName)}`,
-    `COLLEAGUE_CODEX_MODEL=${clean(input.model)}`,
-    `COLLEAGUE_ENABLE_WEB_SEARCH=${input.tools?.webSearch ? '1' : '0'}`,
-    `COLLEAGUE_ENABLE_CODEX=${input.tools?.codex ? '1' : '0'}`,
-    `COLLEAGUE_ENABLE_CURSOR=${input.tools?.cursor ? '1' : '0'}`,
-    `COLLEAGUE_ENABLE_CLAUDE_CODE=${input.tools?.claudeCode ? '1' : '0'}`,
-    `COLLEAGUE_ENABLE_CHARTS=${input.tools?.charts ? '1' : '0'}`,
-    `COLLEAGUE_WORKSPACE=${clean(input.workspace)}`,
     `COLLEAGUE_MEETING_INSTRUCTIONS=${clean(input.meetingInstructions)}`,
   ];
   return `${lines.join('\n')}\n`;

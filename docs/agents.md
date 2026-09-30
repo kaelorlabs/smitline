@@ -14,7 +14,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 
 ## Local MCP server
 
-`packages/mcp/src/server.mjs` is a stdio MCP server. Besides the meeting tools, it offers these call tools:
+`packages/mcp/src/server.mjs` is a stdio MCP server with these tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -28,7 +28,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 | `list_voices` | GPT-Live voices. |
 | `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. |
 
-`colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` and `join-colleague-ai-meeting` skills into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`. Codex users who want exact coding-thread continuity in meetings should also run `scripts/install-codex-integration.sh`.
+`colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
 
 The skill in `.agents/skills/call-with-colleague-ai` teaches agents to write a complete brief with the context of what they and the user are working on, keep the user's profile current, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
 
@@ -136,7 +136,7 @@ Menus change often, and custom connectors may depend on your plan or on workspac
 - **ChatGPT**: custom MCP connectors are under the settings for connectors or apps, sometimes behind a developer mode switch. Create a connector with the URL and choose OAuth sign-in.
 - **Grok, Perplexity, and others**: check whether the product supports custom remote MCP connectors with OAuth sign-in. Any client that supports Streamable HTTP, OAuth dynamic client registration, and PKCE can use the same URL.
 
-Coding agents on the same computer should use the local MCP server instead; it offers more than calls.
+Agents on the same computer should use the local MCP server instead. It has the same tools and needs no proxy or sign-in.
 
 Then ask the agent something like "Call the restaurant at +1 415 555 0142 and book a table for four at 7 tonight." It writes a brief with `start_call`, asks you for anything missing, follows the call with `wait_for_call`, and reports the outcome.
 
@@ -144,7 +144,7 @@ Then ask the agent something like "Call the restaurant at +1 415 555 0142 and bo
 
 - **You approve every agent.** Agents can register themselves, but they get no access until you type the owner passphrase on the approval page. The page shows the app name the agent claims and the address the browser returns to; approve only a connection you just started yourself. After 5 wrong passphrases in 10 minutes, approval locks for 10 minutes for everyone.
 - **Short-lived, revocable tokens.** Access tokens are random, opaque, and last 1 hour. Refresh tokens last 30 days and change on every use. A replaced refresh token still works for 60 seconds, so a retry after a lost response does not sign the agent out; used again after that, or if an authorization code is used twice, that agent's access is revoked. PKCE (S256) is required, authorization codes work once within 10 minutes, and tokens are bound to `https://<domain>/mcp`. Only SHA-256 digests are stored, in `.colleague/connector/` with owner-only permissions. Tokens and the passphrase are never logged.
-- **Call tools only.** Agents can check a brief, start, follow, list, instruct, end, and transfer calls, list voices, and read and update your profile, which holds the names and numbers of the people you call. They cannot reach meeting coding tools, workspaces, approvals, commits, pushes, or runner pairing. An approved agent can still place calls that cost money and speak for you, within `COLLEAGUE_ALLOWED_CALLING_CODES`, so approve only agents you trust.
+- **Call tools only.** Agents can check a brief, start (phone calls and meetings), follow, list, instruct, end, and transfer calls, list voices, and read and update your profile, which holds the names and numbers of the people you call. They cannot read your API keys or files. An approved agent can still place calls that cost money and speak for you, within `COLLEAGUE_ALLOWED_CALLING_CODES`, so approve only agents you trust.
 - **The daemon stays on loopback.** The connector listens on `127.0.0.1` only, and just its routes are public through your proxy. It rejects requests from browser origins other than its own (and `COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS`), and request bodies larger than 1 MB.
 
 See and revoke access with the CLI. Revoking takes effect on a running connector.

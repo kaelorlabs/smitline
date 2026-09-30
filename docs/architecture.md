@@ -1,64 +1,70 @@
 # Architecture
 
-Colleague AI is a **local-first** meeting runtime. The loopback daemon on `127.0.0.1` is the supported production path. GPT-Live provides cloud voice. Coding-agent CLIs, browser profiles, workspace bytes, transcripts, and credentials stay on this computer.
+Colleague AI is a **local-first** runtime that gives any agent phone calls and meetings. The loopback daemon on `127.0.0.1` is the supported path. OpenAI GPT-Live (`gpt-live-1`) is the only voice: it does all listening and speaking. Browser profiles, transcripts, call records, and credentials stay on this computer.
 
-See [capabilities](capabilities.md) for truthful platform and provider matrices. See [hosted runtime](hosted-runtime.md) for the foundation control plane (not production hosting).
+See [capabilities](capabilities.md) for the meeting platform matrix, [calls](calls.md) for the brief and result, and [phone calls](phone.md) for how a phone call runs.
 
 ## Runtime pieces
 
 ```text
-Host integrations (Codex / Cursor / Claude MCP or CLI)
-        │  real sessionId for exact continuity
-        ▼
-SDK / CLI / MCP  ──►  loopback daemon 127.0.0.1:8765
-        │                    │
-        │                    ├─ leases originating coding-agent session
-        │                    ├─ approvals, artifacts, git broker
-        │                    └─ starts meeting supervisor
-        ▼
-Local portal 127.0.0.1:8095  (context continuity: local-portal)
+Your agent (Claude Code, Codex, Cursor, ChatGPT, your own code, ...)
         │
         ▼
-Docker meeting-agent  ← browser + PulseAudio + virtual camera
-        │
+MCP server / remote connector / CLI / SDKs / REST
+        │  brief in, result out
         ▼
-Zoom / Teams / Meet web client     GPT-Live (one gpt-live-1 session)
+Loopback daemon 127.0.0.1:8765
+  ├─ calls API        /v1/calls, /v1/voices, /v1/profile
+  ├─ phone gateway    127.0.0.1:8766 ──► SignalWire or Twilio ◄──► phone
+  │                                       (audio relayed to GPT-Live, or direct over SIP)
+  └─ meetings         /v1/meetings ──► meeting container (Docker)
+                                          browser + PulseAudio + Xvfb + virtual camera
+                                          ◄──► Zoom / Teams / Meet web client
+                                          ◄──► GPT-Live (one gpt-live-1 session)
+        ▲
+Local console 127.0.0.1:8095 (Meetings and Calls tabs)
 ```
 
-The meeting browser, virtual display, and audio bridge run in Docker (`compose.meeting.yaml`, service `meeting-agent`). Coding-agent workers run on the host so official CLI logins are not copied into the container.
+A phone call and a meeting are both **calls**: an agent sends a brief to `/v1/calls` with channel `phone` or `meeting`, and reads the same kind of result. A meeting call starts an ordinary daemon meeting underneath. The console uses the small `/v1/meetings` API directly when you start a meeting by hand.
+
+In both, GPT-Live hands questions that need careful reasoning or precise facts to a backend model through Responses delegation. The backend knows the brief and context. Phone calls use `COLLEAGUE_PHONE_BACKEND_MODEL` and `COLLEAGUE_PHONE_WEB_SEARCH`; meetings use `COLLEAGUE_MEETING_BACKEND_MODEL` and `COLLEAGUE_MEETING_WEB_SEARCH`. Both models default to `gpt-5.6-terra`, and web search is off unless set to `1`.
+
+### The meeting container
+
+One image, `colleague-meeting:local`, built from `Dockerfile.meeting`: `python:3.12-slim-bookworm` with Playwright Chromium, PulseAudio, Xvfb, and x11vnc with noVNC for account sign-in. The daemon starts it with `docker compose -f compose.meeting.yaml up -d --build meeting-agent`, so the first meeting builds it (a couple of minutes, about 1.8 GB on disk). `meeting-runtime/` and the vendored `joinly/` subset are mounted read-only at run time, so code changes need no rebuild. No speech models run in the container.
 
 ### Where the daemon runs
 
-`start-runtime-daemon.sh` runs the daemon on this computer's Python when it can create the daemon's venv (Python 3.10+ with `venv`), and otherwise in Docker (`Dockerfile.daemon`). `COLLEAGUE_DAEMON_RUNTIME=host` or `docker` picks one.
+`start-runtime-daemon.sh` runs the daemon on this computer's Python when it can create the daemon's venv (Python 3.10+ with `venv`), and otherwise in Docker (`Dockerfile.daemon`). `COLLEAGUE_DAEMON_RUNTIME=host` or `docker` picks one. Docker is enough; nothing needs host Python.
 
-In Docker the container uses host networking, so the daemon and phone gateway listen on this computer's loopback exactly as they do without Docker. The checkout is mounted at the same path and the container runs as the host user, so `.colleague/`, `.env`, and call records stay the user's own files, and the meeting containers the daemon starts through the host's Docker socket see the same paths. The image holds only Python, aiohttp, the Docker CLI, and `cloudflared` for the phone tunnel; the code is mounted, so code changes need no rebuild, and the image is rebuilt only when `Dockerfile.daemon` or `requirements-daemon.txt` change. Settings exported in the shell reach the container by name, never by value on the command line.
+In Docker the container uses host networking, so the daemon and phone gateway listen on this computer's loopback exactly as they do without Docker. The checkout is mounted at the same path and the container runs as the host user, so `.colleague/`, `.env`, and call records stay the user's own files, and the meeting containers the daemon starts through the host's Docker socket see the same paths. The image holds only Python, aiohttp, the Docker CLI, and `cloudflared` for the phone tunnel; the code is mounted, so code changes need no rebuild, and the image is rebuilt only when `Dockerfile.daemon` or `requirements-daemon.txt` change. Settings exported in the shell reach the container by name, never by value on the command line. Docker Desktop needs host networking turned on for this computer to reach the daemon.
 
-Coding-agent workers cannot run there: they use the host's `codex`, `cursor-agent`, or `claude` with the user's logins. Handing meeting work to a coding agent therefore needs the daemon on the host's Python. Phone calls, the calls API, and meetings started through `/v1/calls` work in either place. Docker Desktop needs host networking turned on for this computer to reach the daemon.
-
-## Join and admission
+## Joining a meeting
 
 ```mermaid
 sequenceDiagram
-    participant Caller as SDK/CLI/MCP/portal
+    participant Agent as Agent (MCP/CLI/SDK)
     participant Daemon as Loopback daemon
     participant Super as Meeting supervisor
-    participant Adapter as Platform adapter
+    participant Bot as Meeting container
     participant Meet as Zoom/Teams/Meet
-    Caller->>Daemon: POST /v1/meetings (url, agentSession, permissions)
-    Daemon->>Daemon: exclusive lease on agentSession.sessionId
-    Daemon->>Super: start meeting
-    Super->>Adapter: open invitation in local browser
-    Adapter->>Meet: join (guest first)
+    participant Live as GPT-Live
+    Agent->>Daemon: POST /v1/calls (channel meeting, to = invite URL)
+    Daemon->>Super: start meeting (context from the brief)
+    Super->>Bot: docker compose up --build meeting-agent
+    Bot->>Meet: platform adapter opens the invitation and joins (guest first)
     alt waiting room
-        Adapter-->>Daemon: waiting_for_admission
-        Meet->>Adapter: host admits
+        Bot-->>Daemon: waiting_for_admission
+        Meet->>Bot: host admits
     end
-    Adapter->>Meet: connect computer audio
-    Super->>Super: start one gpt-live-1 session
-    Adapter-->>Daemon: live
+    Bot->>Meet: connect computer audio
+    Bot->>Live: start one gpt-live-1 session (Responses delegation)
+    Bot-->>Daemon: live
+    Note over Daemon: meeting ends or the agent calls end_call
+    Daemon-->>Agent: result from the meeting handoff (summary, decisions, action items, transcript)
 ```
 
-Portal joins always use `sessionId: local-portal` and `continuity: context`. Exact continuity is only for host integrations that pass the real originating thread id.
+The brief's context, questions, and limits become the meeting's starting context. The voice session and its backend read it when the session starts. The meeting result is built from the local transcript into a handoff, without a model call.
 
 ## Selective speech (platform microphone and virtual gate)
 
@@ -84,65 +90,13 @@ Once the microphone can carry speech, the session speaks one short AI disclosure
 
 GPT-Live owns pauses, backchannels, and interruptions. The local runtime does not classify meeting speech or add a silence delay.
 
-## Exact-session delegation and final handoff
-
-```mermaid
-sequenceDiagram
-    participant Host as Coding-agent host
-    participant Daemon as Loopback daemon
-    participant Live as GPT-Live
-    participant Provider as Codex/Cursor/Claude adapter
-    Host->>Daemon: join with real sessionId (never last/latest)
-    Daemon->>Daemon: lease session exclusive
-    Live->>Daemon: client-delegated coding task
-    Daemon->>Provider: resume exact thread when capability allows
-    Provider-->>Live: bounded result for spoken delivery
-    Note over Live: gpt-live-1 stays connected (store false)
-    Note over Daemon,Provider: meeting end or cancel
-    Daemon->>Provider: append MeetingHandoff once
-    Daemon->>Daemon: release lease
-    Provider-->>Host: same conversation continues
-```
-
-Context continuity (`continuity: context`, `sessionId: local-portal`) does not resume an originating thread. Cursor and Claude Code exact resume run only when the installed CLI help documents a resume flag.
-
-## Approval-gated workspace action
-
-```mermaid
-sequenceDiagram
-    participant Live as GPT-Live
-    participant Daemon as Loopback daemon
-    participant Op as Operator (portal/CLI/SDK)
-    participant Exec as Workspace executor
-    participant Git as Git broker
-    Live->>Daemon: requested mutation/command
-    Daemon->>Daemon: permission mode
-    alt disabled
-        Daemon-->>Live: denied
-    else allowed
-        Daemon->>Exec: run in isolated worktree
-    else approval-required
-        Daemon-->>Op: approval.required
-        Op->>Daemon: approved or denied
-        alt approved
-            Daemon->>Exec: isolated worktree + artifacts
-            opt commits/pushes also approval-required
-                Exec->>Git: typed commit/push request
-                Op->>Git: decide
-            end
-        end
-    end
-```
-
-Mutations, tests, commits, and pushes never go through the Cursor or Claude CLIs. They stay on the generic approval plane, workspace executor, and git broker.
-
 ## Guest-then-signed-in fallback
 
 ```mermaid
 sequenceDiagram
     participant Op as Operator
-    participant Portal as Local portal
-    participant Adapter as Zoom/Teams/Meet adapter
+    participant Portal as Local console
+    participant Adapter as Teams/Meet adapter
     participant IdP as Official Google/Microsoft page
     Op->>Portal: Connect Google or Microsoft account
     Portal->>Adapter: Open meeting view (noVNC)
@@ -164,70 +118,31 @@ sequenceDiagram
 
 Disconnect removes the local profile directory. It does not revoke sessions on other devices. Zoom has no signed-in profile fallback.
 
-## Incoming shared-content change detection
-
-When screen share is enabled, the meeting container screenshots the share surface every `captureIntervalMs`. Only settled, meaningfully changed frames reach the paid vision analyzer:
-
-```text
-meeting container (each capture)
-  inbox still holds a frame        -> skip (backpressure)
-  same bytes as previous capture   -> reuse its signature, no decode
-  tile signature                   -> ~64x36 tiles (rows follow the aspect ratio); per tile the
-                                      mean luminance and mean horizontal/vertical gradient over
-                                      at most 6x6 sampled pixels
-  settle                           -> must match the previous capture for settleTicks captures
-  mask                             -> tiles that changed in 4 of the last 6 local comparisons
-                                      (clock, video, webcam thumbnail, caret) are ignored until
-                                      they stay quiet for about 3 captures
-  changed vs last selected frame   -> write to inbox with the masked tile list
-host daemon (each inbox frame)
-  duplicate bytes / unchanged / oversized -> skip, as before
-  matches one of the last 32 analyzed screens of this meeting
-                                   -> re-emit that observation with reused: true; no analyzer
-                                      call and no new screenshot or observation artifact
-  otherwise                        -> store screenshot, analyze, store observation, remember it
-container -> GPT-Live session.thinking.append ("Shared content: ...")
-```
-
-A tile counts as changed when its luminance or either gradient moves by more than 8 of 255. The change score is the square root of the changed-tile fraction, roughly the side of the changed area relative to the frame side.
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `captureIntervalMs` | 4000 | Capture period, 2000-15000 ms. |
-| `minChange` | 0.08 | Minimum change score. 0.08 is about 15 of 2304 tiles: a new slide bullet or a two-line scroll passes; a mouse pointer (1-4 tiles) or a hover highlight does not. |
-| `settleTicks` | 1 | Consecutive near-identical captures needed before selection, 0-5. 0 selects the first changed capture, including mid-transition frames. |
-
-Cost for a 1920x1080 frame in the meeting container: about 70 ms when the bytes changed (26 ms PNG decode through Pillow when importable, 45 ms tile sampling) and a SHA-256 otherwise. The host daemon decodes in pure Python (about 0.2 s for a slide, 0.8-0.9 s for dense code) and only for selected frames. Both sides compute signatures in a worker thread.
-
-Content that keeps changing over more than half the frame, such as full-screen video, never settles and is not analyzed until it stops.
-
 ## Retention and deletion
 
 All of these paths are gitignored. Stop the meeting or daemon before deleting files in use.
 
 | Data | Location | How to delete |
 | --- | --- | --- |
-| Transcripts and call traces | `meeting-runtime/recordings/` | Delete the meeting directory from the portal history or remove the folder |
-| Uploaded/pasted context | `meeting-runtime/context/index.json` | Portal **Clear saved context**, or delete the file |
-| Browser profiles (Teams/Google) | `meeting-runtime/profiles/` | Portal **Disconnect**, which removes the local profile; or delete the directory |
-| Coding-agent job files | `meeting-runtime/jobs/` (Codex at root; Cursor/Claude under `jobs/cursor`, `jobs/claude-code`) | Delete after workers are stopped; do not remove an active `worker.lock` to steal a session |
-| Default empty workspace | `meeting-runtime/codex-workspace/` | Delete contents; the launcher recreates the directory |
+| Meeting transcripts and traces | `meeting-runtime/recordings/` | Remove the meeting's folder |
+| Console reference context | `meeting-runtime/context/index.json` | Console **Clear saved context**, or delete the file |
+| Browser profiles (Teams/Google) | `meeting-runtime/profiles/` | Console **Disconnect**, which removes the local profile; or delete the directory |
+| Per-meeting runtime state | `meeting-runtime/run/` | Delete after the meeting has stopped |
 | Daemon auth token | `.colleague/daemon.auth` | Stop the daemon; deleting the file forces a new token on next start |
-| Daemon meetings, events, leases | `.colleague/daemon-data/` | Stop the daemon, then delete the directory |
-| Artifacts (plans, patches, screenshots, observations) | `.colleague/daemon-data/.colleague/artifacts/` | Delete the meeting subdirectory, or the artifacts tree |
-| Hosted pairing hashes | `.colleague/daemon-data/hosted/runner-state.json` | Portal/CLI/SDK **Unpair**, or delete the file after stopping the daemon |
-| CLI last meeting id | `.colleague/cli-meeting.json` | Delete the file |
-| Portal active meeting | `.colleague/portal-active.json` | Stop the colleague from the portal |
+| Daemon meetings, events, call records, webhook secret, API token digests | `.colleague/daemon-data/` | Stop the daemon, then delete the directory |
+| Owner profile | `.colleague/profile.json` | `colleague profile`, or delete the file |
+| Remote connector grants (digests) | `.colleague/connector/` | `colleague connector revoke --all`, or delete the directory |
+| Console active meeting | `.colleague/portal-active.json` | Stop the colleague from the console |
 | API keys / meeting invite | `.env`, `.env.meeting` | Edit or delete; never commit |
 
-Screenshots from incoming shared-content capture are stored as artifacts (`kind: screenshot` / `observation`), not as a separate public dump. Pairing codes and `deviceEnrollment` are shown once and are not written to these files.
+Checkouts from before the cleanup may still have `meeting-runtime/jobs/` and `meeting-runtime/codex-workspace/`. Nothing uses them now; delete them.
 
 ### Container user and file permissions
 
-The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `jobs/`, `recordings/`, and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
+The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `recordings/` and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
 
-Before starting the container, the daemon creates `jobs/`, `recordings/`, and `profiles/` as 0700 directories, because Docker would create missing ones as root. If an earlier run left them owned by root or by uid 1001 (the image's `app` user), run `sudo chown -R "$(id -u):$(id -g)" meeting-runtime/jobs meeting-runtime/recordings meeting-runtime/profiles`.
+Before starting the container, the daemon creates `recordings/` and `profiles/` as 0700 directories, because Docker would create missing ones as root. If an earlier run left them owned by root or by uid 1001 (the image's `app` user), run `sudo chown -R "$(id -u):$(id -g)" meeting-runtime/recordings meeting-runtime/profiles`.
 
 With rootless Docker or Podman, container root is your user: export `COLLEAGUE_UID=0 COLLEAGUE_GID=0` before starting the daemon or `start-meeting-agent.sh`; values already in the environment are kept.
 
-Restarting the meeting participant starts a **new** GPT-Live voice context even when a coding-agent session can be resumed.
+Restarting the meeting participant starts a **new** GPT-Live voice session.

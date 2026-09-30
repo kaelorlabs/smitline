@@ -30,7 +30,6 @@ function fakeColleague() {
     async endCall(id) { return { id, status: 'summarizing' }; },
     async transferCall() { return { transferred: true }; },
     async listVoices() { return { default: 'marin', voices: ['marin'] }; },
-    async joinMeeting() { throw new Error('meeting tools must not be reachable'); },
   };
 }
 
@@ -242,12 +241,6 @@ test('discovery, registration, approval, tokens, and a call over MCP', async (t)
   const remoteStart = listed.body.result.tools.find((tool) => tool.name === 'start_call');
   assert.equal(remoteStart.inputSchema.properties.agentSession, undefined);
   assert.deepEqual(remoteStart.inputSchema.required, ['channel', 'objective']);
-  const handover = await mcp(base, token, {
-    jsonrpc: '2.0', id: 5, method: 'tools/call',
-    params: { name: 'start_call', arguments: { ...BRIEF, agentSession: { provider: 'codex', sessionId: 'x' } } },
-  }, { session });
-  assert.equal(handover.body.result.isError, true);
-  assert.match(handover.body.result.structuredContent.message, /remote connector/);
   const started = await mcp(base, token, {
     jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'start_call', arguments: BRIEF },
   }, { session });

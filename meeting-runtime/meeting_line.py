@@ -33,33 +33,24 @@ def context_from_brief(brief):
     }
 
 
-def meeting_payload(brief, call_id, workspace):
-    agent_session = dict(brief.agent_session or {
-        'provider': 'generic',
-        'sessionId': call_id,
-        'workspace': workspace,
-        'metadata': {'continuity': 'context', 'source': 'call-api'},
-    })
+def meeting_payload(brief):
     # The meeting's opening disclosure names onBehalfOf; a brief's voice overrides COLLEAGUE_VOICE.
-    metadata = dict(agent_session.get('metadata') or {})
-    metadata['onBehalfOf'] = brief.on_behalf_of
-    if brief.voice:
-        metadata['voice'] = brief.voice
-    agent_session['metadata'] = metadata
-    return {
+    payload = {
         'meetingUrl': brief.to,
-        'agentSession': agent_session,
         'context': context_from_brief(brief),
+        'onBehalfOf': brief.on_behalf_of,
     }
+    if brief.voice:
+        payload['voice'] = brief.voice
+    return payload
 
 
 class MeetingLine:
     channel = 'meeting'
 
-    def __init__(self, daemon, *, workspace, poll_interval=2.0, handoff_timeout=120.0,
+    def __init__(self, daemon, *, poll_interval=2.0, handoff_timeout=120.0,
                  sleep=asyncio.sleep, monotonic=None):
         self.daemon = daemon
-        self.workspace = str(workspace)
         self.poll_interval = poll_interval
         self.handoff_timeout = handoff_timeout
         self._sleep = sleep
@@ -81,8 +72,7 @@ class MeetingLine:
         ctx.set_status('connecting')
         self._starting.add(ctx.call_id)
         try:
-            session = await self.daemon.create_meeting(
-                meeting_payload(ctx.brief, ctx.call_id, self.workspace))
+            session = await self.daemon.create_meeting(meeting_payload(ctx.brief))
         finally:
             self._starting.discard(ctx.call_id)
         self._meetings[ctx.call_id] = session.id

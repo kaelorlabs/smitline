@@ -231,7 +231,6 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         ''')
         a = self.adapter(meet=True)
         self.assertTrue(a.capabilities.camera)
-        self.assertTrue(a.capabilities.shared_content)
         self.assertEqual(await a.get_microphone_state(), 'muted')
         await a.unmute()
         self.assertEqual(await a.get_microphone_state(), 'open')

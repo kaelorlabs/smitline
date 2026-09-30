@@ -1,8 +1,8 @@
 # Colleague AI MCP adapter
 
-Local stdio MCP server (`@colleague-ai/mcp` 1.0.0) over the TypeScript SDK. It does not own a second meeting runtime. All tools call the loopback daemon through `@colleague-ai/sdk`.
+Local stdio MCP server (`@colleague-ai/mcp` 1.0.0) over the TypeScript SDK. It gives any MCP-capable agent phone calls and meetings: every tool calls the loopback daemon through `@colleague-ai/sdk`.
 
-`src/remote.mjs` is the remote connector: the call tools only, over MCP Streamable HTTP with OAuth sign-in, for cloud agents such as ChatGPT and Claude. Start it with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
+`src/remote.mjs` is the remote connector: the same call tools over MCP Streamable HTTP with OAuth sign-in, for cloud agents such as ChatGPT and Claude. Start it with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
 
 Do not publish this package and do not install it globally.
 
@@ -10,35 +10,35 @@ Do not publish this package and do not install it globally.
 
 | Tool | Behavior |
 | --- | --- |
-| `join_current_meeting` | Compatibility join when a host can explicitly supply an exact session id |
-| `start_meeting` | Creates a meeting and returns a durable `{ meetingId }` immediately |
-| `get_meeting_status` | Current daemon session |
-| `add_meeting_context` | Versioned `ContextHandoff` |
-| `cancel_meeting` | SDK cancel; includes a partial handoff when one is ready |
-| `get_meeting_handoff` | Poll for the durable handoff |
-| `retry_meeting_handoff` | Retry exact-session append |
-| `list_meeting_approvals` / `get_meeting_approval` / `decide_meeting_approval` | One decision per approval |
-| `list_meeting_artifacts` / `get_meeting_artifact` | Metadata; content is local |
-| `list_coding_providers` | Truthful capability records |
-| `get_runner_status` / `pair_runner` / `complete_runner_pair` / `unpair_runner` | Foundation pairing; loopback remains supported |
-| `start_call` / `check_call_brief` / `wait_for_call` / `get_call` / `list_calls` | Phone calls and meetings from a brief; see [calls](../../docs/calls.md) |
-| `send_call_instruction` / `end_call` / `transfer_call_to_me` / `list_voices` | Steer, end, or take over a call |
+| `start_call` | Place a phone call or join a meeting from a brief; returns the queued call at once |
+| `check_call_brief` | Validate a brief without placing the call; missing fields come with a question to ask |
+| `wait_for_call` / `get_call` / `list_calls` | Follow a call to its structured result |
+| `send_call_instruction` / `end_call` / `transfer_call_to_me` | Steer, end, or take over a call in progress |
+| `list_voices` | GPT-Live voices |
+| `get_profile` / `update_profile` | The user's profile that every call gets as background |
 
-`start_meeting` requires `url`, `provider`, `workspace`, `context`, and `permissions`. Exact continuity also requires the **real originating `sessionId`**. This server never reads the host conversation id, never invents a thread, and rejects `last` / `latest` / `--last`. `cameraEnabled` defaults true. `screenShareEnabled` defaults false and cannot be turned on by voice.
+See [calls](../../docs/calls.md) for the brief and the result.
 
-Set `continuity: "context"` for generic MCP clients. That uses `sessionId: "local-portal"` and must not be treated as exact Codex/Cursor resume.
+## Phone calls and meetings
 
-## MCP Tasks
+Both go through `start_call`:
 
-If the client includes `io.modelcontextprotocol/tasks` on the `start_meeting` request and passes `waitUntilHandoff: true`, the server returns a `CreateTaskResult` (`resultType: "task"`) and waits for the durable handoff. Poll `tasks/get`. Progress notifications describe lifecycle and delegation only — never transcript text.
+- Phone: `{ "channel": "phone", "to": "+14155550142", "objective": "..." }`
+- Meeting: `{ "channel": "meeting", "to": "https://zoom.us/j/...", "objective": "..." }` joins that Zoom, Teams, or Google Meet invite.
 
-Clients without Tasks should poll `get_meeting_handoff`.
+Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome.
 
-## Codex
+## Registering the server
 
-Codex supplies `CODEX_THREAD_ID` to task command subprocesses, but does not reliably forward that per-task value to a persistent MCP server. The installer therefore adds a task-local `colleague` CLI launcher and a `join-colleague-ai-meeting` skill. The skill launches the CLI from the active task so it inherits the exact id directly. MCP remains useful for meeting status and controls. `join_current_meeting` is retained for compatible hosts and tests that can explicitly pass the exact id; never invent, infer, or reuse one.
+`colleague setup register` adds the server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
 
-Example `~/.codex/config.toml` mcp_servers fragment:
+Claude Code:
+
+```bash
+claude mcp add --scope user colleague-ai -- node /absolute/path/to/colleague-ai/packages/mcp/src/server.mjs
+```
+
+Codex (`~/.codex/config.toml`, see `examples/codex.mcp.toml`):
 
 ```toml
 [mcp_servers.colleague-ai]
@@ -47,11 +47,7 @@ args = ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
 cwd = "/absolute/path/to/colleague-ai"
 ```
 
-See `examples/codex.mcp.toml`. Restart Codex after changing MCP configuration. Use `start_meeting` with an explicit session id only for non-Codex hosts or integration testing.
-
-## Cursor
-
-Cursor MCP config (`mcp.json`):
+Cursor (`mcp.json`, see `examples/cursor.mcp.json`):
 
 ```json
 {
@@ -64,15 +60,11 @@ Cursor MCP config (`mcp.json`):
 }
 ```
 
-See `examples/cursor.mcp.json`. Cursor must inject the current composer/chat id; without it, use `continuity: "context"`.
-
-## Claude Code
-
-Claude Code may start this MCP server through Anthropic's documented MCP client setup. Exact continuity still requires the real originating session id from that host. If the installed `claude --help` does not document a resume flag, use `continuity: "context"`. Colleague AI does not invent Claude MCP config keys or resume flags.
+Restart the agent after changing its MCP configuration.
 
 ## Security
 
 - Loopback daemon only (`127.0.0.1`)
 - `.colleague/daemon.auth` is read by the SDK and never returned
 - stdout is JSON-RPC frames only; logs go to stderr and are redacted
-- SIGINT/SIGTERM cancel live meetings unless `COLLEAGUE_MCP_LEAVE_RUNNING=1`
+- Calls run in the daemon, so stopping the MCP server does not end a call in progress

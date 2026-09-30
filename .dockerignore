@@ -1,0 +1,2 @@
+# No image copies files from the checkout; send Docker an empty build context.
+*

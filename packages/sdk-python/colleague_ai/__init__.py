@@ -10,7 +10,6 @@ from .client import (
     RuntimeError,
     FinalizationError,
     InterruptError,
-    MeetingHandle,
     LoopbackTransport,
     create_loopback_transport,
 )
@@ -25,7 +24,6 @@ __all__ = [
     'RuntimeError',
     'FinalizationError',
     'InterruptError',
-    'MeetingHandle',
     'LoopbackTransport',
     'create_loopback_transport',
 ]

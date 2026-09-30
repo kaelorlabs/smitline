@@ -15,7 +15,7 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'notify', 'agentSession',
+    'rehearsal', 'notify',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
@@ -110,7 +110,6 @@ class CallBrief:
     max_minutes: int = None
     rehearsal: bool = False
     webhook_url: str = None
-    agent_session: dict = field(default=None, compare=False)
 
     @property
     def session_context(self):
@@ -140,7 +139,6 @@ class CallBrief:
             'maxMinutes': self.max_minutes,
             'rehearsal': self.rehearsal,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
-            'agentSession': self.agent_session,
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -159,11 +157,6 @@ class CallBrief:
         else:
             to = require_string(data['to'], 'to', max_length=2048)
             platform_for_url(to)
-        agent_session = optional_field(data, 'agentSession')
-        if agent_session is not None:
-            if channel != 'meeting':
-                raise ValueError('agentSession is only supported for meetings')
-            agent_session = dict(require_mapping(agent_session, 'agentSession'))
         language = optional_field(data, 'language')
         if language is not None and not LANGUAGE.fullmatch(require_string(language, 'language', max_length=16)):
             raise ValueError('language must be a language tag such as en or pt-BR')
@@ -217,7 +210,6 @@ class CallBrief:
             max_minutes=max_minutes,
             rehearsal=rehearsal,
             webhook_url=webhook_url,
-            agent_session=agent_session,
         )
 
 

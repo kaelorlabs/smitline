@@ -99,7 +99,7 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 | `TWILIO_FROM_NUMBER` | none | A number bought in Twilio. Needed for incoming calls, and for outgoing calls unless `COLLEAGUE_CALLER_ID` is set. |
 | `SIGNALWIRE_SPACE`, `SIGNALWIRE_PROJECT_ID`, `SIGNALWIRE_API_TOKEN`, `SIGNALWIRE_SIGNING_KEY`, `SIGNALWIRE_FROM_NUMBER` | none | The same, through SignalWire's Compatibility API. The signing key checks webhook signatures. |
 | `COLLEAGUE_PHONE_PROVIDER` | detected | `signalwire` or `twilio` when both are set up. |
-| `COLLEAGUE_PHONE_AUDIO` | `relay` | `relay`, `sip`, or `sip-webhook`; see [Direct audio over SIP](#direct-audio-over-sip). |
+| `COLLEAGUE_PHONE_AUDIO` | `relay` | `relay`, `sip`, or `sip-webhook`; see [Direct audio over SIP](#direct-audio-over-sip-optional). |
 | `COLLEAGUE_SIP_TRUNK_URL`, `COLLEAGUE_SIP_USERNAME`, `COLLEAGUE_SIP_PASSWORD` | none | The SIP trunk OpenAI dials out through (`sip`). `colleague setup sip-trunk` creates one on SignalWire. |
 | `OPENAI_PROJECT_ID`, `OPENAI_WEBHOOK_SECRET` | none | For `sip-webhook`: the project in the SIP address, and the webhook signing secret. |
 | `COLLEAGUE_CALLER_ID` | `TWILIO_FROM_NUMBER` | Caller ID for outgoing calls, such as your verified mobile. |

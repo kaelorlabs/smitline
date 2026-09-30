@@ -4,7 +4,7 @@
 
 ### Your agent can make the call.
 
-Give any AI agent a phone line and a seat in Zoom, Microsoft Teams, and Google Meet. Colleague AI talks with people in real time using GPT-Live, then reports back to the chat that sent it.
+Phone calls and meetings for any AI agent. Colleague AI gives your agent a phone line and a seat in Zoom, Microsoft Teams, and Google Meet, talks with people in real time using GPT-Live, then reports back to the chat that sent it.
 
 [Get started](#get-started) · [Calls](docs/calls.md) · [Phone](docs/phone.md) · [Agents](docs/agents.md) · [Architecture](#architecture) · [Troubleshooting](#troubleshooting)
 
@@ -14,75 +14,64 @@ Give any AI agent a phone line and a seat in Zoom, Microsoft Teams, and Google M
 
 ---
 
-Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Colleague AI holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your SignalWire or Twilio account; meetings are joined by a browser participant on your computer.
+Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Colleague AI holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your SignalWire or Twilio account; meetings are joined by a browser participant that runs in Docker on your computer.
 
-Colleague AI is also another interface to the coding-agent conversation you already have. A host integration (or the local portal) joins a meeting with context and permissions; GPT-Live listens continuously and speaks selectively; delegated work resumes the originating coding-agent session when the host supplies that session’s real id. When the meeting ends, a structured handoff is appended once and the session lease is released.
+OpenAI GPT-Live (`gpt-live-1`) is the only voice. It does all the listening and speaking, and hands harder questions to a backend model that knows the brief.
 
-Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Humans and coding agents should start from [AGENTS.md](AGENTS.md) for the full doc index and invariants.
+Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Contributors, human or agent, should start from [AGENTS.md](AGENTS.md) for the doc index and invariants.
 
-The supported production path is a **loopback daemon on this computer** (`127.0.0.1`). There is no production hosted control plane. The [hosted runtime](docs/hosted-runtime.md) module is a foundation for later pairing tests, not a cloud deployment.
+The supported path is a **loopback daemon on this computer** (`127.0.0.1`). There is no hosted service.
 
-The current product has been exercised in live Zoom calls. Teams and Google Meet share the same local browser/audio runtime; live tenant policies still need acceptance testing. Conversational timing is still being improved.
-
-Phone calls were first placed live on 2026-09-29 through SignalWire: a setup call to the owner and a call that scheduled a meeting with a colleague both came back with the right result. Phone conversation is not yet as natural as ChatGPT voice, because call audio currently passes through this computer; connecting the phone provider straight to OpenAI over SIP is in progress. See [Limitations](#limitations).
+Phone calls were first placed live on 2026-09-29 through SignalWire: a setup call to the owner and a call that scheduled a meeting with a colleague both came back with the right result. Phone conversation is not yet as natural as ChatGPT voice, because call audio currently passes through this computer; connecting the phone provider straight to OpenAI over SIP is in progress. Meetings have been exercised in live Zoom calls; Teams and Google Meet share the same browser and audio runtime but still need live acceptance. See [Limitations](#limitations).
 
 ## What you can do
 
 | Capability | Experience |
 | --- | --- |
 | **Make phone calls** | Your agent sends a brief; Colleague AI calls through SignalWire (free trial works) or Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
-| **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API. |
-| **Talk in Zoom, Teams, or Meet** | Meeting audio streams to GPT-Live; replies play through the participant’s virtual microphone after a short opening AI disclosure. |
-| **Bring a coding agent in** | Codex is the default. Cursor and Claude Code are optional adapters that only use flags documented by their CLIs. |
-| **Keep one technical session** | Exact continuity resumes the host-supplied thread id. Context continuity (`local-portal`) does not invent or hash a thread. |
-| **Work with an explicit workspace** | The worker can inspect the selected directory. Approved mutations run in an isolated worktree, not through Cursor/Claude CLIs. |
-| **Research current information** | Optional local `search_web` backed by Tavily. |
-| **See Colleague AI in the call** | Virtual camera is on by default and never displays task text. Disable it to join audio-only. |
-| **Understand shared slides** | Incoming shared-content capture is **opt-in and off by default**. Voice cannot enable it. Outgoing desktop share from this computer is not implemented. |
-| **Approve risky work** | Commands, edits, network, commits, and pushes can require a single operator decision. |
-| **Review what happened** | Local transcripts, handoffs, artifacts, and (when generated) charts. |
-
-Chart rendering works locally. Sending chart attachments to Zoom chat is experimental and has **not** passed an end-to-end delivery test. Post-meeting chat delivery is not implemented.
+| **Join Zoom, Teams, or Meet** | The same brief with channel `meeting` and the invite link. Meeting audio streams to GPT-Live; replies play through the participant's virtual microphone after a short AI disclosure. The result carries the summary, decisions, action items, and transcript. |
+| **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API or the SDKs. |
+| **See what calls cost** | Every finished call carries its phone and OpenAI cost. The console's Calls page shows each call's brief, result, cost, and transcript, with spend totals. |
+| **Give a meeting private context** | Paste text or add files in the console. The voice and its backend get it as background. |
+| **Appear in the meeting** | A virtual camera shows listening, working, or speaking presence and never displays task text. Turn it off to join audio-only. |
 
 ## Architecture
 
-See [architecture](docs/architecture.md) for sequence diagrams (join/admission, selective speech, exact-session handoff, approval-gated workspace actions, guest-then-signed-in fallback) and [retention paths](docs/architecture.md#retention-and-deletion). See [capabilities](docs/capabilities.md) for Zoom / Teams / Meet and Codex / Cursor / Claude Code matrices.
+See [architecture](docs/architecture.md) for the runtime pieces, sequence diagrams (joining a meeting, selective speech, guest-then-signed-in fallback), and [retention paths](docs/architecture.md#retention-and-deletion). See [capabilities](docs/capabilities.md) for the Zoom / Teams / Meet matrix.
 
 ```mermaid
 flowchart LR
-    Team[Zoom, Teams, or Meet] <-->|Meeting audio| Bridge[Browser and audio bridge]
-    Bridge <-->|Streaming voice| Voice[OpenAI GPT-Live]
-    Voice <--> Daemon[Loopback daemon]
-    Daemon --> Search[search_web / search_context]
-    Daemon --> Agent[Codex, Cursor, or Claude Code]
-    Agent --> Workspace[(Selected workspace)]
-    Daemon --> Records[Local transcripts, artifacts, handoffs]
+    Agent[Your agent] -->|MCP, CLI, SDK, REST| Daemon[Loopback daemon]
+    Daemon -->|Calls API| Phone[Phone gateway]
+    Phone <--> Provider[SignalWire or Twilio]
+    Daemon -->|Meetings| Bot[Meeting container in Docker]
+    Bot <--> Meet[Zoom, Teams, or Meet]
+    Phone <--> Voice[OpenAI GPT-Live]
+    Bot <--> Voice
+    Daemon --> Records[Local call records and transcripts]
 ```
 
-The meeting browser, virtual display, virtual camera, and audio bridge run in Docker. Coding-agent CLIs run on the host so official logins are not copied into the container. GPT-Live keeps **one continuous `gpt-live-1` session** from admission to shutdown (`store: false`).
+The meeting browser, virtual display, virtual camera, and audio bridge run in Docker. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
 
 ## Security model
 
-- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's Twilio routes, which check Twilio signatures, are exposed through a tunnel.
-- **Host-owned secrets.** OpenAI, SignalWire or Twilio, and Tavily keys stay in ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, jobs, artifacts, and pairing hashes stay on disk and gitignored. They are never uploaded to the mock hosted plane.
-- **Least privilege.** Hosted/remote requests may only **narrow** local permissions. The local runner is the final enforcement point.
-- **Fail closed.** Unknown provider ids, undocumented CLI flags, `last`/`latest` session ids, and missing job bindings are rejected.
-- **No secret-bearing logs.** Pairing codes and `deviceEnrollment` are revealed once. Tokens are not placed in URLs, query strings, events, or errors.
+- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's routes, which check the provider's signatures, are exposed through a tunnel.
+- **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
+- **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
+- **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
 - **Operator mute is authoritative.** Colleague AI does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
 ## Prerequisites
 
-- macOS or Linux (Windows through WSL2), Node.js 22+, npm, Git, and Docker. The runtime daemon runs in Docker when this computer has no Python 3.10+ with venv; handing meeting work to a coding agent needs that Python, because the agent runs on this computer with your logins. Host workers use Unix file locking.
+- macOS or Linux (Windows through WSL2), Node.js 22+, npm, Git, and Docker with Docker Compose. Docker is enough: the runtime daemon uses Python 3.10+ with `venv` when this computer has it, and otherwise runs in Docker.
 - On Windows, use WSL2 with Ubuntu: install Docker inside WSL (or enable Docker Desktop's WSL integration) and clone the repository inside the Linux home directory, not under `/mnt/c` or `/mnt/d`. `npm run doctor` checks for this.
-- Docker with Docker Compose, running locally.
-- An OpenAI project API key with access to `gpt-live-1` and the configured Codex backend model (default `gpt-5.6-terra`).
-- Optional: Tavily API key for web search.
-- Optional coding-agent CLIs you actually enable: `codex login` (default), Cursor `cursor-agent`, or Claude Code `claude`. See [coding providers](docs/coding-providers.md).
-- A Zoom, Teams, or Google Meet meeting that permits the agent to join through the web client.
+- An OpenAI project API key with access to `gpt-live-1` and the backend model (default `gpt-5.6-terra`).
+- For phone calls, a SignalWire or Twilio account (see below).
+- For meetings, a Zoom, Teams, or Google Meet meeting that lets a guest join through the web client.
 
 ## Get started
 
-Copy this prompt into your coding agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar):
+Copy this prompt into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar):
 
 ```text
 Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
@@ -98,17 +87,7 @@ Then ask your agent: "Call +1 … and …", "Practice the call on me first", or 
 - **SignalWire, paid.** Adding $5 of credit lets Colleague AI call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05.
 - **Twilio.** Works only with an upgraded (funded) account. Twilio's free trial blocks the live audio Colleague AI needs.
 
-To follow a call live, read its transcript as it happens, or take it over on your phone, run `./start-control-panel.sh` and open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
-
-### Manual setup
-
-For the agent-native Codex experience, register the local integration once:
-
-```bash
-bash scripts/install-codex-integration.sh
-```
-
-The installer adds an exact-continuity launcher at `~/.codex/bin/colleague`, registers the local MCP control server, and installs the `join-colleague-ai-meeting` Codex skill. Restart Codex, open the project you want Colleague AI to access, and ask it to join a meeting. The skill launches the CLI inside the active task, where it directly inherits `CODEX_THREAD_ID`, and supplies the current workspace plus a bounded context handoff. It fails closed instead of falling back to portal-style context continuity. MCP remains available for status and meeting controls; the portal remains an optional operations console.
+To follow a call live, read its transcript as it happens, see what it cost, or take it over on your phone, run `./start-control-panel.sh` and open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
 
 Run the local diagnostic at any time:
 
@@ -116,200 +95,126 @@ Run the local diagnostic at any time:
 npm run doctor
 ```
 
-### 1. Clone and configure
+## Meetings
+
+An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, or Google Meet link. From the CLI:
 
 ```bash
-git clone https://github.com/kaelorlabs/colleague-ai.git
-cd colleague-ai
-cp .env.example .env
-cp meeting-runtime/meeting.env.example .env.meeting
-chmod 600 .env .env.meeting
-npm install
+colleague call --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
+  --objective "Help with the Q3 numbers" --wait
 ```
 
-Edit `.env` with placeholders replaced by **your** keys:
+`--channel meeting --to <url>` does the same, and so does a `--to` that starts with `http://` or `https://`. The result comes back like a phone call's. See [calls](docs/calls.md).
 
-```dotenv
-OPENAI_API_KEY=replace_with_your_project_api_key
-TAVILY_API_KEY=replace_with_your_tavily_api_key
-```
+The first meeting builds the meeting image, `colleague-meeting:local`, with `docker compose -f compose.meeting.yaml up --build`. That takes a couple of minutes and about 1.8 GB of disk.
 
-Meeting details can be entered in the control panel. To configure them manually instead, edit `.env.meeting` using only placeholders from `meeting-runtime/meeting.env.example` (Zoom, Teams, or Meet HTTPS invites). Keep these files private; they are ignored by Git.
+Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. It answers when someone addresses it and hands harder questions to the backend model (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to skip the disclosure.
 
-### 2. Open the meeting console (portal)
+### The local console
 
 ```bash
-bash start-control-panel.sh
+./start-control-panel.sh
 ```
 
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Paste a Zoom, Teams, or Google Meet invite, choose **one** coding agent, tools, optional workspace, camera, and incoming shared-content capture. You can paste private reference text or upload TXT, Markdown, CSV, JSON, YAML, PDF, and DOCX files. Run the checks and start the colleague.
+Open [http://127.0.0.1:8095](http://127.0.0.1:8095). The **Meetings** tab starts a meeting by hand: paste the meeting link, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop the colleague and follow its live status. Past meetings keep their transcript and handoff. The **Calls** tab lists phone calls and meetings started through the calls API. See the [control panel guide](docs/control-panel.md) and [meeting adapters](docs/meeting-adapters.md).
 
-The portal talks to the **loopback daemon**. It starts `start-runtime-daemon.sh` when needed. API keys remain in `.env` and are never returned to the browser. Portal joins use **context continuity** (`local-portal`), not exact thread resume.
-
-Uploaded documents are stored as extracted text in ignored `meeting-runtime/context/index.json`. The agent can call `search_context` when sources exist at voice-session startup.
-
-The first Docker build can take several minutes. The Joinly base image includes historical local speech-model dependencies; the meeting audio path uses GPT-Live, not Whisper/Kokoro.
-
-See the [control panel guide](docs/control-panel.md) for operator workflow and [meeting adapters](docs/meeting-adapters.md) for guest-then-signed-in fallback.
-
-### 3. Admit the participant
-
-Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to skip the disclosure.
+The console talks to the **loopback daemon** and starts `start-runtime-daemon.sh` when needed. API keys remain in `.env` and are never returned to the browser.
 
 | Local interface | Address |
 | --- | --- |
-| Meeting operations console | http://127.0.0.1:8095 |
-| Calls (live transcript, results, take over) | http://127.0.0.1:8095/calls |
-| Agent browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
-| Status, transcripts, and tool activity | http://127.0.0.1:8094/health |
+| Meetings console | http://127.0.0.1:8095 |
+| Calls (live transcript, results, costs, take over) | http://127.0.0.1:8095/calls |
+| Meeting browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
+| Meeting status and transcript | http://127.0.0.1:8094/health |
 | Runtime daemon (loopback) | http://127.0.0.1:8765 |
 
-A `live` health status indicates the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
+A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
 
-### Stop or switch meetings
+### Manual meeting launch
 
-Stop the colleague from the portal, or stop the host worker with **Ctrl-C**, then:
+For debugging without the daemon:
+
+```bash
+cp meeting-runtime/meeting.env.example .env.meeting
+chmod 600 .env.meeting
+bash start-meeting-agent.sh
+```
+
+It reads `.env.meeting` (`MEETING_URL`, `MEETING_PASSCODE`, the participant name, and the backend settings), checks it with `python3`, and starts the container. Stop it with:
 
 ```bash
 docker compose -f compose.meeting.yaml stop meeting-agent
 ```
 
-Configuration and voice-session instructions are loaded at startup. Recreating the participant interrupts the current call and creates a new voice session.
-
-The command-line launcher remains available for automation:
-
-```bash
-bash start-meeting-agent.sh
-```
-
-Old Zoom-specific paths (`compose.zoom.yaml`, `.env.zoom`, `start-zoom-agent.sh`) are **not** read. Use `meeting-runtime/`, `.env.meeting`, `MEETING_URL`, `compose.meeting.yaml`, service `meeting-agent`, and `start-meeting-agent.sh`. Move existing local jobs, workspace, context, and recordings with the runtime directory.
-
-## Daemon, portal, SDK, CLI, and MCP
+## Daemon, console, SDK, CLI, and MCP
 
 | Surface | Role |
 | --- | --- |
-| **Daemon** | `./start-runtime-daemon.sh` — loopback HTTP + SSE, bearer auth, calls, meetings, approvals, artifacts, git, screen-share, providers, runner pairing |
-| **Calls API** | `/v1/calls` — any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md) and `/v1/openapi.json`. |
-| **Phone gateway** | `127.0.0.1:8766` — the only Twilio-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
-| **Portal** | `./start-control-panel.sh` — operator UI; context continuity only |
-| **TypeScript SDK** | `@colleague-ai/sdk` — host integrations; not published to npm |
-| **Python SDK** | `colleague-ai` — same contract; not published to PyPI |
-| **CLI** | `packages/cli` — `colleague call\|calls\|voices\|setup` for calls and setup; `colleague join\|status\|cancel\|handoff\|approvals\|artifacts\|…` for meetings |
-| **MCP** | `packages/mcp` — stdio adapter over the TypeScript SDK; stdout is JSON-RPC only |
-| **Remote connector** | `./start-connector.sh` — MCP over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls; call tools only, and the daemon stays on loopback. See [agents](docs/agents.md). |
-
-Exact continuity: pass the real originating `sessionId` (for Codex, the host thread id). Never `last`, `latest`, `--last`, or a URL hash.
-
-```bash
-colleague join \
-  --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
-  --agent codex \
-  --thread "$CODEX_THREAD_ID" \
-  --workspace "$PWD" \
-  --wait
-```
-
-`--context-continuity` joins without an originating thread. `--no-camera` is audio-only. `--screen-share` opts in to incoming shared-content capture.
-
-## Exact vs context continuity
-
-| Mode | Who uses it | `sessionId` | Behavior |
-| --- | --- | --- | --- |
-| **exact** | Codex/Cursor/Claude host integrations that already have the live thread id | Real originating id | Exclusive lease; resume that thread; append handoff once |
-| **context** | Local portal, generic MCP clients, `--context-continuity` | `local-portal` | Pass structured context only; do not claim thread resume |
-
-Cursor and Claude Code reject exact mode when their CLI help does not document resume.
-
-## Approvals, artifacts, camera, and screen share
-
-- **Approvals** appear in the portal, `colleague approvals`, SDK handles, and MCP tools. One decision per request: approved or denied. There is no approve-all.
-- **Artifacts** (plans, patches, command logs, screenshots, observations) stay in `.colleague/daemon-data/.colleague/artifacts/`. Metadata can be listed; bytes are local.
-- **Virtual camera** shows listening / working / speaking presence, never task text. Uncheck **Show in the meeting** for audio-only. If the host blocks video, audio continues.
-- **Incoming screen share** captures the meeting’s share/presentation surface at a low rate when enabled at join. Off by default. Pause/resume from portal, CLI, SDK, or MCP. Voice cannot turn it on. A frame is analyzed only after the screen settles and changes meaningfully; returning to an earlier screen reuses its observation. See [change detection](docs/architecture.md#incoming-shared-content-change-detection).
-
-## Hosted runtime foundation
-
-Pairing a runner (`colleague runner pair`, portal **Pair runner**, SDK/MCP equivalents) issues a short-lived one-time code. Local loopback remains the supported mode. Credentials, profiles, workspace bytes, transcripts, and screenshots do not leave this computer. See [hosted runtime](docs/hosted-runtime.md).
-
-## Try a conversation
-
-Unmute the agent, then try:
-
-> “Search for the latest release notes for the API we are discussing and tell us whether this behavior changed.”
-
-> “Ask Codex using GPT-5.6 Terra to review a retry strategy for a Python service.”
-
-> “Inspect the CSV in the workspace, calculate monthly conversion, and plot the trend.”
-
-> “Summarize the decision we just made and identify the unresolved question.”
-
-The technical worker has access only to the workspace selected in the console. When no workspace is selected it uses the empty, ignored `meeting-runtime/codex-workspace` directory. Codex analysis through `run_codex` is read-only. Approved workspace edits, if you allow them, run in an isolated git worktree.
-
-## How tools reach the voice model
-
-GPT-Live client-delegates coding work. There is no extra Responses model between Live and the coding-agent CLI.
-
-| Function | Purpose |
-| --- | --- |
-| `search_web(query)` | Public research through Tavily when enabled. |
-| `search_context(query)` | Passages from locally supplied notes and documents. |
-| Coding-agent delegation | Bounded task to Codex, or to Cursor/Claude Code when enabled and capable. |
-
-The Codex model allowlist is defined in [`meeting-runtime/codex_tool.py`](meeting-runtime/codex_tool.py). The default is `gpt-5.6-terra`; `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, and `gpt-5.5` are also listed, subject to account access. Cursor and Claude Code do not guess model names.
-
-Delegated tasks receive the context included in that request. They do **not** automatically receive all background meeting speech.
+| **Daemon** | `./start-runtime-daemon.sh`: loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
+| **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md). |
+| **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
+| **Console** | `./start-control-panel.sh`: Meetings and Calls tabs on `127.0.0.1:8095`. |
+| **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm. |
+| **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI. |
+| **CLI** | `packages/cli`: `colleague call`, `calls`, `profile`, `voices`, `setup`, and `connector`. |
+| **MCP** | `packages/mcp`: stdio server over the TypeScript SDK with the call tools; stdout is JSON-RPC only. |
+| **Remote connector** | `./start-connector.sh`: the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
 
 ## Data and privacy
 
-- **OpenAI:** meeting audio is sent to the voice API. Delegated reasoning receives the relevant text and tool context. These services use your account’s billing or allowance.
-- **Tavily:** search queries are sent to Tavily using your API key when web search is enabled.
-- **Local storage:** see [retention and deletion](docs/architecture.md#retention-and-deletion). Transcripts, profiles, jobs, artifacts, and pairing hashes are gitignored.
+- **OpenAI:** call and meeting audio goes to GPT-Live. The backend model receives the brief, the context, and the questions GPT-Live hands it; with web search on, it can search the web. After a phone call, a summary model reads the transcript. These use your account's billing.
+- **Phone provider:** calls go through your SignalWire or Twilio account. Recordings, if turned on, stay there.
+- **Local storage:** see [retention and deletion](docs/architecture.md#retention-and-deletion). Transcripts, call records, profiles, and context are gitignored.
 
-Transcripts contain meeting content and are retained until you remove them. Generated agent text may represent speech that was muted or interrupted. The recorder does not save raw audio. Restarting starts a fresh voice context even when a coding-agent thread can be resumed.
+Transcripts contain conversation content and are kept until you remove them. Generated agent text may represent speech that was muted or interrupted. Raw audio is not saved. Restarting a meeting participant starts a fresh voice session.
 
 ## Development
 
 | Path | Responsibility |
 | --- | --- |
-| [`meeting-runtime/`](meeting-runtime/) | Adapters, daemon, providers, transcripts, tests |
-| [`control-panel/`](control-panel/) | Local portal |
-| [`packages/sdk-typescript/`](packages/sdk-typescript/) · [`packages/sdk-python/`](packages/sdk-python/) | Host SDKs |
-| [`packages/cli/`](packages/cli/) · [`packages/mcp/`](packages/mcp/) | CLI and MCP adapter |
-| [`gpt-live/`](gpt-live/) | Standalone browser voice diagnostic |
-| [`joinly/`](joinly/) | Vendored meeting/browser/audio infrastructure |
+| [`meeting-runtime/`](meeting-runtime/) | Daemon, calls, phone line and gateway, meeting adapters and bridge, transcripts, tests |
+| [`control-panel/`](control-panel/) | Local console |
+| [`packages/sdk-typescript/`](packages/sdk-typescript/) · [`packages/sdk-python/`](packages/sdk-python/) | SDKs |
+| [`packages/cli/`](packages/cli/) · [`packages/mcp/`](packages/mcp/) | CLI, MCP server, and remote connector |
+| [`joinly/`](joinly/) | Vendored subset of Joinly: browser session, virtual devices, camera feed, Teams and Meet controllers |
+| `Dockerfile.meeting`, `compose.meeting.yaml` | The meeting container |
+| `Dockerfile.daemon` | The daemon image, used when this computer has no usable Python |
+
+The runtime tests run in the meeting image:
 
 ```bash
+docker compose -f compose.meeting.yaml build meeting-agent
 docker run --rm \
   --entrypoint /app/.venv/bin/python \
   -v "$PWD/meeting-runtime:/meeting-runtime:ro" \
-  meeting-agent-joinly-login:local \
+  -v "$PWD/joinly:/opt/joinly:ro" \
+  colleague-meeting:local \
   -m unittest discover -s /meeting-runtime -p 'test_*.py'
 
 npm test
-python3 -m unittest discover -s packages/sdk-python/tests -p 'test_*.py'
+cd packages/sdk-python && python3 -m unittest discover -s tests
 ```
 
-Unit tests do not establish live admission, audio quality, or file delivery. Test those in a real meeting after changing browser or audio behavior.
+Unit tests do not establish live admission, audio quality, or phone behavior. Test those with a real call or meeting after changing browser, audio, or phone code.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Agent is silent | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. If `microphoneState` is `blocked` in Zoom, the host disabled self-unmute: the host can click **Ask to unmute** on its tile, and Colleague AI accepts. |
-| Coding-agent tool fails | Keep the launcher terminal open. Verify the CLI login. A worker lock means another worker is already running. Cursor/Claude exact resume needs documented CLI flags. |
-| Chat attachment is unavailable | Host must allow file transfer; Zoom upload remains experimental. |
-| Agent cannot enter the meeting | Inspect the browser viewer for waiting-room, sign-in, passcode, or host-removal messages. Connect a Microsoft or Google account only as guest-denied fallback. |
-| Voice API rejects the session | Check account access to the configured voice and backend models. |
-| Daemon unauthorized | Token is in `.colleague/daemon.auth`; do not put it in a URL. Restart the daemon to rotate. |
-| Shared-content capture idle | It is off unless enabled at join. Voice cannot enable it. |
+| Agent is silent in a meeting | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. If `microphoneState` is `blocked` in Zoom, the host disabled self-unmute: the host can click **Ask to unmute** on its tile, and Colleague AI accepts. |
+| Agent cannot enter the meeting | Inspect the browser viewer for waiting-room, sign-in, passcode, or host-removal messages. Connect a Microsoft or Google account only when guest access is denied. |
+| The first meeting takes a while to start | The meeting image is being built. Later meetings start from the built image. |
+| Voice API rejects the session | Check account access to `gpt-live-1` and the configured backend model. |
+| Daemon unauthorized | The token is in `.colleague/daemon.auth`; do not put it in a URL. Restart the daemon to rotate it. |
+| Phone call problems | See the troubleshooting table in [SETUP.md](SETUP.md#troubleshooting). |
 
 ## Limitations
 
 - Not a multi-tenant hosted product. Loopback is the supported path.
 - Quiet participation still uses the Live API; there is no `create_response: false`.
+- Meetings do not take live instructions from the agent yet; guidance goes in the brief or the console before the meeting starts.
 - Government Teams is not enabled. Meet URLs must be official `meet.google.com` 3-4-3 codes.
-- Outgoing screen share from this computer is not implemented.
-- Chart delivery into Zoom chat is experimental.
+- Colleague AI does not share a screen or read shared screens.
 - Browser fixture tests are not production compatibility proof.
 - Phone call audio currently travels phone provider → Cloudflare tunnel → this computer → OpenAI and back. The detour adds delay to every turn, so conversation feels less natural than ChatGPT voice. Talking over Colleague AI does not cut it off straight away, and a call can go quiet for a few seconds while it hangs up. Direct SIP, with audio straight between the provider and OpenAI, is being built.
 - An automated call screener (on iPhone or Android) can be mistaken for voicemail, which makes the call end early and be reported as `voicemail`. A fix is in progress.
@@ -317,13 +222,13 @@ Unit tests do not establish live admission, audio quality, or file delivery. Tes
 
 ## Roadmap
 
-See the [product roadmap](docs/product-roadmap.md). Near-term work is direct SIP for phone calls (provider to OpenAI, with Colleague AI steering over a text side channel), latency, conversational timing, reliable chart delivery, summaries, and live tenant acceptance tests for Teams and Meet.
+See the [product roadmap](docs/product-roadmap.md). Near-term work is direct SIP for phone calls (provider to OpenAI, with Colleague AI steering over a text side channel), latency, conversational timing, meeting summaries, and live acceptance tests for Teams and Meet.
 
 ## Credits and upstream work
 
 Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo.
 
-Colleague AI builds on Joinly’s browser and audio infrastructure. See [THIRD_PARTY.md](THIRD_PARTY.md) for the pinned upstream revision and retained license.
+Colleague AI uses portions of Joinly's browser and audio infrastructure. See [THIRD_PARTY.md](THIRD_PARTY.md) for the pinned upstream revision and retained license.
 
 ## License
 

@@ -3,7 +3,7 @@
   "info": {
     "title": "Colleague AI calls API",
     "version": "1.0.0",
-    "description": "Start phone calls and meetings from a brief and read structured results. Meetings also have the richer /v1/meetings API. See docs/calls.md.",
+    "description": "Start phone calls and meetings from a brief and read structured results. See docs/calls.md.",
     "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
   },
   "servers": [{ "url": "http://127.0.0.1:8765" }],
@@ -169,8 +169,7 @@
           "voice": { "type": "string", "examples": ["marin"] },
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
-          "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
-          "agentSession": { "type": "object", "description": "Meeting only: coding-agent session for exact continuity. See /v1/meetings." }
+          "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } }
         }
       },
       "SessionContext": {

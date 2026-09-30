@@ -7,66 +7,47 @@ import test from 'node:test';
 import {
   buildMeetingCreatePayload,
   contextHandoffFromSources,
-  continuityFromAgentSession,
   meetingBusy,
   meetingIsActive,
-  permissionsForTools,
   phaseFromDaemon,
   readActiveMeetingId,
   writeActiveMeetingId,
 } from './meeting-contract.mjs';
 
-test('builds a local portal meeting payload with least-privilege permissions', () => {
+test('builds the meeting payload from the link, reference context, and camera', () => {
   const payload = buildMeetingCreatePayload({
     meetingUrl: 'https://us05web.zoom.us/j/123',
-    model: 'gpt-5.6-terra',
-    workspace: '/Users/Taylor/project',
     meetingInstructions: 'Stay brief.',
-    tools: { webSearch: true, codex: true, charts: false },
+    camera: { enabled: true, defaultOn: false, avatarDataUri: 'data:image/png;base64,AA==' },
   }, { sources: [{ name: 'notes.txt', text: 'Launch Friday.' }] });
-  assert.equal(payload.agentSession.provider, 'codex');
-  assert.equal(payload.agentSession.sessionId, 'local-portal');
-  assert.equal(payload.agentSession.metadata.source, 'local-portal');
-  assert.equal(payload.agentSession.metadata.continuity, 'context');
-  assert.equal(payload.permissions.workspace, 'read-only');
-  assert.equal(payload.permissions.network, 'allowed');
-  assert.equal(payload.permissions.edits, 'disabled');
+  assert.deepEqual(Object.keys(payload).sort(), ['camera', 'context', 'meetingUrl']);
+  assert.equal(payload.meetingUrl, 'https://us05web.zoom.us/j/123');
   assert.equal(payload.context.objective, 'Stay brief.');
   assert.equal(payload.context.importantFiles[0], 'notes.txt');
   assert.equal(payload.context.recentConversation[0].role, 'user');
-  assert.equal(payload.camera.enabled, true);
-  assert.equal(payload.camera.defaultOn, true);
-  assert.equal('avatarPath' in payload.camera, false);
-  assert.equal(payload.screenShare.enabled, false);
-  const withShare = buildMeetingCreatePayload({
-    meetingUrl: 'https://us05web.zoom.us/j/123',
-    model: 'gpt-5.6-terra',
-    tools: { codex: true },
-    screenShare: { enabled: true },
-  });
-  assert.equal(withShare.screenShare.enabled, true);
+  assert.deepEqual(payload.camera, { enabled: true, defaultOn: false, avatarDataUri: 'data:image/png;base64,AA==' });
 });
 
-test('disables workspace and network when those tools are off', () => {
-  assert.deepEqual(permissionsForTools({}), {
-    workspace: 'none', commands: 'disabled', edits: 'disabled',
-    network: 'disabled', commits: 'disabled', pushes: 'disabled',
-  });
+test('camera defaults on and onBehalfOf is sent only when the owner is known', () => {
+  const plain = buildMeetingCreatePayload({ meetingUrl: 'https://meet.google.com/aaa-bbbb-ccc' });
+  assert.deepEqual(plain.camera, { enabled: true, defaultOn: true });
+  assert.equal('onBehalfOf' in plain, false);
+  assert.equal('onBehalfOf' in buildMeetingCreatePayload({ meetingUrl: 'x' }, { onBehalfOf: '  ' }), false);
+  const owned = buildMeetingCreatePayload({ meetingUrl: 'x' }, { onBehalfOf: ' Sam Rivera ' });
+  assert.equal(owned.onBehalfOf, 'Sam Rivera');
+});
+
+test('never forwards coding-agent fields from stale console input', () => {
   const payload = buildMeetingCreatePayload({
     meetingUrl: 'https://teams.microsoft.com/l/meetup-join/abc',
-    model: 'gpt-5.6-terra',
-    tools: { webSearch: false, codex: false },
-  }, { workspace: '/tmp/ws' });
-  assert.equal(payload.agentSession.provider, 'generic');
-  assert.equal(payload.permissions.workspace, 'none');
-  const withCursor = buildMeetingCreatePayload({
-    meetingUrl: 'https://us05web.zoom.us/j/123',
-    model: 'gpt-5.6-terra',
-    tools: { cursor: true },
-  }, { workspace: '/tmp/ws' });
-  assert.equal(withCursor.agentSession.provider, 'cursor');
-  assert.equal(withCursor.agentSession.metadata.continuity, 'context');
-  assert.equal(withCursor.permissions.workspace, 'read-only');
+    model: 'gpt-5.5',
+    workspace: '/tmp/ws',
+    tools: { codex: true, webSearch: true },
+    screenShare: { enabled: true },
+  });
+  for (const key of ['agentSession', 'permissions', 'screenShare', 'model', 'workspace', 'tools']) {
+    assert.equal(key in payload, false, key);
+  }
 });
 
 test('maps daemon meeting state onto existing product phases', () => {
@@ -83,17 +64,6 @@ test('maps daemon meeting state onto existing product phases', () => {
   assert.equal(meetingIsActive({ state: 'joining' }), true);
   assert.equal(meetingBusy({ running: false, phase: 'joining' }), true);
   assert.equal(meetingBusy({ running: false, phase: 'stopped' }), false);
-});
-
-test('labels portal meetings as context continuity and origin sessions as exact', () => {
-  assert.equal(continuityFromAgentSession({
-    sessionId: 'local-portal',
-    metadata: { source: 'local-portal', continuity: 'context' },
-  }), 'context');
-  assert.equal(continuityFromAgentSession({
-    sessionId: 'thread-origin-1',
-    metadata: { source: 'codex-app-server' },
-  }), 'exact');
 });
 
 test('persists the active meeting id for portal restart recovery', () => {

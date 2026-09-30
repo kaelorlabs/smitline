@@ -1,0 +1,31 @@
+# The meeting bot. Chromium joins Zoom, Teams, or Google Meet; PulseAudio and Xvfb give it a
+# microphone, a speaker, and a screen; bridge.py carries the audio to and from GPT-Live, which
+# does all listening and speaking. No speech models run here.
+# meeting-runtime/ and the joinly subset are mounted at run time (compose.meeting.yaml), so
+# only this file's changes need a rebuild.
+FROM python:3.12-slim-bookworm
+
+ARG NOVNC_VERSION=1.5.0
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/opt/joinly \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# x11vnc, noVNC, and websockify show the bot's browser when you sign it in to Teams or Google.
+# noVNC is a static web page and websockify a pip package: Debian's packages would add a second
+# Python to the image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pulseaudio pulseaudio-utils xvfb x11vnc \
+    && python -m venv /app/.venv \
+    && /app/.venv/bin/pip install --no-cache-dir playwright==1.58.0 numpy aiohttp websockify \
+    && ln -s /app/.venv/bin/websockify /usr/bin/websockify \
+    && python -c "import io, tarfile, urllib.request; tarfile.open(fileobj=io.BytesIO(urllib.request.urlopen('https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz').read())).extractall('/usr/share', filter='data')" \
+    && mv /usr/share/noVNC-${NOVNC_VERSION} /usr/share/novnc \
+    && ln -s vnc.html /usr/share/novnc/index.html \
+    && /app/.venv/bin/playwright install --with-deps --no-shell chromium \
+    && chmod -R a+rX /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* /tmp/* \
+    && groupadd --gid 1001 app && useradd --uid 1001 --gid 1001 -m app \
+    && chmod 0755 /home/app
+
+USER app
+ENTRYPOINT ["/app/.venv/bin/python", "-u", "/meeting-runtime/bridge.py"]

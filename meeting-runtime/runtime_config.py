@@ -2,9 +2,7 @@
 from dataclasses import dataclass
 import logging
 import os
-from pathlib import Path
 
-from codex_tool import CODEX_MODELS
 from meeting_intro import owner_name
 from runtime_state import environ_from_state, read_json
 
@@ -38,20 +36,16 @@ def _boolean(value, default=False):
 @dataclass(frozen=True)
 class RuntimeConfig:
     participant_name: str
-    default_codex_model: str
-    web_search_enabled: bool
-    codex_enabled: bool
-    charts_enabled: bool
-    workspace: str
     meeting_instructions: str
     camera_enabled: bool = True
     camera_default_on: bool = True
     camera_logo_data_uri: str = ''
-    screen_share_enabled: bool = False
-    screen_share_settings: dict = None
     voice: str = ''
     meeting_intro: bool = True
     owner_name: str = ''
+    # Responses delegation: the backend model GPT-Live hands hard questions to.
+    backend_model: str = ''
+    web_search: bool = False
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -66,18 +60,11 @@ class RuntimeConfig:
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError('COLLEAGUE_PARTICIPANT_NAME must contain 1–80 printable characters')
 
-        model = env.get('COLLEAGUE_CODEX_MODEL', 'gpt-5.6-terra').strip()
-        if model not in CODEX_MODELS:
-            raise ValueError(f'COLLEAGUE_CODEX_MODEL must be one of: {", ".join(CODEX_MODELS)}')
-
-        web_search = _boolean(env.get('COLLEAGUE_ENABLE_WEB_SEARCH'), True)
-        codex = _boolean(env.get('COLLEAGUE_ENABLE_CODEX'), True)
-        charts = _boolean(env.get('COLLEAGUE_ENABLE_CHARTS'), False)
-        if charts and not codex:
-            raise ValueError('COLLEAGUE_ENABLE_CHARTS requires COLLEAGUE_ENABLE_CODEX=1')
-        workspace = env.get('COLLEAGUE_WORKSPACE', '').strip()
-        if workspace and not Path(workspace).is_absolute():
-            raise ValueError('COLLEAGUE_WORKSPACE must be an absolute path')
+        from phone_prompts import DEFAULT_BACKEND_MODEL
+        backend_model = (env.get('COLLEAGUE_MEETING_BACKEND_MODEL') or '').strip()
+        if len(backend_model) > 128 or any(ord(char) < 33 for char in backend_model):
+            raise ValueError('COLLEAGUE_MEETING_BACKEND_MODEL must be a model name')
+        web_search = (env.get('COLLEAGUE_MEETING_WEB_SEARCH') or '').strip() == '1'
         meeting_instructions = env.get('COLLEAGUE_MEETING_INSTRUCTIONS', '').strip()
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
@@ -99,22 +86,13 @@ class RuntimeConfig:
                 camera_logo = parse_avatar_data_uri(raw_avatar)
             except ValueError:
                 camera_logo = ''
-        # Never interpret a host filesystem path inside the meeting container.
-        # Keep the complete default settings shape even when capture is disabled.
-        # bridge.py publishes retention details for every meeting state.
-        from screen_share import parse_screen_share_settings
-        screen_share = parse_screen_share_settings({'enabled': False})
-        raw_share = state.get('screenShare')
-        if isinstance(raw_share, dict):
-            screen_share = parse_screen_share_settings(raw_share)
-        elif state.get('screenShareEnabled') is True:
-            screen_share = parse_screen_share_settings({'enabled': True})
-        return cls(name, model, web_search, codex, charts, workspace, meeting_instructions,
+        return cls(name, meeting_instructions,
                    camera_enabled, camera_default_on, camera_logo,
-                   screen_share['enabled'], screen_share,
                    voice=_voice(env),
                    meeting_intro=_boolean(env.get('COLLEAGUE_MEETING_INTRO'), True),
-                   owner_name=owner_name(state, env))
+                   owner_name=owner_name(state, env),
+                   backend_model=backend_model or DEFAULT_BACKEND_MODEL,
+                   web_search=web_search)
 
 
 def meeting_state_from_environ(environ=None):

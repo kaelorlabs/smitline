@@ -2,7 +2,7 @@
 
 A **call** is one conversation Colleague AI holds with people on behalf of an agent: a phone call or a meeting. Any agent starts a call with a **brief** and later reads a **result**. This is the contract every surface uses (REST, SDKs, CLI, MCP, remote connector).
 
-Meetings keep their existing, richer API under `/v1/meetings`. A meeting started through `/v1/calls` is an ordinary meeting underneath; the call record links to it.
+A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet invite URL as `to` (CLI: `colleague call --meeting <url>`). Underneath it is an ordinary daemon meeting, and the call record links to it with `meetingId`. The daemon also has a small [meetings API](#meetings-api) that the local console uses.
 
 ## Lifecycle
 
@@ -47,7 +47,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 }
 ```
 
-Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL and may pass `agentSession` for exact coding-agent continuity (local agents only; the remote connector refuses it); everything else about meetings stays in `/v1/meetings`.
+Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`.
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
@@ -83,7 +83,7 @@ The person called comes from `contact`, or else from the profile entry with the 
 
 During a call, `POST /v1/calls/{id}/instructions` with `"silent": true` adds a background note, such as something the owner just remembered. The voice uses it when it becomes relevant instead of acting on it at once.
 
-Meetings get the session context and `questions` as their starting context, with the summary, facts, and details cut to 8,000 characters together; the profile is used on phone calls. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
+Meetings get the session context and `questions` as their starting context, with the summary, facts, and details cut to 8,000 characters together; the profile is used on phone calls. In a meeting, the backend model GPT-Live hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`) gets that context too, up to about 4,000 tokens. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
 
 ## Result
 
@@ -158,6 +158,19 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
 | `GET /v1/openapi.json` | The machine-readable API description. |
+
+### Meetings API
+
+The local console starts meetings with these endpoints. Agents should use `/v1/calls` instead, which returns a result.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/meetings` | Start a meeting. Fields: `meetingUrl` (required), `context`, `camera`, `onBehalfOf`, `voice`. Unknown fields are rejected. |
+| `GET /v1/meetings/{id}` | The meeting's state. |
+| `POST /v1/meetings/{id}/context` | Replace the meeting's context. The voice session reads it when it starts. |
+| `POST /v1/meetings/{id}/cancel` | Stop the meeting. |
+| `GET /v1/meetings/{id}/events` | Server-sent events for the meeting. |
+| `GET /v1/meetings/{id}/handoff` | The handoff built from the transcript after the meeting. |
 
 ## Hooks
 

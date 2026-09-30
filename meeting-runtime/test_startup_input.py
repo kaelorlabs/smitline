@@ -4,16 +4,16 @@ from startup_input import (
     MESSAGE_LIMIT, TOKEN_LIMIT, clip_tokens, estimate_tokens, handoff_to_session_input,
     truncate_session_input,
 )
-from test_schemas import context_payload, permissions_payload
+from test_schemas import context_payload
 
 
 class StartupInputTests(unittest.TestCase):
     def test_handoff_orders_developer_dialogue_and_open_questions(self):
-        messages = handoff_to_session_input(context_payload(), permissions_payload())
+        messages = handoff_to_session_input(context_payload())
         self.assertEqual(messages[0]['role'], 'developer')
         self.assertEqual(messages[0]['content'][0]['type'], 'input_text')
         self.assertIn('Ship the developer platform', messages[0]['content'][0]['text'])
-        self.assertIn('workspace=read-only', messages[0]['content'][0]['text'])
+        self.assertNotIn('Permissions', messages[0]['content'][0]['text'])
         self.assertEqual(messages[1]['role'], 'user')
         self.assertEqual(messages[2]['role'], 'assistant')
         self.assertTrue(messages[-1]['content'][0]['text'].startswith('Open questions:'))

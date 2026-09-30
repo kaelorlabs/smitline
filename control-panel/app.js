@@ -36,9 +36,6 @@ function meetingBusy(status = {}) {
 let csrf = '';
 let savedPasscode = false;
 let selectedSession = null;
-let previewUrls = [];
-let pendingPairing = null;
-
 let selectedAvatar = null;
 
 function payload() {
@@ -48,21 +45,11 @@ function payload() {
     passcode: data.get('passcode') || '',
     keepPasscode: savedPasscode && !data.get('passcode'),
     participantName: data.get('participantName')?.trim(),
-    model: data.get('model'),
-    workspace: data.get('workspace')?.trim(),
     meetingInstructions: data.get('meetingInstructions')?.trim(),
-    tools: {
-      webSearch: data.has('webSearch'), codex: data.has('codex'),
-      cursor: data.has('cursor'), claudeCode: data.has('claudeCode'),
-      charts: data.has('charts'),
-    },
     camera: {
       enabled: data.has('cameraEnabled'),
       defaultOn: data.has('cameraDefaultOn'),
       ...(selectedAvatar ? { avatarDataUri: selectedAvatar } : {}),
-    },
-    screenShare: {
-      enabled: data.has('screenShareEnabled'),
     },
   };
 }
@@ -102,9 +89,6 @@ function setBusy(busy, label) {
 }
 
 function describePhase(phase, health, status = {}) {
-  if ((status.pendingApprovals || []).length && (status.running || phase === 'live')) {
-    return ['Waiting for approval.', 'A workspace action is paused until you approve or deny it.'];
-  }
   const states = {
     stopped: ['Ready when your meeting is.', 'Complete the setup and run checks.'],
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
@@ -125,274 +109,7 @@ function describePhase(phase, health, status = {}) {
     needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
     api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
   };
-  const [message, detail] = states[phase] || ['Working…', 'The current stage is shown above.'];
-  const continuity = status.continuity || health?.codex?.continuity;
-  const provider = status.provider || health?.provider || 'codex';
-  const agent = provider === 'cursor' ? 'Cursor' : provider === 'claude-code' ? 'Claude Code' : 'Codex';
-  if (continuity === 'context') {
-    return [message, detail + ` ${agent} is using context continuity, not the originating thread.`];
-  }
-  if (continuity === 'exact') {
-    return [message, detail + ` ${agent} is resuming the originating session.`];
-  }
-  return [message, detail];
-}
-
-function renderApprovals(pending, meetingId) {
-  const panel = $('#approvals-panel');
-  const list = $('#approval-list');
-  if (!panel || !list) return;
-  if (!pending.length || !meetingId) {
-    panel.hidden = true;
-    list.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  list.replaceChildren(...pending.map((item) => {
-    const card = document.createElement('li');
-    card.className = 'approval-card';
-    const title = document.createElement('b');
-    title.textContent = item.category || item.permission || 'action';
-    const summary = document.createElement('p');
-    summary.textContent = item.summary || 'Requested action needs approval.';
-    const meta = document.createElement('div');
-    meta.className = 'approval-meta';
-    const scope = document.createElement('span');
-    const keys = Object.keys(item.scope || {});
-    scope.textContent = keys.length ? keys.map((key) => `${key}: ${item.scope[key]}`).join(' · ') : 'meeting scope';
-    const expiry = document.createElement('span');
-    expiry.textContent = item.expiresAt ? `expires ${item.expiresAt}` : '';
-    meta.append(scope, expiry);
-    const actions = document.createElement('div');
-    actions.className = 'approval-actions';
-    for (const [decision, label] of [['approved', 'Approve'], ['denied', 'Deny']]) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = decision === 'denied' ? 'button danger compact' : 'button primary compact';
-      button.textContent = label;
-      button.addEventListener('click', async () => {
-        button.disabled = true;
-        try {
-          await request(`/api/meetings/${encodeURIComponent(meetingId)}/approvals/${encodeURIComponent(item.id)}/decision`, {
-            method: 'POST',
-            body: JSON.stringify({ decision }),
-          });
-          await refresh();
-        } catch (error) {
-          announce(error.message, true);
-          button.disabled = false;
-        }
-      });
-      actions.append(button);
-    }
-    card.append(title, summary, meta, actions);
-    return card;
-  }));
-}
-
-function renderWorkspace(artifacts, meetingId) {
-  const panel = $('#workspace-panel');
-  const list = $('#workspace-list');
-  if (!panel || !list) return;
-  const items = artifacts || [];
-  if (!items.length || !meetingId) {
-    panel.hidden = true;
-    list.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  list.replaceChildren(...items.map((item) => {
-    const card = document.createElement('li');
-    card.className = 'workspace-card';
-    const title = document.createElement('b');
-    title.textContent = item.kind || 'artifact';
-    const summary = document.createElement('p');
-    summary.textContent = item.description || item.summary || 'Workspace artifact';
-    const meta = document.createElement('div');
-    meta.className = 'approval-meta';
-    const size = document.createElement('span');
-    size.textContent = item.bytes != null ? `${item.bytes} bytes` : '';
-    const files = document.createElement('span');
-    const changed = (item.changedFiles || []).map((file) => file.path || file).filter(Boolean);
-    files.textContent = changed.length ? changed.join(', ') : (item.status || '');
-    meta.append(size, files);
-    const link = document.createElement('button');
-    link.type = 'button';
-    link.className = 'button ghost compact';
-    link.textContent = 'Download';
-    link.addEventListener('click', async () => {
-      try {
-        const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(item.id)}/content`, {
-          headers: { 'X-Colleague-Token': csrf },
-        });
-        if (!response.ok) throw new Error('Download failed.');
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = item.id || 'artifact';
-        anchor.click();
-        URL.revokeObjectURL(url);
-      } catch (error) {
-        announce(error.message, true);
-      }
-    });
-    card.append(title, summary, meta, link);
-    return card;
-  }));
-}
-
-function renderGit(operations) {
-  const panel = $('#git-panel');
-  const list = $('#git-list');
-  if (!panel || !list) return;
-  const items = operations || [];
-  if (!items.length) {
-    panel.hidden = true;
-    list.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  list.replaceChildren(...items.map((item) => {
-    const card = document.createElement('li');
-    card.className = 'workspace-card';
-    const title = document.createElement('b');
-    title.textContent = item.kind || 'git';
-    const summary = document.createElement('p');
-    const result = item.result || {};
-    summary.textContent = result.summary || 'Waiting for a separate approval.';
-    const meta = document.createElement('div');
-    meta.className = 'approval-meta';
-    const status = document.createElement('span');
-    status.textContent = item.status || 'requested';
-    const detail = document.createElement('span');
-    detail.textContent = result.commitSha || item.approvalId || '';
-    meta.append(status, detail);
-    card.append(title, summary, meta);
-    return card;
-  }));
-}
-
-function revokePreviews() {
-  for (const url of previewUrls) URL.revokeObjectURL(url);
-  previewUrls = [];
-}
-
-function shareStateLabel(share, health) {
-  const status = (share && share.status) || health.screenShare || {};
-  if (!status.enabled) return 'off';
-  if (status.paused) return 'paused';
-  if (status.capturing) return 'capturing';
-  if (status.active) return 'shared content';
-  if (status.available) return 'available';
-  const reason = status.degradedReason;
-  return reason ? String(reason).replaceAll('_', ' ') : 'idle';
-}
-
-function renderScreenShare(share, meetingId) {
-  const panel = $('#screen-share-panel');
-  const list = $('#screen-share-list');
-  const actions = $('#screen-share-actions');
-  if (!panel || !list || !actions) return;
-  revokePreviews();
-  const status = share?.status || {};
-  const observations = share?.observations || [];
-  if (!meetingId || (!status.enabled && !observations.length)) {
-    panel.hidden = true;
-    list.replaceChildren();
-    actions.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  actions.replaceChildren();
-  if (status.enabled) {
-    for (const [action, label] of [['pause', 'Pause capture'], ['resume', 'Resume capture']]) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = action === 'resume' ? 'button primary compact' : 'button ghost compact';
-      button.textContent = label;
-      button.disabled = action === 'pause' ? Boolean(status.paused) : !status.paused;
-      button.addEventListener('click', async () => {
-        button.disabled = true;
-        try {
-          await request(`/api/meetings/${encodeURIComponent(meetingId)}/screen-share/${action}`, {
-            method: 'POST',
-            body: '{}',
-          });
-          await refresh();
-        } catch (error) {
-          announce(error.message, true);
-          button.disabled = false;
-        }
-      });
-      actions.append(button);
-    }
-  }
-  if (!observations.length) {
-    const empty = document.createElement('p');
-    empty.className = 'empty';
-    empty.textContent = status.paused ? 'Capture is paused.' : 'No shared-content observations yet.';
-    list.replaceChildren(empty);
-    return;
-  }
-  list.replaceChildren(...observations.map((item) => {
-    const card = document.createElement('li');
-    card.className = 'workspace-card';
-    const title = document.createElement('b');
-    title.textContent = item.summary || 'Shared content';
-    const meta = document.createElement('div');
-    meta.className = 'approval-meta';
-    const confidence = document.createElement('span');
-    confidence.textContent = item.confidence != null ? `confidence ${item.confidence}` : '';
-    const when = document.createElement('span');
-    when.textContent = item.timestamp || '';
-    meta.append(confidence, when);
-    if (item.reused) {
-      const reused = document.createElement('span');
-      reused.textContent = 'earlier screen, analysis reused';
-      meta.append(reused);
-    }
-    card.append(title, meta);
-    const artifactId = item.frameArtifactId;
-    if (artifactId) {
-      const preview = document.createElement('img');
-      preview.className = 'share-preview';
-      preview.alt = 'Shared content frame';
-      card.append(preview);
-      fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
-        headers: { 'X-Colleague-Token': csrf },
-      }).then(async (response) => {
-        if (!response.ok) return;
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        previewUrls.push(url);
-        preview.src = url;
-      }).catch(() => {});
-      const link = document.createElement('button');
-      link.type = 'button';
-      link.className = 'button ghost compact';
-      link.textContent = 'Download frame';
-      link.addEventListener('click', async () => {
-        try {
-          const response = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/content`, {
-            headers: { 'X-Colleague-Token': csrf },
-          });
-          if (!response.ok) throw new Error('Download failed.');
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.download = `${artifactId}.png`;
-          anchor.click();
-          URL.revokeObjectURL(url);
-        } catch (error) {
-          announce(error.message, true);
-        }
-      });
-      card.append(link);
-    }
-    return card;
-  }));
+  return states[phase] || ['Working…', 'The current stage is shown above.'];
 }
 
 function renderStatus(status) {
@@ -406,9 +123,7 @@ function renderStatus(status) {
   $('#phase-label').textContent = phase.replaceAll('_', ' ');
   $('#signal-message').textContent = message;
   $('#signal-detail').textContent = detail;
-  const pending = status.pendingApprovals || [];
-  const waiting = pending.length > 0;
-  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${waiting ? 'waiting' : (health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : '')}`;
+  $('#signal-stage').className = `signal-stage ${live ? 'active' : ''} ${health.error || phase.includes('error') || phase === 'needs_attention' ? 'error' : ''}`;
   $('#mic-state').textContent = health.microphoneState || '—';
   $('#floor-state').textContent = (health.floorState || '—').replaceAll('_', ' ');
   const cameraState = health.cameraState || (health.cameraEnabled === false ? 'off' : '—');
@@ -416,53 +131,21 @@ function renderStatus(status) {
     ? `${String(cameraState).replaceAll('_', ' ')} (${String(health.degradedReason).replaceAll('_', ' ')})`
     : String(cameraState).replaceAll('_', ' ');
   $('#visual-state').textContent = (health.visualState || '—').replaceAll('_', ' ');
-  const shareState = $('#share-state');
-  if (shareState) shareState.textContent = shareStateLabel(status.screenShare, health);
-  const shareLock = form.querySelector('[name="screenShareEnabled"]');
-  if (shareLock) shareLock.disabled = meetingBusy(status);
   $('#listening-state').textContent = health.listening === undefined ? '—' : (health.listening ? 'Active' : 'Stopped');
-  $('#tool-state').textContent = health.backend_status || '—';
-  const continuity = status.continuity || health.codex?.continuity;
-  $('#continuity-state').textContent = continuity === 'exact'
-    ? 'Originating thread'
-    : continuity === 'context'
-      ? 'Context only'
-      : '—';
   const seconds = Number(health.usage_seconds || 0);
   $('#session-time').textContent = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-  renderApprovals(pending, status.meetingId);
-  renderWorkspace(status.workspaceArtifacts || [], status.meetingId);
-  renderGit(status.gitOperations || []);
-  renderScreenShare(status.screenShare, status.meetingId);
   $('#stop-button').disabled = !meetingBusy(status);
   $('#start-button').disabled = operationBusy || meetingBusy(status);
   const log = (status.logs || []).map(row => `${row.at.slice(11,19)}  ${row.text}`).join('\n');
   $('#runtime-log').textContent = log || 'No activity yet.';
   renderSessions(status.sessions || []);
-  const runner = status.runner || {};
-  const runnerState = $('#runner-state');
-  if (runnerState) {
-    runnerState.textContent = runner.paired
-      ? 'Paired. This computer still owns profiles, microphone, workspace, and credentials.'
-      : 'Not paired. Local loopback is active.';
-  }
-  if (runner.paired) {
-    pendingPairing = null;
-    const codeEl = $('#pairing-code');
-    if (codeEl) {
-      codeEl.hidden = true;
-      codeEl.textContent = '';
-    }
-    const completeBtn = $('#complete-runner-pair');
-    if (completeBtn) completeBtn.hidden = true;
-  }
 }
 
 function handoffStatusLabel(session) {
   const status = session.handoffStatus || 'none';
   if (status === 'ready') return session.partial ? 'Handoff ready (partial)' : 'Handoff ready';
   if (status === 'pending') return 'Handoff pending';
-  if (status === 'failed') return 'Handoff failed — retry available';
+  if (status === 'failed') return 'Handoff incomplete';
   return session.hasTranscript ? 'Transcript only' : 'Meeting session';
 }
 
@@ -562,33 +245,17 @@ async function openTranscript(id, button) {
     statusNode.textContent = status === 'ready'
       ? (result.partial ? 'Structured handoff is ready. This record is marked partial.' : 'Structured handoff is ready.')
       : status === 'pending'
-        ? 'Handoff is stored locally and still pending Codex append or daemon release.'
+        ? 'Handoff is stored locally and still being finalized.'
         : status === 'failed'
-          ? 'Codex append failed. The local handoff is kept; retry without releasing the lease.'
+          ? 'Handoff finalization did not complete. The local handoff is kept.'
           : 'No structured handoff is available yet.';
     $('#transcript-body').textContent = (result.transcript || '').trim() || 'This meeting has no transcript content.';
     const actions = $('#handoff-actions');
     const handoffView = $('#handoff-view');
-    const retry = $('#retry-handoff');
     if (result.handoff) {
       actions.hidden = false;
       handoffView.hidden = false;
       $('#handoff-body').textContent = JSON.stringify(result.handoff, null, 2);
-      retry.hidden = status !== 'failed';
-      retry.onclick = async () => {
-        retry.disabled = true;
-        try {
-          await request(`/api/sessions/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
-          announce('Codex append retry succeeded.');
-          await openTranscript(id, button);
-          await refresh();
-        } catch (error) {
-          announce(error.message, true);
-          await openTranscript(id, button);
-        } finally {
-          retry.disabled = false;
-        }
-      };
       $('#download-handoff').onclick = () => {
         const blob = new Blob([JSON.stringify(result.handoff, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
@@ -600,7 +267,6 @@ async function openTranscript(id, button) {
     } else {
       actions.hidden = true;
       handoffView.hidden = true;
-      retry.hidden = true;
     }
   } catch (error) { announce(error.message, true); }
 }
@@ -632,7 +298,7 @@ async function runChecks() {
     const result = await request('/api/preflight', { method: 'POST', body: JSON.stringify(payload()) });
     showErrors(result.errors);
     box.className = `preflight ${result.ready ? 'ready' : 'failed'}`;
-    box.querySelector('p').textContent = result.ready ? 'Ready to join. Credentials, Docker, Codex, and meeting settings passed.' : Object.values(result.errors).join(' ');
+    box.querySelector('p').textContent = result.ready ? 'Ready to join. Your OpenAI key, Docker, and meeting settings passed.' : Object.values(result.errors).join(' ');
     if (result.ready) announce('');
     else announce(Object.values(result.errors)[0] || 'Checks failed.', true);
     return result.ready;
@@ -690,22 +356,6 @@ $('#stop-button').addEventListener('click', async () => {
   catch (error) { announce(error.message, true); }
 });
 
-function codingEnabled() {
-  return Boolean(form.elements.codex?.checked || form.elements.cursor?.checked || form.elements.claudeCode?.checked);
-}
-function exclusiveCoding(changed) {
-  if (!changed.checked) return;
-  ['codex', 'cursor', 'claudeCode'].forEach((name) => {
-    if (form.elements[name] && form.elements[name] !== changed) form.elements[name].checked = false;
-  });
-}
-['codex', 'cursor', 'claudeCode'].forEach((name) => {
-  form.elements[name]?.addEventListener('change', (event) => {
-    exclusiveCoding(event.target);
-    $('#workspace-field').hidden = !codingEnabled();
-    if (!form.elements.codex.checked) form.elements.charts.checked = false;
-  });
-});
 async function refresh() {
   try { renderStatus(await request('/api/status')); } catch { $('.connection').classList.remove('live'); $('#connection-label').textContent = 'Console disconnected'; }
 }
@@ -718,18 +368,9 @@ async function init() {
     $('#meeting-url').value = settings.meetingUrl;
     updatePlatform();
     $('#participant-name').value = settings.participantName;
-    $('#workspace').value = settings.workspace;
     $('#meeting-instructions').value = settings.meetingInstructions;
-    $('#model').replaceChildren(...data.models.map(model => Object.assign(document.createElement('option'), { value: model, textContent: model })));
-    $('#model').value = settings.model;
-    form.elements.webSearch.checked = settings.tools.webSearch;
-    form.elements.codex.checked = settings.tools.codex;
-    if (form.elements.cursor) form.elements.cursor.checked = Boolean(settings.tools.cursor);
-    if (form.elements.claudeCode) form.elements.claudeCode.checked = Boolean(settings.tools.claudeCode);
-    form.elements.charts.checked = settings.tools.charts;
     savedPasscode = settings.hasPasscode;
     $('#passcode-hint').textContent = savedPasscode ? 'A passcode is saved. Leave blank to keep it.' : 'Optional when the invitation URL includes access credentials.';
-    $('#workspace-field').hidden = !(settings.tools.codex || settings.tools.cursor || settings.tools.claudeCode);
     renderStatus(data.status);
     setInterval(refresh, 2000);
   } catch (error) { announce(`Control panel failed to initialize: ${error.message}`, true); }
@@ -818,56 +459,3 @@ for (const [kind, noun] of [['teams', 'Microsoft'], ['google', 'Google']]) {
     });
   }
 }
-$('#pair-runner')?.addEventListener('click', async event => {
-  event.target.disabled = true;
-  try {
-    const started = await request('/api/runner/pair', { method: 'POST', body: '{}' });
-    pendingPairing = { pairingId: started.pairingId, pairingCode: started.pairingCode };
-    const codeEl = $('#pairing-code');
-    if (codeEl) {
-      codeEl.hidden = false;
-      codeEl.textContent = `Pairing code (shown once): ${started.pairingCode}`;
-    }
-    const completeBtn = $('#complete-runner-pair');
-    if (completeBtn) completeBtn.hidden = false;
-    announce('Pairing code is shown once. Confirm pairing, then it will not be shown again.');
-  } catch (error) { announce(error.message, true); }
-  finally { event.target.disabled = false; }
-});
-$('#complete-runner-pair')?.addEventListener('click', async event => {
-  event.target.disabled = true;
-  try {
-    if (!pendingPairing?.pairingId || !pendingPairing?.pairingCode) {
-      throw new Error('Start pairing before confirming.');
-    }
-    const payload = { pairingId: pendingPairing.pairingId, pairingCode: pendingPairing.pairingCode };
-    pendingPairing = null;
-    const codeEl = $('#pairing-code');
-    if (codeEl) {
-      codeEl.hidden = true;
-      codeEl.textContent = '';
-    }
-    event.target.hidden = true;
-    await request('/api/runner/pair/complete', { method: 'POST', body: JSON.stringify(payload) });
-    announce('Runner paired. The pairing code will not be shown again.');
-    await refresh();
-  } catch (error) { announce(error.message, true); }
-  finally { event.target.disabled = false; }
-});
-$('#unpair-runner')?.addEventListener('click', async event => {
-  event.target.disabled = true;
-  try {
-    pendingPairing = null;
-    const codeEl = $('#pairing-code');
-    if (codeEl) {
-      codeEl.hidden = true;
-      codeEl.textContent = '';
-    }
-    const completeBtn = $('#complete-runner-pair');
-    if (completeBtn) completeBtn.hidden = true;
-    await request('/api/runner/unpair', { method: 'POST', body: '{}' });
-    announce('Runner unpaired. Local loopback remains active.');
-    await refresh();
-  } catch (error) { announce(error.message, true); }
-  finally { event.target.disabled = false; }
-});

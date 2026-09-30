@@ -261,8 +261,7 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
 
             async def no_sleep(_seconds):
                 await asyncio.sleep(0)
-            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep,
-                               monotonic=lambda: next(ticks))
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks))
             h = ServiceHarness(temp, lines={'meeting': line})
             record = await h.service.create(brief(channel='meeting', to=ZOOM,
                                                   context='Q3 sales review'))
@@ -275,8 +274,8 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
                         if e['type'] == 'call.status']
             self.assertEqual(statuses[:4], ['connecting', 'waiting', 'in_progress', 'summarizing'])
             payload = daemon.created[0]
-            self.assertEqual(payload['agentSession']['provider'], 'generic')
-            self.assertEqual(payload['agentSession']['metadata']['continuity'], 'context')
+            self.assertEqual(set(payload), {'meetingUrl', 'context', 'onBehalfOf'})
+            self.assertEqual(payload['onBehalfOf'], 'Robin')
             self.assertEqual(payload['context']['summary'], 'Q3 sales review')
             self.assertEqual(h.summarizer.calls, 0)
             await h.service.shutdown()
@@ -295,7 +294,7 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
 
             async def no_sleep(_seconds):
                 await asyncio.sleep(0)
-            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep)
+            line = MeetingLine(daemon, sleep=no_sleep)
             h = ServiceHarness(temp, lines={'meeting': line})
             record = await h.service.create(brief(channel='meeting', to=ZOOM))
             await asyncio.sleep(0)
@@ -315,8 +314,7 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
 
             async def no_sleep(_seconds):
                 await asyncio.sleep(0)
-            line = MeetingLine(daemon, workspace='/tmp/ws', sleep=no_sleep,
-                               monotonic=lambda: next(ticks))
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks))
             h = ServiceHarness(temp, lines={'meeting': line})
             record = await h.service.create(brief(channel='meeting', to=ZOOM, maxMinutes=1))
             done = await h.service.wait(record['id'], timeout=5)
@@ -324,12 +322,15 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(done['endReason'], 'max_duration')
             await h.service.shutdown()
 
-    def test_payload_keeps_host_agent_session(self):
-        session = {'provider': 'codex', 'sessionId': 'thread-1', 'workspace': '/w'}
-        parsed = CallBrief.from_dict(brief(channel='meeting', to=ZOOM, agentSession=session))
-        # The host session is kept; the metadata adds who the meeting disclosure names.
-        self.assertEqual(meeting_payload(parsed, 'call-x', '/ws')['agentSession'],
-                         {**session, 'metadata': {'onBehalfOf': 'Robin'}})
+    def test_payload_names_the_owner_and_voice(self):
+        parsed = CallBrief.from_dict(brief(channel='meeting', to=ZOOM, voice='cinder'))
+        payload = meeting_payload(parsed)
+        self.assertEqual(payload['onBehalfOf'], 'Robin')
+        self.assertEqual(payload['voice'], 'cinder')
+        self.assertNotIn('agentSession', payload)
+        with self.assertRaises(ValueError):
+            CallBrief.from_dict(brief(channel='meeting', to=ZOOM,
+                                      agentSession={'provider': 'codex', 'sessionId': 'thread-1'}))
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
@@ -411,12 +412,10 @@ class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
         from test_schemas import handoff_payload
         with tempfile.TemporaryDirectory() as temp:
             supervisor = FakeSupervisor()
-            workspace = Path(temp) / 'workspace'
-            workspace.mkdir()
             harness = ServiceHarness(temp)
 
             def lines(daemon):
-                line = MeetingLine(daemon, workspace=workspace, poll_interval=0.01, handoff_timeout=5)
+                line = MeetingLine(daemon, poll_interval=0.01, handoff_timeout=5)
                 harness.service.lines = {'meeting': line}
                 return harness.service
             app = create_app(root=Path(temp) / 'daemon', auth_token='t', supervisor=supervisor,
@@ -429,7 +428,7 @@ class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
             meeting_id = call['line']['meetingId']
             self.assertEqual(supervisor.started, [meeting_id])
             session = await daemon.get_meeting(meeting_id)
-            self.assertEqual(session.agent_session.provider, 'generic')
+            self.assertEqual(session.on_behalf_of, 'Robin')
             context = session.context.to_dict()
             self.assertEqual(context['objective'], 'Book a table for 4 at 7pm')
             self.assertIn('Do not share: salaries', context['constraints'])
@@ -442,7 +441,59 @@ class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
             done = await harness.service.wait(record['id'], timeout=5)
             self.assertEqual(done['status'], 'completed')
             self.assertEqual(done['result']['summary'], 'Agreed on Q3.')
-            self.assertEqual(done['result']['actionItems'], ['dev: Implement leases'])
+            self.assertEqual(done['result']['actionItems'], ['dev: Send the meeting notes'])
+            await harness.service.shutdown()
+            app.runtime_daemon.close()
+
+    async def test_meeting_transcript_reaches_the_handoff(self):
+        """The bridge's transcript path writes the archive the host builds the handoff from."""
+        from bridge import MeetingTranscript
+        from call_record import CallRecord
+        from meeting_finalizer import MeetingFinalizer, archive_dir
+        from test_runtime_daemon import FakeSupervisor
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = FakeSupervisor()
+            harness = ServiceHarness(temp)
+            runtime_root = Path(temp) / 'meeting-runtime'
+
+            def lines(daemon):
+                harness.service.lines = {'meeting': MeetingLine(
+                    daemon, poll_interval=0.01, handoff_timeout=5)}
+                return harness.service
+            app = create_app(root=Path(temp) / 'daemon', auth_token='t', supervisor=supervisor,
+                             call_service_factory=lines)
+            daemon = app.runtime_daemon
+            record = await harness.service.create(brief(channel='meeting', to=ZOOM))
+            call = await harness.service.wait(record['id'], timeout=0.2)
+            meeting_id = call['line']['meetingId']
+            daemon.transition(meeting_id, 'live')
+
+            # What bridge.run_voice does with GPT-Live transcript deltas inside the container.
+            state = {'muted': False}
+            archive = CallRecord(runtime_root / 'recordings', meeting_id=meeting_id)
+            transcript = MeetingTranscript(archive, state)
+            transcript.note({'type': 'session.input_transcript.delta', 'event_id': 'tr-in-1',
+                             'delta': 'Can we move the launch to Friday?',
+                             'start_ms': 100, 'end_ms': 900})
+            transcript.note({'type': 'session.output_transcript.delta', 'event_id': 'tr-out-1',
+                             'delta': 'Robin agreed to Friday earlier today.',
+                             'start_ms': 1000, 'end_ms': 1800})
+            transcript.note({'type': 'session.input_transcript.delta', 'event_id': 'tr-in-1',
+                             'delta': 'Can we move the launch to Friday?'})
+            archive.close(end_reason='meeting_ended', stage='finished')
+            self.assertEqual([c['speaker'] for c in state['captions']], ['meeting', 'agent'])
+
+            session = await daemon.get_meeting(meeting_id)
+            result = await MeetingFinalizer(runtime_root, daemon=daemon).complete(
+                session, reason='meeting_ended', partial=False)
+            self.assertEqual(result['status'], 'ready')
+            self.assertIn('2 transcript entries', result['handoff'].summary)
+            text = (archive_dir(runtime_root, meeting_id) / 'transcript.txt').read_text()
+            self.assertIn('Can we move the launch to Friday?', text)
+            self.assertIn('Robin agreed to Friday earlier today.', text)
+            done = await harness.service.wait(record['id'], timeout=5)
+            self.assertEqual(done['status'], 'completed')
+            self.assertIn('2 transcript entries', done['result']['summary'])
             await harness.service.shutdown()
             app.runtime_daemon.close()
 
