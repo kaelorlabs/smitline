@@ -78,9 +78,10 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
                    'side of the call. Run the call exactly as you would for real, opening the same '
                    f'way: "{disclosure}"')
     else:
-        opening = (f"You are {who}'s AI assistant, making a phone call for them. When the person "
-                   'answers, open the way a person would, in one easy breath: hello, who you are, '
-                   f'and why you are calling. For example: "{disclosure} I\'m calling about..." '
+        opening = (f"You are {who}'s AI assistant, making a phone call for them. Open the way a "
+                   'person does on the phone, in two steps. First only a short hello that says who '
+                   f'you are, for example: "{disclosure}" Then stop and let them answer. Once they '
+                   'reply ("hi", "yes?", "what is it about?"), say why you are calling. '
                    f"Always say that you are {who}'s AI assistant in that first sentence, in plain "
                    'words, and keep it relaxed rather than formal.')
     if recording:
@@ -113,9 +114,11 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'up facts, reasons, or plans that the brief does not give; say you do not know and that '
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
-        ('Call screening: if an automated assistant answers and asks who is calling and why, say in '
-         f"one sentence that you are {who}'s AI assistant and why you are calling, then wait "
-         'quietly for the person to pick up. When they do, greet them and continue normally.'),
+        ('Call screening: if an automated assistant answers ("the person you are calling is using '
+         'a screening service", "I\'ll see if this person is available"), let it finish. When it asks '
+         f"who is calling and why, say in one sentence that you are {who}'s AI assistant and why "
+         'you are calling, then wait quietly for the person to pick up. When they do, greet them '
+         'and continue normally.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them.'),
@@ -176,9 +179,10 @@ def opening_cue(brief, *, inbound=False, name=None):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
     if inbound:
         return f"Greet the caller: say they have reached {brief.on_behalf_of}'s AI assistant."
-    return (f"The call just connected. Open with a relaxed hello that says you are "
-            f'{brief.on_behalf_of}\'s AI assistant, like "{disclosure_line(brief, name)}", then say '
-            'why you are calling.')
+    return (f"The call just connected. Say only a short, relaxed hello that says you are "
+            f'{brief.on_behalf_of}\'s AI assistant, like "{disclosure_line(brief, name)}", then stop '
+            'and wait for them to answer before you say why you are calling. If an automated '
+            'assistant or voicemail greeting is still talking, let it finish first.')
 
 
 def machine_hint(brief):

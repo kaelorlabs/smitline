@@ -378,7 +378,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
-        self.assertIn('"Hey Sam, this is Robin\'s AI assistant. I\'m calling about..."', instructions)
+        self.assertIn('"Hey Sam, this is Robin\'s AI assistant." Then stop and let them answer.', instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
         self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
@@ -533,8 +533,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
             ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': quiet}})
         await until(lambda: not session.pacer.paused)
         self.assertGreater(unheard, 2.0)
-        # Talking over it: paused within 160 ms, and after 450 ms the rest is dropped.
-        for _ in range(30):
+        # Talking over it: paused within 160 ms, and after 700 ms the rest is dropped.
+        for _ in range(45):
             ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': speech}})
         await until(lambda: session._barge == 'dropped')
         self.assertEqual(clears(), 2)
@@ -576,6 +576,26 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn({'kind': 'in', 'ts': '60', 'seq': '3'},
                       [{k: v for k, v in json.loads(line).items() if k != 't'} for line in path.read_text().splitlines()])
         self.assertEqual(oct(path.stat().st_mode & 0o777), '0o600')
+
+    async def test_a_call_screener_is_heard_out_before_the_opening(self):
+        from test_barge_in import QUIET, SPEECH
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+
+        def say(frames):
+            for frame in frames:
+                ws.push({'event': 'media', 'media': {'track': 'inbound',
+                                                     'payload': base64.b64encode(frame).decode()}})
+        # "Hi, the person you are calling is using a screening service" (2 s), a 0.6 s pause,
+        # "go ahead and say your name" (1 s), then quiet.
+        say([QUIET] * 5 + [SPEECH] * 100 + [QUIET] * 30 + [SPEECH] * 50)
+        await asyncio.sleep(1.0)
+        self.assertFalse(any(kind == 'session.commentary.append' for kind, _ in live.appends))
+        say([QUIET] * 100)
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends), timeout=3)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
 
     async def test_the_opening_follows_a_hello_heard_locally(self):
         from test_barge_in import QUIET, SPEECH
