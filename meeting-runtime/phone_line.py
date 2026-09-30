@@ -33,6 +33,10 @@ from voice_core import (
 # The provider keeps this much speech buffered, so network jitter does not chop it; a
 # barge-in clears it at once.
 OUTPUT_LEAD_SECONDS = 0.6
+# When nothing is left playing, speech starts only once this much of it has arrived (or has
+# waited this long), so the provider holds a reserve from the first word: recordings showed
+# 20 ms silent slots where GPT-Live's audio arrived just in time.
+OUTPUT_CUSHION_SECONDS = 0.12
 # Local barge-in (barge_in.py): speech that starts while this much of the assistant's is
 # still unheard pauses it; once the other person has talked this long it is an
 # interruption and the rest is dropped. Model audio arriving this soon after the drop is
@@ -125,13 +129,14 @@ class OutputPacer:
     TAIL_WAIT = 0.06
     # A late frame this far past the end of playback left the listener a gap; a longer quiet
     # is a pause between turns, not a gap.
-    GAP_MIN = 0.04
+    GAP_MIN = 0.01
     GAP_MAX = 1.0
 
-    def __init__(self, send, *, lead=OUTPUT_LEAD_SECONDS, clock=time.monotonic,
-                 sleep=asyncio.sleep, bytes_per_second=8000):
+    def __init__(self, send, *, lead=OUTPUT_LEAD_SECONDS, cushion=OUTPUT_CUSHION_SECONDS,
+                 clock=time.monotonic, sleep=asyncio.sleep, bytes_per_second=8000):
         self._send = send
         self.lead = lead
+        self.cushion = cushion
         self.clock = clock
         self.sleep = sleep
         self.bytes_per_second = bytes_per_second
@@ -232,6 +237,26 @@ class OutputPacer:
         except asyncio.TimeoutError:
             return False
 
+    async def _cushioned(self, size):
+        """Nothing is playing: wait until `cushion` seconds have arrived, or for that long.
+
+        False when a pause or flush took the held frame meanwhile.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.cushion
+        while self.queued_bytes / self.bytes_per_second < self.cushion:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            self._ready.clear()
+            try:
+                await asyncio.wait_for(self._ready.wait(), remaining)
+            except asyncio.TimeoutError:
+                break
+            if self._next is None:
+                return False
+        return self._next is not None
+
     async def run(self):
         while True:
             starved = False
@@ -247,6 +272,8 @@ class OutputPacer:
                 await self._ready.wait()
             payload, last = self._next = self.queue.popleft()
             size = len(base64.b64decode(payload))
+            if self.play_until <= self.clock() and not await self._cushioned(size):
+                continue  # paused or flushed while gathering the cushion
             self.queued_bytes = max(0, self.queued_bytes - size)
             seconds = size / self.bytes_per_second
             now = self.clock()

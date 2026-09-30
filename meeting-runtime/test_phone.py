@@ -740,6 +740,30 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         pacer.mark_played('out-1')
         self.assertTrue(await pacer.drained(0.01))
 
+    async def test_speech_starts_with_a_cushion(self):
+        sent = []
+
+        async def send(message):
+            sent.append((asyncio.get_running_loop().time(), message))
+        pacer = OutputPacer(send, cushion=0.1)
+        runner = asyncio.create_task(pacer.run())
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        pacer.offer(base64.b64encode(b'' * 320).decode())  # 40 ms: not enough yet
+        await asyncio.sleep(0.03)
+        self.assertEqual(sent, [])
+        pacer.offer(base64.b64encode(b'' * 640).decode())  # now 120 ms: start at once
+        await until(lambda: len([m for _, m in sent if m['event'] == 'media']) == 6)
+        self.assertLess(sent[0][0] - started, 0.08)
+        # A lone short delta still plays, after at most the cushion.
+        pacer.flush()
+        sent.clear()
+        started = loop.time()
+        pacer.offer(base64.b64encode(b'' * 160).decode())
+        await until(lambda: sent)
+        self.assertGreaterEqual(sent[0][0] - started, 0.09)
+        runner.cancel()
+
     async def test_odd_tails_join_the_next_delta_or_are_padded(self):
         sent = []
 
