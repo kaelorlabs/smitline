@@ -37,12 +37,17 @@ def valid_signature(auth_token, url, params, provided):
     return hmac.compare_digest(expected, provided)
 
 
-def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna'):
-    """<Connect><Stream> keeps the call on our WebSocket; it ends when the socket closes."""
+def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna', realtime=False):
+    """<Connect><Stream> keeps the call on our WebSocket; it ends when the socket closes.
+
+    realtime (SignalWire only): its player manages packet delays and bursts itself instead
+    of playing buffered audio with delay.
+    """
     parts = ['<?xml version="1.0" encoding="UTF-8"?><Response>']
     if say:
         parts.append(f'<Say voice={quoteattr(say_voice)}>{escape(say)}</Say>')
-    parts.append(f'<Connect><Stream url={quoteattr(stream_url)}>')
+    extra = ' realtime="true"' if realtime else ''
+    parts.append(f'<Connect><Stream url={quoteattr(stream_url)}{extra}>')
     for name, value in parameters.items():
         parts.append(f'<Parameter name={quoteattr(name)} value={quoteattr(str(value))}/>')
     parts.append('</Stream></Connect></Response>')
@@ -132,7 +137,7 @@ class TwilioClient:
             if self.flavor == 'twilio':
                 form.append(('AsyncAmdStatusCallbackMethod', 'POST'))
         if record:
-            form.append(('Record', 'true'))
+            form += [('Record', 'true'), ('RecordingChannels', 'dual')]
             if recording_callback:
                 form += [('RecordingStatusCallback', recording_callback),
                          ('RecordingStatusCallbackMethod', 'POST'),

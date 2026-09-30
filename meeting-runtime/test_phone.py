@@ -822,6 +822,8 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
 
     def test_twiml_escapes(self):
         import xml.etree.ElementTree as ET
+        self.assertIn('<Stream url="wss://x" realtime="true">', stream_twiml('wss://x', {}, realtime=True))
+        self.assertNotIn('realtime', stream_twiml('wss://x', {}))
         twiml = stream_twiml('wss://x/twilio/media', {'callId': 'c"1', 'token': '<t>'}, say='A & B')
         root = ET.fromstring(twiml)
         self.assertEqual(root.find('Say').text, 'A & B')

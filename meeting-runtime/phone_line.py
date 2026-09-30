@@ -1107,7 +1107,11 @@ class PhoneLine:
             if session.canceled:
                 return await self._finish(ctx, session)
             stream_url = 'wss://' + base.split('://', 1)[1] + '/twilio/media'
-            twiml = stream_twiml(stream_url, {'callId': ctx.call_id, 'token': session.token})
+            # COLLEAGUE_STREAM_REALTIME=1 lets SignalWire's player smooth packet delays and bursts.
+            realtime = (getattr(twilio, 'flavor', 'twilio') == 'signalwire'
+                        and self.environ().get('COLLEAGUE_STREAM_REALTIME') == '1')
+            twiml = stream_twiml(stream_url, {'callId': ctx.call_id, 'token': session.token},
+                                 realtime=realtime)
             created = await twilio.create_call(
                 to=ctx.brief.to, from_=session.from_number, twiml=twiml,
                 status_callback=f'{base}/twilio/status/{ctx.call_id}',
