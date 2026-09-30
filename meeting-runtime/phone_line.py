@@ -114,6 +114,49 @@ class UtteranceJoiner:
         return [(speaker, ' '.join(text.split()))] if text else []
 
 
+class ProviderClock:
+    """The phone provider's audio clock, recovered from the timestamps on the audio it sends.
+
+    Pacing by this computer's clock fails when that clock runs at the wrong rate: under WSL2
+    the monotonic clock measured 6% slow, so speech went out slower than the provider played
+    it and its buffer ran dry one silent 20 ms frame at a time. Twilio and SignalWire stamp
+    every incoming frame with the milliseconds of audio since the stream began. Their time now
+    is the stamp of the least delayed recent frame, plus the time since, at the measured rate.
+    Until stamps arrive it is this computer's clock.
+    """
+
+    WINDOW = 20.0  # seconds of recent frames used for the rate and the reference
+    MIN_SPAN = 2.0  # the rate is measured once frames span this long
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.rate = 1.0
+        self._frames = collections.deque()  # (our time, their time), both in seconds
+        self._offset = None
+
+    def observe(self, stamp_ms):
+        try:
+            theirs = int(stamp_ms) / 1000
+        except (TypeError, ValueError):
+            return
+        ours = self.clock()
+        frames = self._frames
+        frames.append((ours, theirs))
+        while len(frames) > 2 and frames[0][0] < ours - self.WINDOW:
+            frames.popleft()
+        first_ours, first_theirs = frames[0]
+        if ours - first_ours >= self.MIN_SPAN and theirs > first_theirs:
+            self.rate = min(1.25, max(0.8, (theirs - first_theirs) / (ours - first_ours)))
+        # A frame that arrived late would put their time behind; the earliest arrival is truest.
+        self._offset = max(theirs_at - ours_at * self.rate for ours_at, theirs_at in frames)
+
+    def __call__(self):
+        now = self.clock()
+        if self._offset is None:
+            return now
+        return self._offset + now * self.rate
+
+
 class OutputPacer:
     """Send model audio to the provider no more than a short lead ahead of playback.
 
@@ -286,7 +329,7 @@ class OutputPacer:
             now = self.clock()
             ahead = self.play_until - now
             if ahead > self.lead:
-                await self.sleep(ahead - self.lead)
+                await self.sleep((ahead - self.lead) / getattr(self.clock, 'rate', 1.0))
                 if self._next is None:  # paused or flushed meanwhile, which took this frame
                     continue
                 now = self.clock()
@@ -445,7 +488,9 @@ class PhoneSession:
         self.ctx.set_status('in_progress')
         if self.line.environ().get('COLLEAGUE_AUDIO_TRACE') == '1':
             self._trace, self._trace_start = [], time.monotonic()
-        self.pacer = OutputPacer(self._twilio_send, trace=self._note)
+        # The provider's clock paces the assistant's speech: this computer's may run fast or slow.
+        self.provider_clock = ProviderClock()
+        self.pacer = OutputPacer(self._twilio_send, clock=self.provider_clock, trace=self._note)
         manager = self.line.live_factory(self.api_key, self.config())
         try:
             try:
@@ -517,6 +562,7 @@ class PhoneSession:
             if event == 'media':
                 media = data.get('media') or {}
                 if media.get('track', 'inbound') == 'inbound' and media.get('payload'):
+                    self.provider_clock.observe(media.get('timestamp'))
                     if self._trace is not None:
                         self._note('in', ts=media.get('timestamp'), seq=data.get('sequenceNumber'))
                     await self.live.send_audio(media['payload'])
@@ -707,6 +753,8 @@ class PhoneSession:
         }
         if self.pacer is not None:
             stats['gaps'] = dict(self.pacer.gaps)
+            # The provider's clock against this computer's; far from 1 means a drifting clock.
+            stats['clockRate'] = round(self.provider_clock.rate, 4)
         if self.stats['responseDelaysMs']:
             stats['replyDelayMs'] = spread(self.stats['responseDelaysMs'])
         if self.stats['stopDelaysMs']:

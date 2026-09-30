@@ -16,7 +16,7 @@ from call_hooks import DefaultCallHooks
 from call_service import CallError, CallService
 from call_store import CallStore
 from phone_gateway import create_gateway_app
-from phone_line import OutputPacer, PhoneLine, UtteranceJoiner, inbound_brief
+from phone_line import OutputPacer, PhoneLine, ProviderClock, UtteranceJoiner, inbound_brief
 from phone_prompts import (
     backend_instructions, delegation_config, discloses, mentions_ai, voice_instructions,
 )
@@ -286,7 +286,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['cost']['openai'], round(33 / 60 * 0.05 + (300 * 2 + 20 * 12) / 1e6, 6))
         self.assertEqual(set(done['usage']['audio']), {'maxUnplayedMs', 'interruptionsFollowed',
                                                        'hangupsYielded', 'pauses', 'backchannels',
-                                                       'gaps'})
+                                                       'gaps', 'clockRate'})
         self.assertEqual([line['speaker'] for line in done['result']['transcript']],
                          ['other', 'agent', 'other'])
         self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
@@ -813,6 +813,44 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         await until(lambda: sent[-1]['event'] == 'mark')
         self.assertEqual(sum(1 for m in sent if m['event'] == 'mark'), 1)
         runner.cancel()
+
+    def test_provider_clock_follows_the_provider_not_this_computer(self):
+        ours = [100.0]
+        clock = ProviderClock(clock=lambda: ours[0])
+        self.assertEqual(clock(), 100.0)  # no stamps yet: this computer's clock
+        # This computer's clock runs 8% slow: 20 ms frames arrive every 18.5 ms of ours,
+        # and one in ten arrives 40 ms late.
+        for frame in range(500):
+            ours[0] = 100.0 + frame * 0.02 / 1.08 + (0.04 if frame % 10 == 3 else 0.0)
+            clock.observe(str(frame * 20))
+        self.assertAlmostEqual(clock.rate, 1.08, delta=0.01)
+        ours[0] = 100.0 + 500 * 0.02 / 1.08
+        self.assertAlmostEqual(clock(), 10.0, delta=0.005)  # their time, from on-time frames
+        clock.observe('garbage')  # ignored
+        self.assertAlmostEqual(clock.rate, 1.08, delta=0.01)
+
+    async def test_pacing_follows_a_faster_provider_clock(self):
+        ours = [0.0]
+        provider = ProviderClock(clock=lambda: ours[0])
+        for frame in range(200):  # the provider's clock runs 8% faster than ours
+            ours[0] = frame * 0.02 / 1.08
+            provider.observe(str(frame * 20))
+        slept = []
+
+        async def sleep(seconds):
+            slept.append(seconds)
+            ours[0] += seconds
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        pacer = OutputPacer(send, clock=provider, sleep=sleep, cushion=0)
+        pacer.offer(base64.b64encode(b'\xff' * 16000).decode())  # 2 s of speech
+        runner = asyncio.create_task(pacer.run())
+        await until(lambda: len([m for m in sent if m['event'] == 'media']) == 100)
+        runner.cancel()
+        # 2 s of the provider's time pass in 2 / 1.08 s of ours, less the lead.
+        self.assertAlmostEqual(sum(slept), (2.0 - pacer.lead - 0.02) / 1.08, delta=0.03)
 
     async def test_pause_takes_back_unheard_speech_and_resume_carries_on(self):
         now = [0.0]
