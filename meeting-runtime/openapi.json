@@ -35,9 +35,12 @@
       "get": {
         "summary": "List recent calls, newest first",
         "operationId": "listCalls",
-        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+          { "name": "tzOffset", "in": "query", "description": "The reader's minutes east of UTC; spend is grouped by their local day.", "schema": { "type": "integer", "minimum": -840, "maximum": 840, "default": 0 } }
+        ],
         "responses": {
-          "200": { "description": "Calls", "content": { "application/json": { "schema": { "type": "object", "properties": { "calls": { "type": "array", "items": { "$ref": "#/components/schemas/Call" } } }, "required": ["calls"] } } } }
+          "200": { "description": "Calls", "content": { "application/json": { "schema": { "type": "object", "properties": { "calls": { "type": "array", "items": { "$ref": "#/components/schemas/Call" } }, "spend": { "$ref": "#/components/schemas/Spend" } }, "required": ["calls", "spend"] } } } }
         }
       }
     },
@@ -253,8 +256,52 @@
           "result": { "oneOf": [{ "$ref": "#/components/schemas/Result" }, { "type": "null" }] },
           "direction": { "type": "string", "enum": ["outbound", "inbound"] },
           "recording": { "type": "object", "description": "Phone calls recorded with COLLEAGUE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
-          "usage": { "type": "object" },
+          "usage": { "type": "object", "description": "Measured usage: voiceSeconds, phoneSeconds, phoneProvider, phonePrice (the provider's own price, once reported), backendTokens and backendModel, summaryTokens and summaryModel." },
+          "cost": { "$ref": "#/components/schemas/Cost" },
           "error": { "type": "string" }
+        }
+      },
+      "Cost": {
+        "type": "object",
+        "description": "Finished calls only. Phone: what the provider billed, or an estimate until it reports. OpenAI: calculated from usage at list prices as of pricesAsOf.",
+        "required": ["currency", "total", "phone", "openai", "estimated", "items", "pricesAsOf"],
+        "properties": {
+          "currency": { "type": "string", "enum": ["USD"] },
+          "total": { "type": "number" },
+          "phone": { "type": "number" },
+          "openai": { "type": "number" },
+          "estimated": { "type": "boolean", "description": "True while the phone line is estimated." },
+          "unpriced": { "type": "array", "items": { "type": "string" }, "description": "Models with no known price; left out of the total." },
+          "pricesAsOf": { "type": "string", "format": "date" },
+          "items": { "type": "array", "items": { "type": "object", "required": ["kind", "amount", "source"], "properties": {
+            "kind": { "type": "string", "enum": ["phone", "voice", "backend", "summary"] },
+            "amount": { "type": ["number", "null"] },
+            "source": { "type": "string", "enum": ["provider", "list_price", "estimate"] },
+            "provider": { "type": ["string", "null"] },
+            "model": { "type": "string" },
+            "seconds": { "type": ["integer", "null"] },
+            "ratePerMinute": { "type": "number" },
+            "input": { "type": "integer" },
+            "cached": { "type": "integer" },
+            "output": { "type": "integer" },
+            "webSearches": { "type": "integer" }
+          } } }
+        }
+      },
+      "Spend": {
+        "type": "object",
+        "required": ["currency", "pricesAsOf", "days"],
+        "properties": {
+          "currency": { "type": "string", "enum": ["USD"] },
+          "pricesAsOf": { "type": "string", "format": "date" },
+          "days": { "type": "array", "description": "Finished calls per local day, oldest first.", "items": { "type": "object", "properties": {
+            "day": { "type": "string", "format": "date" },
+            "calls": { "type": "integer" },
+            "total": { "type": "number" },
+            "phone": { "type": "number" },
+            "openai": { "type": "number" },
+            "estimated": { "type": "boolean" }
+          } } }
         }
       },
       "Result": {

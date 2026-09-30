@@ -603,6 +603,10 @@ function renderBrief(call) {
   section.hidden = rows.length === 0;
 }
 
+function rate(value) {
+  return `$${Number(value) || 0}/min`;
+}
+
 function tokenUsage(item) {
   const parts = [`${counter.format(item.input || 0)} in`];
   if (item.cached) parts[0] += ` (${counter.format(item.cached)} cached)`;
@@ -617,9 +621,9 @@ function costRow(item) {
   if (item.kind === 'phone') {
     usage = item.source === 'provider'
       ? `${duration(item.seconds || 0)} · billed by ${provider}`
-      : `${duration(item.seconds || 0)} · estimated at ${money(item.ratePerMinute)}/min until ${provider} reports its price`;
+      : `${duration(item.seconds || 0)} · estimated at ${rate(item.ratePerMinute)} until ${provider} reports its price`;
   } else if (item.kind === 'voice') {
-    usage = `${duration(item.seconds || 0)} at ${money(item.ratePerMinute)}/min`;
+    usage = `${duration(item.seconds || 0)} at ${rate(item.ratePerMinute)}`;
   } else {
     usage = tokenUsage(item);
   }
@@ -641,11 +645,12 @@ function renderCost(call) {
   const total = `${cost.estimated ? '≈ ' : ''}${money(cost.total)}`;
   $('cost-total').textContent = total;
   $('cost-sum').textContent = total;
+  const charged = Boolean(cost.items?.length);
   $('cost-rows').replaceChildren(...(cost.items || []).map(costRow));
-  if (!cost.items?.length) {
-    const row = document.createElement('tr');
-    row.append(Object.assign(document.createElement('td'), { colSpan: 3, className: 'usage', textContent: 'Nothing was charged: the call never connected.' }));
-    $('cost-rows').replaceChildren(row);
+  $('cost').querySelector('.table-wrap').hidden = !charged;
+  if (!charged) {
+    $('cost-note').textContent = 'Nothing was charged: the call never connected.';
+    return;
   }
   const notes = [`OpenAI amounts are calculated from usage at list prices as of ${pricesDate(cost.pricesAsOf)}.`];
   if (cost.unpriced?.length) notes.push(`No price is known for ${cost.unpriced.join(', ')}, so it is not in the total.`);
