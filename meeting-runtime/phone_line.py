@@ -52,7 +52,7 @@ SILENT_FRAME_DB = -48.0
 # interruption and the rest is dropped. Model audio arriving this soon after the drop is
 # the abandoned rest of it.
 BARGE_MIN_QUEUED = 0.15
-BARGE_COMMIT_MS = 450
+BARGE_COMMIT_MS = 700
 BARGE_STALE_SECONDS = 1.0
 # Speech this long is a turn; the reply delay is measured from its end.
 TURN_MIN_MS = 300
@@ -60,6 +60,10 @@ DRAIN_TIMEOUT = 8.0
 # The opening starts when the other person has finished their hello (heard locally), or
 # after this long if they say nothing.
 OPENING_DELAY = 1.5
+# First words longer than a hello (a call screener, a voicemail greeting) have finished only
+# after this much quiet, not the detector's usual 450 ms; that waits out their pauses.
+OPENING_LONG_WORDS_MS = 1500
+OPENING_LONG_QUIET = 1.2
 SILENCE_PROMPT_SECONDS = 40.0
 SILENCE_END_SECONDS = 65.0
 WRAP_UP_SECONDS = 60.0
@@ -620,6 +624,22 @@ class PhoneSession:
         if self.end_reason is None:
             self.end_reason = 'remote_hangup'
 
+    async def _let_long_greeting_finish(self):
+        """A call screener or voicemail greeting pauses mid-message: wait for real quiet."""
+        if self.detector.last_speech_ms < OPENING_LONG_WORDS_MS and not self.detector.speaking:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        quiet_since = None
+        while loop.time() < deadline:
+            if self.detector.speaking:
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = loop.time()
+            elif loop.time() - quiet_since >= OPENING_LONG_QUIET:
+                return
+            await asyncio.sleep(0.05)
+
     def _note(self, kind, **data):
         if self._trace is not None:
             self._trace.append({'t': round(time.monotonic() - self._trace_start, 4),
@@ -842,6 +862,7 @@ class PhoneSession:
         await asyncio.wait(heard, timeout=OPENING_DELAY, return_when=asyncio.FIRST_COMPLETED)
         for waiter in heard:
             waiter.cancel()
+        await self._let_long_greeting_finish()
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
                                opening_cue(self.brief, inbound=self.inbound, name=self.greet_name))
