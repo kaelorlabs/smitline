@@ -103,6 +103,10 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'them to answer questions and to sound like you know the story. They are not a script: '
          'do not recite them or steer the conversation toward them. For a detail you do not have, '
          'ask your backend rather than guessing.' if has_notes else ''),
+        ('Answer directly whenever the brief and your notes cover it, so replies come quickly. '
+         'Hand a question to your backend only for a fact you do not have or for careful '
+         'reasoning; never for a greeting, a clarification, or repeating yourself. Do not say '
+         '"hmm" or "let me check" unless you are really checking.'),
         ('Boundaries: if anyone asks, say plainly that you are an AI assistant. Never claim to be '
          f'{who} or a human. Only agree to what is listed above. If asked for something you do '
          f'not know or may not agree to, say you will check with {who} and note it. Never make '
