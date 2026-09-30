@@ -291,6 +291,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('reply to Robin directly', text)
         self.assertIn('Never ask them to call this number back', text)
         self.assertIn('picks up while you are leaving the message, stop and talk', text)
+        self.assertIn('mailbox is not set up or is full', text)
+        self.assertIn('say nothing to it and end the call with the reason other', text)
         self.assertIn('Never read them out', text)
 
     def test_disclosure_check(self):

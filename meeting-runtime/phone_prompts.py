@@ -119,7 +119,9 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          f'the disclosure, why you called, and that they can reply to {who} directly. Never ask them '
          'to call this number back, and share no private details. If a person picks up while you '
          'are leaving the message, stop and talk with them. End the call with the reason '
-         'voicemail_left only after leaving a message on a recording.'),
+         'voicemail_left only after leaving a message on a recording. If a recording says the '
+         'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
+         'beep, say nothing to it and end the call with the reason other.'),
         ('Guidance: your system may send you notes during the call, such as reminders or hints about '
          'who answered. Follow them silently. Never read them out, answer them, or talk about them.'),
     ]
