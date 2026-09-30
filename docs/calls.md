@@ -105,6 +105,27 @@ Meetings get the session context and `questions` as their starting context, with
 
 `outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once Twilio finishes the file. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. Meeting results come from the meeting handoff. `source` records which path produced the result.
 
+## Cost
+
+Every finished call carries `cost`, in US dollars:
+
+```json
+{
+  "currency": "USD", "total": 0.0425, "phone": 0.017, "openai": 0.0255, "estimated": false,
+  "items": [
+    { "kind": "phone", "provider": "signalwire", "seconds": 53, "amount": 0.017, "source": "provider" },
+    { "kind": "voice", "model": "gpt-live-1", "seconds": 30, "amount": 0.025, "source": "list_price" },
+    { "kind": "summary", "model": "gpt-5.6-luna", "input": 478, "output": 316, "amount": 0.000475, "source": "list_price" }
+  ],
+  "pricesAsOf": "2026-09-29"
+}
+```
+
+- **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`); `COLLEAGUE_PHONE_PRICE_PER_MINUTE` sets the estimate's rate. A handed-over call's second leg, to your phone, is not included.
+- **OpenAI:** GPT-Live seconds, and the background and summary models' tokens (cached input and web searches included), priced from the table in `call_costs.py`. OpenAI does not bill per call, so these amounts are calculated, not billed. A model with no known price is listed in `unpriced` and left out of the total. A call keeps the cost it was given when it ended; update the table when prices change.
+
+`GET /v1/calls` also returns `spend`: finished calls' totals per day, in the reader's time zone when `tzOffset` (minutes east of UTC) is given. The console's Calls page shows today, this month, all time, and the average per call, and for each call its brief, result, cost, and transcript.
+
 ## Delivery
 
 | Method | Use |

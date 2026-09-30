@@ -55,7 +55,14 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             limit = max(1, min(int(request.query.get('limit', '20')), 100))
         except ValueError:
             return _error(422, 'invalid_request', 'limit must be a number')
-        return public_json({'calls': service.list(owner=await owner(request), limit=limit)})
+        try:
+            tz_offset = max(-840, min(int(request.query.get('tzOffset', '0')), 840))
+        except ValueError:
+            return _error(422, 'invalid_request', 'tzOffset must be minutes east of UTC')
+        records = service.list(owner=await owner(request), limit=None)
+        service.backfill_prices(records)
+        return public_json({'calls': records[:limit],
+                            'spend': service.spend(records, tz_offset_minutes=tz_offset)})
 
     @handle
     async def get_call(request):

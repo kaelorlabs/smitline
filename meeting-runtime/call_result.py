@@ -220,8 +220,10 @@ class ResponsesSummarizer:
             duration_seconds=duration_seconds, source='summary_model')
         result['summaryTokens'] = {
             'input': int(usage.get('input_tokens') or 0),
+            'cached': int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0),
             'output': int(usage.get('output_tokens') or 0),
         }
+        result['summaryModel'] = self.model
         return result
 
 

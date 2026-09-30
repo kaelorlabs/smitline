@@ -835,7 +835,7 @@ test('calls view reads calls openly and protects end and transfer', async () => 
   const server = createServer({
     root: fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-calls-')),
     daemon: {
-      async listCalls() { return { calls: [{ id: callId, status: 'in_progress' }] }; },
+      async listCalls(limit, tzOffset) { actions.push(['list', limit, tzOffset]); return { calls: [{ id: callId, status: 'in_progress' }] }; },
       async getCall(id) { return { id, status: 'in_progress' }; },
       async callEvents(id, after) { actions.push(['events', id, after]); return { events: [] }; },
       async endCall(id) { actions.push(['end', id]); return { id, status: 'summarizing' }; },
@@ -848,7 +848,8 @@ test('calls view reads calls openly and protects end and transfer', async () => 
     const base = `http://127.0.0.1:${server.address().port}`;
     const page = await fetch(`${base}/calls`);
     assert.match(await page.text(), /id="transcript"/);
-    assert.equal((await (await fetch(`${base}/api/calls`)).json()).calls[0].id, callId);
+    assert.equal((await (await fetch(`${base}/api/calls?tzOffset=-240`)).json()).calls[0].id, callId);
+    assert.deepEqual(actions.shift(), ['list', 50, '-240']);
     await fetch(`${base}/api/calls/${callId}/events?after=4`);
     assert.deepEqual(actions[0], ['events', callId, '4']);
     const denied = await fetch(`${base}/api/calls/${callId}/transfer`, { method: 'POST', body: '{}' });

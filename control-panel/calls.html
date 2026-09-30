@@ -28,17 +28,34 @@
       <section class="hero">
         <p class="eyebrow">Workspace / Calls</p>
         <h1>Calls</h1>
-        <p class="hero-copy">Follow your agent’s phone calls and meetings as they happen. Read the result when one ends, or take over a live call on your phone.</p>
+        <p class="hero-copy">Follow your agent’s phone calls and meetings as they happen. Read what each one was asked to do, how it went, and what it cost, or take over a live call on your phone.</p>
       </section>
 
       <div id="banner" class="banner" role="alert" hidden></div>
 
+      <section id="spend" class="spend" aria-labelledby="spend-title" hidden>
+        <h2 id="spend-title" class="visually-hidden">What calls have cost</h2>
+        <dl class="spend-figures">
+          <div><dt>Today</dt><dd id="spend-today" class="spend-value"></dd><dd id="spend-today-calls" class="spend-sub"></dd></div>
+          <div><dt>This month</dt><dd id="spend-month" class="spend-value"></dd><dd id="spend-month-calls" class="spend-sub"></dd></div>
+          <div><dt>All time</dt><dd id="spend-all" class="spend-value"></dd><dd id="spend-all-calls" class="spend-sub"></dd></div>
+          <div>
+            <dt>Average per call</dt><dd id="spend-average" class="spend-value"></dd>
+            <dd class="spend-sub"><span class="split" aria-hidden="true"><span id="split-phone" class="phone"></span><span id="split-openai" class="openai"></span></span></dd>
+            <dd class="spend-sub legend"><span><i class="swatch phone" aria-hidden="true"></i>Phone <b id="spend-phone"></b></span><span><i class="swatch openai" aria-hidden="true"></i>OpenAI <b id="spend-openai"></b></span></dd>
+          </div>
+        </dl>
+        <p id="spend-note" class="spend-note"></p>
+      </section>
+
       <div class="layout" id="layout" data-mode="list">
         <nav class="list-pane" aria-labelledby="list-title">
           <h2 id="list-title" class="label">Recent calls</h2>
+          <div id="filters" class="filters" role="group" aria-label="Show calls by result" hidden></div>
           <p id="list-loading" class="muted loading">Loading calls…</p>
           <ol id="call-list" class="call-list"></ol>
           <p id="list-empty" class="muted" hidden>No calls yet.</p>
+          <p id="list-filtered" class="muted" hidden>No calls with this result.</p>
         </nav>
 
         <section id="detail" class="detail-pane" tabindex="-1" aria-label="Call details">
@@ -66,6 +83,11 @@
               <span id="call-status" class="chip"></span>
             </header>
             <p class="objective"><span class="objective-label">Goal</span> <span id="call-objective"></span></p>
+
+            <section id="brief" class="brief" aria-labelledby="brief-title" hidden>
+              <h3 id="brief-title" class="section-title">Brief</h3>
+              <dl id="brief-fields" class="brief-fields"></dl>
+            </section>
 
             <div id="live-panel" class="live-panel" hidden>
               <div class="actions">
@@ -107,6 +129,21 @@
               </div>
             </section>
 
+            <section id="cost" class="cost" aria-labelledby="cost-title" hidden>
+              <div class="section-head">
+                <h3 id="cost-title" class="section-title">Cost</h3>
+                <span id="cost-total" class="cost-total"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="cost-table">
+                  <thead><tr><th scope="col">Item</th><th scope="col">Usage</th><th scope="col" class="num">Amount</th></tr></thead>
+                  <tbody id="cost-rows"></tbody>
+                  <tfoot><tr><th scope="row" colspan="2">Total</th><td id="cost-sum" class="num"></td></tr></tfoot>
+                </table>
+              </div>
+              <p id="cost-note" class="muted small"></p>
+            </section>
+
             <p id="recording" class="recording" hidden><span class="recording-label">Recorded in your Twilio account</span> <span id="recording-text"></span> <code id="recording-url"></code></p>
 
             <section class="transcript-section" aria-labelledby="transcript-title">
@@ -125,7 +162,7 @@
       </div>
       <p id="announcer" class="visually-hidden" role="status"></p>
     </main>
-    <footer><span>Colleague AI runs locally on this computer.</span><span>Calls use your own OpenAI and Twilio accounts.</span></footer>
+    <footer><span>Colleague AI runs locally on this computer.</span><span>Calls use your own OpenAI and phone provider accounts.</span></footer>
   </div>
   <script type="module" src="/calls.js"></script>
 </body>

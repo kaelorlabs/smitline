@@ -440,7 +440,10 @@ export function createServer({
     if (callMatch && request.method === 'GET') {
       const [, callId, action] = callMatch;
       try {
-        if (!callId) return json(response, 200, await daemonClient.listCalls(30));
+        if (!callId) {
+          const tzOffset = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('tzOffset') || '';
+          return json(response, 200, await daemonClient.listCalls(50, tzOffset));
+        }
         if (!action) return json(response, 200, await daemonClient.getCall(callId));
         if (action === 'events') {
           const after = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('after') || '';

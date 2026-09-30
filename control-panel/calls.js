@@ -1,4 +1,4 @@
-// Follow calls live from the local console: status, transcript, result, join, and end.
+// Follow calls live from the local console: brief, status, transcript, result, cost, join, and end.
 const TERMINAL = new Set(['completed', 'failed', 'canceled']);
 const BEFORE_ANSWER = new Set(['queued', 'connecting', 'ringing', 'waiting']);
 const LIVE_POLL_MS = 1500;
@@ -21,12 +21,18 @@ const END_REASONS = {
   meeting_ended: 'Meeting ended', transferred: 'Handed to you', error: 'Something went wrong',
 };
 const JOIN_TEXT = 'Take over the call';
+const PROVIDERS = { twilio: 'Twilio', signalwire: 'SignalWire' };
+const COST_ITEMS = { phone: 'Phone line', voice: 'Voice', backend: 'Background model', summary: 'Summary' };
+// Result filters, in the order they are offered.
+const FILTER_ORDER = ['all', 'live', 'achieved', 'partial', 'not_reached', 'voicemail', 'declined', 'failed', 'canceled'];
 
 const $ = (id) => document.getElementById(id);
 const state = {
   token: '',
   tokenReady: null,
   calls: [],
+  spend: null,
+  filter: 'all',
   loaded: false,
   known: new Set(),
   selected: location.hash.slice(1) || null,
@@ -122,14 +128,54 @@ function brief(call) {
   return call.brief || {};
 }
 
+function contactName(call) {
+  const name = brief(call).contact?.name;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
 function shortName(call) {
   if (call.channel === 'meeting') return meetingName(brief(call).to);
-  return `${call.direction === 'inbound' ? 'From ' : ''}${formatPhone(brief(call).to)}`;
+  return `${call.direction === 'inbound' ? 'From ' : ''}${contactName(call) || formatPhone(brief(call).to)}`;
 }
 
 function callTitle(call) {
   if (call.channel === 'meeting') return meetingName(brief(call).to);
-  return `${call.direction === 'inbound' ? 'Call from' : 'Call to'} ${formatPhone(brief(call).to)}`;
+  const number = formatPhone(brief(call).to);
+  const name = contactName(call);
+  return `${call.direction === 'inbound' ? 'Call from' : 'Call to'} ${name ? `${name} (${number})` : number}`;
+}
+
+const counter = new Intl.NumberFormat();
+
+// Small amounts keep enough digits to be told apart: $0.0005, $0.017, $1.25.
+function money(value) {
+  const amount = Number(value) || 0;
+  if (amount === 0) return '$0.00';
+  return `$${amount.toFixed(amount < 0.01 ? 4 : amount < 1 ? 3 : 2)}`;
+}
+
+function localDay(date = new Date()) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+}
+
+function pricesDate(iso) {
+  const date = new Date(`${iso}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function callCount(count) {
+  return count === 1 ? '1 call' : `${counter.format(count)} calls`;
+}
+
+function resultKey(call) {
+  if (!TERMINAL.has(call.status)) return 'live';
+  return call.result?.outcome || call.status;
+}
+
+function resultLabel(key) {
+  if (key === 'all') return 'All';
+  if (key === 'live') return 'In progress';
+  return OUTCOMES[key]?.text || capitalize(key.replace(/_/g, ' '));
 }
 
 function statusInfo(call) {
@@ -229,6 +275,44 @@ function setMode() {
   document.body.dataset.mode = mode;
 }
 
+// Spend ---------------------------------------------------------------------------
+
+function addUp(days) {
+  return days.reduce((sum, day) => ({
+    calls: sum.calls + day.calls,
+    total: sum.total + day.total,
+    phone: sum.phone + day.phone,
+    openai: sum.openai + day.openai,
+    estimated: sum.estimated || day.estimated,
+  }), { calls: 0, total: 0, phone: 0, openai: 0, estimated: false });
+}
+
+function renderSpend(spend) {
+  const days = spend?.days || [];
+  $('spend').hidden = !days.length;
+  if (!days.length) return;
+  const today = localDay();
+  const all = addUp(days);
+  const figures = {
+    today: addUp(days.filter((day) => day.day === today)),
+    month: addUp(days.filter((day) => day.day.slice(0, 7) === today.slice(0, 7))),
+    all,
+  };
+  for (const [name, sum] of Object.entries(figures)) {
+    $(`spend-${name}`).textContent = `${sum.estimated ? '≈ ' : ''}${money(sum.total)}`;
+    $(`spend-${name}-calls`).textContent = callCount(sum.calls);
+  }
+  $('spend-average').textContent = money(all.calls ? all.total / all.calls : 0);
+  $('spend-phone').textContent = money(all.phone);
+  $('spend-openai').textContent = money(all.openai);
+  const share = all.total ? Math.round((all.phone / all.total) * 100) : 0;
+  $('split-phone').style.width = `${share}%`;
+  $('split-openai').style.width = `${all.total ? 100 - share : 0}%`;
+  $('spend-note').textContent = 'Phone charges are what your phone provider billed for each call. '
+    + `OpenAI charges are calculated from each call’s usage at OpenAI’s list prices as of ${pricesDate(spend.pricesAsOf)}; OpenAI does not bill per call.`
+    + (all.estimated ? ' ≈ means a phone charge is still an estimate because the provider has not reported its price yet.' : '');
+}
+
 // Call list ---------------------------------------------------------------------
 
 const listItems = new Map();
@@ -240,23 +324,29 @@ function listItem(call) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'call-item';
+    const top = Object.assign(document.createElement('span'), { className: 'top' });
     const who = Object.assign(document.createElement('span'), { className: 'who' });
+    const price = Object.assign(document.createElement('span'), { className: 'price' });
     const goal = Object.assign(document.createElement('span'), { className: 'goal' });
     const row = Object.assign(document.createElement('span'), { className: 'row' });
     const chip = document.createElement('span');
     const time = document.createElement('time');
+    top.append(who, price);
     row.append(chip, time);
-    button.append(who, goal, row);
+    button.append(top, goal, row);
     button.addEventListener('click', () => openCall(call.id));
     item.append(button);
-    entry = { item, button, who, goal, chip, time, signature: '' };
+    entry = { item, button, who, price, goal, chip, time, signature: '' };
     listItems.set(call.id, entry);
   }
   const badge = listBadge(call);
-  const signature = JSON.stringify([shortName(call), brief(call).objective, badge, call.createdAt, when(call.createdAt)]);
+  const cost = call.cost ? `${call.cost.estimated ? '≈ ' : ''}${money(call.cost.total)}` : '';
+  const signature = JSON.stringify([shortName(call), brief(call).objective, badge, call.createdAt, when(call.createdAt), cost]);
   if (signature !== entry.signature) {
     entry.signature = signature;
     entry.who.textContent = shortName(call);
+    entry.price.textContent = cost;
+    entry.price.title = cost ? 'What this call cost' : '';
     entry.goal.textContent = brief(call).objective || '';
     setChip(entry.chip, badge);
     entry.time.dateTime = call.createdAt || '';
@@ -266,25 +356,61 @@ function listItem(call) {
   return entry.item;
 }
 
+const filterButtons = new Map();
+
+// Offer a filter for each result present; buttons update in place so focus stays put.
+function renderFilters() {
+  const counts = new Map([['all', state.calls.length]]);
+  for (const call of state.calls) counts.set(resultKey(call), (counts.get(resultKey(call)) || 0) + 1);
+  if (!counts.has(state.filter)) state.filter = 'all';
+  const keys = [...counts.keys()].sort((a, b) => {
+    const rank = (key) => (FILTER_ORDER.includes(key) ? FILTER_ORDER.indexOf(key) : FILTER_ORDER.length);
+    return rank(a) - rank(b);
+  });
+  const container = $('filters');
+  container.hidden = keys.length < 3; // "All" plus at least two different results
+  if (keys.join() !== [...filterButtons.keys()].join()) {
+    filterButtons.clear();
+    container.replaceChildren(...keys.map((key) => {
+      const button = Object.assign(document.createElement('button'), { type: 'button', className: 'filter' });
+      const count = Object.assign(document.createElement('span'), { className: 'count' });
+      button.append(resultLabel(key), count);
+      button.addEventListener('click', () => {
+        state.filter = key;
+        renderList();
+      });
+      filterButtons.set(key, { button, count });
+      return button;
+    }));
+  }
+  for (const [key, { button, count }] of filterButtons) {
+    button.setAttribute('aria-pressed', String(key === state.filter));
+    count.textContent = counter.format(counts.get(key) || 0);
+  }
+}
+
 // Update items in place so keyboard focus and scroll position survive each refresh.
 function renderList() {
+  renderFilters();
   const list = $('call-list');
-  const ids = new Set(state.calls.map((call) => call.id));
+  const shown = state.calls.filter((call) => state.filter === 'all' || resultKey(call) === state.filter);
+  const ids = new Set(shown.map((call) => call.id));
   for (const [id, entry] of listItems) {
     if (!ids.has(id)) { entry.item.remove(); listItems.delete(id); }
   }
-  state.calls.forEach((call, index) => {
+  shown.forEach((call, index) => {
     const item = listItem(call);
     if (list.children[index] !== item) list.insertBefore(item, list.children[index] || null);
   });
   $('list-loading').hidden = true;
   $('list-empty').hidden = state.calls.length > 0;
+  $('list-filtered').hidden = !state.calls.length || shown.length > 0;
   if (state.loaded) {
     for (const call of state.calls) {
       if (!state.known.has(call.id)) announce(`New call: ${callTitle(call)}.`);
     }
   }
-  state.known = ids;
+  state.known = new Set(state.calls.map((call) => call.id));
 }
 
 // Selected call -------------------------------------------------------------------
@@ -410,6 +536,127 @@ function renderResult(call) {
   fillList('result-decisions', result.decisions);
 }
 
+function bulletList(items) {
+  const list = document.createElement('ul');
+  list.append(...items.map((text) => Object.assign(document.createElement('li'), { textContent: text })));
+  return list;
+}
+
+function textBlock(text, className = '') {
+  return Object.assign(document.createElement('p'), { textContent: text, className });
+}
+
+function listed(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item.trim()) : [];
+}
+
+// The brief's background: plain text, or the structured object (summary, facts, decisions, ...).
+function backgroundNodes(context) {
+  if (!context) return [];
+  if (typeof context === 'string') return [textBlock(context)];
+  const nodes = [];
+  if (context.summary) nodes.push(textBlock(context.summary));
+  for (const [key, label] of [['facts', ''], ['decisions', 'Already decided'], ['openQuestions', 'Still open']]) {
+    const items = listed(context[key]);
+    if (!items.length) continue;
+    if (label) nodes.push(textBlock(label, 'sub'));
+    nodes.push(bulletList(items));
+  }
+  if (context.details) {
+    const more = document.createElement('details');
+    more.append(Object.assign(document.createElement('summary'), { textContent: 'More background' }),
+      textBlock(context.details, 'more'));
+    nodes.push(more);
+  }
+  return nodes;
+}
+
+function renderBrief(call) {
+  const section = $('brief');
+  if (section.dataset.for === call.id) return;
+  section.dataset.for = call.id;
+  const b = brief(call);
+  const rows = [];
+  const add = (label, ...nodes) => {
+    const content = nodes.filter(Boolean);
+    if (content.length) rows.push([label, content]);
+  };
+  const contact = b.contact || {};
+  if (contact.name) {
+    const who = [contact.name, contact.relationship].filter(Boolean).join(', ');
+    add('Speaking with', textBlock(who), contact.notes && textBlock(contact.notes, 'muted'));
+  }
+  if (b.successCriteria) add('Done when', textBlock(b.successCriteria));
+  if (listed(b.questions).length) add('Questions to ask', bulletList(listed(b.questions)));
+  if (b.tone) add('Tone', textBlock(capitalize(b.tone)));
+  add('Background', ...backgroundNodes(b.context));
+  if (listed(b.mayAgreeTo).length) add('Can agree to', bulletList(listed(b.mayAgreeTo)));
+  if (listed(b.mustNotShare).length) add('Must not share', bulletList(listed(b.mustNotShare)));
+  const limits = [b.maxMinutes ? `${b.maxMinutes} min at most` : '', b.voice ? `voice ${b.voice}` : '', b.language ? `language ${b.language}` : ''].filter(Boolean);
+  if (limits.length) add('Call settings', textBlock(capitalize(limits.join(' · '))));
+  if (b.rehearsal) add('Practice', textBlock('A rehearsal: it called your own phone.'));
+  $('brief-fields').replaceChildren(...rows.flatMap(([label, nodes]) => {
+    const dd = document.createElement('dd');
+    dd.append(...nodes);
+    return [Object.assign(document.createElement('dt'), { textContent: label }), dd];
+  }));
+  section.hidden = rows.length === 0;
+}
+
+function rate(value) {
+  return `$${Number(value) || 0}/min`;
+}
+
+function tokenUsage(item) {
+  const parts = [`${counter.format(item.input || 0)} in`];
+  if (item.cached) parts[0] += ` (${counter.format(item.cached)} cached)`;
+  parts.push(`${counter.format(item.output || 0)} out tokens`);
+  if (item.webSearches) parts.push(item.webSearches === 1 ? '1 web search' : `${item.webSearches} web searches`);
+  return parts.join(' · ');
+}
+
+function costRow(item) {
+  const provider = PROVIDERS[item.provider] || 'your phone provider';
+  let usage = '';
+  if (item.kind === 'phone') {
+    usage = item.source === 'provider'
+      ? `${duration(item.seconds || 0)} · billed by ${provider}`
+      : `${duration(item.seconds || 0)} · estimated at ${rate(item.ratePerMinute)} until ${provider} reports its price`;
+  } else if (item.kind === 'voice') {
+    usage = `${duration(item.seconds || 0)} at ${rate(item.ratePerMinute)}`;
+  } else {
+    usage = tokenUsage(item);
+  }
+  const row = document.createElement('tr');
+  const name = Object.assign(document.createElement('th'), { scope: 'row', textContent: item.kind === 'phone' && PROVIDERS[item.provider] ? `${COST_ITEMS.phone} (${provider})` : (COST_ITEMS[item.kind] || capitalize(item.kind)) });
+  if (item.model) name.append(Object.assign(document.createElement('span'), { className: 'model', textContent: item.model }));
+  const amount = item.amount === null || item.amount === undefined ? 'Price unknown'
+    : `${item.source === 'estimate' ? '≈ ' : ''}${money(item.amount)}`;
+  row.append(name,
+    Object.assign(document.createElement('td'), { className: 'usage', textContent: usage }),
+    Object.assign(document.createElement('td'), { className: 'num', textContent: amount }));
+  return row;
+}
+
+function renderCost(call) {
+  const cost = call.cost;
+  $('cost').hidden = !cost;
+  if (!cost) return;
+  const total = `${cost.estimated ? '≈ ' : ''}${money(cost.total)}`;
+  $('cost-total').textContent = total;
+  $('cost-sum').textContent = total;
+  const charged = Boolean(cost.items?.length);
+  $('cost-rows').replaceChildren(...(cost.items || []).map(costRow));
+  $('cost').querySelector('.table-wrap').hidden = !charged;
+  if (!charged) {
+    $('cost-note').textContent = 'Nothing was charged: the call never connected.';
+    return;
+  }
+  const notes = [`OpenAI amounts are calculated from usage at list prices as of ${pricesDate(cost.pricesAsOf)}.`];
+  if (cost.unpriced?.length) notes.push(`No price is known for ${cost.unpriced.join(', ')}, so it is not in the total.`);
+  $('cost-note').textContent = notes.join(' ');
+}
+
 function lineItem(line, call) {
   const item = document.createElement('li');
   item.className = line.speaker === 'agent' ? 'agent' : 'other';
@@ -498,7 +745,9 @@ function renderCall(call, { focusTitle = false } = {}) {
     : '';
   $('recording-url').textContent = recording ? recording.url : '';
   $('result-pending').hidden = call.status !== 'summarizing';
+  renderBrief(call);
   renderResult(call);
+  renderCost(call);
   renderTranscript(call);
 
   if (!fresh && state.lastStatus && state.lastStatus !== call.status) {
@@ -516,6 +765,11 @@ function renderCall(call, { focusTitle = false } = {}) {
 async function refreshDetail(options) {
   const target = state.selected;
   if (state.call?.id === target && TERMINAL.has(state.call.status)) {
+    const fromList = state.calls.find((call) => call.id === target);
+    if (fromList?.cost && JSON.stringify(fromList.cost) !== JSON.stringify(state.call.cost)) {
+      state.call = { ...state.call, cost: fromList.cost };
+      renderCost(state.call);
+    }
     renderMeta(state.call);
     return;
   }
@@ -548,8 +802,11 @@ async function refresh(options = {}) {
   if (state.inFlight) return;
   state.inFlight = true;
   try {
-    const { calls = [] } = await api('/api/calls');
+    // Spend is grouped by the reader's local day.
+    const { calls = [], spend = null } = await api(`/api/calls?tzOffset=${-new Date().getTimezoneOffset()}`);
     state.calls = calls;
+    state.spend = spend;
+    renderSpend(spend);
     if (!state.autoPicked) {
       state.autoPicked = true;
       // On a wide screen, open the call most worth watching: a live one, else the latest.

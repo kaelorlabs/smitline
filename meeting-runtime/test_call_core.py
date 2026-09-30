@@ -299,7 +299,8 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(captured['store'])
         self.assertIn('Other party: Sure, 7pm works.', captured['input'])
         self.assertEqual(result['details'], [{'label': 'Confirmation', 'value': 'LG-2291'}])
-        self.assertEqual(result['summaryTokens'], {'input': 900, 'output': 80})
+        self.assertEqual(result['summaryTokens'], {'input': 900, 'cached': 0, 'output': 80})
+        self.assertEqual(result['summaryModel'], summarizer.model)
         self.assertEqual(result['transcript'][1]['speaker'], 'other')
 
     async def test_summarizer_failures(self):
@@ -406,7 +407,7 @@ class VoiceCoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(function_call_from({'type': 'session.started'}))
         usage = backend_usage_from({'type': 'response.event', 'event': {
             'type': 'response.completed', 'response': {'usage': {'input_tokens': 5, 'output_tokens': 2}}}})
-        self.assertEqual(usage, {'input': 5, 'output': 2})
+        self.assertEqual(usage, {'input': 5, 'cached': 0, 'output': 2, 'webSearches': 0})
 
         ws = FakeWs([])
 

@@ -13,10 +13,11 @@ import secrets
 import time
 
 from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
+from call_costs import provider_price_from
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
-    HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, greeting_name, machine_hint,
+    DEFAULT_BACKEND_MODEL, HANGUP_YIELDED, delegation_config, disclosure_reminder, discloses, greeting_name, machine_hint,
     opening_cue, voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
@@ -205,7 +206,8 @@ class PhoneSession:
         self.end_reason = None
         self.error_detail = None
         self.phone_seconds = None
-        self.backend_tokens = {'input': 0, 'output': 0}
+        self.backend_tokens = {'input': 0, 'cached': 0, 'output': 0, 'webSearches': 0}
+        self.backend_model = None
         self.disclosure_checked = False
         self.disclosure_attempts = 0
         self.greet_name = None  # the person's name for the hello, when the profile or brief knows it
@@ -241,6 +243,7 @@ class PhoneSession:
         session = self.brief.session_context
         owner = self.brief.on_behalf_of
         notes = voice_notes(profile, contact, session, owner)
+        self.backend_model = env.get('COLLEAGUE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
         return session_config(
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording, contact=contact,
@@ -249,7 +252,7 @@ class PhoneSession:
             audio_format=PCMU8,
             voice=self.brief.voice or default_voice(env),
             delegation=delegation_config(
-                self.brief, model=env.get('COLLEAGUE_PHONE_BACKEND_MODEL'),
+                self.brief, model=self.backend_model,
                 web_search=env.get('COLLEAGUE_PHONE_WEB_SEARCH') == '1', inbound=self.inbound,
                 background=backend_background(profile, contact, session, owner)),
             seed_input=voice_input(notes),
@@ -403,8 +406,8 @@ class PhoneSession:
         elif kind == 'response.event':
             usage = backend_usage_from(event)
             if usage:
-                self.backend_tokens['input'] += usage['input']
-                self.backend_tokens['output'] += usage['output']
+                for key, value in usage.items():
+                    self.backend_tokens[key] = self.backend_tokens.get(key, 0) + value
             call = function_call_from(event)
             if call and call['name'] == 'end_call':
                 # Hanging up needs no tool result or further backend turn.
@@ -1063,7 +1066,20 @@ class PhoneLine:
                 pass
         reason = session.end_reason or ('canceled' if session.canceled else 'hangup')
         error = session.error_detail if reason == 'error' else None
-        await ctx.finish(reason, usage=self._usage(session), error=error)
+        usage = self._usage(session)
+        try:
+            usage['phoneProvider'] = ctx.credentials('twilio').get('provider') or 'twilio'
+        except Exception:
+            pass
+        await ctx.finish(reason, usage=usage, error=error)
+
+    async def provider_price(self, credentials, record):
+        """What Twilio or SignalWire charged for a finished call; None until it says."""
+        sid = (record.get('line') or {}).get('providerCallSid')
+        if not sid:
+            return None
+        body = await self.twilio_factory(credentials('twilio')).get_call(sid)
+        return provider_price_from(body)
 
     async def start_inbound(self, ctx, *, call_sid, token):
         openai = ctx.credentials('openai')
@@ -1101,7 +1117,9 @@ class PhoneLine:
         if session.phone_seconds is not None:
             usage['phoneSeconds'] = session.phone_seconds
         if any(session.backend_tokens.values()):
-            usage['backendTokens'] = dict(session.backend_tokens)
+            usage['backendTokens'] = {key: value for key, value in session.backend_tokens.items()
+                                      if value or key in ('input', 'output')}
+            usage['backendModel'] = session.backend_model
         if session.connected.is_set():
             usage['audio'] = session.audio_stats()
         return usage

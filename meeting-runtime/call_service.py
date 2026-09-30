@@ -3,6 +3,7 @@ import asyncio
 import os
 
 from call_brief import BriefIncomplete, CallBrief
+from call_costs import call_cost, spend, with_cost
 from call_hooks import CallRefused, LineNotReady, MissingCredentials, maybe_await
 from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
@@ -12,6 +13,11 @@ from call_store import TERMINAL, CallNotFound, new_call_id
 
 
 MAX_WAIT_SECONDS = 300
+# Seconds between checks for the phone provider's price after a call ends; providers fill
+# it in within a minute or two, sometimes later.
+PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
+# Older calls whose price is looked up in the background when the call list is read.
+PRICE_BACKFILL_LIMIT = 50
 # Long calls keep their opening (disclosure, early details) and the most recent lines.
 TRANSCRIPT_HEAD = 60
 TRANSCRIPT_TAIL = 340
@@ -88,8 +94,11 @@ class CallContext:
 
 
 class CallService:
-    def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None):
+    def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None,
+                 price_check_delays=PRICE_CHECK_DELAYS):
         self.store = store
+        self.price_check_delays = tuple(price_check_delays)
+        self._price_checked = set()
         self.hooks = hooks
         self.lines = dict(lines or {})
         self._environ = environ
@@ -219,10 +228,14 @@ class CallService:
         self._event(record['id'], 'call.created', channel=brief.channel, direction=direction)
         context = CallContext(self, record['id'], brief, owner)
         self._contexts[record['id']] = context
-        task = asyncio.create_task(self._run(start, context), name='call-' + record['id'])
+        self._spawn(self._run(start, context), name='call-' + record['id'])
+        return record
+
+    def _spawn(self, coroutine, name=None):
+        task = asyncio.create_task(coroutine, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        return record
+        return task
 
     async def _run(self, start, context):
         try:
@@ -279,10 +292,67 @@ class CallService:
         record = self.store.get(call_id)
         if owner is not None and record.get('owner') != owner:
             raise CallNotFound(call_id)
-        return record
+        return with_cost(record, self.environ)
 
     def list(self, *, owner=None, limit=20):
-        return self.store.list(owner=owner, limit=limit)
+        """Newest first; limit=None lists every call."""
+        return [with_cost(record, self.environ)
+                for record in self.store.list(owner=owner, limit=limit)]
+
+    @staticmethod
+    def spend(records, *, tz_offset_minutes=0):
+        return spend(records, tz_offset_minutes=tz_offset_minutes)
+
+    # Phone prices ----------------------------------------------------------
+
+    def _needs_price(self, record):
+        line = self.lines.get(record.get('channel'))
+        return (record.get('status') in TERMINAL
+                and getattr(line, 'provider_price', None) is not None
+                and bool((record.get('line') or {}).get('providerCallSid'))
+                and 'phonePrice' not in (record.get('usage') or {}))
+
+    async def _settle_price(self, call_id):
+        for delay in self.price_check_delays:
+            await asyncio.sleep(delay)
+            if await self._check_price(call_id):
+                return
+
+    async def _check_price(self, call_id):
+        """Record the provider's price for a call; True once it is recorded or never will be."""
+        record = self.store.get(call_id)
+        if not self._needs_price(record):
+            return True
+        owner = record.get('owner')
+        try:
+            price = await self.lines[record['channel']].provider_price(
+                lambda provider: self.hooks.credentials(owner, provider), record)
+        except Exception:
+            return False
+        if price is None:
+            return False
+        usage = dict(record.get('usage') or {}, phonePrice=price)
+        self.store.update(call_id, usage=usage,
+                          cost=call_cost(dict(record, usage=usage), self.environ))
+        self._signal(call_id)
+        return True
+
+    def backfill_prices(self, records):
+        """Look up, once per run, the provider's price for finished calls that lack it."""
+        due = [record['id'] for record in records
+               if record['id'] not in self._price_checked and self._needs_price(record)]
+        due = due[:PRICE_BACKFILL_LIMIT]
+        if not due:
+            return
+        self._price_checked.update(due)
+
+        async def run():
+            for call_id in due:
+                try:
+                    await self._check_price(call_id)
+                except CallNotFound:
+                    pass
+        self._spawn(run())
 
     def events(self, call_id, *, after=None):
         return self.store.events(call_id, after=after)
@@ -385,7 +455,8 @@ class CallService:
         if record['status'] in TERMINAL:
             return
         if error and not context.transcript and handoff is None:
-            self._set_status(call_id, 'failed', endReason='error', error=error, usage=usage)
+            self._set_status(call_id, 'failed', endReason='error', error=error, usage=usage,
+                             cost=call_cost(dict(record, usage=usage), self.environ))
         else:
             self._set_status(call_id, 'summarizing', endReason=end_reason)
             try:
@@ -399,13 +470,19 @@ class CallService:
                 result['disclosureVerified'] = context.disclosure
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
+            if 'summaryModel' in result:
+                usage = dict(usage, summaryModel=result.pop('summaryModel'))
             status = 'canceled' if result['outcome'] == 'canceled' else 'completed'
             record = self.store.update(call_id, result=result, usage=usage,
+                                       cost=call_cost(dict(record, usage=usage), self.environ),
                                        **({'error': error} if error else {}))
             self._event(call_id, 'call.result', outcome=result['outcome'])
             self._set_status(call_id, status, endReason=end_reason)
         self._contexts.pop(call_id, None)
         record = self.store.get(call_id)
+        if self._needs_price(record):
+            self._price_checked.add(call_id)
+            self._spawn(self._settle_price(call_id))
         try:
             await maybe_await(self.hooks.record_usage(record['owner'], record, record.get('usage') or {}))
         except Exception:
