@@ -558,6 +558,37 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audio['replyDelayMs']['count'], 1)
         self.assertGreaterEqual(audio['replyDelayMs']['median'], 450)  # from their last word
 
+    async def test_audio_trace_is_written_when_asked(self):
+        self.h.env['COLLEAGUE_AUDIO_TRACE'] = '1'
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 1600).decode()})
+        ws.push({'event': 'media', 'sequenceNumber': '3', 'media': {'track': 'inbound', 'payload': 'f39/', 'timestamp': '60'}})
+        await until(lambda: session.pacer.sent_marks == 1)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        path = self.h.store.root / record['id'] / 'audio-trace.jsonl'
+        kinds = [json.loads(line)['kind'] for line in path.read_text().splitlines()]
+        self.assertIn('delta', kinds)
+        self.assertEqual(kinds.count('send'), 10)
+        self.assertIn('mark', kinds)
+        self.assertIn({'kind': 'in', 'ts': '60', 'seq': '3'},
+                      [{k: v for k, v in json.loads(line).items() if k != 't'} for line in path.read_text().splitlines()])
+        self.assertEqual(oct(path.stat().st_mode & 0o777), '0o600')
+
+    async def test_the_opening_follows_a_hello_heard_locally(self):
+        from test_barge_in import QUIET, SPEECH
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        for frame in [QUIET] * 5 + [SPEECH] * 20 + [QUIET] * 25:
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': base64.b64encode(frame).decode()}})
+        # Well before the 1.5 s fallback, once their hello has ended.
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends), timeout=1.2)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
     async def test_voicemail_and_transfer(self):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)

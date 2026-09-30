@@ -10,6 +10,7 @@ import asyncio
 import base64
 import collections
 import json
+import os
 import secrets
 import time
 
@@ -47,7 +48,9 @@ BARGE_STALE_SECONDS = 1.0
 # Speech this long is a turn; the reply delay is measured from its end.
 TURN_MIN_MS = 300
 DRAIN_TIMEOUT = 8.0
-OPENING_DELAY = 2.5
+# The opening starts when the other person has finished their hello (heard locally), or
+# after this long if they say nothing.
+OPENING_DELAY = 1.5
 SILENCE_PROMPT_SECONDS = 40.0
 SILENCE_END_SECONDS = 65.0
 WRAP_UP_SECONDS = 60.0
@@ -133,8 +136,9 @@ class OutputPacer:
     GAP_MAX = 1.0
 
     def __init__(self, send, *, lead=OUTPUT_LEAD_SECONDS, cushion=OUTPUT_CUSHION_SECONDS,
-                 clock=time.monotonic, sleep=asyncio.sleep, bytes_per_second=8000):
+                 clock=time.monotonic, sleep=asyncio.sleep, bytes_per_second=8000, trace=None):
         self._send = send
+        self._trace = trace or (lambda kind, **data: None)
         self.lead = lead
         self.cushion = cushion
         self.clock = clock
@@ -197,18 +201,21 @@ class OutputPacer:
             self.queue.appendleft((payload, last))
             self.queued_bytes += len(base64.b64decode(payload))
         self._sent.clear()
+        self._trace('pause', unheard=len(unheard))
         self.play_until = now
         self.paused = True
         self._continuous = False
         self._ready.clear()
 
     def resume(self):
+        self._trace('resume', queued=len(self.queue))
         self.paused = False
         if self.queue:
             self._ready.set()
 
     def flush(self):
         """Drop speech the model has stopped saying; the caller also clears the provider."""
+        self._trace('flush', dropped=len(self.queue))
         self.queue.clear()
         self._sent.clear()
         self._next = None
@@ -291,6 +298,7 @@ class OutputPacer:
                 self.gaps['starved'] += int(starved)
             await self._send({'event': 'media', 'media': {'payload': payload}})
             starts = max(now, self.play_until)
+            self._trace('send', ahead=round(starts - now, 4), queued=len(self.queue))
             self._sent.append((payload, last, starts))
             while self._sent and self._sent[0][2] + 0.02 < now:
                 self._sent.popleft()
@@ -298,6 +306,7 @@ class OutputPacer:
                 # Speech has stopped for now: one mark says when the provider finished playing it.
                 self.sent_marks += 1
                 await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
+                self._trace('mark')
             self.play_until = starts + seconds
             self._continuous = True
 
@@ -349,6 +358,9 @@ class PhoneSession:
         self.stats = {'interruptionsFollowed': 0, 'hangupsYielded': 0, 'responseDelaysMs': [],
                       'pauses': 0, 'backchannels': 0, 'stopDelaysMs': []}
         self.detector = SpeechDetector()
+        self._hello_heard = asyncio.Event()  # they finished their first words (heard locally)
+        self._trace = None  # COLLEAGUE_AUDIO_TRACE=1: timing of audio events, for diagnosis
+        self._trace_start = None
         self._barge = None  # 'paused' while deciding, 'dropped' after an interruption
         self._dropped_at = None
         self.last_activity = None
@@ -431,7 +443,9 @@ class PhoneSession:
         self.last_activity = self.started_at
         self.connected.set()
         self.ctx.set_status('in_progress')
-        self.pacer = OutputPacer(self._twilio_send)
+        if self.line.environ().get('COLLEAGUE_AUDIO_TRACE') == '1':
+            self._trace, self._trace_start = [], time.monotonic()
+        self.pacer = OutputPacer(self._twilio_send, trace=self._note)
         manager = self.line.live_factory(self.api_key, self.config())
         try:
             try:
@@ -453,6 +467,7 @@ class PhoneSession:
                 task.cancel()
             if self._hangups:
                 await asyncio.wait(list(self._hangups), timeout=5)
+            self._write_trace()
             self.finished.set()
 
     async def _bridge(self, live):
@@ -502,6 +517,8 @@ class PhoneSession:
             if event == 'media':
                 media = data.get('media') or {}
                 if media.get('track', 'inbound') == 'inbound' and media.get('payload'):
+                    if self._trace is not None:
+                        self._note('in', ts=media.get('timestamp'), seq=data.get('sequenceNumber'))
                     await self.live.send_audio(media['payload'])
                     await self._hear(media['payload'])
             elif event == 'mark':
@@ -510,6 +527,23 @@ class PhoneSession:
                 break
         if self.end_reason is None:
             self.end_reason = 'remote_hangup'
+
+    def _note(self, kind, **data):
+        if self._trace is not None:
+            self._trace.append({'t': round(time.monotonic() - self._trace_start, 4),
+                                'kind': kind, **data})
+
+    def _write_trace(self):
+        """Save the trace next to the call record as audio-trace.jsonl (owner-only)."""
+        if not self._trace:
+            return
+        try:
+            path = self.ctx.service.store.root / self.ctx.call_id / 'audio-trace.jsonl'
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                handle.writelines(json.dumps(entry) + '\n' for entry in self._trace)
+        except (AttributeError, OSError):
+            pass
 
     async def _hear(self, payload):
         """Stop talking the moment the other person does (see barge_in.py)."""
@@ -521,6 +555,10 @@ class PhoneSession:
             return
         now = time.monotonic()
         change = self.detector.feed(frame, playing=self.pacer.playing())
+        if change:
+            self._note('vad_' + change)
+        if change == 'end':
+            self._hello_heard.set()
         if change == 'start':
             if (self._barge is None and not self._hanging_up
                     and self.pacer.unplayed_seconds() >= BARGE_MIN_QUEUED):
@@ -558,6 +596,7 @@ class PhoneSession:
     def _output_audio(self, event):
         now = time.monotonic()
         self.last_activity = self.last_output_at = now
+        self._note('delta', bytes=len(event.get('delta') or '') * 3 // 4)
         if (self._barge == 'dropped' and self._dropped_at is not None
                 and now - self._dropped_at < BARGE_STALE_SECONDS):
             return  # the rest of what they interrupted, still arriving
@@ -703,13 +742,15 @@ class PhoneSession:
 
     async def _open(self):
         """Prompt the opening once the other side speaks, or after a short pause."""
-        try:
-            await asyncio.wait_for(self.heard_other.wait(), OPENING_DELAY)
-        except asyncio.TimeoutError:
-            pass
+        heard = [asyncio.ensure_future(self.heard_other.wait()),
+                 asyncio.ensure_future(self._hello_heard.wait())]
+        await asyncio.wait(heard, timeout=OPENING_DELAY, return_when=asyncio.FIRST_COMPLETED)
+        for waiter in heard:
+            waiter.cancel()
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
                                opening_cue(self.brief, inbound=self.inbound, name=self.greet_name))
+        self._note('opening_cue')
         await asyncio.Event().wait()
 
     async def _watch(self):
