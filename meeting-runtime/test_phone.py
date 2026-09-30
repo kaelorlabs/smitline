@@ -729,16 +729,35 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(3):
             pacer.offer(chunk)
         runner = asyncio.create_task(pacer.run())
-        # 1.5 s of audio goes out as 75 frames of 20 ms, plus one mark per delta.
-        await until(lambda: len(sent) == 78)
+        # 1.5 s of audio goes out as 75 frames of 20 ms, and one mark when it stops.
+        await until(lambda: len(sent) == 76)
         runner.cancel()
-        self.assertEqual([m['mark']['name'] for m in sent if m['event'] == 'mark'],
-                         ['out-1', 'out-2', 'out-3'])
+        self.assertEqual([m['mark']['name'] for m in sent if m['event'] == 'mark'], ['out-1'])
+        self.assertEqual(sent[-1]['event'], 'mark')
         self.assertLessEqual(max(ahead), pacer.lead + 0.02 + 1e-9)
         self.assertAlmostEqual(sum(slept), 1.5 - pacer.lead - 0.02, delta=0.021)
         self.assertFalse(await pacer.drained(0.01))
-        pacer.mark_played('out-3')
+        pacer.mark_played('out-1')
         self.assertTrue(await pacer.drained(0.01))
+
+    async def test_odd_tails_join_the_next_delta_or_are_padded(self):
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        pacer = OutputPacer(send)
+        runner = asyncio.create_task(pacer.run())
+        # 100 bytes, then 300: one whole frame of the joined audio, then a 80-byte tail.
+        pacer.offer(base64.b64encode(b'\x01' * 100).decode())
+        pacer.offer(base64.b64encode(b'\x02' * 300).decode())
+        await until(lambda: len([m for m in sent if m['event'] == 'media']) == 3)
+        frames = [base64.b64decode(m['media']['payload']) for m in sent if m['event'] == 'media']
+        self.assertEqual([len(frame) for frame in frames], [160, 160, 160])
+        self.assertEqual(frames[0], b'\x01' * 100 + b'\x02' * 60)
+        self.assertEqual(frames[2], b'\x02' * 80 + b'\xff' * 80)  # padded once speech stopped
+        await until(lambda: sent[-1]['event'] == 'mark')
+        self.assertEqual(sum(1 for m in sent if m['event'] == 'mark'), 1)
+        runner.cancel()
 
     async def test_pause_takes_back_unheard_speech_and_resume_carries_on(self):
         now = [0.0]
@@ -822,6 +841,8 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
 
     def test_twiml_escapes(self):
         import xml.etree.ElementTree as ET
+        self.assertIn('<Stream url="wss://x" realtime="true">', stream_twiml('wss://x', {}, realtime=True))
+        self.assertNotIn('realtime', stream_twiml('wss://x', {}))
         twiml = stream_twiml('wss://x/twilio/media', {'callId': 'c"1', 'token': '<t>'}, say='A & B')
         root = ET.fromstring(twiml)
         self.assertEqual(root.find('Say').text, 'A & B')

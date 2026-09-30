@@ -110,13 +110,19 @@ class UtteranceJoiner:
 class OutputPacer:
     """Send model audio to the provider no more than a short lead ahead of playback.
 
-    Audio goes out in 20 ms frames, so what the provider has buffered never exceeds the lead
-    plus one frame, whatever size GPT-Live's deltas are. When the other person starts
+    Audio goes out in whole 20 ms frames, so what the provider has buffered never exceeds the
+    lead plus one frame, whatever size GPT-Live's deltas are; a delta's odd tail waits for the
+    next one, or is padded with silence when speech stops. A recorded call showed SignalWire
+    playing a 20 ms silent slot for every mark, so a mark goes out only when speech stops,
+    where that slot falls in a pause. When the other person starts
     talking, pause() clears the provider and keeps what they have not heard yet: resume()
     carries on from there after a short "mhm", and flush() drops it after a real interruption.
     """
 
     FRAME_BYTES = 160  # 20 ms of 8 kHz mu-law
+    SILENCE = b'\xff'  # mu-law zero
+    # How long a delta's odd tail waits for the next delta before it is padded and sent.
+    TAIL_WAIT = 0.06
     # A late frame this far past the end of playback left the listener a gap; a longer quiet
     # is a pause between turns, not a gap.
     GAP_MIN = 0.04
@@ -139,6 +145,7 @@ class OutputPacer:
         self.gaps = {'count': 0, 'totalMs': 0, 'starved': 0}
         self._sent = collections.deque()  # (payload, last, starts playing at)
         self._next = None  # the frame run() holds while waiting to send it
+        self._tail = b''  # a delta's last bytes, short of a whole frame
         self._ready = asyncio.Event()
         self._continuous = False  # the next frame continues speech already playing
         self._drained = asyncio.Event()
@@ -147,13 +154,25 @@ class OutputPacer:
     def offer(self, payload):
         self._drained.clear()
         audio = base64.b64decode(payload)
-        frames = [audio[i:i + self.FRAME_BYTES] for i in range(0, len(audio), self.FRAME_BYTES)]
-        for index, frame in enumerate(frames):
-            self.queue.append((base64.b64encode(frame).decode('ascii'), index == len(frames) - 1))
         self.queued_bytes += len(audio)
+        audio = self._tail + audio
+        whole = len(audio) - len(audio) % self.FRAME_BYTES
+        self._tail = audio[whole:]
+        for start in range(0, whole, self.FRAME_BYTES):
+            self._queue_frame(audio[start:start + self.FRAME_BYTES])
         self.max_unplayed = max(self.max_unplayed, self.unplayed_seconds())
         if not self.paused:
             self._ready.set()
+
+    def _queue_frame(self, frame):
+        self.queue.append((base64.b64encode(frame).decode('ascii'), False))
+
+    def _pad_tail(self):
+        """Speech stopped mid-frame: send the rest of the frame as silence."""
+        frame = self._tail + self.SILENCE * (self.FRAME_BYTES - len(self._tail))
+        self.queued_bytes += self.FRAME_BYTES - len(self._tail)
+        self._tail = b''
+        self._queue_frame(frame)
 
     def unplayed_seconds(self):
         """Speech not heard yet: queued here, plus sent to the provider but still playing."""
@@ -188,6 +207,7 @@ class OutputPacer:
         self.queue.clear()
         self._sent.clear()
         self._next = None
+        self._tail = b''
         self.queued_bytes = 0
         self.play_until = self.clock()
         self.played_marks = self.sent_marks
@@ -201,7 +221,8 @@ class OutputPacer:
             self.played_marks = max(self.played_marks, int(str(name).rsplit('-', 1)[-1]))
         except ValueError:
             return
-        if self.played_marks >= self.sent_marks and not self.queue and not self.paused:
+        if (self.played_marks >= self.sent_marks and not self.queue and not self._tail
+                and not self.paused):
             self._drained.set()
 
     async def drained(self, timeout=DRAIN_TIMEOUT):
@@ -217,6 +238,12 @@ class OutputPacer:
             while self.paused or not self.queue:
                 starved = starved or not self.paused
                 self._ready.clear()
+                if self._tail and not self.paused:
+                    try:
+                        await asyncio.wait_for(self._ready.wait(), self.TAIL_WAIT)
+                    except asyncio.TimeoutError:
+                        self._pad_tail()
+                    continue
                 await self._ready.wait()
             payload, last = self._next = self.queue.popleft()
             size = len(base64.b64decode(payload))
@@ -240,8 +267,8 @@ class OutputPacer:
             self._sent.append((payload, last, starts))
             while self._sent and self._sent[0][2] + 0.02 < now:
                 self._sent.popleft()
-            if last:
-                # One mark per delta tells us when that speech finished playing.
+            if not self.queue and not self._tail:
+                # Speech has stopped for now: one mark says when the provider finished playing it.
                 self.sent_marks += 1
                 await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
             self.play_until = starts + seconds
@@ -1107,7 +1134,11 @@ class PhoneLine:
             if session.canceled:
                 return await self._finish(ctx, session)
             stream_url = 'wss://' + base.split('://', 1)[1] + '/twilio/media'
-            twiml = stream_twiml(stream_url, {'callId': ctx.call_id, 'token': session.token})
+            # COLLEAGUE_STREAM_REALTIME=1 lets SignalWire's player smooth packet delays and bursts.
+            realtime = (getattr(twilio, 'flavor', 'twilio') == 'signalwire'
+                        and self.environ().get('COLLEAGUE_STREAM_REALTIME') == '1')
+            twiml = stream_twiml(stream_url, {'callId': ctx.call_id, 'token': session.token},
+                                 realtime=realtime)
             created = await twilio.create_call(
                 to=ctx.brief.to, from_=session.from_number, twiml=twiml,
                 status_callback=f'{base}/twilio/status/{ctx.call_id}',
