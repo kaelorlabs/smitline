@@ -1,5 +1,6 @@
-# Tests every pull request and push. On main and on version tags it then publishes the two
-# images new users pull: ghcr.io/kaelorlabs/colleague and ghcr.io/kaelorlabs/colleague-meeting.
+# Tests every pull request and every push to main. A version tag (v0.1.0, ...) also publishes
+# the two images new users pull: ghcr.io/kaelorlabs/colleague and ghcr.io/kaelorlabs/colleague-meeting.
+# To release: git tag v0.1.0 && git push origin v0.1.0
 name: Images
 
 on:
@@ -67,7 +68,7 @@ jobs:
 
   publish:
     needs: test
-    if: github.event_name != 'pull_request'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,9 +95,9 @@ jobs:
           images: ${{ steps.names.outputs.meeting }}
           tags: |
             type=sha,format=short
-            type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
       - name: Publish the meeting image
         uses: docker/build-push-action@v6
         with:
@@ -114,9 +115,9 @@ jobs:
           images: ${{ steps.names.outputs.colleague }}
           tags: |
             type=sha,format=short
-            type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
       - name: Publish the colleague image
         uses: docker/build-push-action@v6
         with:

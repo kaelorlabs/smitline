@@ -178,7 +178,7 @@ Transcripts contain conversation content and are kept until you remove them. Gen
 | `Dockerfile`, `docker/` | The `colleague` image: daemon, console, CLI, and MCP, with Node and Python inside |
 | `Dockerfile.meeting`, `compose.meeting.image.yaml` | The meeting image, and how the `colleague` container starts it |
 | `compose.meeting.yaml`, `Dockerfile.daemon`, `start-*.sh` | Running from a checkout |
-| `.github/workflows/images.yml` | Tests every pull request; publishes both images to GHCR from `main` and version tags |
+| `.github/workflows/images.yml` | Tests every pull request and push to `main`; a version tag (`git tag v0.1.0 && git push origin v0.1.0`) publishes both images to GHCR |
 
 ### Run from a checkout
 

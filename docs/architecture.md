@@ -53,7 +53,7 @@ One image, `ghcr.io/kaelorlabs/colleague-meeting` (`Dockerfile.meeting`, about 1
 
 From a checkout, the daemon uses `compose.meeting.yaml` instead: it builds `colleague-meeting:local` and mounts `meeting-runtime/` and `joinly/` read-only, so code changes need no rebuild.
 
-`.github/workflows/images.yml` runs the tests on every pull request (including the runtime suite inside the meeting image and a start of the colleague image) and publishes both images, for `linux/amd64` and `linux/arm64`, from `main` and version tags.
+`.github/workflows/images.yml` runs the tests on every pull request and push to `main` (including the runtime suite inside the meeting image and a start of the colleague image). A version tag such as `v0.1.0` also publishes both images, for `linux/amd64` and `linux/arm64`, tagged with the version, `latest`, and `sha-<commit>`; the colleague image starts the meeting image with the same `sha-` tag.
 
 ### Running from a checkout
 
