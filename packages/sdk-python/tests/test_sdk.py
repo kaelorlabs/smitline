@@ -114,10 +114,10 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
                                    {'text': 'Ask about parking'}))
         await client.instruct_call('call-0123456789abcdef', 'He tried it yesterday', silent=True)
         await client.get_profile()
-        await client.update_profile({'about': 'Robin builds Colleague AI.'})
+        await client.update_profile({'about': 'Robin builds Smitline.'})
         self.assertEqual(seen[4][2], {'text': 'He tried it yesterday', 'silent': True})
         self.assertEqual(seen[5][:2], ('GET', '/v1/profile'))
-        self.assertEqual(seen[6], ('PATCH', '/v1/profile', {'about': 'Robin builds Colleague AI.'}))
+        self.assertEqual(seen[6], ('PATCH', '/v1/profile', {'about': 'Robin builds Smitline.'}))
 
     async def test_a_meeting_is_joined_with_start_call(self):
         seen = []

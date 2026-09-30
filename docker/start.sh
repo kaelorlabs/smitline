@@ -1,5 +1,5 @@
 #!/bin/bash
-# The two processes of the colleague container: the runtime daemon and the local console
+# The two processes of the smitline container: the runtime daemon and the local console
 # (web pages and the MCP endpoint). If either stops, the container stops, and Docker's
 # restart policy starts it again.
 set -euo pipefail

@@ -1,10 +1,10 @@
-# Colleague AI local console
+# Smitline local console
 
-The local console is an optional operator interface for Colleague AI. Agents do not need it: they place calls and join meetings through the calls API. The console has two tabs: **Meetings**, to start a meeting by hand and follow it, and **Calls**, to follow calls that agents started.
+The local console is an optional operator interface for Smitline. Agents do not need it: they place calls and join meetings through the calls API. The console has two tabs: **Meetings**, to start a meeting by hand and follow it, and **Calls**, to follow calls that agents started.
 
 ## Open the console
 
-The `colleague` container serves it: open [http://127.0.0.1:8095](http://127.0.0.1:8095). Add your keys first with `docker exec colleague colleague setup secrets` (see [SETUP.md](../SETUP.md)).
+The `smitline` container serves it: open [http://127.0.0.1:8095](http://127.0.0.1:8095). Add your keys first with `docker exec smitline smitline setup secrets` (see [SETUP.md](../SETUP.md)).
 
 The console never returns API keys to the browser. Keys, uploaded context, meeting transcripts, and browser profiles stay in the container's data volume.
 
@@ -12,7 +12,7 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 
 ## Calls
 
-`http://127.0.0.1:8095/calls` (**Calls** in the console's top bar) lists recent phone calls and meetings started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Colleague AI leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
+`http://127.0.0.1:8095/calls` (**Calls** in the console's top bar) lists recent phone calls and meetings started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
 ## Meetings
 
@@ -24,13 +24,13 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 4. Choose the camera. **Show in the meeting** (default on) publishes a virtual camera tile, and **Turn camera on after joining** starts it on. Add an avatar or logo if you like (PNG, JPEG, WebP, or SVG up to 80 KB). Task text is never shown.
 5. Optionally add short meeting guidance: the agent's role, terminology, response style, or meeting-specific boundaries. Do not use it for credentials.
 6. For a Teams or Google Meet meeting that needs an account, connect one first; see [meeting adapters](meeting-adapters.md).
-7. Run the checks, resolve any reported issue, and start the colleague.
+7. Run the checks, resolve any reported issue, and start Smitline.
 
 The checks validate the meeting settings, the OpenAI key, and Docker availability. The first meeting downloads the meeting image (about 1.8 GB), which takes a few minutes; from a checkout it is built instead.
 
 ### Supply private reference context
 
-Paste text or upload TXT, Markdown, CSV, TSV, JSON, YAML, PDF, or DOCX files under **Reference context**. The console extracts text locally and stores it in `context/index.json` under the meeting data (`/data/meetings` in the `colleague` volume, `meeting-runtime/` in a checkout). Individual files are limited to 8 MB, a batch can contain up to 10 files, and all saved extracted text is limited to 1,000,000 characters.
+Paste text or upload TXT, Markdown, CSV, TSV, JSON, YAML, PDF, or DOCX files under **Reference context**. The console extracts text locally and stores it in `context/index.json` under the meeting data (`/data/meetings` in the `smitline` volume, `meeting-runtime/` in a checkout). Individual files are limited to 8 MB, a batch can contain up to 10 files, and all saved extracted text is limited to 1,000,000 characters.
 
 The saved sources go to the meeting as its starting context. GPT-Live gets them as background, and so does the backend model it hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`). Longer material is cut to fit. The voice session reads the context when it starts, so add sources before starting the meeting, or restart the participant after changing them.
 
@@ -38,11 +38,11 @@ Use **Clear saved context** when the material should no longer be available. Thi
 
 ### Operate the meeting
 
-The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Colleague AI** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
+The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Smitline** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
 
-The platform may display Colleague AI as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Colleague AI in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Colleague AI's tile; it accepts that explicit request.
+The platform may display Smitline as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Smitline in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Smitline's tile; it accepts that explicit request.
 
-**Open meeting view** shows the container's browser. Stop the colleague from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory.
+**Open meeting view** shows the container's browser. Stop Smitline from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory.
 
 ### Review local records
 
@@ -63,7 +63,7 @@ It reads `.env.meeting`, checks the configuration with `python3`, and builds and
 
 ## Troubleshooting
 
-- If the console does not answer, check `docker ps` for the `colleague` container and `docker logs colleague`. From a checkout, run `npm install` and confirm Node.js 22 or later is active.
+- If the console does not answer, check `docker ps` for the `smitline` container and `docker logs smitline`. From a checkout, run `npm install` and confirm Node.js 22 or later is active.
 - If the checks report Docker unavailable, start Docker (Docker Desktop, or the Docker Engine service inside WSL) and rerun the checks.
 - If the participant is silent, address it directly with a question or task and inspect `floorState`, `microphoneState`, the runtime log, and health state. If the platform microphone was externally muted, unmute it through the meeting UI before expecting audio; in Zoom the host can click **Ask to unmute** on its tile.
 - If the meeting does not admit the participant, inspect the browser viewer for a waiting-room, sign-in, passcode, or host-removal message.

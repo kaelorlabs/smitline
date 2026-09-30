@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "colleague-ai": {
+    "smitline": {
       "command": "node",
-      "args": ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"],
+      "args": ["/absolute/path/to/smitline/packages/mcp/src/server.mjs"],
       "env": {
-        "COLLEAGUE_ROOT": "/absolute/path/to/colleague-ai"
+        "COLLEAGUE_ROOT": "/absolute/path/to/smitline"
       }
     }
   }

@@ -363,17 +363,17 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         from briefing import save_profile
         self.h.hooks.env_file = Path(self.temp.name) / '.env'
         save_profile(Path(self.temp.name) / '.colleague' / 'profile.json', {
-            'about': 'Robin builds Colleague AI.', 'boundaries': ['Never discuss money.'],
+            'about': 'Robin builds Smitline.', 'boundaries': ['Never discuss money.'],
             'people': [{'name': 'Sam', 'relationship': 'close friend', 'phone': '+14155550143'}]})
         record, session = await self.h.dial(
             to='+14155550143', objective='Ask Sam whether to launch now or wait',
             questions=['Launch now or wait, and why?'],
-            context={'summary': 'Colleague AI lets agents make calls.',
+            context={'summary': 'Smitline lets agents make calls.',
                      'details': 'Pricing: about 6 cents a minute.'})
         ws, live, task = await self.h.connect(record, session)
         config = live.config
         notes = config['input'][0]['content'][0]['text']
-        self.assertIn('Colleague AI lets agents make calls.', notes)
+        self.assertIn('Smitline lets agents make calls.', notes)
         self.assertIn("Speaking with: Sam, Robin's close friend", notes)
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
@@ -1183,7 +1183,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         docker = PublicUrl(lambda: {}, 8766, spawn=spawn, probe=probe,
                            which=lambda name: '/usr/bin/docker' if name == 'docker' else None)
         self.assertEqual(docker.command()[:4], ['docker', 'run', '--rm', '--network'])
-        self.assertIn('colleague-tunnel-8766', docker.command())
+        self.assertIn('smitline-tunnel-8766', docker.command())
         spawned.clear()
         self.assertEqual(await docker.get(), 'https://brave-fox-12.trycloudflare.com')
         self.assertEqual(spawned[0][:3], ('docker', 'rm', '-f'))

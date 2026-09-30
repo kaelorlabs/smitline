@@ -94,7 +94,7 @@ def default_path(project_root):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Manage Colleague AI API tokens')
+    parser = argparse.ArgumentParser(description='Manage Smitline API tokens')
     parser.add_argument('--root', default=str(Path(__file__).resolve().parent.parent))
     commands = parser.add_subparsers(dest='command', required=True)
     create = commands.add_parser('create', help='create a token and print it once')

@@ -188,9 +188,9 @@ test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the conta
   assert.equal(client.managed, true);
   assert.equal(client.tokenPath, path.join(root, '.colleague', 'daemon.auth'));
   await assert.rejects(client.createMeeting({ meetingUrl: 'https://us05web.zoom.us/j/1' }), (error) => (
-    /docker restart colleague/.test(error.message) && error.code === 'daemon_unavailable' && error.status === 503
+    /docker restart smitline/.test(error.message) && error.code === 'daemon_unavailable' && error.status === 503
   ));
-  await assert.rejects(client.getMeeting('mtg-1'), /docker restart colleague/);
+  await assert.rejects(client.getMeeting('mtg-1'), /docker restart smitline/);
   assert.equal(spawns, 0);
   assert.equal(fs.existsSync(path.join(root, '.colleague', 'daemon.log')), false);
 

@@ -14,7 +14,7 @@ const PASSPHRASE = 'correct horse battery staple';
 const CALL_ID = 'call-0123456789abcdef';
 const REDIRECT = 'https://agent.example/callback';
 const BRIEF = { channel: 'phone', to: '+14155550142', onBehalfOf: 'Robin', objective: 'Book a table for 4 at 7pm' };
-const cli = fileURLToPath(new URL('../../cli/src/colleague.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('../../cli/src/smitline.mjs', import.meta.url));
 const remote = fileURLToPath(new URL('../src/remote.mjs', import.meta.url));
 
 function fakeColleague() {
@@ -202,7 +202,7 @@ test('discovery, registration, approval, tokens, and a call over MCP', async (t)
 
   const { verifier, challenge } = pkce();
   const form = await approvalForm(authorizeUrl(base, client, challenge));
-  assert.match(form.html, /Allow Test agent to use Colleague AI\?/);
+  assert.match(form.html, /Allow Test agent to use Smitline\?/);
   assert.match(form.html, /https:\/\/agent\.example/);
   assert.match(form.html, /<label for="passphrase">Owner passphrase<\/label>/);
   assert.equal(form.headers.get('x-frame-options'), 'DENY');
@@ -466,13 +466,13 @@ test('token files hold only digests, in private files', async (t) => {
   assert.equal(statSync(path.join(dir, 'clients.json')).mode & 0o777, 0o600);
 });
 
-test('colleague connector status and revoke act on a running connector', async (t) => {
+test('smitline connector status and revoke act on a running connector', async (t) => {
   const { base, root } = await startServer(t);
   const { client, tokens } = await signIn(base);
-  const status = await runCli([cli, 'connector', 'status', '--root', root], { COLLEAGUE_CONNECTOR_URL: 'https://colleague.example.com' });
+  const status = await runCli([cli, 'connector', 'status', '--root', root], { COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com' });
   assert.equal(status.code, 0, status.stderr);
   const report = JSON.parse(status.stdout);
-  assert.equal(report.connectorUrl, 'https://colleague.example.com/mcp');
+  assert.equal(report.connectorUrl, 'https://smitline.example.com/mcp');
   assert.equal(report.clients[0].clientId, client.client_id);
   assert.equal(report.clients[0].activeGrants, 1);
   assert.equal(report.grants[0].clientName, 'Test agent');
@@ -501,15 +501,15 @@ test('configuration comes from the environment or .env and is required', async (
   assert.throws(() => loadConnectorConfig({ root, env: {} }), (error) => (
     /COLLEAGUE_CONNECTOR_URL is not set/.test(error.message) && /COLLEAGUE_CONNECTOR_PASSPHRASE is not set/.test(error.message)
   ));
-  const env = { COLLEAGUE_CONNECTOR_URL: 'https://colleague.example.com', COLLEAGUE_CONNECTOR_PASSPHRASE: PASSPHRASE };
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'http://colleague.example.com' } }), /https/);
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'https://colleague.example.com/mcp' } }), /no path/);
+  const env = { COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com', COLLEAGUE_CONNECTOR_PASSPHRASE: PASSPHRASE };
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'http://smitline.example.com' } }), /https/);
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com/mcp' } }), /no path/);
   assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_PASSPHRASE: 'short' } }), /at least 12/);
   assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS: 'nonsense' } }), /invalid origin/);
 
-  await fs.writeFile(path.join(root, '.env'), `COLLEAGUE_CONNECTOR_URL=https://colleague.example.com/\nCOLLEAGUE_CONNECTOR_PASSPHRASE=${PASSPHRASE}\n`);
+  await fs.writeFile(path.join(root, '.env'), `COLLEAGUE_CONNECTOR_URL=https://smitline.example.com/\nCOLLEAGUE_CONNECTOR_PASSPHRASE=${PASSPHRASE}\n`);
   const fromFile = loadConnectorConfig({ root, env: {} });
-  assert.equal(fromFile.baseUrl, 'https://colleague.example.com');
+  assert.equal(fromFile.baseUrl, 'https://smitline.example.com');
   assert.equal(fromFile.passphrase, PASSPHRASE);
   assert.equal(fromFile.port, 8767);
   const overridden = loadConnectorConfig({ root, env: { COLLEAGUE_CONNECTOR_URL: 'http://127.0.0.1:9000', COLLEAGUE_CONNECTOR_PORT: '9000' } });

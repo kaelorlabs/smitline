@@ -1,4 +1,4 @@
-"""Local Colleague AI Python SDK: phone calls and meetings through the runtime daemon."""
+"""Local Smitline Python SDK: phone calls and meetings through the runtime daemon."""
 
 from __future__ import annotations
 

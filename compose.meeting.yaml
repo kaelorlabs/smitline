@@ -1,6 +1,6 @@
 services:
   meeting-agent:
-    image: colleague-meeting:local
+    image: smitline-meeting:local
     build:
       context: .
       dockerfile: Dockerfile.meeting

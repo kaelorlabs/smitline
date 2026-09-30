@@ -1,8 +1,8 @@
 # Calls
 
-A **call** is one conversation Colleague AI holds with people on behalf of an agent: a phone call or a meeting. Any agent starts a call with a **brief** and later reads a **result**. This is the contract every surface uses (REST, SDKs, CLI, MCP, remote connector).
+A **call** is one conversation Smitline holds with people on behalf of an agent: a phone call or a meeting. Any agent starts a call with a **brief** and later reads a **result**. This is the contract every surface uses (REST, SDKs, CLI, MCP, remote connector).
 
-A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet invite URL as `to` (CLI: `colleague call --meeting <url>`). Underneath it is an ordinary daemon meeting, and the call record links to it with `meetingId`. The daemon also has a small [meetings API](#meetings-api) that the local console uses.
+A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet invite URL as `to` (CLI: `smitline call --meeting <url>`). Underneath it is an ordinary daemon meeting, and the call record links to it with `meetingId`. The daemon also has a small [meetings API](#meetings-api) that the local console uses.
 
 ## Lifecycle
 
@@ -43,7 +43,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
   "voice": "marin",
   "maxMinutes": 10,
   "rehearsal": false,
-  "notify": { "webhookUrl": "https://example.com/hooks/colleague" }
+  "notify": { "webhookUrl": "https://example.com/hooks/smitline" }
 }
 ```
 
@@ -191,6 +191,6 @@ Set `COLLEAGUE_CALL_HOOKS=module:factory` to load different hooks.
 
 The daemon listens on loopback with a per-launch token by default. The token is in `.colleague/daemon.auth` (`/data/.colleague/daemon.auth` in the image) and changes each time the daemon starts.
 
-Server mode also accepts long-lived API tokens; only SHA-256 digests are stored. It refuses to start without at least one API token and must sit behind a TLS-terminating proxy. From a checkout, create a token with `python3 meeting-runtime/api_tokens.py create --name NAME`, then start the daemon with `COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`. In the image, create the token as the `app` user, so the file stays readable to the daemon: `docker exec -u app colleague python meeting-runtime/api_tokens.py --root /data create --name NAME`. The container's start script reads the same two variables, so pass `-e COLLEAGUE_SERVER_MODE=1 -e COLLEAGUE_DAEMON_HOST=0.0.0.0` to `docker run`.
+Server mode also accepts long-lived API tokens; only SHA-256 digests are stored. It refuses to start without at least one API token and must sit behind a TLS-terminating proxy. From a checkout, create a token with `python3 meeting-runtime/api_tokens.py create --name NAME`, then start the daemon with `COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`. In the image, create the token as the `app` user, so the file stays readable to the daemon: `docker exec -u app smitline python meeting-runtime/api_tokens.py --root /data create --name NAME`. The container's start script reads the same two variables, so pass `-e COLLEAGUE_SERVER_MODE=1 -e COLLEAGUE_DAEMON_HOST=0.0.0.0` to `docker run`.
 
 Credentials come from the process environment first, then the ignored `.env` (`/data/.env` in the image), which is reread for every call, so keys added during setup work without a restart.

@@ -1,6 +1,6 @@
 # Architecture
 
-Colleague AI is a **local-first** runtime that gives any agent phone calls and meetings. The loopback daemon on `127.0.0.1` is the supported path. OpenAI GPT-Live (`gpt-live-1`) is the only voice: it does all listening and speaking. Browser profiles, transcripts, call records, and credentials stay on this computer.
+Smitline is a **local-first** runtime that gives any agent phone calls and meetings. The loopback daemon on `127.0.0.1` is the supported path. OpenAI GPT-Live (`gpt-live-1`) is the only voice: it does all listening and speaking. Browser profiles, transcripts, call records, and credentials stay on this computer.
 
 See [capabilities](capabilities.md) for the meeting platform matrix, [calls](calls.md) for the brief and result, and [phone calls](phone.md) for how a phone call runs.
 
@@ -13,7 +13,7 @@ Your agent (Claude Code, Codex, Cursor, ChatGPT, your own code, ...)
 MCP (127.0.0.1:8095/mcp or stdio) / remote connector / CLI / SDKs / REST
         │  brief in, result out
         ▼
-colleague container (ghcr.io/kaelorlabs/colleague, host networking, data volume at /data)
+smitline container (ghcr.io/kaelorlabs/smitline, host networking, data volume at /data)
 Loopback daemon 127.0.0.1:8765
   ├─ calls API        /v1/calls, /v1/voices, /v1/profile
   ├─ phone gateway    127.0.0.1:8766 ──► SignalWire or Twilio ◄──► phone
@@ -30,9 +30,9 @@ A phone call and a meeting are both **calls**: an agent sends a brief to `/v1/ca
 
 In both, GPT-Live hands questions that need careful reasoning or precise facts to a backend model through Responses delegation. The backend knows the brief and context. Phone calls use `COLLEAGUE_PHONE_BACKEND_MODEL` and `COLLEAGUE_PHONE_WEB_SEARCH`; meetings use `COLLEAGUE_MEETING_BACKEND_MODEL` and `COLLEAGUE_MEETING_WEB_SEARCH`. Both models default to `gpt-5.6-terra`, and web search is off unless set to `1`.
 
-### The colleague container
+### The Smitline container
 
-Users run one image, `ghcr.io/kaelorlabs/colleague` (`Dockerfile`, about 600 MB): Python with the daemon, Node with the console, CLI, and MCP server, the Docker CLI with Compose, and `cloudflared` for the phone tunnel. `docker/entrypoint.sh` gives the data volume and the Docker socket to the image's `app` user (uid 1001) and starts `docker/start.sh`, which runs the daemon and the console; if either stops, the container stops and Docker's restart policy starts it again. The `colleague` command (`docker/colleague`) runs as the same user, so settings it writes stay readable to the service.
+Users run one image, `ghcr.io/kaelorlabs/smitline` (`Dockerfile`, about 600 MB): Python with the daemon, Node with the console, CLI, and MCP server, the Docker CLI with Compose, and `cloudflared` for the phone tunnel. `docker/entrypoint.sh` gives the data volume and the Docker socket to the image's `app` user (uid 1001) and starts `docker/start.sh`, which runs the daemon and the console; if either stops, the container stops and Docker's restart policy starts it again. The `smitline` command (`docker/smitline`) runs as the same user, so settings it writes stay readable to the service.
 
 The image sets:
 
@@ -40,20 +40,20 @@ The image sets:
 | --- | --- | --- |
 | `COLLEAGUE_ROOT` | `/data` | `.env`, `.env.meeting`, and `.colleague/`. In a checkout, the checkout. |
 | `COLLEAGUE_MEETING_DATA` | `/data/meetings` | Meeting `run/`, `recordings/`, `profiles/`, and `context/`. In a checkout, `meeting-runtime/`. |
-| `COLLEAGUE_MANAGED` | `1` | The container runs the daemon: nothing else starts it, `colleague setup start` only reports, and `colleague setup register` prints how to connect agents instead of writing their config. |
-| `COLLEAGUE_MEETING_IMAGE` | `ghcr.io/kaelorlabs/colleague-meeting:sha-…` | The meeting image from the same commit, pulled on the first meeting. |
+| `COLLEAGUE_MANAGED` | `1` | The container runs the daemon: nothing else starts it, `smitline setup start` only reports, and `smitline setup register` prints how to connect agents instead of writing their config. |
+| `COLLEAGUE_MEETING_IMAGE` | `ghcr.io/kaelorlabs/smitline-meeting:sha-…` | The meeting image from the same commit, pulled on the first meeting. |
 
-`COLLEAGUE_VOLUME` (default `colleague`) names the data volume, and `COLLEAGUE_CONTAINER_NAME` (default `colleague`) the container, for the commands `setup register` prints.
+`COLLEAGUE_VOLUME` (default `smitline`) names the data volume, and `COLLEAGUE_CONTAINER_NAME` (default `smitline`) the container, for the commands `setup register` prints.
 
-Local agents connect to MCP over Streamable HTTP at `127.0.0.1:8095/mcp` with a bearer token kept in `.colleague/mcp.token`. The endpoint accepts only `Host: 127.0.0.1:8095` or `localhost:8095` and refuses any request with an `Origin` header, so a web page cannot reach it. Claude Desktop, which only starts stdio servers, runs `docker exec -i colleague colleague mcp`.
+Local agents connect to MCP over Streamable HTTP at `127.0.0.1:8095/mcp` with a bearer token kept in `.colleague/mcp.token`. The endpoint accepts only `Host: 127.0.0.1:8095` or `localhost:8095` and refuses any request with an `Origin` header, so a web page cannot reach it. Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.
 
 ### The meeting container
 
-One image, `ghcr.io/kaelorlabs/colleague-meeting` (`Dockerfile.meeting`, about 1.8 GB on disk): `python:3.12-slim-bookworm` with Playwright Chromium, PulseAudio, Xvfb, and x11vnc with noVNC for account sign-in, plus `meeting-runtime/` and the vendored `joinly/` subset. No speech models run in it. The daemon starts it through the host's Docker with `compose.meeting.image.yaml`, pulling it on the first meeting. It runs as uid 1001 and mounts the same `colleague` volume at `/data`; its `/meeting-runtime/run`, `recordings`, and `profiles` are links into `/data/meetings`.
+One image, `ghcr.io/kaelorlabs/smitline-meeting` (`Dockerfile.meeting`, about 1.8 GB on disk): `python:3.12-slim-bookworm` with Playwright Chromium, PulseAudio, Xvfb, and x11vnc with noVNC for account sign-in, plus `meeting-runtime/` and the vendored `joinly/` subset. No speech models run in it. The daemon starts it through the host's Docker with `compose.meeting.image.yaml`, pulling it on the first meeting. It runs as uid 1001 and mounts the same `smitline` volume at `/data`; its `/meeting-runtime/run`, `recordings`, and `profiles` are links into `/data/meetings`.
 
-From a checkout, the daemon uses `compose.meeting.yaml` instead: it builds `colleague-meeting:local` and mounts `meeting-runtime/` and `joinly/` read-only, so code changes need no rebuild.
+From a checkout, the daemon uses `compose.meeting.yaml` instead: it builds `smitline-meeting:local` and mounts `meeting-runtime/` and `joinly/` read-only, so code changes need no rebuild.
 
-`.github/workflows/images.yml` runs the tests on every pull request and push to `main` (including the runtime suite inside the meeting image and a start of the colleague image). A version tag such as `v0.1.0` also publishes both images, for `linux/amd64` and `linux/arm64`, tagged with the version, `latest`, and `sha-<commit>`; the colleague image starts the meeting image with the same `sha-` tag.
+`.github/workflows/images.yml` runs the tests on every pull request and push to `main` (including the runtime suite inside the meeting image and a start of the smitline image). A version tag such as `v0.1.0` also publishes both images, for `linux/amd64` and `linux/arm64`, tagged with the version, `latest`, and `sha-<commit>`; the smitline image starts the meeting image with the same `sha-` tag.
 
 ### Running from a checkout
 
@@ -106,9 +106,9 @@ sequenceDiagram
     Adapter->>Meet: mute when the session ends
 ```
 
-The platform microphone is unmuted once when the voice session starts and muted when it ends. Between replies only the local virtual gate closes, so participants hear silence while the platform shows Colleague AI as unmuted. If a host or participant mutes it, generated audio is discarded and the runtime never reopens the microphone on its own. If the host disables "Allow participants to unmute themselves" in Zoom, the start-of-session unmute fails and Colleague AI cannot speak until the host asks it to unmute; the Zoom adapter accepts the host's "The host would like you to unmute" dialog, because that is the host's explicit request.
+The platform microphone is unmuted once when the voice session starts and muted when it ends. Between replies only the local virtual gate closes, so participants hear silence while the platform shows Smitline as unmuted. If a host or participant mutes it, generated audio is discarded and the runtime never reopens the microphone on its own. If the host disables "Allow participants to unmute themselves" in Zoom, the start-of-session unmute fails and Smitline cannot speak until the host asks it to unmute; the Zoom adapter accepts the host's "The host would like you to unmute" dialog, because that is the host's explicit request.
 
-Once the microphone can carry speech, the session speaks one short AI disclosure naming the person it acts for ("Hi everyone, I'm NAME's AI assistant. I'll mostly listen; say 'Colleague' if you need me."), then returns to listening. The name comes from the runtime state (`onBehalfOf`, or the call task "Take part in this meeting on behalf of NAME."), then `COLLEAGUE_OWNER_NAME`, then "the person who invited me". `COLLEAGUE_MEETING_INTRO=0` turns it off.
+Once the microphone can carry speech, the session speaks one short AI disclosure naming the person it acts for ("Hi everyone, I'm NAME's AI assistant. I'll mostly listen; say 'Smitline' if you need me."), then returns to listening. The name comes from the runtime state (`onBehalfOf`, or the call task "Take part in this meeting on behalf of NAME."), then `COLLEAGUE_OWNER_NAME`, then "the person who invited me". `COLLEAGUE_MEETING_INTRO=0` turns it off.
 
 GPT-Live owns pauses, backchannels, and interruptions. The local runtime does not classify meeting speech or add a silence delay.
 
@@ -142,7 +142,7 @@ Disconnect removes the local profile directory. It does not revoke sessions on o
 
 ## Retention and deletion
 
-In the image, the `.colleague/` and `.env` paths below are under `/data`, and the `meeting-runtime/` paths are under `/data/meetings`, all in the `colleague` volume: `docker volume rm colleague` deletes everything. In a checkout they are in the checkout, and gitignored. Stop the meeting or daemon before deleting files in use.
+In the image, the `.colleague/` and `.env` paths below are under `/data`, and the `meeting-runtime/` paths are under `/data/meetings`, all in the `smitline` volume: `docker volume rm smitline` deletes everything. In a checkout they are in the checkout, and gitignored. Stop the meeting or daemon before deleting files in use.
 
 | Data | Location | How to delete |
 | --- | --- | --- |
@@ -152,15 +152,15 @@ In the image, the `.colleague/` and `.env` paths below are under `/data`, and th
 | Per-meeting runtime state | `meeting-runtime/run/` | Delete after the meeting has stopped |
 | Daemon auth token | `.colleague/daemon.auth` | Stop the daemon; deleting the file forces a new token on next start |
 | Daemon meetings, events, call records, webhook secret, API token digests | `.colleague/daemon-data/` | Stop the daemon, then delete the directory |
-| Owner profile | `.colleague/profile.json` | `colleague profile`, or delete the file |
-| Remote connector grants (digests) | `.colleague/connector/` | `colleague connector revoke --all`, or delete the directory |
-| Local MCP token | `.colleague/mcp.token` | Delete it; the next `colleague setup register` makes a new one, and agents need the new header |
-| Console active meeting | `.colleague/portal-active.json` | Stop the colleague from the console |
+| Owner profile | `.colleague/profile.json` | `smitline profile`, or delete the file |
+| Remote connector grants (digests) | `.colleague/connector/` | `smitline connector revoke --all`, or delete the directory |
+| Local MCP token | `.colleague/mcp.token` | Delete it; the next `smitline setup register` makes a new one, and agents need the new header |
+| Console active meeting | `.colleague/portal-active.json` | Stop Smitline from the console |
 | API keys / meeting invite | `.env`, `.env.meeting` | Edit or delete; never commit |
 
 ### Container user and file permissions
 
-In the image, the colleague and meeting containers both run as uid 1001, so the private files they share need nothing more. The rest of this section is about running from a checkout.
+In the image, the smitline and meeting containers both run as uid 1001, so the private files they share need nothing more. The rest of this section is about running from a checkout.
 
 The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `recordings/` and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
 

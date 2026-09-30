@@ -27,7 +27,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
     clientInfo: { name: 'test', version: '1' },
     capabilities: {},
   });
-  assert.equal(init.result.serverInfo.name, 'colleague-ai');
+  assert.equal(init.result.serverInfo.name, 'smitline');
   assert.equal(init.result.capabilities.extensions, undefined);
   assert.match(init.result.instructions, /start_call/);
   assert.match(init.result.instructions, /channel 'meeting'/);

@@ -19,9 +19,9 @@ export const EXIT = Object.freeze({
 // The first start creates a Python environment and installs packages.
 const DEFAULT_STARTUP_TIMEOUT_MS = 60000;
 
-// In the Colleague AI container (COLLEAGUE_MANAGED=1) the container runs the daemon;
+// In the Smitline container (COLLEAGUE_MANAGED=1) the container runs the daemon;
 // nothing else may start one.
-export const MANAGED_NOT_RUNNING = 'Colleague AI is not running; restart the container: docker restart colleague';
+export const MANAGED_NOT_RUNNING = 'Smitline is not running; restart the container: docker restart smitline';
 
 export function isManaged(env = process.env) {
   return String(env?.COLLEAGUE_MANAGED ?? '').trim() === '1';
@@ -142,7 +142,7 @@ function defaultIsPortOpen(host, port) {
     socket.once('error', (error) => {
       if (error?.code === 'EPERM' || error?.code === 'EACCES') {
         reject(new StartupError(
-          `local loopback access to ${host}:${port} was blocked; allow the command to access the Colleague AI daemon and retry`,
+          `local loopback access to ${host}:${port} was blocked; allow the command to access the Smitline daemon and retry`,
           { code: 'loopback_access_denied' },
         ));
         return;
@@ -297,7 +297,7 @@ export function createLoopbackTransport(options = {}) {
     listVoices() {
       return json('GET', '/v1/voices');
     },
-    // Operations, not calls: used by colleague setup stop, not part of the public SDK.
+    // Operations, not calls: used by smitline setup stop, not part of the public SDK.
     stopDaemon() {
       return json('POST', '/v1/daemon/stop', {});
     },

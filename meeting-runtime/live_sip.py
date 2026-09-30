@@ -1,6 +1,6 @@
 """GPT-Live over SIP: call audio flows between the phone provider and OpenAI directly.
 
-Colleague AI only steers the call: it creates or accepts the session with the
+Smitline only steers the call: it creates or accepts the session with the
 brief as instructions, then attaches a text "sideband" WebSocket for call
 progress, transcripts, backend tool calls, and commands, and ends or
 transfers the call through REST. See docs/phone.md and

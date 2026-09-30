@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local Colleague AI SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon.",
-  "homepage": "https://github.com/kaelorlabs/colleague-ai",
+  "description": "Local Smitline SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon.",
+  "homepage": "https://github.com/kaelorlabs/smitline",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kaelorlabs/colleague-ai.git",
+    "url": "git+https://github.com/kaelorlabs/smitline.git",
     "directory": "packages/sdk-typescript"
   },
   "license": "Apache-2.0",

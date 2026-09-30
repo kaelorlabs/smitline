@@ -2,7 +2,7 @@ import asyncio
 import re
 from adapters_base import AuthenticationRequired
 
-async def join_zoom(page, url, passcode, stop, stage, participant_name='Colleague AI'):
+async def join_zoom(page, url, passcode, stop, stage, participant_name='Smitline'):
     url = re.sub(r'/j/(\d+)', r'/wc/join/\1', url)
     await page.goto(url, wait_until='domcontentloaded', timeout=60000)
     submitted = False

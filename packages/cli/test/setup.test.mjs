@@ -12,7 +12,7 @@ import {
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv, SETUP_PAGE_PORT, setupPagePort, colleagueVersion,
 } from '../src/setup.mjs';
 
-const cli = fileURLToPath(new URL('../src/colleague.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 
 async function tempRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-setup-'));
@@ -55,9 +55,9 @@ test('settings are validated and secrets are refused', () => {
 });
 
 test('connector settings take an https origin and a passphrase of at least 12 characters', () => {
-  assert.equal(validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://colleague.example.com/'), 'https://colleague.example.com');
-  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'http://colleague.example.com'), /https/);
-  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://colleague.example.com/mcp'), /no path/);
+  assert.equal(validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://smitline.example.com/'), 'https://smitline.example.com');
+  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'http://smitline.example.com'), /https/);
+  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://smitline.example.com/mcp'), /no path/);
   assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_PASSPHRASE', 'correct horse battery staple'), /secret/);
   const passphrase = 'correct horse battery staple';
   assert.deepEqual(sanitizeSubmission(new URLSearchParams({ COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase })),
@@ -93,7 +93,7 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.equal(wrong.status, 404);
   const page = await fetch(pageUrl);
   const first = await page.text();
-  assert.match(first, /Colleague AI setup/);
+  assert.match(first, /Smitline setup/);
   assert.match(first, /name="action" value="done"/);
 
   // Each save keeps the page open for more.
@@ -212,7 +212,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.deepEqual(empty.optional.map((item) => item.id), ['caller_id', 'owner_phone']);
 
   assert.match(empty.checks.find((c) => c.id === 'runtime').detail, /^Python on this computer/);
-  // Without a usable Python, Docker runs Colleague AI; without either, that comes first.
+  // Without a usable Python, Docker runs Smitline; without either, that comes first.
   const noVenv = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({ 'docker info': 0 }), find });
   const runtime = noVenv.checks.find((c) => c.id === 'runtime');
   assert.equal(runtime.ok, true);
@@ -255,7 +255,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.equal(full.firstCallReady, full.checks.find((c) => c.id === 'owner_phone').ok === true);
   const offline = await setupStatus({ root, env: {}, fetchImpl, runner, find, verify: false });
   assert.equal(offline.checks.find((c) => c.id === 'caller_id').ok, true);
-  // Twilio's trial strips <Stream>, so it cannot carry a Colleague AI call.
+  // Twilio's trial strips <Stream>, so it cannot carry a Smitline call.
   const twilioTrial = await setupStatus({
     root, env: {}, runner, find, fetchImpl: async (url) => (String(url).endsWith('/Accounts/AC1.json')
       ? Response.json({ status: 'active', type: 'Trial' }) : fetchImpl(url)),
@@ -283,16 +283,16 @@ test('register adds the stdio server to detected agents', async (t) => {
   const { results, manual } = registerAgents('/repo', { runner, find, home });
   assert.deepEqual(results.map((r) => r.id), ['claude-code', 'cursor']);
   const add = calls.find((c) => c[0] === 'claude' && c[2] === 'add');
-  assert.deepEqual(add.slice(1, 6), ['mcp', 'add', '--scope', 'user', 'colleague-ai']);
+  assert.deepEqual(add.slice(1, 6), ['mcp', 'add', '--scope', 'user', 'smitline']);
   assert.equal(add.at(-1), '/repo/packages/mcp/src/server.mjs');
   const cursor = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
-  assert.deepEqual(cursor.mcpServers['colleague-ai'].args, ['/repo/packages/mcp/src/server.mjs']);
+  assert.deepEqual(cursor.mcpServers['smitline'].args, ['/repo/packages/mcp/src/server.mjs']);
   assert.equal(manual.args[0], '/repo/packages/mcp/src/server.mjs');
 });
 
 test('register from WSL also adds Windows apps and installs the call skills', async (t) => {
   const repo = await tempRoot(t);
-  for (const name of ['call-with-colleague-ai', 'setup-colleague-ai']) {
+  for (const name of ['call-with-smitline', 'setup-smitline']) {
     await fs.mkdir(path.join(repo, '.agents', 'skills', name), { recursive: true });
     await fs.writeFile(path.join(repo, '.agents', 'skills', name, 'SKILL.md'), `# ${name}\n`);
   }
@@ -311,16 +311,16 @@ test('register from WSL also adds Windows apps and installs the call skills', as
   const server = path.join(repo, 'packages', 'mcp', 'src', 'server.mjs');
   const desktop = JSON.parse(await fs.readFile(path.join(appData, 'Claude', 'claude_desktop_config.json'), 'utf8'));
   assert.deepEqual(desktop.mcpServers.other, { command: 'x' });
-  assert.deepEqual(desktop.mcpServers['colleague-ai'], {
+  assert.deepEqual(desktop.mcpServers['smitline'], {
     command: 'wsl.exe', args: ['-d', 'Ubuntu', '--exec', process.execPath, server],
   });
   assert.ok(results.some((r) => r.id === 'claude-desktop' && r.registered));
   const windowsClaude = calls.find((c) => c[0] === 'cmd.exe' && c.includes('add'));
   assert.deepEqual(windowsClaude.slice(-6), ['wsl.exe', '-d', 'Ubuntu', '--exec', process.execPath, server]);
   assert.deepEqual(skills.map((s) => s.id), ['claude', 'claude-windows']);
-  assert.deepEqual(skills[0].installed, ['call-with-colleague-ai']);
-  await fs.access(path.join(home, '.claude', 'skills', 'call-with-colleague-ai', 'SKILL.md'));
-  await fs.access(path.join(userProfile, '.claude', 'skills', 'call-with-colleague-ai', 'SKILL.md'));
+  assert.deepEqual(skills[0].installed, ['call-with-smitline']);
+  await fs.access(path.join(home, '.claude', 'skills', 'call-with-smitline', 'SKILL.md'));
+  await fs.access(path.join(userProfile, '.claude', 'skills', 'call-with-smitline', 'SKILL.md'));
   assert.equal(manual.windows.command, 'wsl.exe');
 
   // Outside WSL there is no Windows side.
@@ -448,14 +448,14 @@ test('setup stop stops the daemon, but not in the middle of a call unless forced
   const busy = await runCli(['setup', 'stop', '--root', root], env);
   assert.equal(busy.code, 2);
   assert.match(busy.stderr, /A call is in progress \(call-0123456789abcdef\)/);
-  assert.match(busy.stderr, /colleague setup stop --force/);
+  assert.match(busy.stderr, /smitline setup stop --force/);
   assert.ok(!seen.includes('POST /v1/daemon/stop'));
 
   const forced = await runCli(['setup', 'stop', '--force', '--root', root], env);
   assert.equal(forced.code, 0, forced.stderr);
   assert.deepEqual(JSON.parse(forced.stdout), { running: false, stopped: true, port });
   assert.ok(seen.includes('POST /v1/daemon/stop'));
-  assert.match(forced.stderr, /Colleague AI stopped/);
+  assert.match(forced.stderr, /Smitline stopped/);
 
   // Nothing running: nothing to stop, and nothing is started.
   const idle = await runCli(['setup', 'stop', '--root', root], env);
@@ -466,7 +466,7 @@ test('setup stop stops the daemon, but not in the middle of a call unless forced
   // In the container, the container is stopped from the host.
   const managed = await runCli(['setup', 'stop'], { ...env, COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root });
   assert.equal(managed.code, 0, managed.stderr);
-  assert.match(JSON.parse(managed.stdout).next, /docker stop colleague/);
+  assert.match(JSON.parse(managed.stdout).next, /docker stop smitline/);
 });
 
 test('call builds a brief, waits for the result, and shows questions for missing fields', async (t) => {
@@ -563,13 +563,13 @@ test('sip-trunk creates the SignalWire script and SIP address OpenAI dials out t
   const fetchImpl = async (url, options) => {
     requests.push([String(url), JSON.parse(options.body), options.headers.Authorization]);
     if (String(url).endsWith('/swml_scripts')) return Response.json({ id: 'res_1' });
-    return Response.json({ id: 'addr_1', uri: 'sip:*@acme-colleague-ai-openai.dapp.signalwire.com' });
+    return Response.json({ id: 'addr_1', uri: 'sip:*@acme-smitline-openai.dapp.signalwire.com' });
   };
   const env = { SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p-1', SIGNALWIRE_API_TOKEN: 'PT-x',
     SIGNALWIRE_FROM_NUMBER: '+14155550124' };
   const trunk = await createSignalWireTrunk({ env, fetchImpl, password: 'generated-secret' });
   assert.deepEqual(trunk.settings, {
-    COLLEAGUE_SIP_TRUNK_URL: 'sips:acme-colleague-ai-openai.dapp.signalwire.com:5061',
+    COLLEAGUE_SIP_TRUNK_URL: 'sips:acme-smitline-openai.dapp.signalwire.com:5061',
     COLLEAGUE_SIP_USERNAME: '+14155550124',
     COLLEAGUE_SIP_PASSWORD: 'generated-secret',
     COLLEAGUE_PHONE_AUDIO: 'sip',
@@ -582,7 +582,7 @@ test('sip-trunk creates the SignalWire script and SIP address OpenAI dials out t
   assert.match(connect.to, /sips\?:/);
   assert.equal(address[0], 'https://acme.signalwire.com/api/fabric/sip_addresses');
   assert.deepEqual({ ...address[1], password: 'hidden' }, {
-    name: 'colleague-ai-openai', calling_handler_resource_id: 'res_1', user: '*', encryption: 'required',
+    name: 'smitline-openai', calling_handler_resource_id: 'res_1', user: '*', encryption: 'required',
     codecs: ['OPUS', 'PCMU', 'PCMA'], password: 'hidden' });
 
   await assert.rejects(createSignalWireTrunk({ env: { ...env, SIGNALWIRE_API_TOKEN: '' }, fetchImpl }), /Set up SignalWire first/);
@@ -626,7 +626,7 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   assert.equal(person.code, 0, person.stderr);
   const removed = await runCli(['profile', 'person', ...common, '--name', 'Sam', '--remove']);
   assert.equal(removed.code, 0, removed.stderr);
-  const about = await runCli(['profile', 'set', ...common, '--about', 'Robin builds Colleague AI.', '--boundaries', 'No money talk; No family details']);
+  const about = await runCli(['profile', 'set', ...common, '--about', 'Robin builds Smitline.', '--boundaries', 'No money talk; No family details']);
   assert.equal(about.code, 0, about.stderr);
   const shown = await runCli(['profile', 'show', ...common]);
   assert.equal(JSON.parse(shown.stdout).version, 1);
@@ -634,17 +634,17 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   assert.deepEqual(patches, [
     { people: [{ name: 'Sam', relationship: 'close friend', phone: '+14155550143' }] },
     { removePeople: ['Sam'] },
-    { about: 'Robin builds Colleague AI.', boundaries: ['No money talk', 'No family details'] },
+    { about: 'Robin builds Smitline.', boundaries: ['No money talk', 'No family details'] },
   ]);
   const contextFile = path.join(root, 'context.json');
-  await fs.writeFile(contextFile, JSON.stringify({ summary: 'Colleague AI lets agents call.', details: 'Pricing.' }));
+  await fs.writeFile(contextFile, JSON.stringify({ summary: 'Smitline lets agents call.', details: 'Pricing.' }));
   const placed = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Get feedback',
     '--questions', 'Launch now or wait?; Who would use it?', '--tone', 'casual', '--context-file', contextFile]);
   assert.equal(placed.code, 0, placed.stderr);
   const brief = daemon.seen.find((item) => item.method === 'POST' && item.url === '/v1/calls').body;
   assert.deepEqual(brief.questions, ['Launch now or wait?', 'Who would use it?']);
   assert.equal(brief.tone, 'casual');
-  assert.deepEqual(brief.context, { summary: 'Colleague AI lets agents call.', details: 'Pricing.' });
+  assert.deepEqual(brief.context, { summary: 'Smitline lets agents call.', details: 'Pricing.' });
 });
 
 async function closedPort() {
@@ -661,7 +661,7 @@ async function listing(dir) {
   return out.sort();
 }
 
-test('managed status skips host-only checks and says Colleague AI runs in its container', async (t) => {
+test('managed status skips host-only checks and says Smitline runs in its container', async (t) => {
   const root = await tempRoot(t);
   await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME=Robin\n');
   const ran = [];
@@ -699,11 +699,11 @@ test('managed setup status from the CLI', async (t) => {
   assert.match(report.checks.find((c) => c.id === 'runtime').detail, /container/);
   const daemon = report.checks.find((c) => c.id === 'daemon');
   assert.equal(daemon.ok, false);
-  assert.match(daemon.fix, /docker restart colleague/);
+  assert.match(daemon.fix, /docker restart smitline/);
   // The image sets COLLEAGUE_VERSION; it shows in the JSON and in the plain-text status.
   const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port), COLLEAGUE_VERSION: '9.8.7' };
   assert.equal(JSON.parse((await runCli(['setup', 'status', '--json', '--no-verify'], env)).stdout).version, '9.8.7');
-  assert.match((await runCli(['setup', 'status', '--no-verify'], env)).stdout, /Colleague AI version.*9\.8\.7/);
+  assert.match((await runCli(['setup', 'status', '--no-verify'], env)).stdout, /Smitline version.*9\.8\.7/);
 });
 
 test('the version comes from COLLEAGUE_VERSION, then package.json, then dev', async (t) => {
@@ -715,7 +715,7 @@ test('the version comes from COLLEAGUE_VERSION, then package.json, then dev', as
   const status = await setupStatus({ root: code, env: {}, verify: false, runner: fakeRunner({}), find: () => null, managed: true, version: '0.1.0' });
   assert.equal(status.version, '0.1.0');
   assert.deepEqual(status.checks.find((c) => c.id === 'version'), {
-    id: 'version', label: 'Colleague AI version', ok: true, required: false, group: 'core', detail: '0.1.0',
+    id: 'version', label: 'Smitline version', ok: true, required: false, group: 'core', detail: '0.1.0',
   });
 });
 
@@ -733,23 +733,23 @@ test('managed setup register prints how to connect host agents and writes nothin
   assert.equal(report.managed, true);
   assert.deepEqual(report.mcp, { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } });
   assert.equal(report.agents['claude-code'].command,
-    `claude mcp add --transport http --scope user colleague-ai http://127.0.0.1:8095/mcp --header "Authorization: Bearer ${token}"`);
+    `claude mcp add --transport http --scope user smitline http://127.0.0.1:8095/mcp --header "Authorization: Bearer ${token}"`);
   assert.equal(report.agents.codex.toml,
-    `[mcp_servers.colleague-ai]\nurl = "http://127.0.0.1:8095/mcp"\nhttp_headers = { Authorization = "Bearer ${token}" }\n`);
+    `[mcp_servers.smitline]\nurl = "http://127.0.0.1:8095/mcp"\nhttp_headers = { Authorization = "Bearer ${token}" }\n`);
   assert.deepEqual(report.agents.cursor.json, {
-    mcpServers: { 'colleague-ai': { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } } },
+    mcpServers: { 'smitline': { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } } },
   });
   assert.deepEqual(report.agents['claude-desktop'].json, {
-    mcpServers: { 'colleague-ai': { command: 'docker', args: ['exec', '-i', 'colleague', 'colleague', 'mcp'] } },
+    mcpServers: { 'smitline': { command: 'docker', args: ['exec', '-i', 'smitline', 'smitline', 'mcp'] } },
   });
   const code = path.resolve(path.dirname(cli), '../../..');
-  assert.equal(report.skill.path, `${code}/.agents/skills/call-with-colleague-ai/SKILL.md`);
+  assert.equal(report.skill.path, `${code}/.agents/skills/call-with-smitline/SKILL.md`);
   // The skills folder is made first: docker cp would otherwise rename the skill to "skills".
   assert.equal(report.skill.copy['claude-code'],
-    `mkdir -p "$HOME/.claude/skills" && docker cp colleague:${code}/.agents/skills/call-with-colleague-ai "$HOME/.claude/skills/"`);
+    `mkdir -p "$HOME/.claude/skills" && docker cp smitline:${code}/.agents/skills/call-with-smitline "$HOME/.claude/skills/"`);
   // PowerShell 5.1 does not expand ~, and a trailing \ before a quote breaks native arguments.
   assert.equal(report.skill.copyPowerShell['claude-code'],
-    `New-Item -ItemType Directory -Force "$HOME\\.claude\\skills" | Out-Null; docker cp colleague:${code}/.agents/skills/call-with-colleague-ai "$HOME\\.claude\\skills"`);
+    `New-Item -ItemType Directory -Force "$HOME\\.claude\\skills" | Out-Null; docker cp smitline:${code}/.agents/skills/call-with-smitline "$HOME\\.claude\\skills"`);
   assert.ok(!JSON.stringify(report.skill).includes('~'));
   assert.match(report.agents['claude-desktop'].note, /which docker/);
   // Nothing on the "host" side changed; only the token was made, under the data root.
@@ -759,17 +759,17 @@ test('managed setup register prints how to connect host agents and writes nothin
   // The same token again, and a plain-text version for a person.
   const text = await runCli(['setup', 'register'], env);
   assert.equal(text.code, 0, text.stderr);
-  assert.match(text.stdout, /claude mcp add --transport http --scope user colleague-ai http:\/\/127\.0\.0\.1:8095\/mcp/);
+  assert.match(text.stdout, /claude mcp add --transport http --scope user smitline http:\/\/127\.0\.0\.1:8095\/mcp/);
   assert.ok(text.stdout.includes(`Authorization: Bearer ${token}`));
   assert.match(text.stdout, /"command": "docker"/);
-  assert.match(text.stdout, /docker cp colleague:/);
+  assert.match(text.stdout, /docker cp smitline:/);
   assert.match(text.stdout, /mkdir -p "\$HOME\/\.codex\/skills"/);
   assert.match(text.stdout, /New-Item -ItemType Directory -Force "\$HOME\\\.claude\\skills"/);
   assert.match(text.stdout, /which docker/);
   const other = containerRegistration({ codeRoot: '/app', token: 't', container: 'c2' }).skill;
-  assert.equal(other.copy.codex, 'mkdir -p "$HOME/.codex/skills" && docker cp c2:/app/.agents/skills/call-with-colleague-ai "$HOME/.codex/skills/"');
+  assert.equal(other.copy.codex, 'mkdir -p "$HOME/.codex/skills" && docker cp c2:/app/.agents/skills/call-with-smitline "$HOME/.codex/skills/"');
   assert.equal(other.copyPowerShell.codex,
-    'New-Item -ItemType Directory -Force "$HOME\\.codex\\skills" | Out-Null; docker cp c2:/app/.agents/skills/call-with-colleague-ai "$HOME\\.codex\\skills"');
+    'New-Item -ItemType Directory -Force "$HOME\\.codex\\skills" | Out-Null; docker cp c2:/app/.agents/skills/call-with-smitline "$HOME\\.codex\\skills"');
 });
 
 test('register outside the container also offers the local HTTP endpoint', async (t) => {
@@ -791,7 +791,7 @@ test('managed setup start reports the daemon and never starts one', async (t) =>
   assert.equal(down.code, 3);
   assert.deepEqual(JSON.parse(down.stdout), {
     running: false, started: false, port, managed: true,
-    error: 'Colleague AI is not running; restart the container: docker restart colleague',
+    error: 'Smitline is not running; restart the container: docker restart smitline',
   });
   await assert.rejects(fs.access(path.join(root, '.colleague', 'daemon.log')));
 
@@ -805,7 +805,7 @@ test('managed setup start reports the daemon and never starts one', async (t) =>
   // A call with the daemon down fails at once with the same advice.
   const call = await runCli(['call', '--to', '+14155550142', '--objective', 'Book a table', '--port', String(port)], env);
   assert.equal(call.code, 3);
-  assert.match(call.stderr, /Colleague AI is not running; restart the container: docker restart colleague/);
+  assert.match(call.stderr, /Smitline is not running; restart the container: docker restart smitline/);
   assert.match(call.stderr, /Hint: Restart the container/);
 });
 
@@ -815,7 +815,7 @@ test('COLLEAGUE_ROOT is where the CLI keeps .env and the local MCP token', async
   assert.equal(saved.code, 0, saved.stderr);
   assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
   assert.equal(statSync(path.join(root, '.env')).mode & 0o777, 0o600);
-  const { dataRoot } = await import('../src/colleague.mjs');
+  const { dataRoot } = await import('../src/smitline.mjs');
   const previous = process.env.COLLEAGUE_ROOT;
   process.env.COLLEAGUE_ROOT = root;
   try {
@@ -828,7 +828,7 @@ test('COLLEAGUE_ROOT is where the CLI keeps .env and the local MCP token', async
   assert.equal(dataRoot({}), path.resolve(previous || path.resolve(path.dirname(cli), '../../..')));
 });
 
-test('colleague mcp serves MCP on stdin and stdout', async (t) => {
+test('smitline mcp serves MCP on stdin and stdout', async (t) => {
   const root = await tempRoot(t);
   const child = spawn(process.execPath, [cli, 'mcp'], {
     env: { ...process.env, COLLEAGUE_ROOT: root }, stdio: ['pipe', 'pipe', 'pipe'],
@@ -841,7 +841,7 @@ test('colleague mcp serves MCP on stdin and stdout', async (t) => {
   assert.equal(code, 0);
   const replies = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
-  assert.equal(replies[0].result.serverInfo.name, 'colleague-ai');
+  assert.equal(replies[0].result.serverInfo.name, 'smitline');
   assert.equal(replies[1].result.tools.length, 11);
 });
 

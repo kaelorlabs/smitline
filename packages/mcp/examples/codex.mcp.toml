@@ -1,7 +1,7 @@
-# Colleague AI MCP for Codex: phone calls and meetings through start_call.
+# Smitline MCP for Codex: phone calls and meetings through start_call.
 # Restart Codex after installing.
 
-[mcp_servers.colleague-ai]
+[mcp_servers.smitline]
 command = "node"
-args = ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
-cwd = "/absolute/path/to/colleague-ai"
+args = ["/absolute/path/to/smitline/packages/mcp/src/server.mjs"]
+cwd = "/absolute/path/to/smitline"

@@ -15,7 +15,7 @@ from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_me
 from transcript_assembler import TranscriptAssembler
 from voice_core import backend_usage_from
 from meeting_connection import joined_meeting
-from meeting_intro import introduce, intro_instructions
+from meeting_intro import addressing_instructions, introduce, intro_instructions
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
@@ -160,6 +160,7 @@ def build_session_config(runtime, meeting_state=None):
 Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor.
 Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
+    config['instructions'] += addressing_instructions(runtime.participant_name)
     if runtime.voice:
         config['audio']['output'] = {'voice': runtime.voice}
     if runtime.meeting_intro:

@@ -130,8 +130,8 @@ class PresenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(presence.sync(), 'listening')
         self.assertEqual(calls, ['listening', 'working', 'speaking', 'working', 'listening'])
 
-    def test_default_mark_is_colleague_branded(self):
-        self.assertIn('Colleague%20AI', DEFAULT_AVATAR_DATA_URI)
+    def test_default_mark_is_smitline_branded(self):
+        self.assertIn('Smitline', DEFAULT_AVATAR_DATA_URI)
         self.assertFalse(rendered_state_is_private(DEFAULT_AVATAR_DATA_URI))
 
 

@@ -263,7 +263,7 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HostAskingAdapter(Adapter):
-    """Self-unmute is disabled by the host; the host can still ask Colleague AI to unmute."""
+    """Self-unmute is disabled by the host; the host can still ask Smitline to unmute."""
 
     def __init__(self):
         super().__init__()

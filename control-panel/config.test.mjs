@@ -4,7 +4,7 @@ import { ownerName, parseEnv, publicSettings, serializeSettings, validateSetting
 
 const valid = {
   meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
-  participantName: 'Colleague AI',
+  participantName: 'Smitline',
   meetingInstructions: 'Focus on release readiness.',
 };
 
@@ -40,7 +40,7 @@ test('serializes only runtime settings and preserves a hidden passcode', () => {
   assert.ok(!text.includes('OPENAI_API_KEY'));
   assert.deepEqual(publicSettings(parseEnv(text)), {
     platform: 'zoom', meetingUrl: valid.meetingUrl, hasPasscode: true,
-    participantName: 'Colleague AI', meetingInstructions: 'Focus on release readiness.',
+    participantName: 'Smitline', meetingInstructions: 'Focus on release readiness.',
   });
   assert.equal(/CODEX|WORKSPACE|ENABLE_/.test(text), false);
   assert.equal(text.includes('COLLEAGUE_CAMERA'), false);

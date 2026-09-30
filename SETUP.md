@@ -1,21 +1,21 @@
-# Set up Colleague AI
+# Set up Smitline
 
 This file is written for the user's agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar). The user pastes this prompt into their agent:
 
-> Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
+> Set up Smitline for me from https://github.com/kaelorlabs/smitline. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 
 Agent: follow the steps below. Run the commands yourself, say in one short line what each step does, and ask the user only the questions the status command gives you.
 
 ## Rules
 
-- **Never ask for keys in the chat.** Keys go on the local setup page, which saves them in Colleague AI's private data volume. If the user pastes a key into the chat anyway, do not repeat it or write it anywhere; point them to the page.
+- **Never ask for keys in the chat.** Keys go on the local setup page, which saves them in Smitline's private data volume. If the user pastes a key into the chat anyway, do not repeat it or write it anywhere; point them to the page.
 - **Let the page do the asking.** The page collects the OpenAI key, the user's name, and, for phone calls, the phone provider's details (SignalWire or Twilio) and the user's phone number. A typical setup needs at most two questions in the chat.
-- **Don't ask what the status already answers.** When a step has a `suggest`, apply it with `colleague setup set KEY VALUE` and tell the user what you chose.
+- **Don't ask what the status already answers.** When a step has a `suggest`, apply it with `smitline setup set KEY VALUE` and tell the user what you chose.
 - **Make the first call before asking for a restart.** Restarting the agent app ends this conversation, so the test call comes first.
 
 ## 1. Docker
 
-Colleague AI needs only Docker. It runs as one container, `colleague`, and starts a second one for each meeting.
+Smitline needs only Docker. It runs as one container, `smitline`, and starts a second one for each meeting.
 
 ```bash
 docker info
@@ -23,19 +23,19 @@ docker info
 
 If Docker is missing or not running, help the user install or start it: Docker Desktop on a Mac or Windows, or Docker Engine on Linux or inside WSL (https://docs.docker.com/engine/install/).
 
-Docker Desktop needs host networking so this computer can reach Colleague AI. It needs Docker Desktop 4.34 or newer, signed in to a Docker account: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. It does not work with Enhanced Container Isolation turned on. Docker Engine on Linux or in WSL needs nothing extra.
+Docker Desktop needs host networking so this computer can reach Smitline. It needs Docker Desktop 4.34 or newer, signed in to a Docker account: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. It does not work with Enhanced Container Isolation turned on. Docker Engine on Linux or in WSL needs nothing extra.
 
 Run the `docker` commands below wherever `docker info` works: a terminal on macOS or Linux, PowerShell or Command Prompt on Windows with Docker Desktop, or inside WSL when Docker Engine runs there. Each command is one line, so it works the same in bash, zsh, PowerShell, and cmd.
 
-## 2. Start Colleague AI
+## 2. Start Smitline
 
 ```bash
-docker run -d --name colleague --restart unless-stopped --network host -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/colleague
+docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/smitline
 ```
 
 In Git Bash on Windows, which some agents use, put `MSYS_NO_PATHCONV=1 ` in front of the command, or write the socket as `-v //var/run/docker.sock:/var/run/docker.sock`: Git Bash otherwise rewrites `/var/run/docker.sock` into a Windows path.
 
-This downloads the image (about 600 MB) and starts it. It keeps running and starts again with Docker. Settings, keys, call records, and meeting recordings live in the `colleague` volume, never in the image. The Docker socket lets it start the meeting container.
+This downloads the image (about 600 MB) and starts it. It keeps running and starts again with Docker. Settings, keys, call records, and meeting recordings live in the `smitline` volume, never in the image. The Docker socket lets it start the meeting container.
 
 Check that this computer reaches it. The console must answer at http://127.0.0.1:8095 (give it a few seconds after the first start):
 
@@ -43,19 +43,19 @@ Check that this computer reaches it. The console must answer at http://127.0.0.1
 curl -fsS -o /dev/null http://127.0.0.1:8095/calls && echo ok
 ```
 
-In PowerShell: `(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8095/calls).StatusCode` prints `200`. If it does not answer on Docker Desktop, turn on host networking as in step 1, then `docker restart colleague`. `docker logs colleague` shows whether the container itself started.
+In PowerShell: `(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8095/calls).StatusCode` prints `200`. If it does not answer on Docker Desktop, turn on host networking as in step 1, then `docker restart smitline`. `docker logs smitline` shows whether the container itself started.
 
-From here on, every `colleague` command runs inside the container: `docker exec colleague colleague ...`. The steps below write it out in full. `docker exec -i` is only needed where a step says so.
+From here on, every `smitline` command runs inside the container: `docker exec smitline smitline ...`. The steps below write it out in full. `docker exec -i` is only needed where a step says so.
 
 ## 3. Check what is missing
 
 ```bash
-docker exec colleague colleague setup status --json
+docker exec smitline smitline setup status --json
 ```
 
 The command exits with code 3 until `ready` is true. That is expected: read the JSON it prints either way. It has:
 
-- `version`: the Colleague AI version.
+- `version`: the Smitline version.
 - `ready`: keys and name are in place.
 - `phoneReady`, `meetingsReady`: each channel can be used.
 - `firstCallReady`: the test call to the user's phone can be made.
@@ -67,7 +67,7 @@ Run it again after each change.
 ## 4. The setup page
 
 ```bash
-docker exec colleague colleague setup secrets --json
+docker exec smitline smitline setup secrets --json
 ```
 
 This starts a page on `127.0.0.1`, port 8096 (another free port if that one is busy), and returns its address at once. The container cannot open a browser, so open the address yourself (`open <url>` on macOS, `xdg-open <url>` on Linux, `start <url>` on Windows), or give it to the user. Tell the user:
@@ -80,57 +80,57 @@ When the user says they are done, run the status again. GPT-Live needs an OpenAI
 
 ### Phone calls: SignalWire (free) or Twilio (paid)
 
-Colleague AI streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. Offer the user one of these:
+Smitline streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. Offer the user one of these:
 
-- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** there with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). You can set the Space URL and Project ID yourself with `docker exec colleague colleague setup set`; the token and signing key go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
-- **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Colleague AI call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
+- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** there with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). You can set the Space URL and Project ID yourself with `docker exec smitline smitline setup set`; the token and signing key go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
+- **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Smitline call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
 
 If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
 
 ### Optional: direct audio
 
-Calls work without this. If the user's OpenAI organization has outbound SIP enabled, call audio can flow straight between SignalWire and OpenAI instead of through this computer, for slightly quicker turns. Offer it only after the first call works. `docker exec colleague colleague setup sip-trunk` sets it up: it creates a script and a SIP address in the user's SignalWire space (ask first), and the account must be out of SignalWire's trial.
+Calls work without this. If the user's OpenAI organization has outbound SIP enabled, call audio can flow straight between SignalWire and OpenAI instead of through this computer, for slightly quicker turns. Offer it only after the first call works. `docker exec smitline smitline setup sip-trunk` sets it up: it creates a script and a SIP address in the user's SignalWire space (ask first), and the account must be out of SignalWire's trial.
 
 ## 5. The first call
 
 When `firstCallReady` is true:
 
 ```bash
-docker exec colleague colleague setup call-me --wait
+docker exec smitline smitline setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Every call opens with a short hello that says whose AI assistant is calling ("Hi, this is <name>'s AI assistant."), and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Colleague' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec colleague colleague setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec colleague colleague setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says whose AI assistant is calling ("Hi, this is <name>'s AI assistant."), and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
 
-Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
+Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Smitline join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
 
-## 6. Tell Colleague AI about the user
+## 6. Tell Smitline about the user
 
 Every phone call gets the user's profile as background: who they are, the people they call, and how they like to come across. Fill it in from what you already know about the user from this conversation and your own notes, without interviewing them:
 
 ```bash
-docker exec colleague colleague profile set --about "Sam Rivera runs a small design studio in Toronto." --style "Friendly and brief"
-docker exec colleague colleague profile person --name "Alex Chen" --relationship "business partner" --phone +14155550142
+docker exec smitline smitline profile set --about "Sam Rivera runs a small design studio in Toronto." --style "Friendly and brief"
+docker exec smitline smitline profile person --name "Alex Chen" --relationship "business partner" --phone +14155550142
 ```
 
 Tell the user in one line what you saved, and that they can say something like "Jordan is my sister, +1 415 555 0199" at any time. Save only what they would expect, and never passwords, keys, or card numbers. If you know nothing about them yet, skip this step.
 
 ## 7. Connect the agent
 
-Agents reach Colleague AI's tools over MCP at `http://127.0.0.1:8095/mcp`, with a local token. This prints how to connect each agent:
+Agents reach Smitline's tools over MCP at `http://127.0.0.1:8095/mcp`, with a local token. This prints how to connect each agent:
 
 ```bash
-docker exec colleague colleague setup register --json
+docker exec smitline smitline setup register --json
 ```
 
 Run the entry for the agent you are, on this computer (not in the container):
 
 - **Claude Code:** run the `claude mcp add ...` command it gives.
-- **Codex:** add the `[mcp_servers.colleague-ai]` block to `~/.codex/config.toml`.
+- **Codex:** add the `[mcp_servers.smitline]` block to `~/.codex/config.toml`.
 - **Cursor:** add the entry to `~/.cursor/mcp.json`.
-- **Claude Desktop:** add the `docker exec -i colleague colleague mcp` entry to `claude_desktop_config.json`. If Claude Desktop cannot start it, use the full path of `docker` (from `which docker`, such as `/usr/local/bin/docker` on macOS): apps opened from the Dock often do not see `/usr/local/bin`.
+- **Claude Desktop:** add the `docker exec -i smitline smitline mcp` entry to `claude_desktop_config.json`. If Claude Desktop cannot start it, use the full path of `docker` (from `which docker`, such as `/usr/local/bin/docker` on macOS): apps opened from the Dock often do not see `/usr/local/bin`.
 - **Anything else:** use the URL and the `Authorization` header.
 
-The output also has the commands that copy the `call-with-colleague-ai` skill, which teaches an agent how to write a good brief, out of the container into `~/.claude/skills` or `~/.codex/skills`: `copy` for bash and zsh, `copyPowerShell` for PowerShell. For another agent, copy it where that agent keeps skills. The token is a local credential: keep it in the agent's config, not in chat or notes.
+The output also has the commands that copy the `call-with-smitline` skill, which teaches an agent how to write a good brief, out of the container into `~/.claude/skills` or `~/.codex/skills`: `copy` for bash and zsh, `copyPowerShell` for PowerShell. For another agent, copy it where that agent keeps skills. The token is a local credential: keep it in the agent's config, not in chat or notes.
 
 Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
 
@@ -144,27 +144,27 @@ Tell the user in two or three sentences what works now, then give examples:
 
 Mention the console at http://127.0.0.1:8095: the Calls page shows each call's brief, result, cost, and transcript.
 
-Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `docker exec colleague colleague call --to ... --objective ... --wait`. For a meeting, use channel `meeting` with the invite link as `to`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
+Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `docker exec smitline smitline call --to ... --objective ... --wait`. For a meeting, use channel `meeting` with the invite link as `to`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
 
 ## Updating and removing
 
-- **Update:** `docker pull ghcr.io/kaelorlabs/colleague`, then `docker rm -f colleague` and run the `docker run` command from step 2 again. The volume keeps everything.
-- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/colleague:0.1.0`, in both commands. The meeting image with the matching code is pulled for it.
-- **Remove:** `docker rm -f colleague`. Also run `docker volume rm colleague` to delete keys and records.
+- **Update:** `docker pull ghcr.io/kaelorlabs/smitline`, then `docker rm -f smitline` and run the `docker run` command from step 2 again. The volume keeps everything.
+- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.1.0`, in both commands. The meeting image with the matching code is pulled for it.
+- **Remove:** `docker rm -f smitline`. Also run `docker volume rm smitline` to delete keys and records.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `docker run` says the name `colleague` is in use | It is already installed. `docker start colleague` if it is stopped |
-| The console or MCP address does not answer on Docker Desktop | Turn on host networking (Docker Desktop 4.34 or newer, signed in: Settings > Resources > Network), then `docker restart colleague` |
+| `docker run` says the name `smitline` is in use | It is already installed. `docker start smitline` if it is stopped |
+| The console or MCP address does not answer on Docker Desktop | Turn on host networking (Docker Desktop 4.34 or newer, signed in: Settings > Resources > Network), then `docker restart smitline` |
 | `docker run` in Git Bash fails on the socket path | Put `MSYS_NO_PATHCONV=1 ` in front, or write `-v //var/run/docker.sock:/var/run/docker.sock` |
-| `Colleague AI is not running` | `docker restart colleague`; `docker logs colleague` shows why it stopped |
+| `Smitline is not running` | `docker restart smitline`; `docker logs smitline` shows why it stopped |
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
 | `The phone provider can reach this computer` fails | Check the network; the container opens a Cloudflare quick tunnel on the first call. On a server set `COLLEAGUE_PUBLIC_URL` |
 | A call fails with "trial accounts have limited parameter access" | That is a Twilio trial; use SignalWire's free trial, or upgrade the Twilio account |
 | A SignalWire trial call is refused | Verify the number you are calling in SignalWire (Phone Numbers > Verified Caller IDs) |
 | The agent does not show the call tools | Run step 7 again and restart the agent app |
-| Anything else | `docker logs colleague` |
+| Anything else | `docker logs smitline` |
 
 Contributors running from a checkout instead of the image: see [README.md](README.md#run-from-a-checkout).

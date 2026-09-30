@@ -1,11 +1,11 @@
-# Colleague AI: product vision, decisions, and progress
+# Smitline: product vision, decisions, and progress
 
 **Document status:** canonical product brief and progress ledger  
 **Last reviewed:** 2026-09-30  
 **Current stage:** advanced local alpha / developer preview  
 **Primary implementation branch at this snapshot:** `main`
 
-This document is the durable product memory for Colleague AI. It explains what we are building, why it matters, which decisions are settled, what already exists, and what remains. Contributors, human or agent, should read this document before proposing architecture or product changes and update the progress ledger when a milestone materially changes.
+This document is the durable product memory for Smitline. It explains what we are building, why it matters, which decisions are settled, what already exists, and what remains. Contributors, human or agent, should read this document before proposing architecture or product changes and update the progress ledger when a milestone materially changes.
 
 Related technical references:
 
@@ -20,7 +20,7 @@ Related technical references:
 
 ## Product in one sentence
 
-Colleague AI gives any AI agent phone calls and meetings: the agent sends a brief, Colleague AI talks with people in real time using GPT-Live, and a structured result comes back to the chat that sent it.
+Smitline gives any AI agent phone calls and meetings: the agent sends a brief, Smitline talks with people in real time using GPT-Live, and a structured result comes back to the chat that sent it.
 
 ## The problem
 
@@ -34,7 +34,7 @@ A user should be able to tell the agent they are already using:
 
 > Call Luigi's and book a table for 4 at 7. Or: join this meeting and help with the Q3 numbers.
 
-Colleague AI should then:
+Smitline should then:
 
 1. Receive a brief from the agent: who to call or which meeting to join, on whose behalf, the goal, the context, what it may agree to, and what it must not share.
 2. Ask, through the agent, for anything missing instead of guessing.
@@ -59,7 +59,7 @@ User in Claude Code, Codex, Cursor, ChatGPT, Claude, or their own code
                   |
                   | "Call Luigi's" / "Join this meeting"
                   v
-   Colleague AI MCP server / remote connector / CLI / SDK
+   Smitline MCP server / remote connector / CLI / SDK
                   |
                   v
           Local runtime daemon (calls API)
@@ -83,7 +83,7 @@ Setup is agent-driven too: the user pastes one prompt, and the agent follows [SE
 
 ### During a call or meeting
 
-- Colleague AI joins as one participant.
+- Smitline joins as one participant.
 - GPT-Live handles audio understanding, conversational timing, interruptions, and spoken delivery.
 - GPT-Live hands harder questions to the backend model and stays in the conversation meanwhile.
 - A virtual camera may show listening, working, or speaking state in meetings without exposing task text or private content.
@@ -101,26 +101,26 @@ These decisions should not be reversed casually. A proposal to change one should
 2. **The console is optional.** It is an operations and fallback console, not the agent-native experience.
 3. **One continuous GPT-Live session.** Use `gpt-live-1` for the whole call or meeting with `store: false`. Do not switch to transcription-only mode and lose original audio context. GPT-Live is the only voice; nothing else listens or speaks.
 4. **GPT-Live owns conversational behavior.** It decides when to speak and how to handle pauses and interruptions. Do not add local silence timers, backchannel classifiers, wake phrases, or an `Allow speaking` product toggle as the normal interaction model.
-5. **Selective participation.** Instructions should make Colleague AI a quiet, useful participant in meetings. It should answer direct requests and intervene when necessary for a material factual or safety correction, not reply to every sentence.
+5. **Selective participation.** Instructions should make Smitline a quiet, useful participant in meetings. It should answer direct requests and intervene when necessary for a material factual or safety correction, not reply to every sentence.
 6. *Retired 2026-09-30.* Client delegation to a coding-agent provider. Meetings now use Responses delegation, as phone calls do (decision 23).
 7. *Retired 2026-09-30.* Resuming the originating coding-agent session.
 8. *Retired 2026-09-30.* Exclusive coding-agent session lease.
 9. **Application-owned memory.** Transcripts, events, call records, and handoffs are the system of record. Model context alone is insufficient.
 10. **Explicit context, never hidden reasoning.** Pass objectives, summaries, facts, decisions, constraints, and open questions. Do not request chain-of-thought or hidden traces.
 11. **Platform adapters.** Zoom, Teams, and Meet DOM and policy differences remain behind a shared meeting adapter contract.
-12. **Guest first, account fallback.** Teams and Meet attempt guest entry before using a locally connected account. Credentials are entered by the user on the official provider page and are never collected by Colleague AI.
+12. **Guest first, account fallback.** Teams and Meet attempt guest entry before using a locally connected account. Credentials are entered by the user on the official provider page and are never collected by Smitline.
 13. **Local-first security boundary.** The supported runtime is a loopback daemon. Browser profiles, credentials, transcripts, and call records remain local.
 14. *Retired 2026-09-30.* Typed permissions and approvals for workspace commands, edits, commits, and pushes.
 15. *Retired 2026-09-30.* Isolated worktree mutations and the Git broker.
-16. **Operator/platform mute is authoritative.** Colleague AI must not override an explicit host or participant mute. Generated audio is discarded when the meeting microphone is unavailable.
+16. **Operator/platform mute is authoritative.** Smitline must not override an explicit host or participant mute. Generated audio is discarded when the meeting microphone is unavailable.
 17. **No sensitive camera output.** The virtual camera communicates presence only. It never displays prompts, task text, credentials, or meeting content.
-18. *Retired 2026-09-30.* Opt-in incoming screen observation. Colleague AI no longer reads shared screens.
+18. *Retired 2026-09-30.* Opt-in incoming screen observation. Smitline no longer reads shared screens.
 19. **Truthful capabilities.** Platform features are reported only when built or tested. Unsupported features and model names are never guessed.
 20. **No hardcoded demo scenario.** The runtime must support general calls and meetings with user-provided context rather than fixed data or scripted behavior.
 21. **Brief in, result out.** Any agent, local or cloud, starts a phone call or meeting through the calls API with a brief and reads a structured result. A meeting is a call on the `meeting` channel; `/v1/meetings` is a small API the console uses. (Added 2026-09-28; updated 2026-09-30.)
 22. **Server mode is opt-in.** Loopback with a per-launch token stays the default. A non-loopback bind requires at least one long-lived API token (stored as a digest) and a TLS-terminating proxy; it exists so cloud agents can reach a self-hosted installation. (Added 2026-09-28; narrows decision 13 rather than replacing it.)
 23. **Responses delegation driven by the brief.** GPT-Live hands hard questions to a Responses backend model that knows the brief and context, because most callers are agents that cannot be reached mid-call. Phone calls use `COLLEAGUE_PHONE_BACKEND_MODEL`, meetings `COLLEAGUE_MEETING_BACKEND_MODEL`, both `gpt-5.6-terra` by default, with optional OpenAI web search. (Added 2026-09-28 for phone calls; extended to meetings 2026-09-30.)
-24. **Phone calls and meetings for any agent.** Colleague AI does not integrate with coding agents beyond being a tool they can call. Claude Code, Codex, and Cursor are callers like any other MCP client. (Added 2026-09-30.)
+24. **Phone calls and meetings for any agent.** Smitline does not integrate with coding agents beyond being a tool they can call. Claude Code, Codex, and Cursor are callers like any other MCP client. (Added 2026-09-30.)
 
 ## Current implementation snapshot
 
@@ -136,7 +136,7 @@ Status meanings:
 | Zoom web adapter | Partial | Join, admission, audio, mute, and lifecycle behavior exist and Zoom has had live use. Final regression acceptance remains necessary. |
 | Microsoft Teams adapter | Partial | Guest-first join, Microsoft profile fallback, audio, mute, participant count, and termination handling exist. Tenant-policy and audio acceptance coverage remains limited. |
 | Google Meet adapter | Partial | Guest-first join and Google profile fallback exist with fixture coverage. Full live acceptance remains outstanding. |
-| Meeting container | Implemented | One image, `ghcr.io/kaelorlabs/colleague-meeting`, from `Dockerfile.meeting` (Playwright Chromium, PulseAudio, Xvfb, x11vnc/noVNC), pulled on the first meeting (built as `colleague-meeting:local` from a checkout). Uses a vendored subset of Joinly for the browser session, virtual devices, camera feed, and Teams/Meet controllers. |
+| Meeting container | Implemented | One image, `ghcr.io/kaelorlabs/smitline-meeting`, from `Dockerfile.meeting` (Playwright Chromium, PulseAudio, Xvfb, x11vnc/noVNC), pulled on the first meeting (built as `smitline-meeting:local` from a checkout). Uses a vendored subset of Joinly for the browser session, virtual devices, camera feed, and Teams/Meet controllers. |
 | Continuous GPT-Live voice | Partial | One `gpt-live-1` session, `store: false`, audio context, and transcript events. `COLLEAGUE_VOICE` selects the voice. Meetings delegate hard questions to a Responses backend (`COLLEAGUE_MEETING_BACKEND_MODEL`), covered by bridge tests; not yet heard in a live meeting. Conversational quality and platform audio reliability still need evaluation. |
 | Meeting AI disclosure | Partial | Once admitted and able to speak, a meeting session says one short AI disclosure naming the person it acts for (call brief, then `COLLEAGUE_OWNER_NAME`), then listens; `COLLEAGUE_MEETING_INTRO=0` turns it off. Covered by unit and bridge tests with a fake GPT-Live socket; not yet heard in a live meeting. |
 | Selective speech and mute transport | Partial | GPT-Live-driven participation, virtual audio gating, and public drain/discard of queued playback exist, with automated tests. The platform microphone unmutes once per session and mutes at the end; between replies only the local gate closes. Zoom mute prefers a visible control and falls back to the in-meeting shortcut. When a Zoom host blocks self-unmute, the adapter accepts the host's "Ask to unmute" request (tests with fakes). Cross-platform live acceptance, including that request, is still open. |
@@ -151,11 +151,11 @@ Status meanings:
 | TypeScript SDK | Implemented locally | Call, profile, and voice methods. Package is not published. |
 | Python SDK | Implemented locally | Mirrors the TypeScript SDK. Package is not published. |
 | CLI | Implemented locally | `call` (phone or `--meeting`), `calls`, `profile`, `voices`, agent-driven `setup`, and `connector`. Distribution and installer UX remain. |
-| MCP server | Implemented locally | The call tools (`start_call`, `wait_for_call`, and more) over the TypeScript SDK, served over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token, and over stdio (`colleague mcp`). |
+| MCP server | Implemented locally | The call tools (`start_call`, `wait_for_call`, and more) over the TypeScript SDK, served over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token, and over stdio (`smitline mcp`). |
 | Local console | Implemented | Meetings and Calls tabs at `127.0.0.1:8095`. It should remain optional. |
 | Remote connector | Partial | MCP Streamable HTTP with OAuth 2.1 (dynamic registration, PKCE, owner-passphrase approval, rotating tokens stored as digests) exposes the same call tools to cloud agents through a TLS proxy. Covered by tests and a local browser run; not yet connected from ChatGPT or Claude. See [agents](agents.md). |
-| Packaging and onboarding | Partial | A copied prompt lets the user's agent follow [SETUP.md](../SETUP.md): `colleague setup status --json` lists what is missing with the question to ask, keys go on a one-time local page, `setup register` prints how to connect Claude Code, Codex, Cursor, and Claude Desktop, and `setup call-me` rings the user. Docker is enough: one image, `ghcr.io/kaelorlabs/colleague`, runs everything, and daemon-started meetings pull the meeting image when missing and need no `.env.meeting`. There is no published SDK/CLI/MCP package, and the flow has not been run end to end by a new user. |
-| Outgoing and incoming screen sharing | Missing | Colleague AI does not share a screen or read shared screens. |
+| Packaging and onboarding | Partial | A copied prompt lets the user's agent follow [SETUP.md](../SETUP.md): `smitline setup status --json` lists what is missing with the question to ask, keys go on a one-time local page, `setup register` prints how to connect Claude Code, Codex, Cursor, and Claude Desktop, and `setup call-me` rings the user. Docker is enough: one image, `ghcr.io/kaelorlabs/smitline`, runs everything, and daemon-started meetings pull the meeting image when missing and need no `.env.meeting`. There is no published SDK/CLI/MCP package, and the flow has not been run end to end by a new user. |
+| Outgoing and incoming screen sharing | Missing | Smitline does not share a screen or read shared screens. |
 | Automated QA | Strong but incomplete | Broad unit coverage exists. Automated tests cannot prove browser selectors, tenant policy, admission, audio quality, or real provider behavior. |
 | Live acceptance | Incomplete | A complete acceptance run across phone calls and Zoom, Teams, and Meet on the current build is still required. |
 
@@ -193,7 +193,7 @@ Run repeatable real calls and meetings covering:
 
 - Publish or bundle supported SDK, CLI, and MCP packages.
 - Add one-command installation and update paths.
-- Keep `colleague setup status` current for Docker, API keys, and phone setup.
+- Keep `smitline setup status` current for Docker, API keys, and phone setup.
 - Keep the console as an optional local dashboard.
 
 ### 4. Make results dependable
@@ -238,13 +238,13 @@ Run repeatable real calls and meetings covering:
 
 ### Milestone C — Distribution
 
-- [x] Decide supported installation form: one Docker image, `ghcr.io/kaelorlabs/colleague`, started with one `docker run`.
+- [x] Decide supported installation form: one Docker image, `ghcr.io/kaelorlabs/smitline`, started with one `docker run`.
 - [x] Package the daemon, console, CLI, MCP endpoint, and meeting image; update by pulling the image again.
 - [x] Document uninstall, credential removal, and data deletion (SETUP.md, architecture retention table).
 - [ ] Make the GHCR packages public, and confirm a first install on a clean Mac and a clean Windows machine.
 - [ ] Recruit a small external cohort and capture consented reliability metrics.
 
-**Exit criterion:** someone outside the original machine can install Colleague AI from their agent and complete a first call and a first meeting.
+**Exit criterion:** someone outside the original machine can install Smitline from their agent and complete a first call and a first meeting.
 
 ### Milestone D — Useful meeting outcomes
 
@@ -252,7 +252,7 @@ Run repeatable real calls and meetings covering:
 - [ ] Improve speaker attribution and late-join context when platform data permits it.
 - [ ] Measure response usefulness, false interventions, and result completeness.
 
-**Exit criterion:** people send Colleague AI to recurring meetings because it reduces follow-up work.
+**Exit criterion:** people send Smitline to recurring meetings because it reduces follow-up work.
 
 ### Milestone E — Hosted team product
 
@@ -261,7 +261,7 @@ Run repeatable real calls and meetings covering:
 - [ ] Add multi-tenant storage, retention controls, audit logs, budgets, and billing.
 - [ ] Add safe upgrades, health monitoring, incident controls, and support tooling.
 
-**Exit criterion:** a team can operate Colleague AI across approved users without sharing one person's local configuration.
+**Exit criterion:** a team can operate Smitline across approved users without sharing one person's local configuration.
 
 ## Explicitly out of scope for the immediate release
 
@@ -288,7 +288,7 @@ Track product outcomes rather than only code completion:
 
 ## Definition of a beta
 
-Colleague AI is ready for a beta when all of the following are true:
+Smitline is ready for a beta when all of the following are true:
 
 - A new user can install it from their agent without editing repository source.
 - Any MCP-capable agent can place a phone call and join a meeting from a brief and read the result.
@@ -327,29 +327,29 @@ Entries before 2026-09-30 describe the product as it was then, including the cod
 
 ### 2026-09-30
 
-- One service: users need only Docker. `ghcr.io/kaelorlabs/colleague` (about 600 MB) runs the daemon and the console, carries the CLI (`docker exec colleague colleague ...`), and serves MCP to local agents over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token (Claude Desktop uses `docker exec -i colleague colleague mcp`). Settings and records live in the `colleague` volume. The meeting image carries its code and shares that volume. `.github/workflows/images.yml` tests pull requests and publishes both images for amd64 and arm64. SETUP.md is now Docker-only. Checked end to end on a fresh volume: setup status, the setup page, MCP over HTTP and stdio, and starting the meeting container from inside the colleague container.
+- One service: users need only Docker. `ghcr.io/kaelorlabs/smitline` (about 600 MB) runs the daemon and the console, carries the CLI (`docker exec smitline smitline ...`), and serves MCP to local agents over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token (Claude Desktop uses `docker exec -i smitline smitline mcp`). Settings and records live in the `smitline` volume. The meeting image carries its code and shares that volume. `.github/workflows/images.yml` tests pull requests and publishes both images for amd64 and arm64. SETUP.md is now Docker-only. Checked end to end on a fresh volume: setup status, the setup page, MCP over HTTP and stdio, and starting the meeting container from inside the smitline container.
 - Product direction narrowed to phone calls and meetings for any AI agent. The coding-agent direction was dropped: bringing Codex, Cursor, or Claude Code into meetings, exact-session continuity, session leases, and handoff append. Recorded decision 24 and retired decisions 6, 7, 8, 14, 15, and 18.
 - Removed with it: coding-agent providers and workers, runner pairing and the hosted-runtime mock control plane, approvals, workspace actions, the Git broker, charts, Tavily web search, screen-share capture and analysis, the unused `gpt-live/` voice demo, the separate meeting MCP tools and SDK meeting handles, the CLI meeting commands, the `join-colleague-ai-meeting` skill, and the Codex installer.
-- Agents join meetings through the calls API: `start_call` with channel `meeting` and the invite URL as `to` (CLI: `colleague call --meeting <url>`). `/v1/meetings` keeps only what the console uses, and the call brief no longer has `agentSession`.
+- Agents join meetings through the calls API: `start_call` with channel `meeting` and the invite URL as `to` (CLI: `smitline call --meeting <url>`). `/v1/meetings` keeps only what the console uses, and the call brief no longer has `agentSession`.
 - Meetings now delegate hard questions to a Responses backend, as phone calls do: `COLLEAGUE_MEETING_BACKEND_MODEL` (default `gpt-5.6-terra`) and `COLLEAGUE_MEETING_WEB_SEARCH=1` for OpenAI web search.
-- One meeting image, `colleague-meeting:local`, from `Dockerfile.meeting`, about 1.8 GB instead of about 4 GB for the two previous images. `compose.yaml` and `Dockerfile.login` are gone. `joinly/` is now a subset: browser session, virtual devices, camera feed, and Teams/Meet controllers; its speech models and services were removed.
+- One meeting image, `smitline-meeting:local`, from `Dockerfile.meeting`, about 1.8 GB instead of about 4 GB for the two previous images. `compose.yaml` and `Dockerfile.login` are gone. `joinly/` is now a subset: browser session, virtual devices, camera feed, and Teams/Meet controllers; its speech models and services were removed.
 - The console has a Calls tab and a Meetings tab. Host Python is no longer needed for anything; Docker is enough.
-- The runtime suite passes in `colleague-meeting:local` with `joinly/` mounted. A live meeting on this build has not been run yet.
+- The runtime suite passes in `smitline-meeting:local` with `joinly/` mounted. A live meeting on this build has not been run yet.
 
 ### 2026-09-28
 
-- Product direction widened: Colleague AI becomes a phone and meeting tool that any agent can use through a brief, self-hosted under Apache-2.0 first and managed later. Recorded decisions 21 to 23.
+- Product direction widened: Smitline becomes a phone and meeting tool that any agent can use through a brief, self-hosted under Apache-2.0 first and managed later. Recorded decisions 21 to 23.
 - Licensed the project under Apache-2.0 with a NOTICE for vendored Joinly (MIT). Added LF line-ending rules so Windows checkouts keep working scripts, documented Windows through WSL2, and taught the doctor to check both.
 - Shared-content change detection now compares 64x36 tile signatures (luminance and edge strength), selects a frame only after it settles (`settleTicks`, default 1), masks regions that keep animating, and reuses the observation for any of the last 32 analyzed screens instead of calling the analyzer again (`reused: true`). Live acceptance on real Zoom/Teams/Meet shares stays open.
 - Added the calls core: brief validation with questions for missing fields, durable call records and events, results from a strict-schema summary or the meeting handoff, signed webhooks with retries, extension hooks, a transport-neutral GPT-Live session module, the meeting line, `/v1/calls` routes with an OpenAPI description, and opt-in server mode with API tokens. Covered by unit and HTTP tests; no live acceptance yet.
 - The meeting bridge still drives GPT-Live directly. Moving it onto the shared voice module waits for a live meeting to verify the change.
 - Added phone calls through Twilio: the phone line, Twilio client with signature checks, a separate loopback gateway for Twilio routes, a Cloudflare quick tunnel for laptops, inbound message-taking behind a setting, and docs. A real call has not been placed yet.
-- Known issue from the hackathon video (corrected): when a Zoom host disables "Allow participants to unmute themselves", the one platform unmute at session start fails, so Colleague AI can never speak in that meeting. `zoom_controls.accept_host_unmute` accepted the host's "Ask to unmute" dialog and had tests, but nothing called it. The runtime does not re-mute the platform after each reply (only its local gate closes), so accepting the request once is enough; wired in below.
+- Known issue from the hackathon video (corrected): when a Zoom host disables "Allow participants to unmute themselves", the one platform unmute at session start fails, so Smitline can never speak in that meeting. `zoom_controls.accept_host_unmute` accepted the host's "Ask to unmute" dialog and had tests, but nothing called it. The runtime does not re-mute the platform after each reply (only its local gate closes), so accepting the request once is enough; wired in below.
 - Meeting runtime fixes from acceptance review. The meeting container now runs as the host user (`COLLEAGUE_UID`/`COLLEAGUE_GID`, set by the daemon and `start-meeting-agent.sh`), so it can read the private runtime state and the host can read its recordings. Verified by starting the real image through `ProductionMeetingSupervisor.start()` on WSL2 with Docker Engine: before, the bridge failed with `PermissionError` on `runtime.json` and Docker created the mount directories as root; after, it read the runtime state, loaded the Zoom page, wrote recordings as the host user (0700/0600), and the host built the handoff from them. The daemon builds the Joinly base image when it is missing, creates the bind-mount directories itself, and `.env.meeting` is optional.
-- Meetings open with one short AI disclosure naming the person Colleague AI acts for, cued as GPT-Live commentary once the meeting microphone can carry speech. `COLLEAGUE_MEETING_INTRO=0` turns it off, and `COLLEAGUE_VOICE` now sets the meeting voice. The Zoom adapter accepts the host's "Ask to unmute" dialog while the microphone is blocked or muted, then arms the microphone. Both are covered by tests with fakes; neither has been heard in a live meeting yet.
-- Screen understanding: Codex image analysis runs as an async subprocess and parses only stdout, so it no longer stalls the daemon's HTTP, SSE, approvals, and phone gateway; a capture or file error degrades the status instead of ending the meeting; observations that arrive while Colleague AI speaks are deferred (newest only); and the daemon's `analyzerAvailable` is no longer overwritten by the container.
+- Meetings open with one short AI disclosure naming the person Smitline acts for, cued as GPT-Live commentary once the meeting microphone can carry speech. `COLLEAGUE_MEETING_INTRO=0` turns it off, and `COLLEAGUE_VOICE` now sets the meeting voice. The Zoom adapter accepts the host's "Ask to unmute" dialog while the microphone is blocked or muted, then arms the microphone. Both are covered by tests with fakes; neither has been heard in a live meeting yet.
+- Screen understanding: Codex image analysis runs as an async subprocess and parses only stdout, so it no longer stalls the daemon's HTTP, SSE, approvals, and phone gateway; a capture or file error degrades the status instead of ending the meeting; observations that arrive while Smitline speaks are deferred (newest only); and the daemon's `analyzerAvailable` is no longer overwritten by the container.
 - Doctor: example placeholder keys count as missing, WSL1 is reported separately from WSL2, a failing Compose check shows its first error line, Codex checks warn unless Codex exact continuity is installed (or `--codex` is passed), and python3 with venv support is checked. Removed the unused `live/` experiment with its broken `start-live.sh`, made the remaining launchers executable, and added Apache-2.0 license metadata to the root and SDK packages.
-- Added agent access and agent-driven setup: call methods in both SDKs, MCP call tools, `colleague call`/`calls`/`voices`, `colleague setup` (status with questions, local key page, settings, registration, voice, test call), SETUP.md with the copy-paste prompt, a call-briefing skill, a calls view in the console with live transcript, end, and hand-over, and the remote connector for cloud agents.
+- Added agent access and agent-driven setup: call methods in both SDKs, MCP call tools, `smitline call`/`calls`/`voices`, `smitline setup` (status with questions, local key page, settings, registration, voice, test call), SETUP.md with the copy-paste prompt, a call-briefing skill, a calls view in the console with live transcript, end, and hand-over, and the remote connector for cloud agents.
 - Final acceptance review against the product goals (self-hosted, any agent, brief in and result out, wow first run, voice any time, keys never in chat), with fixes:
   - Phone: the spoken AI disclosure is checked in common languages and must name the owner, and outgoing results carry `disclosureVerified`; audio goes to Twilio in 20 ms frames; take-over says a fallback line when the owner does not answer; recordings are attached through a signed callback; incoming calls are capped and always ring the bought Twilio number; the quick tunnel is probed before Twilio gets the address; result webhooks refuse hosts that resolve to private addresses.
   - Briefs: `onBehalfOf` defaults to the owner name, rehearsals ring only the owner phone, and a verified caller ID alone is enough for outgoing calls. The remote connector hides and refuses `agentSession`.
@@ -357,9 +357,9 @@ Entries before 2026-09-30 describe the product as it was then, including the cod
   - UI: the calls view, setup page, connector approval page, and CLI output were reworked to match the console in light and dark, with plain-language states and results.
   - The runtime daemon runs in Docker when this computer cannot make a Python venv (`Dockerfile.daemon`: Python, aiohttp, the Docker CLI for meeting containers, and cloudflared for the phone tunnel). A new user needs only Node and Docker. Host Python stays the choice when available, because coding agents run on the host with the user's logins.
   - Phone calls also work through SignalWire, whose free trial allows live audio streaming (Twilio's 2026 trial strips `<Stream>`, found in the first new-user walkthrough). Same REST, webhook, and media-stream code; setup status flags a Twilio trial as unusable.
-  - Direct SIP for phone calls (`COLLEAGUE_PHONE_AUDIO=sip` or `sip-webhook`): call audio flows between the provider and OpenAI, and Colleague AI steers over GPT-Live's text sideband. OpenAI dialing out needs outbound SIP enabled for the organization; until then calls fall back to the relay. `colleague setup sip-trunk` creates the SignalWire trunk. Covered by fixture tests; no live SIP call yet.
+  - Direct SIP for phone calls (`COLLEAGUE_PHONE_AUDIO=sip` or `sip-webhook`): call audio flows between the provider and OpenAI, and Smitline steers over GPT-Live's text sideband. OpenAI dialing out needs outbound SIP enabled for the organization; until then calls fall back to the relay. `smitline setup sip-trunk` creates the SignalWire trunk. Covered by fixture tests; no live SIP call yet.
   - The relay now follows interruptions (drops speech GPT-Live abandoned), lets a hang-up give way to someone still talking, treats the carrier's machine verdict as a hint, and records reply delays and queued speech per call.
-  - Three levels of call context: the owner's profile (`/v1/profile`, `colleague profile`, and the MCP `get_profile` and `update_profile` tools), the session context in the brief (text, or a summary, facts, decisions, open questions, and long details), and the goal (objective, questions, tone, contact). The goal and the profile's standing boundaries go into the voice instructions; a short reference version of the rest starts the GPT-Live session as a developer message marked as background, not an agenda; the backend model gets everything. Agents can add silent notes mid-call. Covered by tests; not yet heard on a live call.
+  - Three levels of call context: the owner's profile (`/v1/profile`, `smitline profile`, and the MCP `get_profile` and `update_profile` tools), the session context in the brief (text, or a summary, facts, decisions, open questions, and long details), and the goal (objective, questions, tone, contact). The goal and the profile's standing boundaries go into the voice instructions; a short reference version of the rest starts the GPT-Live session as a developer message marked as background, not an agenda; the backend model gets everything. Agents can add silent notes mid-call. Covered by tests; not yet heard on a live call.
   - Still open: a live direct-SIP call (waiting for OpenAI to enable outbound SIP) and a real meeting on this build. Relayed SignalWire calls to real people worked on 2026-09-29.
 
 ### 2026-09-18

@@ -1,6 +1,6 @@
-# Colleague AI TypeScript SDK
+# Smitline TypeScript SDK
 
-Versioned local SDK (`@colleague-ai/sdk` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
+Versioned local SDK (`@colleague-ai/sdk` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
 
 Requires Node.js 22+. This package is not published to npm: use it from a checkout of this repository, importing `packages/sdk-typescript/src/index.mjs`.
 
@@ -70,13 +70,13 @@ The default transport:
 4. Rereads the token file after 401
 5. Starts `start-runtime-daemon.sh` if the port is closed (`autostart: false` turns this off)
 
-When Colleague AI runs in the `colleague` container, the token is inside the container and changes each time it starts. Pass a `readAuth` function that fetches it, and turn off autostart:
+When Smitline runs in the `smitline` container, the token is inside the container and changes each time it starts. Pass a `readAuth` function that fetches it, and turn off autostart:
 
 ```js
 import { execFileSync } from 'node:child_process';
 
 const colleague = new Colleague({
   autostart: false,
-  readAuth: () => execFileSync('docker', ['exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim(),
+  readAuth: () => execFileSync('docker', ['exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim(),
 });
 ```

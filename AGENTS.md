@@ -4,7 +4,7 @@ Read these before proposing product, architecture, or runtime changes:
 
 | Document | Purpose |
 | --- | --- |
-| [README.md](README.md) | What Colleague AI does, setup, security model, surfaces, tests, troubleshooting |
+| [README.md](README.md) | What Smitline does, setup, security model, surfaces, tests, troubleshooting |
 | [docs/product-vision-and-progress.md](docs/product-vision-and-progress.md) | Canonical product brief, settled decisions, progress ledger |
 | [docs/architecture.md](docs/architecture.md) | Runtime layout, sequences, retention and deletion |
 | [docs/calls.md](docs/calls.md) | Call API: briefs, lifecycle, results, costs, delivery, hooks, server mode |
@@ -24,7 +24,7 @@ Agent skills for setup and for placing calls live under [`.agents/skills/`](.age
 - **Brief in, result out.** Phone calls and meetings start through the calls API and return the same result shape.
 - **Fail closed** on unknown fields, unsupported meeting links, incomplete briefs, and missing configuration.
 - **Local-first:** loopback daemon, gitignored secrets, transcripts, call records, profiles, and context.
-- **Disclose.** Phone calls always open with an AI disclosure naming the person Colleague AI acts for. Meetings do too unless the owner sets `COLLEAGUE_MEETING_INTRO=0`.
+- **Disclose.** Phone calls always open with an AI disclosure naming the person Smitline acts for. Meetings do too unless the owner sets `COLLEAGUE_MEETING_INTRO=0`.
 - **Preserve** existing Zoom/Teams/Meet admission, audio, mute, transcript, handoff, and console behavior unless a change explicitly replaces it.
 
 ## Tests
@@ -35,7 +35,7 @@ docker run --rm \
   --entrypoint /app/.venv/bin/python \
   -v "$PWD/meeting-runtime:/meeting-runtime:ro" \
   -v "$PWD/joinly:/opt/joinly:ro" \
-  colleague-meeting:local \
+  smitline-meeting:local \
   -m unittest discover -s /meeting-runtime -p 'test_*.py'
 
 npm test

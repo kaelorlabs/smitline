@@ -233,7 +233,7 @@ class DefaultCallHooks:
             phone = _usable(env.get('COLLEAGUE_OWNER_PHONE'))
             if not phone:
                 raise CallRefused('owner_phone_missing', 'Rehearsals call your own phone. Set it '
-                                  'first: colleague setup set COLLEAGUE_OWNER_PHONE +1...')
+                                  'first: smitline setup set COLLEAGUE_OWNER_PHONE +1...')
             if brief.to != phone:
                 raise CallRefused('rehearsal_owner_only',
                                   'A rehearsal can only call your own phone (COLLEAGUE_OWNER_PHONE).')

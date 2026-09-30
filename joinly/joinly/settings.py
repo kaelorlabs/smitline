@@ -11,4 +11,4 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    return Settings(name=os.environ.get("JOINLY_NAME") or "Colleague AI")
+    return Settings(name=os.environ.get("JOINLY_NAME") or "Smitline")

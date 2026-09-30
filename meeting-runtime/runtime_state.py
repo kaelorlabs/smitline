@@ -97,7 +97,7 @@ def state_from_session(session):
         'meetingId': session.id,
         'platform': session.platform,
         'meetingUrl': session.meeting_url,
-        'participantName': 'Colleague AI',
+        'participantName': 'Smitline',
         'meetingInstructions': '',
         'context': context,
     }

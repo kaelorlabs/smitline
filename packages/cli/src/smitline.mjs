@@ -61,34 +61,34 @@ function requestInterrupt() {
 }
 
 const USAGE = `Usage:
-  colleague call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
+  smitline call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
                [--language <tag>] [--max-minutes <n>] [--rehearsal] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--check] [--wait]
-  colleague call --meeting <url> --objective <text> [...same options] [--wait]
-  colleague call --channel meeting --to <url> --objective <text> [...same options] [--wait]
-  colleague call --brief <json> | --brief-file <path> [--check] [--wait]
-  colleague calls list [--limit <n>]
-  colleague calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
-  colleague calls instruct --call-id <id> --text <guidance> [--silent]
-  colleague profile show
-  colleague profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
-  colleague profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
-  colleague voices
-  colleague setup status [--json] [--no-verify]
-  colleague setup secrets [--no-open] [--wait]
-  colleague setup set <KEY> <value>
-  colleague setup start
-  colleague setup stop [--force]
-  colleague setup register [--agents claude-code,codex,cursor,claude-desktop] [--json]
-  colleague setup voice [--set <name>] [--preview <name>]
-  colleague setup sip-trunk
-  colleague setup call-me [--wait]
-  colleague connector status
-  colleague connector revoke --all | --client <id>
-  colleague mcp                    (MCP server on stdin/stdout, for Claude Desktop and other stdio clients)
-  colleague version | --version
+  smitline call --meeting <url> --objective <text> [...same options] [--wait]
+  smitline call --channel meeting --to <url> --objective <text> [...same options] [--wait]
+  smitline call --brief <json> | --brief-file <path> [--check] [--wait]
+  smitline calls list [--limit <n>]
+  smitline calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
+  smitline calls instruct --call-id <id> --text <guidance> [--silent]
+  smitline profile show
+  smitline profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
+  smitline profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
+  smitline voices
+  smitline setup status [--json] [--no-verify]
+  smitline setup secrets [--no-open] [--wait]
+  smitline setup set <KEY> <value>
+  smitline setup start
+  smitline setup stop [--force]
+  smitline setup register [--agents claude-code,codex,cursor,claude-desktop] [--json]
+  smitline setup voice [--set <name>] [--preview <name>]
+  smitline setup sip-trunk
+  smitline setup call-me [--wait]
+  smitline connector status
+  smitline connector revoke --all | --client <id>
+  smitline mcp                    (MCP server on stdin/stdout, for Claude Desktop and other stdio clients)
+  smitline version | --version
 `;
 
 function parseArgs(argv) {
@@ -119,11 +119,11 @@ function parseArgs(argv) {
 function hintFor(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (error?.code === 'daemon_unavailable') {
-    return isManaged() ? 'Restart the container: docker restart colleague' : 'Colleague AI\'s background service did not answer. Check the setup with: colleague setup status';
+    return isManaged() ? 'Restart the container: docker restart smitline' : 'Smitline\'s background service did not answer. Check the setup with: smitline setup status';
   }
-  if (error?.code === 'not_configured') return 'See what is missing with: colleague setup status';
-  if (error?.code === 'not_found' && /call/i.test(message)) return 'List recent calls with: colleague calls list';
-  if (/^unknown (command|\w+ command)/.test(message)) return 'See all commands with: colleague help';
+  if (error?.code === 'not_configured') return 'See what is missing with: smitline setup status';
+  if (error?.code === 'not_found' && /call/i.test(message)) return 'List recent calls with: smitline calls list';
+  if (/^unknown (command|\w+ command)/.test(message)) return 'See all commands with: smitline help';
   return '';
 }
 
@@ -256,7 +256,7 @@ function describeCallStatus(call) {
     case 'connecting': return meeting ? 'Joining the meeting…' : 'Dialing…';
     case 'ringing': return 'Ringing…';
     case 'waiting': return 'Waiting to be let into the meeting…';
-    case 'in_progress': return meeting ? 'In the meeting. Colleague AI is listening.' : 'Connected. Colleague AI is talking with them.';
+    case 'in_progress': return meeting ? 'In the meeting. Smitline is listening.' : 'Connected. Smitline is talking with them.';
     case 'summarizing': return `Call ended${reason ? ` (${reason})` : ''}. Writing the result…`;
     case 'completed': return `Done${reason ? ` (${reason})` : ''}.`;
     case 'failed': return `The call failed${call.error ? `: ${call.error}` : reason ? ` (${reason}).` : '.'}`;
@@ -269,7 +269,7 @@ async function waitUntilDone(client, callId) {
   let last = '';
   for (;;) {
     if (interruptState.requested) {
-      throw new InterruptError(`Stopped following call ${callId}. The call keeps going; check it with: colleague calls get --call-id ${callId}`);
+      throw new InterruptError(`Stopped following call ${callId}. The call keeps going; check it with: smitline calls get --call-id ${callId}`);
     }
     // Short long-polls keep Ctrl-C responsive; the request cannot be aborted mid-wait.
     const call = await client.waitForCall(callId, 10);
@@ -301,7 +301,7 @@ async function callCommand(args) {
       : `Calling ${formatPhone(target.to)} (call ${call.id}).`);
     progress(args.wait
       ? 'Following the call until it ends. Ctrl-C stops following; the call keeps going.'
-      : `Follow it with: colleague calls wait --call-id ${call.id}`);
+      : `Follow it with: smitline calls wait --call-id ${call.id}`);
     if (!args.wait) {
       printJson(call);
       return EXIT.ok;
@@ -357,7 +357,7 @@ function printStatus(report, { stream = process.stdout } = {}) {
   const marks = {
     ok: paint('32', '✓'), missing: paint('31', '✗'), optional: paint('33', '○'), unknown: paint('33', '?'),
   };
-  const lines = [paint('1', 'Colleague AI setup'), ''];
+  const lines = [paint('1', 'Smitline setup'), ''];
   const known = new Set(STATUS_GROUPS.map(([id]) => id));
   const groups = [...STATUS_GROUPS, ...[...new Set(report.checks.map((c) => c.group))]
     .filter((id) => !known.has(id)).map((id) => [id, id[0].toUpperCase() + id.slice(1)])];
@@ -374,7 +374,7 @@ function printStatus(report, { stream = process.stdout } = {}) {
   }
   const blocking = report.checks.filter((c) => c.required && c.ok !== true).length;
   lines.push(report.ready
-    ? paint('32', 'Ready. Your agent can use Colleague AI.')
+    ? paint('32', 'Ready. Your agent can use Smitline.')
     : paint('31', `Not ready yet: ${blocking} required ${blocking === 1 ? 'item needs' : 'items need'} a fix (marked ✗).`));
   const phone = report.checks.filter((c) => c.group === 'phone');
   const phoneText = report.phoneReady ? 'ready' : phone.some((c) => c.ok === true && c.id !== 'public_url') ? 'not finished' : 'not set up';
@@ -383,7 +383,7 @@ function printStatus(report, { stream = process.stdout } = {}) {
   lines.push(`Phone calls: ${phoneText}. Meetings: ${meetingsText}.`);
   const next = (report.next || []).find((item) => item.fix);
   if (next) lines.push(`Next: ${next.fix}`);
-  else if (report.firstCallReady) lines.push('Try it: colleague setup call-me --wait');
+  else if (report.firstCallReady) lines.push('Try it: smitline setup call-me --wait');
   stream.write(`${lines.join('\n')}\n`);
 }
 
@@ -429,20 +429,20 @@ async function startDaemon(root, { timeoutMs = 240_000, managed = isManaged() } 
   let exitCode = null;
   child.once('exit', (code) => { exitCode = code ?? 1; });
   child.unref();
-  progress('Starting Colleague AI. The first start builds a small Docker image or installs Python packages, which can take a minute or two.');
+  progress('Starting Smitline. The first start builds a small Docker image or installs Python packages, which can take a minute or two.');
   const started = Date.now();
   let lastNote = started;
   while (Date.now() - started < timeoutMs) {
     if (await portOpen(port)) {
-      progress(`Colleague AI is running (log: ${log}).`);
+      progress(`Smitline is running (log: ${log}).`);
       return { running: true, started: true, port, log };
     }
     if (exitCode !== null) {
       const recent = tail(log);
       const hint = /ensurepip|venv/.test(recent)
-        ? ' Python cannot create a virtual environment: start Docker to run Colleague AI there, or run: sudo apt install -y python3-venv'
+        ? ' Python cannot create a virtual environment: start Docker to run Smitline there, or run: sudo apt install -y python3-venv'
         : '';
-      throw new StartupError(`Colleague AI stopped while starting (exit ${exitCode}).${hint}\n${recent}`, { code: 'daemon_unavailable' });
+      throw new StartupError(`Smitline stopped while starting (exit ${exitCode}).${hint}\n${recent}`, { code: 'daemon_unavailable' });
     }
     if (Date.now() - lastNote >= 15_000) {
       lastNote = Date.now();
@@ -450,7 +450,7 @@ async function startDaemon(root, { timeoutMs = 240_000, managed = isManaged() } 
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new StartupError(`Colleague AI did not start within ${Math.round(timeoutMs / 1000)} s. Recent log:\n${tail(log)}`, { code: 'daemon_unavailable' });
+  throw new StartupError(`Smitline did not start within ${Math.round(timeoutMs / 1000)} s. Recent log:\n${tail(log)}`, { code: 'daemon_unavailable' });
 }
 
 /** Run the setup page in a background process, so the agent gets the address at once. */
@@ -547,10 +547,10 @@ async function setupCommand(args) {
   }
   if (action === 'stop') {
     // Stops the daemon, and with it the phone tunnel. It starts again on the next call
-    // or with colleague setup start.
+    // or with smitline setup start.
     const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
     if (isManaged()) {
-      printJson({ stopped: false, managed: true, next: 'Colleague AI runs in its container; on this computer run: docker stop colleague' });
+      printJson({ stopped: false, managed: true, next: 'Smitline runs in its container; on this computer run: docker stop smitline' });
       return EXIT.ok;
     }
     if (!(await portOpen(port))) {
@@ -562,21 +562,21 @@ async function setupCommand(args) {
       const active = (await client.listCalls(100)).filter((call) => !TERMINAL.has(call.status));
       if (active.length) {
         throw new ValidationError(`A call is in progress (${active.map((call) => call.id).join(', ')}). `
-          + 'End it first with colleague calls end --call-id <id>, or run colleague setup stop --force to end it now.');
+          + 'End it first with smitline calls end --call-id <id>, or run smitline setup stop --force to end it now.');
       }
     }
     await client._transport.stopDaemon();
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline && await portOpen(port)) await new Promise((resolve) => setTimeout(resolve, 250));
     const stopped = !(await portOpen(port));
-    progress(stopped ? 'Colleague AI stopped. It starts again on the next call, or with: colleague setup start' : 'Colleague AI is still stopping.');
+    progress(stopped ? 'Smitline stopped. It starts again on the next call, or with: smitline setup start' : 'Smitline is still stopping.');
     printJson({ running: !stopped, stopped, port });
     return stopped ? EXIT.ok : EXIT.startup;
   }
   if (action === 'set') {
     const key = args._[2];
     const value = args._[3];
-    if (!key || value === undefined) throw new ValidationError('usage: colleague setup set <KEY> <value>');
+    if (!key || value === undefined) throw new ValidationError('usage: smitline setup set <KEY> <value>');
     let clean;
     try {
       clean = validateSetting(String(key), String(value));
@@ -642,7 +642,7 @@ async function setupCommand(args) {
           to: phone,
           onBehalfOf: name,
           voice,
-          objective: `This is a voice preview for ${name}. In two or three sentences, say this is the ${voice} voice for Colleague AI, and ask whether they would like to keep it. Then say goodbye and end the call.`,
+          objective: `This is a voice preview for ${name}. In two or three sentences, say this is the ${voice} voice for Smitline, and ask whether they would like to keep it. Then say goodbye and end the call.`,
           maxMinutes: 2,
         }),
       });
@@ -655,7 +655,7 @@ async function setupCommand(args) {
     const phone = process.env.COLLEAGUE_OWNER_PHONE || env.COLLEAGUE_OWNER_PHONE;
     const name = process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME;
     if (!phone || !name) {
-      throw new ValidationError('set your name and phone first: colleague setup set COLLEAGUE_OWNER_NAME "<name>" and COLLEAGUE_OWNER_PHONE +1...');
+      throw new ValidationError('set your name and phone first: smitline setup set COLLEAGUE_OWNER_NAME "<name>" and COLLEAGUE_OWNER_PHONE +1...');
     }
     return callCommand({
       ...args,
@@ -663,7 +663,7 @@ async function setupCommand(args) {
         channel: 'phone',
         to: phone,
         onBehalfOf: name,
-        objective: `This is the setup test call to ${name}, the owner. Say that Colleague AI is set up and working and that this is your voice. Tell them they can ask their agent for a different voice at any time, and that from now on they can ask their agent to call someone or join a meeting. Answer a quick question if they have one, then say goodbye. Keep it under a minute.`,
+        objective: `This is the setup test call to ${name}, the owner. Say that Smitline is set up and working and that this is your voice. Tell them they can ask their agent for a different voice at any time, and that from now on they can ask their agent to call someone or join a meeting. Answer a quick question if they have one, then say goodbye. Keep it under a minute.`,
         maxMinutes: 3,
       }),
     });
@@ -687,7 +687,7 @@ async function profileCommand(args) {
       style: text(args.style),
       boundaries: args.boundaries === undefined ? undefined : splitList(args.boundaries) || [],
     }).filter(([, value]) => value !== undefined));
-    if (!Object.keys(update).length) throw new ValidationError('usage: colleague profile set --about <text> | --style <text> | --boundaries <a; b>');
+    if (!Object.keys(update).length) throw new ValidationError('usage: smitline profile set --about <text> | --style <text> | --boundaries <a; b>');
   } else if (action === 'person') {
     const name = text(args.name);
     if (!name) throw new ValidationError('--name is required');
@@ -723,10 +723,10 @@ async function connectorCommand(args) {
       printJson({ revoked: store.revoke({ all: true }) });
       return EXIT.ok;
     }
-    if (!args.client || args.client === true) throw new ValidationError('usage: colleague connector revoke --all | --client <id>');
+    if (!args.client || args.client === true) throw new ValidationError('usage: smitline connector revoke --all | --client <id>');
     const clientId = String(args.client);
     const known = store.getClient(clientId) || store.summary().grants.some((grant) => grant.clientId === clientId);
-    if (!known) throw new ValidationError(`no registered client ${clientId}; see colleague connector status`);
+    if (!known) throw new ValidationError(`no registered client ${clientId}; see smitline connector status`);
     printJson({ revoked: store.revoke({ clientId }) });
     return EXIT.ok;
   }
@@ -737,7 +737,7 @@ async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
   if (command === 'version' || args.version === true) {
-    process.stdout.write(`colleague-ai ${colleagueVersion()}\n`);
+    process.stdout.write(`smitline ${colleagueVersion()}\n`);
     return EXIT.ok;
   }
   if (!command || command === 'help' || args.help) {
@@ -751,7 +751,7 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'connector') return await connectorCommand(args);
     if (command === 'profile') return await profileCommand(args);
     if (command === 'mcp') {
-      // The stdio MCP server in this process (docker exec -i colleague colleague mcp).
+      // The stdio MCP server in this process (docker exec -i smitline smitline mcp).
       // stdout carries protocol frames only; this returns when stdin closes.
       const { startStdioServer } = await import('../../mcp/src/server.mjs');
       const { drained } = startStdioServer({ root: dataRoot(args) });

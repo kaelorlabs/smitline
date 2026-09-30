@@ -11,7 +11,7 @@ always uses our virtual feed regardless of platform behavior.
 Patches ``enumerateDevices`` to include a virtual camera so
 platforms that check for camera hardware still show a video toggle.
 
-The camera canvas renders the Colleague AI mark (or a validated
+The camera canvas renders the Smitline mark (or a validated
 local avatar) directly. Audio amplitude drives an equalizer that
 reacts to speech in real time. Presence uses ``set_visual_state``.
 """
@@ -493,7 +493,7 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                 deviceId: 'virtual-camera',
                 groupId: 'virtual',
                 kind: 'videoinput',
-                label: 'Colleague AI',
+                label: 'Smitline',
                 toJSON() {{ return this; }},
             }});
         }}
@@ -526,7 +526,7 @@ def build_camera_override_script(*, logo_src: str | None = None) -> str:
 class CameraFeed:
     """Manages the virtual camera canvas and amplitude-driven glow.
 
-    Draws the Colleague AI mark (or a validated avatar data URI) on the
+    Draws the Smitline mark (or a validated avatar data URI) on the
     camera canvas. Wraps an ``AudioWriter`` to extract amplitude and
     push it to the canvas render loop. Presence states use
     ``set_visual_state``.
@@ -559,7 +559,7 @@ class CameraFeed:
         )
 
     def set_visual_state(self, name: str | None) -> None:
-        """Set a Colleague presence state, or listening when cleared."""
+        """Set a Smitline presence state, or listening when cleared."""
         if not self.enabled:
             return
         visual = name if name in _VISUAL_STATES else "listening"
@@ -574,7 +574,7 @@ class CameraFeed:
             )
 
     def set_effect(self, name: str | None) -> None:
-        """Map a Joinly action animation onto Colleague visual presence."""
+        """Map a Joinly action animation onto Smitline visual presence."""
         if not name:
             self.set_visual_state("listening")
             return

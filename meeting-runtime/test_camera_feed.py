@@ -23,9 +23,9 @@ def _has_colleague_feed():
 
 @unittest.skipUnless(_has_colleague_feed(), 'Colleague CameraFeed presence API is required')
 class CameraFeedScriptTests(unittest.TestCase):
-    def test_script_is_colleague_branded_without_private_text(self):
+    def test_script_is_smitline_branded_without_private_text(self):
         script = build_camera_override_script()
-        self.assertIn('Colleague AI', script)
+        self.assertIn('Smitline', script)
         self.assertIn('__setVisualState', script)
         self.assertIn('fxListening', script)
         self.assertNotIn('Virtual Camera', script)

@@ -1,9 +1,9 @@
-# Colleague AI MCP server
+# Smitline MCP server
 
 The call tools for any MCP-capable agent (`@colleague-ai/mcp` 0.1.0): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
 
-- **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `colleague` container.
-- **stdio**, with `colleague mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i colleague colleague mcp`.
+- **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `smitline` container.
+- **stdio**, with `smitline mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.
 - **The remote connector** (`src/remote.mjs`): the same tools over HTTPS with OAuth sign-in, for cloud agents such as ChatGPT and Claude. It runs from a checkout with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
 
 Do not publish this package and do not install it globally.
@@ -32,37 +32,37 @@ Then call `wait_for_call` until the status is `completed`, `failed`, or `cancele
 
 ## Connecting an agent
 
-With the `colleague` container running, this prints the URL, the `Authorization` header, and what to run or paste for Claude Code, Codex, Cursor, and Claude Desktop:
+With the `smitline` container running, this prints the URL, the `Authorization` header, and what to run or paste for Claude Code, Codex, Cursor, and Claude Desktop:
 
 ```bash
-docker exec colleague colleague setup register --json
+docker exec smitline smitline setup register --json
 ```
 
-The token is kept in `/data/.colleague/mcp.token` in the `colleague` volume and stays the same across restarts. For example, Claude Code:
+The token is kept in `/data/.colleague/mcp.token` in the `smitline` volume and stays the same across restarts. For example, Claude Code:
 
 ```bash
-claude mcp add --transport http --scope user colleague-ai http://127.0.0.1:8095/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http --scope user smitline http://127.0.0.1:8095/mcp --header "Authorization: Bearer <token>"
 ```
 
 The endpoint accepts only requests addressed to `127.0.0.1:8095` or `localhost:8095`, and refuses any request with an `Origin` header, so a web page cannot reach it. Restart the agent after changing its MCP configuration. [SETUP.md](../../SETUP.md) walks through all of this.
 
 ### From a checkout
 
-Run from a clone (see [Run from a checkout](../../README.md#run-from-a-checkout)), `colleague setup register` adds a stdio server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
+Run from a clone (see [Run from a checkout](../../README.md#run-from-a-checkout)), `smitline setup register` adds a stdio server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
 
 Claude Code:
 
 ```bash
-claude mcp add --scope user colleague-ai -- node /absolute/path/to/colleague-ai/packages/mcp/src/server.mjs
+claude mcp add --scope user smitline -- node /absolute/path/to/smitline/packages/mcp/src/server.mjs
 ```
 
 Codex (`~/.codex/config.toml`, see `examples/codex.mcp.toml`):
 
 ```toml
-[mcp_servers.colleague-ai]
+[mcp_servers.smitline]
 command = "node"
-args = ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
-cwd = "/absolute/path/to/colleague-ai"
+args = ["/absolute/path/to/smitline/packages/mcp/src/server.mjs"]
+cwd = "/absolute/path/to/smitline"
 ```
 
 Cursor (`mcp.json`, see `examples/cursor.mcp.json`):
@@ -70,9 +70,9 @@ Cursor (`mcp.json`, see `examples/cursor.mcp.json`):
 ```json
 {
   "mcpServers": {
-    "colleague-ai": {
+    "smitline": {
       "command": "node",
-      "args": ["/absolute/path/to/colleague-ai/packages/mcp/src/server.mjs"]
+      "args": ["/absolute/path/to/smitline/packages/mcp/src/server.mjs"]
     }
   }
 }

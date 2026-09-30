@@ -1,6 +1,6 @@
 # Capability matrix
 
-Values below match the code. Colleague AI does not claim platform features it has not built or tested.
+Values below match the code. Smitline does not claim platform features it has not built or tested.
 
 ## Meeting platforms
 
@@ -12,7 +12,7 @@ From `MeetingPlatformAdapter.capabilities` in `meeting-runtime/adapters.py` and 
 | Government / lookalike hosts | Rejected | Government Teams not enabled; lookalikes rejected | `www.`, workspace/stream hosts, `/landing`, `/new` rejected |
 | Guest join first | Yes | Yes | Yes |
 | Signed-in profile fallback | No | Microsoft (`teams-connected` / `teams`) | Google (`google-connected` / `google`) |
-| Browser controls | Colleague AI's own Zoom controls | Joinly Teams controller | Joinly Google Meet controller |
+| Browser controls | Smitline's own Zoom controls | Joinly Teams controller | Joinly Google Meet controller |
 | Virtual camera | Yes | Yes | Yes |
 | Participant discovery | No | Yes | Yes |
 | Empty-room auto-leave | Ended/removal detection only (no participant count) | Leaves when the toolbar reports one participant | Same count-based leave when the toolbar reports one participant; ended/removal detection also applies |

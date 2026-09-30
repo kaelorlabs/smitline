@@ -1,13 +1,13 @@
 ---
-name: call-with-colleague-ai
-description: Place a phone call or join a video meeting for the user with Colleague AI, then report the result. Use when the user says "call", "phone", "ring", "book by phone", "leave a message", "join this meeting", or pastes a Zoom, Teams, or Google Meet link for someone to attend.
+name: call-with-smitline
+description: Place a phone call or join a video meeting for the user with Smitline, then report the result. Use when the user says "call", "phone", "ring", "book by phone", "leave a message", "join this meeting", or pastes a Zoom, Teams, or Google Meet link for someone to attend.
 ---
 
-# Calls with Colleague AI
+# Calls with Smitline
 
-Colleague AI talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `colleague call ... --wait`. When Colleague AI runs in its Docker container, as it does after a normal setup, the CLI is `docker exec colleague colleague call ... --wait`.
+Smitline talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `smitline call ... --wait`. When Smitline runs in its Docker container, as it does after a normal setup, the CLI is `docker exec smitline smitline call ... --wait`.
 
-Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `colleague call --meeting <url> --objective "..." --wait`). Colleague AI joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`.
+Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`.
 
 ## 1. Write a complete brief
 

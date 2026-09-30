@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Colleague AI · Meeting console</title>
+  <title>Smitline · Meeting console</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="shell" data-view="meeting">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Colleague AI home">
+      <a class="brand" href="/" aria-label="Smitline home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>Colleague <b>AI</b></span>
+        <span>Smitline</span>
       </a>
       <nav class="topnav" aria-label="Console"><a href="/" aria-current="page">Meetings</a><a href="/calls">Calls</a></nav>
       <div class="connection"><span id="connection-dot"></span><span id="connection-label">Checking system</span></div>
     </header>
 
     <main>
-      <section class="hero"><div><p class="eyebrow">Workspace / Meetings</p><h1 id="page-title">New meeting</h1><p class="hero-copy" id="page-description">Set up your colleague, then invite it into the conversation.</p></div><span class="local-badge">Local workspace</span></section>
+      <section class="hero"><div><p class="eyebrow">Workspace / Meetings</p><h1 id="page-title">New meeting</h1><p class="hero-copy" id="page-description">Set up Smitline, then invite it into the conversation.</p></div><span class="local-badge">Local workspace</span></section>
       <nav class="view-nav" aria-label="Workspace views"><button type="button" data-view="meeting" aria-current="page">Meeting setup</button><button type="button" data-view="context">Reference context</button><button type="button" data-view="history">Transcripts</button></nav>
 
       <div id="notice" class="notice" role="status" hidden></div>
@@ -65,7 +65,7 @@
               </div>
               <div class="field">
                 <label for="participant-name">Name in the meeting <span class="req">Required</span></label>
-                <input id="participant-name" name="participantName" required aria-required="true" maxlength="80" placeholder="Colleague AI">
+                <input id="participant-name" name="participantName" required aria-required="true" maxlength="80" placeholder="Smitline">
                 <small class="error" id="participantName-error" data-error="participantName"></small>
               </div>
             </div>
@@ -73,14 +73,14 @@
             <fieldset>
               <legend>Meeting camera</legend>
               <div class="tool-grid camera-grid">
-                <label class="tool-card"><input type="checkbox" name="cameraEnabled" checked><span><b>Show in the meeting</b><small>Colleague AI appears as a virtual camera tile</small></span></label>
+                <label class="tool-card"><input type="checkbox" name="cameraEnabled" checked><span><b>Show in the meeting</b><small>Smitline appears as a virtual camera tile</small></span></label>
                 <label class="tool-card"><input type="checkbox" name="cameraDefaultOn" checked><span><b>Turn camera on after joining</b><small>Audio continues if the host blocks video</small></span></label>
               </div>
               <div class="field-row camera-setup">
                 <div class="field">
                   <label for="camera-avatar">Avatar or logo <span>optional</span></label>
                   <input id="camera-avatar" name="cameraAvatar" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg">
-                  <small class="hint">PNG, JPEG, WebP, or SVG up to 80 KB. A bundled Colleague AI mark is used when none is chosen.</small>
+                  <small class="hint">PNG, JPEG, WebP, or SVG up to 80 KB. A bundled Smitline mark is used when none is chosen.</small>
                   <small class="error" data-error="camera"></small>
                   <button class="text-button" id="remove-avatar-button" type="button" hidden>Remove custom avatar</button>
                 </div>
@@ -103,7 +103,7 @@
             <div class="field full">
               <label for="meeting-instructions">Meeting guidance <span>optional</span></label>
               <textarea id="meeting-instructions" name="meetingInstructions" maxlength="2000" placeholder="Example: This is a product review. Prioritize launch blockers and answer only when your contribution is useful."></textarea>
-              <small class="hint">Give your colleague a role or explain what matters in this meeting.</small>
+              <small class="hint">Give Smitline a role or explain what matters in this meeting.</small>
               <small class="error" data-error="meetingInstructions"></small>
             </div>
 
@@ -140,14 +140,14 @@
 
             <div class="actions">
               <button class="button secondary" id="check-button" type="button">Run checks</button>
-              <button class="button primary" id="start-button" type="button">Start colleague <span>↗</span></button>
+              <button class="button primary" id="start-button" type="button">Start Smitline <span>↗</span></button>
             </div>
           </form>
         </section>
 
         <aside class="panel live-panel" aria-labelledby="live-title">
           <div class="panel-heading">
-            <div><p class="kicker">Participant</p><h2 id="live-title">Colleague AI</h2></div>
+            <div><p class="kicker">Participant</p><h2 id="live-title">Smitline</h2></div>
 
           </div>
 
@@ -169,7 +169,7 @@
 
           <div class="live-actions">
             <a class="button ghost" href="http://127.0.0.1:6082/vnc.html?autoconnect=true" target="_blank" rel="noreferrer">Open meeting view</a>
-            <button class="button danger" id="stop-button" type="button" disabled>Stop colleague</button>
+            <button class="button danger" id="stop-button" type="button" disabled>Stop Smitline</button>
           </div>
 
           <details class="logs">
@@ -202,7 +202,7 @@
         </div>
       </section>
     </main>
-    <footer><span>Colleague AI runs locally on this computer.</span><span>Meetings use your own OpenAI account.</span></footer>
+    <footer><span>Smitline runs locally on this computer.</span><span>Meetings use your own OpenAI account.</span></footer>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

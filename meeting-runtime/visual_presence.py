@@ -1,4 +1,4 @@
-"""Colleague AI visual presence: states, avatar validation, and camera policy."""
+"""Smitline visual presence: states, avatar validation, and camera policy."""
 from pathlib import Path
 import base64
 import binascii
@@ -44,7 +44,7 @@ PRIVATE_RENDER_TOKENS = (
 
 COLLEAGUE_MARK_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" '
-    'aria-label="Colleague AI">'
+    'aria-label="Smitline">'
     '<rect width="128" height="128" rx="28" fill="#30323b"/>'
     '<rect x="34" y="44" width="12" height="40" rx="4" fill="#fff"/>'
     '<rect x="58" y="28" width="12" height="72" rx="4" fill="#fff"/>'

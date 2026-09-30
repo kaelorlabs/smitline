@@ -6,19 +6,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startFakeDaemon } from '../../sdk-typescript/test/fake-daemon.mjs';
-import { DEFAULT_COLLEAGUE_ROOT, parseArgs } from '../src/colleague.mjs';
+import { DEFAULT_COLLEAGUE_ROOT, parseArgs } from '../src/smitline.mjs';
 
-const cli = fileURLToPath(new URL('../src/colleague.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 const ZOOM = 'https://zoom.us/j/555111222';
 
-test('installed CLI resolves the Colleague AI repository independently of caller cwd', () => {
+test('installed CLI resolves the Smitline repository independently of caller cwd', () => {
   assert.equal(DEFAULT_COLLEAGUE_ROOT, path.resolve(path.dirname(cli), '../../..'));
 });
 
 test('CLI executes when invoked through an installed symlink', async (t) => {
   const installDir = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-link-'));
   t.after(() => fs.rm(installDir, { recursive: true, force: true }));
-  const installedCli = path.join(installDir, 'colleague');
+  const installedCli = path.join(installDir, 'smitline');
   await fs.symlink(cli, installedCli);
   const result = await new Promise((resolve) => {
     const child = spawn(installedCli, ['help'], {
@@ -34,7 +34,7 @@ test('CLI executes when invoked through an installed symlink', async (t) => {
   });
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /^Usage:/);
-  assert.match(result.stdout, /colleague call --meeting <url>/);
+  assert.match(result.stdout, /smitline call --meeting <url>/);
 });
 
 function runColleague(args, { env = {}, cwd } = {}) {
@@ -72,11 +72,11 @@ test('--version and version print the release', async () => {
   for (const args of [['--version'], ['version']]) {
     const result = await runColleague(args, { env });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, `colleague-ai ${version}\n`);
+    assert.equal(result.stdout, `smitline ${version}\n`);
   }
   const image = await runColleague(['--version'], { env: { COLLEAGUE_VERSION: '0.1.0-test' } });
-  assert.equal(image.stdout, 'colleague-ai 0.1.0-test\n');
-  assert.match((await runColleague(['help'], { env })).stdout, /colleague version \| --version/);
+  assert.equal(image.stdout, 'smitline 0.1.0-test\n');
+  assert.match((await runColleague(['help'], { env })).stdout, /smitline version \| --version/);
 });
 
 test('parseArgs reads flags and values', () => {
