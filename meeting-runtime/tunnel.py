@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 # api.trycloudflare.com appears in cloudflared's own error messages; it is never a tunnel.
 QUICK_URL = re.compile(r'https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b')
 REGISTERED = 'Registered tunnel connection'
-DEFAULT_IMAGE = 'cloudflare/cloudflared:latest'
+DEFAULT_IMAGE = 'cloudflare/cloudflared:2026.9.3'
 # The first run may pull the Docker image; a fresh address can take a few seconds to resolve.
 START_TIMEOUT = 90.0
 PROBE_TIMEOUT = 45.0

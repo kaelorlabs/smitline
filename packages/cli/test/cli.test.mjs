@@ -65,6 +65,20 @@ async function withDaemon(t, options = {}) {
   return { root, daemon, common: ['--root', root, '--port', String(daemon.port)] };
 }
 
+test('--version and version print the release', async () => {
+  const { version } = JSON.parse(await fs.readFile(path.join(DEFAULT_COLLEAGUE_ROOT, 'package.json'), 'utf8'));
+  assert.match(version, /^\d+\.\d+\.\d+/);
+  const env = { COLLEAGUE_VERSION: '' };
+  for (const args of [['--version'], ['version']]) {
+    const result = await runColleague(args, { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `colleague-ai ${version}\n`);
+  }
+  const image = await runColleague(['--version'], { env: { COLLEAGUE_VERSION: '0.1.0-test' } });
+  assert.equal(image.stdout, 'colleague-ai 0.1.0-test\n');
+  assert.match((await runColleague(['help'], { env })).stdout, /colleague version \| --version/);
+});
+
 test('parseArgs reads flags and values', () => {
   const args = parseArgs(['call', '--meeting', ZOOM, '--wait', '--objective', 'Take notes']);
   assert.equal(args.meeting, ZOOM);

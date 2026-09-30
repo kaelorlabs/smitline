@@ -1,6 +1,6 @@
 # Meeting adapters
 
-Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared browser/audio runtime in one Docker container (`colleague-meeting:local`). An agent joins with `start_call` on the `meeting` channel and the invite URL as `to` (see [calls](calls.md)); you can also paste the invitation into the console. Platform detection is automatic. Government Teams is not enabled.
+Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared browser/audio runtime in one Docker container, from the `ghcr.io/kaelorlabs/colleague-meeting` image (built as `colleague-meeting:local` from a checkout). An agent joins with `start_call` on the `meeting` channel and the invite URL as `to` (see [calls](calls.md)); you can also paste the invitation into the console. Platform detection is automatic. Government Teams is not enabled.
 
 ## Operation
 
@@ -8,11 +8,11 @@ The steps below use the console. When an agent starts the meeting, steps 1 and 2
 
 1. Open http://127.0.0.1:8095 (from a checkout, run `./start-control-panel.sh` first).
 2. Paste an HTTPS Zoom, Teams commercial, Teams Free, or Google Meet (`https://meet.google.com/xxx-yyyy-zzz`) meeting URL.
-3. For Teams or Meet meetings that require an account, choose **Connect Microsoft account** or **Connect Google account**, then **Open meeting view**. Complete sign-in yourself on the official page. Once the console reports account connected, stop the account browser. Browser profiles are stored locally in the ignored `meeting-runtime/profiles/` directory.
+3. For Teams or Meet meetings that require an account, choose **Connect Microsoft account** or **Connect Google account**, then **Open meeting view**. Complete sign-in yourself on the official page. Once the console reports account connected, stop the account browser. Browser profiles are stored locally: in `/data/meetings/profiles` in the `colleague` volume, or in the ignored `meeting-runtime/profiles/` directory of a checkout.
 4. Start the colleague. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.
 5. Admit the participant. It connects computer audio and starts listening continuously.
 6. The adapter opens the platform microphone once and keeps the audio connection stable. The virtual microphone transmits silence while Colleague AI listens and immediately transports speech when GPT-Live chooses to respond.
-7. Once its microphone is open, Colleague AI says one short AI disclosure naming the person it acts for, then listens. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to turn this off. `COLLEAGUE_VOICE` picks the GPT-Live voice.
+7. Once its microphone is open, Colleague AI says one short AI disclosure naming the person it acts for, then listens. Turn this off with `docker exec colleague colleague setup set COLLEAGUE_MEETING_INTRO 0` (from a checkout: `colleague setup set ...`). `COLLEAGUE_VOICE` picks the GPT-Live voice.
 8. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
 9. A host or participant mute is authoritative; Colleague AI does not reopen the platform microphone on its own. In Zoom it accepts the host's explicit "Ask to unmute" request.
 10. Stop the colleague to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
@@ -42,13 +42,9 @@ Adapters do not share a screen and do not read shared screens.
 - **Colleague AI never speaks in Zoom, and `microphoneState` is `blocked`.** The host has turned off "Allow participants to unmute themselves", so the one unmute at session start failed. The host can click **Ask to unmute** on Colleague AI's video tile (or in the participant list); the Zoom adapter accepts "The host would like you to unmute" and arms its microphone. It then stays unmuted between replies, so the host asks only once unless they mute it again.
 - **A host muted Colleague AI.** It stays muted. Unmute it from the meeting UI, or in Zoom click **Ask to unmute** again.
 
-## Breaking migration
-
-The current names are `meeting-runtime/`, `.env.meeting`, `MEETING_URL`, `MEETING_PASSCODE`, `compose.meeting.yaml`, Docker service `meeting-agent`, and `start-meeting-agent.sh`. Old Zoom-specific settings are not read. Move existing local context, recordings, and profiles with the runtime directory; do not delete them. Update local launch scripts and stop the previous runtime before starting the new one. Secret files and browser profiles stay ignored by Git.
-
 ## Verification
 
-Run `node --test control-panel/*.test.mjs` and the runtime unittest suite inside the built meeting image (the command is in [AGENTS.md](../AGENTS.md#tests)). Browser fixtures use that image's Chromium with no meeting accounts or API credentials. They verify URL rejection, lobby versus admission, account requirements, and individual microphone controls. Participation tests verify model-audio transport, stable microphone connection, blocked microphones, and external mute handling.
+Run `node --test control-panel/*.test.mjs` and the runtime unittest suite inside the meeting image built from a checkout (the command is in [AGENTS.md](../AGENTS.md#tests)). Browser fixtures use that image's Chromium with no meeting accounts or API credentials. They verify URL rejection, lobby versus admission, account requirements, and individual microphone controls. Participation tests verify model-audio transport, stable microphone connection, blocked microphones, and external mute handling.
 
 See [capabilities](capabilities.md) for the adapter matrix and [architecture](architecture.md#guest-then-signed-in-fallback) for the guest-then-signed-in sequence. Live Zoom/Teams/Meet calls remain necessary to validate actual tenant admission, signed-in fallback, two-way audio, chat submission, and restart. Browser fixture tests alone do not establish production compatibility.
 

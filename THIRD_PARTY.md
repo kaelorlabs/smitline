@@ -10,6 +10,20 @@ This repository includes source snapshots, not nested Git repositories. Their or
 
 Changes to the kept Joinly modules: persistent browser-profile support, browser cleanup, optional guest-name entry for signed-in Google sessions, a longer join-state wait, and explicit guest-rejection diagnostics.
 
-The meeting image (`Dockerfile.meeting`) installs Playwright's Chromium, PulseAudio, Xvfb, x11vnc, noVNC, and websockify from their publishers; their licenses remain those of their respective publishers. No model weights are downloaded.
+## In the published images
 
-The local control panel uses Mozilla PDF.js (`pdfjs-dist`, Apache-2.0) to extract PDF text and Mammoth (`mammoth`, BSD-2-Clause) to extract DOCX text. Their notices and dependency licenses are included in the installed npm packages and lockfile.
+The images redistribute these components unchanged. Each keeps its own license; the license files ship inside the image or the package.
+
+| Component | Where | License |
+| --- | --- | --- |
+| Node.js 22 | `colleague` image, from `node:22-bookworm-slim` | MIT, with bundled dependencies under their own licenses |
+| Docker CLI and the Docker Compose plugin | `colleague` image, from `docker:29.8.1-cli` | Apache-2.0 |
+| cloudflared | `colleague` image, from `cloudflare/cloudflared:2026.9.3` | Apache-2.0 |
+| Mammoth (`mammoth`) | `colleague` image, npm; extracts DOCX text in the console | BSD-2-Clause |
+| Mozilla PDF.js (`pdfjs-dist`) | `colleague` image, npm; extracts PDF text in the console | Apache-2.0 |
+| Playwright for Python | meeting image, PyPI | Apache-2.0 |
+| Chromium and ffmpeg, as built by Playwright | meeting image, `/opt/ms-playwright` | Chromium: BSD-3-Clause and the third-party licenses bundled with it; ffmpeg: LGPL-2.1 (`COPYING.LGPLv2.1` next to it) |
+| noVNC 1.5.0 | meeting image, `/usr/share/novnc` | MPL-2.0 for the core library, other files as listed in its `LICENSE.txt` |
+| websockify | meeting image, PyPI | LGPL-3.0 |
+
+The npm dependencies of Mammoth and PDF.js are listed with their licenses in `package-lock.json` and ship in `node_modules`. The Python packages (aiohttp, numpy, and their dependencies) come from PyPI, and the Debian packages (tini, PulseAudio, Xvfb, x11vnc) from Debian bookworm, each under its publisher's license; Debian's copyright files are in `/usr/share/doc`. No model weights are downloaded.

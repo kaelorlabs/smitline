@@ -1,15 +1,15 @@
 # Colleague AI TypeScript SDK
 
-Versioned local SDK (`@colleague-ai/sdk` 1.0.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
+Versioned local SDK (`@colleague-ai/sdk` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
 
-Requires Node.js 22+. This package is for local use and is not published to npm.
+Requires Node.js 22+. This package is not published to npm: use it from a checkout of this repository, importing `packages/sdk-typescript/src/index.mjs`.
 
 ## Calls and meetings
 
-Both go through `startCall` with a brief:
+Both go through `startCall` with a brief. Run from the checkout's root:
 
 ```ts
-import { Colleague } from '@colleague-ai/sdk';
+import { Colleague } from './packages/sdk-typescript/src/index.mjs';
 
 const colleague = new Colleague();
 
@@ -65,7 +65,18 @@ console.log(done.result?.summary);
 The default transport:
 
 1. Connects to `127.0.0.1:8765` (or `COLLEAGUE_DAEMON_PORT`)
-2. Reads the host-only token from `.colleague/daemon.auth` and never returns it
+2. Reads the host-only token from `.colleague/daemon.auth` under `root` (default: `COLLEAGUE_ROOT`, else the working directory) and never returns it
 3. Sends `Authorization: Bearer …` on every request
 4. Rereads the token file after 401
-5. Starts `start-runtime-daemon.sh` if the port is closed
+5. Starts `start-runtime-daemon.sh` if the port is closed (`autostart: false` turns this off)
+
+When Colleague AI runs in the `colleague` container, the token is inside the container and changes each time it starts. Pass a `readAuth` function that fetches it, and turn off autostart:
+
+```js
+import { execFileSync } from 'node:child_process';
+
+const colleague = new Colleague({
+  autostart: false,
+  readAuth: () => execFileSync('docker', ['exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim(),
+});
+```

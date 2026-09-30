@@ -3,7 +3,7 @@
 **Document status:** canonical product brief and progress ledger  
 **Last reviewed:** 2026-09-30  
 **Current stage:** advanced local alpha / developer preview  
-**Primary implementation branch at this snapshot:** `cleanup`
+**Primary implementation branch at this snapshot:** `main`
 
 This document is the durable product memory for Colleague AI. It explains what we are building, why it matters, which decisions are settled, what already exists, and what remains. Contributors, human or agent, should read this document before proposing architecture or product changes and update the progress ledger when a milestone materially changes.
 
@@ -136,7 +136,7 @@ Status meanings:
 | Zoom web adapter | Partial | Join, admission, audio, mute, and lifecycle behavior exist and Zoom has had live use. Final regression acceptance remains necessary. |
 | Microsoft Teams adapter | Partial | Guest-first join, Microsoft profile fallback, audio, mute, participant count, and termination handling exist. Tenant-policy and audio acceptance coverage remains limited. |
 | Google Meet adapter | Partial | Guest-first join and Google profile fallback exist with fixture coverage. Full live acceptance remains outstanding. |
-| Meeting container | Implemented | One image, `colleague-meeting:local`, from `Dockerfile.meeting` (Playwright Chromium, PulseAudio, Xvfb, x11vnc/noVNC), built on the first meeting. Uses a vendored subset of Joinly for the browser session, virtual devices, camera feed, and Teams/Meet controllers. |
+| Meeting container | Implemented | One image, `ghcr.io/kaelorlabs/colleague-meeting`, from `Dockerfile.meeting` (Playwright Chromium, PulseAudio, Xvfb, x11vnc/noVNC), pulled on the first meeting (built as `colleague-meeting:local` from a checkout). Uses a vendored subset of Joinly for the browser session, virtual devices, camera feed, and Teams/Meet controllers. |
 | Continuous GPT-Live voice | Partial | One `gpt-live-1` session, `store: false`, audio context, and transcript events. `COLLEAGUE_VOICE` selects the voice. Meetings delegate hard questions to a Responses backend (`COLLEAGUE_MEETING_BACKEND_MODEL`), covered by bridge tests; not yet heard in a live meeting. Conversational quality and platform audio reliability still need evaluation. |
 | Meeting AI disclosure | Partial | Once admitted and able to speak, a meeting session says one short AI disclosure naming the person it acts for (call brief, then `COLLEAGUE_OWNER_NAME`), then listens; `COLLEAGUE_MEETING_INTRO=0` turns it off. Covered by unit and bridge tests with a fake GPT-Live socket; not yet heard in a live meeting. |
 | Selective speech and mute transport | Partial | GPT-Live-driven participation, virtual audio gating, and public drain/discard of queued playback exist, with automated tests. The platform microphone unmutes once per session and mutes at the end; between replies only the local gate closes. Zoom mute prefers a visible control and falls back to the in-meeting shortcut. When a Zoom host blocks self-unmute, the adapter accepts the host's "Ask to unmute" request (tests with fakes). Cross-platform live acceptance, including that request, is still open. |
@@ -151,10 +151,10 @@ Status meanings:
 | TypeScript SDK | Implemented locally | Call, profile, and voice methods. Package is not published. |
 | Python SDK | Implemented locally | Mirrors the TypeScript SDK. Package is not published. |
 | CLI | Implemented locally | `call` (phone or `--meeting`), `calls`, `profile`, `voices`, agent-driven `setup`, and `connector`. Distribution and installer UX remain. |
-| MCP server | Implemented locally | Thin stdio server over the TypeScript SDK with the call tools (`start_call`, `wait_for_call`, and more). |
+| MCP server | Implemented locally | The call tools (`start_call`, `wait_for_call`, and more) over the TypeScript SDK, served over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token, and over stdio (`colleague mcp`). |
 | Local console | Implemented | Meetings and Calls tabs at `127.0.0.1:8095`. It should remain optional. |
 | Remote connector | Partial | MCP Streamable HTTP with OAuth 2.1 (dynamic registration, PKCE, owner-passphrase approval, rotating tokens stored as digests) exposes the same call tools to cloud agents through a TLS proxy. Covered by tests and a local browser run; not yet connected from ChatGPT or Claude. See [agents](agents.md). |
-| Packaging and onboarding | Partial | A copied prompt lets the user's agent follow [SETUP.md](../SETUP.md): `colleague setup status --json` lists what is missing with the question to ask, keys go on a one-time local page, `setup register` connects Claude Code, Codex, and Cursor, and `setup call-me` rings the user. Node and Docker are enough. Daemon-started meetings build the meeting image when missing, run the container as the host user, and need no `.env.meeting`. There is no published SDK/CLI/MCP package, and the flow has not been run end to end by a new user. |
+| Packaging and onboarding | Partial | A copied prompt lets the user's agent follow [SETUP.md](../SETUP.md): `colleague setup status --json` lists what is missing with the question to ask, keys go on a one-time local page, `setup register` prints how to connect Claude Code, Codex, Cursor, and Claude Desktop, and `setup call-me` rings the user. Docker is enough: one image, `ghcr.io/kaelorlabs/colleague`, runs everything, and daemon-started meetings pull the meeting image when missing and need no `.env.meeting`. There is no published SDK/CLI/MCP package, and the flow has not been run end to end by a new user. |
 | Outgoing and incoming screen sharing | Missing | Colleague AI does not share a screen or read shared screens. |
 | Automated QA | Strong but incomplete | Broad unit coverage exists. Automated tests cannot prove browser selectors, tenant policy, admission, audio quality, or real provider behavior. |
 | Live acceptance | Incomplete | A complete acceptance run across phone calls and Zoom, Teams, and Meet on the current build is still required. |
@@ -193,7 +193,7 @@ Run repeatable real calls and meetings covering:
 
 - Publish or bundle supported SDK, CLI, and MCP packages.
 - Add one-command installation and update paths.
-- Keep the first-run diagnostic current for Docker, audio, browser, API keys, and phone setup.
+- Keep `colleague setup status` current for Docker, API keys, and phone setup.
 - Keep the console as an optional local dashboard.
 
 ### 4. Make results dependable

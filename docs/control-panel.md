@@ -26,11 +26,11 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 6. For a Teams or Google Meet meeting that needs an account, connect one first; see [meeting adapters](meeting-adapters.md).
 7. Run the checks, resolve any reported issue, and start the colleague.
 
-The checks validate the meeting settings, the OpenAI key, and Docker availability. The first meeting builds the meeting image, which takes a couple of minutes.
+The checks validate the meeting settings, the OpenAI key, and Docker availability. The first meeting downloads the meeting image (about 1.8 GB), which takes a few minutes; from a checkout it is built instead.
 
 ### Supply private reference context
 
-Paste text or upload TXT, Markdown, CSV, TSV, JSON, YAML, PDF, or DOCX files under **Reference context**. The console extracts text locally and stores it in `meeting-runtime/context/index.json`. Individual files are limited to 8 MB, a batch can contain up to 10 files, and all saved extracted text is limited to 1,000,000 characters.
+Paste text or upload TXT, Markdown, CSV, TSV, JSON, YAML, PDF, or DOCX files under **Reference context**. The console extracts text locally and stores it in `context/index.json` under the meeting data (`/data/meetings` in the `colleague` volume, `meeting-runtime/` in a checkout). Individual files are limited to 8 MB, a batch can contain up to 10 files, and all saved extracted text is limited to 1,000,000 characters.
 
 The saved sources go to the meeting as its starting context. GPT-Live gets them as background, and so does the backend model it hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`). Longer material is cut to fit. The voice session reads the context when it starts, so add sources before starting the meeting, or restart the participant after changing them.
 
@@ -46,13 +46,13 @@ The platform may display Colleague AI as unmuted because the runtime keeps the b
 
 ### Review local records
 
-Each meeting creates a directory under `meeting-runtime/recordings/` containing the incremental transcript and event trace. **Transcripts** lists recent meetings, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
+Each meeting creates a directory under `recordings/` in the meeting data (`/data/meetings` in the volume, `meeting-runtime/` in a checkout) containing the incremental transcript and event trace. **Transcripts** lists recent meetings, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
 
 The transcript records recognized and generated text. It is not a raw-audio archive and may include a generated response that was muted or interrupted before participants heard it.
 
 ## Command-line operation
 
-The lower-level launcher remains available for debugging:
+From a checkout, the lower-level launcher remains available for debugging:
 
 ```bash
 cp meeting-runtime/meeting.env.example .env.meeting

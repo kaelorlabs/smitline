@@ -243,7 +243,7 @@ class HookTests(unittest.TestCase):
     def test_calling_code_allow_list(self):
         hooks = DefaultCallHooks(environ={'COLLEAGUE_ALLOWED_CALLING_CODES': '1, +44'})
         hooks.precheck('local', CallBrief.from_dict(phone_brief()))
-        hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+442071838750')))
+        hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+442079460123')))
         with self.assertRaises(CallRefused):
             hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))
         DefaultCallHooks(environ={}).precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))

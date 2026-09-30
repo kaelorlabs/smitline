@@ -10,7 +10,7 @@ import {
 import { fileURLToPath } from 'node:url';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
-export const MCP_SERVER_VERSION = '1.0.0';
+export const MCP_SERVER_VERSION = '0.1.0';
 const DEFAULT_COLLEAGUE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };

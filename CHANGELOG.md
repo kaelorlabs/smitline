@@ -1,0 +1,27 @@
+# Changelog
+
+## 0.1.0 — 2026-09-30
+
+First public release.
+
+Colleague AI gives any AI agent phone calls and meetings. The agent sends a brief; Colleague AI talks with people in real time using OpenAI GPT-Live (`gpt-live-1`), hands harder questions to a backend model that knows the brief, and returns a structured result: the outcome, a summary, details, decisions, action items, open questions, and the transcript.
+
+### What it does
+
+- **Phone calls** through your SignalWire or Twilio account. Every call opens with an AI disclosure naming the person it acts for. Rehearse a call on your own phone first, follow the live transcript, or take the call over on your phone.
+- **Zoom, Microsoft Teams, and Google Meet meetings** with the same brief on the `meeting` channel. A browser participant joins in a second container, speaks through a virtual microphone after a short disclosure, and can show a presence camera.
+- **One Docker image**, `ghcr.io/kaelorlabs/colleague`, started with one `docker run`. It runs the loopback daemon, the local console, the CLI (`docker exec colleague colleague ...`), and starts the meeting image, `ghcr.io/kaelorlabs/colleague-meeting`, for each meeting.
+- **Any agent.** MCP over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token, or over stdio (`colleague mcp`); the CLI; the REST calls API (`/v1/calls`, with an OpenAPI description); TypeScript and Python SDKs; and a remote connector with OAuth sign-in for cloud agents.
+- **Agent-driven setup.** Paste one prompt into your agent. Keys are typed into a one-time local page, never into the chat, and stay in the data volume.
+- **Context in three levels:** the owner's profile (who they are, the people they know, standing boundaries), the session context in the brief (a summary, facts, decisions, open questions, and long reference details), and the goal (objective, questions, tone, contact).
+- **Calls dashboard** at `127.0.0.1:8095/calls`: each call's brief, live transcript, result, and phone plus OpenAI cost, with spend totals.
+
+### Phone audio
+
+- **Local barge-in.** Colleague AI listens to the other person itself: about 160 ms after they talk over it, playback pauses and the provider's buffer is cleared. A short "mhm" lets it carry on; real speech drops the rest of what it was saying.
+- **Provider-clock pacing and adaptive playout.** Playback follows the phone provider's clock, recovered from the timestamps on its audio, so a computer clock that runs fast or slow does not starve or flood the line. The provider's buffer is kept near 0.3 seconds by stretching or trimming pauses; speech itself is never cut.
+- **A natural opening.** The assistant says a short hello naming whose AI assistant it is, then waits for an answer before saying why it is calling. Call screeners and voicemail greetings are heard out first.
+
+### Known limitations
+
+See [Limitations](README.md#limitations). In short: phone audio is relayed through your computer (direct SIP is being built), Teams and Google Meet still need live acceptance testing, trial phone accounts call only verified numbers, and Twilio's free trial cannot carry call audio.

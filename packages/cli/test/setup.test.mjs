@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
-  serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv,
+  serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv, SETUP_PAGE_PORT, setupPagePort, colleagueVersion,
 } from '../src/setup.mjs';
 
 const cli = fileURLToPath(new URL('../src/colleague.mjs', import.meta.url));
@@ -153,6 +153,23 @@ test('the secrets page times out: with saves it resolves, without it rejects', a
   const used = await servedUrl({ root, timeoutMs: 600 });
   assert.equal((await postForm(used.pageUrl, { COLLEAGUE_OWNER_NAME: 'Robin' })).status, 200);
   assert.deepEqual(await used.done, { saved: ['COLLEAGUE_OWNER_NAME'], timedOut: true });
+});
+
+test('the secrets page uses a fixed port, and any free port when that one is busy', async (t) => {
+  assert.equal(SETUP_PAGE_PORT, 8096);
+  assert.equal(setupPagePort({}), 8096);
+  assert.equal(setupPagePort({ COLLEAGUE_SETUP_PORT: '9123' }), 9123);
+  assert.equal(setupPagePort({ COLLEAGUE_SETUP_PORT: 'nope' }), 8096);
+
+  const free = await closedPort();
+  const first = await servedUrl({ root: await tempRoot(t), port: free, timeoutMs: 400 });
+  assert.equal(new URL(first.pageUrl).port, String(free));
+  // The same port again while the first page holds it: the second page takes another one.
+  const second = await servedUrl({ root: await tempRoot(t), port: free, timeoutMs: 400 });
+  assert.notEqual(new URL(second.pageUrl).port, String(free));
+  assert.equal((await fetch(second.pageUrl)).status, 200);
+  await assert.rejects(first.done, /timed out/);
+  await assert.rejects(second.done, /timed out/);
 });
 
 test('the secrets page explains saved fields, errors, and the finish without echoing values', () => {
@@ -683,6 +700,23 @@ test('managed setup status from the CLI', async (t) => {
   const daemon = report.checks.find((c) => c.id === 'daemon');
   assert.equal(daemon.ok, false);
   assert.match(daemon.fix, /docker restart colleague/);
+  // The image sets COLLEAGUE_VERSION; it shows in the JSON and in the plain-text status.
+  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port), COLLEAGUE_VERSION: '9.8.7' };
+  assert.equal(JSON.parse((await runCli(['setup', 'status', '--json', '--no-verify'], env)).stdout).version, '9.8.7');
+  assert.match((await runCli(['setup', 'status', '--no-verify'], env)).stdout, /Colleague AI version.*9\.8\.7/);
+});
+
+test('the version comes from COLLEAGUE_VERSION, then package.json, then dev', async (t) => {
+  const code = await tempRoot(t);
+  assert.equal(colleagueVersion(code, {}), 'dev');
+  await fs.writeFile(path.join(code, 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0' }));
+  assert.equal(colleagueVersion(code, {}), '0.1.0');
+  assert.equal(colleagueVersion(code, { COLLEAGUE_VERSION: '0.2.0' }), '0.2.0');
+  const status = await setupStatus({ root: code, env: {}, verify: false, runner: fakeRunner({}), find: () => null, managed: true, version: '0.1.0' });
+  assert.equal(status.version, '0.1.0');
+  assert.deepEqual(status.checks.find((c) => c.id === 'version'), {
+    id: 'version', label: 'Colleague AI version', ok: true, required: false, group: 'core', detail: '0.1.0',
+  });
 });
 
 test('managed setup register prints how to connect host agents and writes nothing there', async (t) => {
@@ -710,7 +744,14 @@ test('managed setup register prints how to connect host agents and writes nothin
   });
   const code = path.resolve(path.dirname(cli), '../../..');
   assert.equal(report.skill.path, `${code}/.agents/skills/call-with-colleague-ai/SKILL.md`);
-  assert.equal(report.skill.copy['claude-code'], `docker cp colleague:${code}/.agents/skills/call-with-colleague-ai ~/.claude/skills/`);
+  // The skills folder is made first: docker cp would otherwise rename the skill to "skills".
+  assert.equal(report.skill.copy['claude-code'],
+    `mkdir -p "$HOME/.claude/skills" && docker cp colleague:${code}/.agents/skills/call-with-colleague-ai "$HOME/.claude/skills/"`);
+  // PowerShell 5.1 does not expand ~, and a trailing \ before a quote breaks native arguments.
+  assert.equal(report.skill.copyPowerShell['claude-code'],
+    `New-Item -ItemType Directory -Force "$HOME\\.claude\\skills" | Out-Null; docker cp colleague:${code}/.agents/skills/call-with-colleague-ai "$HOME\\.claude\\skills"`);
+  assert.ok(!JSON.stringify(report.skill).includes('~'));
+  assert.match(report.agents['claude-desktop'].note, /which docker/);
   // Nothing on the "host" side changed; only the token was made, under the data root.
   assert.deepEqual(await listing(home), ['.claude', '.cursor']);
   assert.deepEqual(await listing(root), ['.colleague', path.join('.colleague', 'mcp.token')]);
@@ -722,8 +763,13 @@ test('managed setup register prints how to connect host agents and writes nothin
   assert.ok(text.stdout.includes(`Authorization: Bearer ${token}`));
   assert.match(text.stdout, /"command": "docker"/);
   assert.match(text.stdout, /docker cp colleague:/);
-  assert.equal(containerRegistration({ codeRoot: '/app', token: 't', container: 'c2' }).skill.copy.codex,
-    'docker cp c2:/app/.agents/skills/call-with-colleague-ai ~/.codex/skills/');
+  assert.match(text.stdout, /mkdir -p "\$HOME\/\.codex\/skills"/);
+  assert.match(text.stdout, /New-Item -ItemType Directory -Force "\$HOME\\\.claude\\skills"/);
+  assert.match(text.stdout, /which docker/);
+  const other = containerRegistration({ codeRoot: '/app', token: 't', container: 'c2' }).skill;
+  assert.equal(other.copy.codex, 'mkdir -p "$HOME/.codex/skills" && docker cp c2:/app/.agents/skills/call-with-colleague-ai "$HOME/.codex/skills/"');
+  assert.equal(other.copyPowerShell.codex,
+    'New-Item -ItemType Directory -Force "$HOME\\.codex\\skills" | Out-Null; docker cp c2:/app/.agents/skills/call-with-colleague-ai "$HOME\\.codex\\skills"');
 });
 
 test('register outside the container also offers the local HTTP endpoint', async (t) => {
@@ -797,4 +843,12 @@ test('colleague mcp serves MCP on stdin and stdout', async (t) => {
   assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
   assert.equal(replies[0].result.serverInfo.name, 'colleague-ai');
   assert.equal(replies[1].result.tools.length, 11);
+});
+
+test('setup set accepts the meeting and backend settings, and checks their values', async () => {
+  const { validateSetting } = await import('../src/setup.mjs');
+  assert.equal(validateSetting('COLLEAGUE_MEETING_INTRO', '0'), '0');
+  assert.equal(validateSetting('COLLEAGUE_MEETING_BACKEND_MODEL', 'gpt-5.6-luna'), 'gpt-5.6-luna');
+  assert.throws(() => validateSetting('COLLEAGUE_PHONE_WEB_SEARCH', 'yes'), /must be 0 or 1/);
+  assert.throws(() => validateSetting('COLLEAGUE_PHONE_BACKEND_MODEL', 'gpt 5; rm'), /model name/);
 });
