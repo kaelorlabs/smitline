@@ -1009,7 +1009,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         cloudflared = lambda name: '/usr/bin/cloudflared' if name == 'cloudflared' else None
         probed = []
 
-        async def probe(url, timeout):
+        async def probe(url, timeout, problems=None):
             probed.append(url)
             return True
         tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared, probe=probe)
@@ -1036,11 +1036,18 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         output[:] = [b'INF |  https://brave-fox-12.trycloudflare.com  |\n',
                      b'INF Registered tunnel connection connIndex=0\n']
 
-        async def unreachable(url, timeout):
+        async def unreachable(url, timeout, problems=None):
+            problems.append('ClientConnectorDNSError')
             return False
-        with self.assertRaises(TunnelError):
-            await PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared,
-                            probe=unreachable).get()
+        logged = []
+        spawned.clear()
+        with self.assertRaises(TunnelError) as caught:
+            await PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared, probe=unreachable,
+                            log=lambda line, **_: logged.append(line)).get()
+        # It tries a fresh tunnel once more, and says why neither worked.
+        self.assertEqual(len(spawned), 2)
+        self.assertEqual(len(logged), 2)
+        self.assertIn('ClientConnectorDNSError', str(caught.exception))
         docker = PublicUrl(lambda: {}, 8766, spawn=spawn, probe=probe,
                            which=lambda name: '/usr/bin/docker' if name == 'docker' else None)
         self.assertEqual(docker.command()[:4], ['docker', 'run', '--rm', '--network'])
