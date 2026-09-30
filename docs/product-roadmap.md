@@ -1,10 +1,10 @@
-# Colleague AI product roadmap
+# Smitline product roadmap
 
-This document describes how Colleague AI becomes a product that people can operate repeatedly and trust: phone calls and meetings for any AI agent. Work is organized around user outcomes.
+This document describes how Smitline becomes a product that people can operate repeatedly and trust: phone calls and meetings for any AI agent. Work is organized around user outcomes.
 
 ## Product principle
 
-Colleague AI should behave like a prepared assistant that an agent can send on a call: easy to brief, honest that it is an AI, useful when addressed, careful with private context, and clear about what happened when the call ends.
+Smitline should behave like a prepared assistant that an agent can send on a call: easy to brief, honest that it is an AI, useful when addressed, careful with private context, and clear about what happened when the call ends.
 
 ## Milestone 1 — Reliable local product
 
@@ -36,7 +36,7 @@ Exit criteria: a user's agent places real calls to businesses and people, and th
 
 ## Milestone 3 — Useful context
 
-Goal: Colleague AI knows what it needs for the call and nothing more.
+Goal: Smitline knows what it needs for the call and nothing more.
 
 - [x] Let operators paste notes and upload common documents as private meeting context.
 - [x] Hand hard questions to a backend model that knows the brief, with optional web search.
@@ -47,7 +47,7 @@ Exit criteria: a user can see exactly what context a call had, and the answers c
 
 ## Milestone 4 — Multi-user product
 
-Goal: a small team can use Colleague AI without sharing one person's machine configuration.
+Goal: a small team can use Smitline without sharing one person's machine configuration.
 
 - [ ] Add authenticated accounts, teams, encrypted secret storage, and role-based permissions.
 - [ ] Introduce a session service and durable metadata store while keeping raw meeting data retention configurable.
@@ -59,7 +59,7 @@ Exit criteria: invited team members can launch calls using approved integrations
 
 ## Milestone 5 — Meeting-native collaboration
 
-Goal: Colleague AI contributes naturally throughout a real meeting.
+Goal: Smitline contributes naturally throughout a real meeting.
 
 - [ ] Improve turn-taking, interruptions, speaker attribution, and latency.
 - [ ] Add meeting summaries, decisions, assigned actions, and follow-up workflows beyond the transcript-based handoff.
@@ -67,7 +67,7 @@ Goal: Colleague AI contributes naturally throughout a real meeting.
 - [x] Add more meeting providers only behind the common adapter contract and provider-specific tests. Zoom, Teams, and Meet share that contract.
 - [ ] Evaluate quality using recorded consented scenarios, including false-positive interventions and answer accuracy.
 
-Exit criteria: people choose to send Colleague AI to recurring meetings because it reduces follow-up work.
+Exit criteria: people choose to send Smitline to recurring meetings because it reduces follow-up work.
 
 ## Current boundary
 

@@ -165,7 +165,7 @@ class PublicUrl:
         return None
 
     def container(self):
-        return f'colleague-tunnel-{self.local_port}'
+        return f'smitline-tunnel-{self.local_port}'
 
     def available(self):
         try:

@@ -90,8 +90,8 @@ export function createLocalMcpHandler({
         return send(response, 403, rpcError(null, -32000, 'Browsers cannot use this endpoint'));
       }
       if (!authorized(request)) {
-        return send(response, 401, rpcError(null, -32001, 'A valid bearer token is required; see colleague setup register'), {
-          'WWW-Authenticate': 'Bearer realm="colleague-ai"',
+        return send(response, 401, rpcError(null, -32001, 'A valid bearer token is required; see smitline setup register'), {
+          'WWW-Authenticate': 'Bearer realm="smitline"',
         });
       }
       return await handleMcpRequest(request, response, { store, owner: 'local', label: 'a local agent', log });

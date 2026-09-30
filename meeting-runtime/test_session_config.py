@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from bridge import browser_environment, build_session_config
-from meeting_intro import intro_event, introduce
+from meeting_intro import addressing_instructions, intro_event, introduce
 from runtime_config import RuntimeConfig
 from runtime_state import write_private_json
 from test_schemas import context_payload
@@ -84,7 +84,7 @@ class SessionConfigTests(unittest.TestCase):
 
 
 class MeetingIntroTests(unittest.TestCase):
-    INTRO = "Hi everyone, I'm {}'s AI assistant. I'll mostly listen; say 'Colleague' if you need me."
+    INTRO = "Hi everyone, I'm {}'s AI assistant. I'll mostly listen; say 'Smitline' if you need me."
 
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
@@ -124,6 +124,27 @@ class MeetingIntroTests(unittest.TestCase):
         runtime = RuntimeConfig.from_environ({})
         self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
                       intro_event(runtime)['content'])
+
+    def test_people_can_address_it_as_smitline_as_heard_or_as_colleague(self):
+        prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
+        self.assertIn('people address you as "Smitline".', prompt)
+        for heard in ('"smit line"', '"Smith line"', '"Smithline"', '"Smitlin"'):
+            self.assertIn(heard, prompt)
+        self.assertIn('"Colleague" also addresses you', prompt)
+        self.assertIn('not when they talk about a colleague of theirs', prompt)
+
+    def test_a_custom_participant_name_is_accepted_alongside_smitline(self):
+        runtime = RuntimeConfig.from_environ({'COLLEAGUE_PARTICIPANT_NAME': 'Robin Bot'})
+        prompt = build_session_config(runtime)['instructions']
+        self.assertIn('people address you as "Robin Bot" or "Smitline".', prompt)
+        self.assertIn('"Colleague" also addresses you', prompt)
+        self.assertEqual(addressing_instructions('smitline'), addressing_instructions(''))
+
+    def test_addressing_names_stay_when_the_intro_is_off(self):
+        runtime = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0'})
+        prompt = build_session_config(runtime)['instructions']
+        self.assertIn('"Smitline"', prompt)
+        self.assertIn('"Colleague" also addresses you', prompt)
 
     def test_intro_can_be_switched_off(self):
         runtime = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0',

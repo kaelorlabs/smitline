@@ -1,6 +1,6 @@
-# Colleague AI Python SDK
+# Smitline Python SDK
 
-Versioned local SDK (`colleague-ai` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Colleague AI runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
+Versioned local SDK (`colleague-ai` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
 
 Requires Python 3.10+. This package is not published to PyPI: use it from a checkout of this repository, with `packages/sdk-python` on `PYTHONPATH` or installed with `pip install ./packages/sdk-python`. There are no third-party runtime dependencies.
 
@@ -46,13 +46,13 @@ Typed errors: `ValidationError`, `StartupError`, `RuntimeError`.
 
 The loopback transport reads `.colleague/daemon.auth` under `root` (default: the working directory), authenticates every request, rotates a stale token from that file, and can start `start-runtime-daemon.sh` (`autostart=False` turns this off).
 
-When Colleague AI runs in the `colleague` container, the token is inside the container and changes each time it starts. Pass a `read_auth` function that fetches it, and turn off autostart:
+When Smitline runs in the `smitline` container, the token is inside the container and changes each time it starts. Pass a `read_auth` function that fetches it, and turn off autostart:
 
 ```python
 import subprocess
 
 def read_auth():
-    return subprocess.run(['docker', 'exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'],
+    return subprocess.run(['docker', 'exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'],
                           capture_output=True, text=True, check=True).stdout.strip()
 
 colleague = Colleague(read_auth=read_auth, autostart=False)

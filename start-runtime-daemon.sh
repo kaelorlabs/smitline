@@ -49,7 +49,7 @@ run_on_host() {
     if [[ ! -x "$VENV/bin/python" ]]; then
       if ! python3 -m venv "$VENV"; then
         rm -rf "$VENV"
-        echo 'Could not create a Python virtual environment. Start Docker to run Colleague AI there instead, or on Ubuntu run: sudo apt install -y python3-venv' >&2
+        echo 'Could not create a Python virtual environment. Start Docker to run Smitline there instead, or on Ubuntu run: sudo apt install -y python3-venv' >&2
         exit 1
       fi
     fi
@@ -66,18 +66,18 @@ run_in_docker() {
   local hash desktop sock name
   hash="$(cat Dockerfile.daemon "$REQ" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12)"
   if [[ "$(docker image inspect -f '{{index .Config.Labels "colleague.hash"}}' "$IMAGE" 2>/dev/null || true)" != "$hash" ]]; then
-    echo 'Building the Colleague AI image (first start only; about a minute)...'
+    echo 'Building the Smitline image (first start only; about a minute)...'
     tar -cf - Dockerfile.daemon -C meeting-runtime requirements-daemon.txt \
       | docker build --quiet --label "colleague.hash=$hash" -t "$IMAGE" -f Dockerfile.daemon -
   fi
   # Host networking keeps the daemon and phone gateway on this computer's loopback,
   # exactly where they are without Docker. The checkout is mounted at the same path,
   # so the meeting containers the daemon starts see the same files.
-  local args=(--rm --init --name "colleague-daemon-$PORT" --network host
+  local args=(--rm --init --name "smitline-daemon-$PORT" --network host
     -v "$ROOT:$ROOT" -w "$ROOT" -e HOME=/tmp)
   desktop="$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)"
   if [[ "$desktop" == *"Docker Desktop"* ]]; then
-    echo 'Docker Desktop: turn on host networking (Settings > Resources > Network) so this computer can reach Colleague AI.'
+    echo 'Docker Desktop: turn on host networking (Settings > Resources > Network) so this computer can reach Smitline.'
   else
     # Files the daemon writes stay owned by you.
     args+=(--user "$(id -u):$(id -g)")
@@ -98,7 +98,7 @@ run_in_docker() {
       OPENAI_*|TWILIO_*|SIGNALWIRE_*|COLLEAGUE_*) args+=(-e "$name") ;;
     esac
   done
-  docker rm -f "colleague-daemon-$PORT" >/dev/null 2>&1 || true
+  docker rm -f "smitline-daemon-$PORT" >/dev/null 2>&1 || true
   exec docker run "${args[@]}" "$IMAGE" \
     python -u "$ROOT/meeting-runtime/daemon_main.py" --host "$HOST" --port "$PORT" ${MODE[@]+"${MODE[@]}"}
 }
@@ -117,7 +117,7 @@ case "$RUNTIME" in
     elif docker_ready; then
       run_in_docker
     else
-      echo 'Colleague AI needs Docker (recommended) or Python 3.10+ with venv. Start or install Docker, or on Ubuntu run: sudo apt install -y python3-venv' >&2
+      echo 'Smitline needs Docker (recommended) or Python 3.10+ with venv. Start or install Docker, or on Ubuntu run: sudo apt install -y python3-venv' >&2
       exit 1
     fi ;;
   *)

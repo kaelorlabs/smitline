@@ -1,4 +1,4 @@
-/** Versioned Colleague AI SDK types mirroring the daemon's calls API. */
+/** Versioned Smitline SDK types mirroring the daemon's calls API. */
 export const SCHEMA_VERSION = 1;
 export const SDK_VERSION: string;
 
@@ -124,7 +124,7 @@ export interface ColleagueOptions {
   root?: string;
   /** Where start-runtime-daemon.sh lives, when it differs from root. */
   codeRoot?: string;
-  /** True in the Colleague AI container (COLLEAGUE_MANAGED=1): the daemon is never started from here. */
+  /** True in the Smitline container (COLLEAGUE_MANAGED=1): the daemon is never started from here. */
   managed?: boolean;
   host?: string;
   port?: number;
@@ -161,7 +161,7 @@ export function createLoopbackTransport(options?: {
 }): DaemonTransport;
 
 export const MANAGED_NOT_RUNNING: string;
-/** True when COLLEAGUE_MANAGED=1: the Colleague AI container runs the daemon. */
+/** True when COLLEAGUE_MANAGED=1: the Smitline container runs the daemon. */
 export function isManaged(env?: Record<string, string | undefined>): boolean;
 
 export const EXIT: {

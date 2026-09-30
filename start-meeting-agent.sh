@@ -15,7 +15,7 @@ else
   GET_IMAGE=(--build)
 fi
 if [[ ! -f "$DATA/.env" ]]; then
-  echo 'Set OPENAI_API_KEY first: colleague setup secrets' >&2
+  echo 'Set OPENAI_API_KEY first: smitline setup secrets' >&2
   exit 1
 fi
 # The container runs as this user so it can use the private runtime files.

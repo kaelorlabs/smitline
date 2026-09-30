@@ -672,7 +672,7 @@ def create_app(
         # server-mode API token held by a remote program.
         _, _, credential = request.headers.get('Authorization', '').partition(' ')
         if not _bearer_matches(credential, token):
-            return _json_error(403, 'forbidden', 'only the local token on this computer can stop Colleague AI')
+            return _json_error(403, 'forbidden', 'only the local token on this computer can stop Smitline')
         (on_stop or request_stop)()
         return web.json_response({'stopping': True}, status=202)
 

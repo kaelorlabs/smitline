@@ -4,8 +4,8 @@ const $ = (sel) => document.querySelector(sel);
 const startLock = createStartLock();
 const form = $('#meeting-form');
 const views = {
-  meeting: ['New meeting', 'Set up your colleague, then invite it into the conversation.'],
-  context: ['Reference context', 'Give your colleague the documents and details behind the discussion.'],
+  meeting: ['New meeting', 'Set up Smitline, then invite it into the conversation.'],
+  context: ['Reference context', 'Give Smitline the documents and details behind the discussion.'],
   history: ['Transcripts and handoffs', 'Return to the conversations, decisions, and structured handoffs from your meetings.'],
 };
 function selectView(view) {
@@ -85,7 +85,7 @@ function setBusy(busy, label) {
   $('#check-button').disabled = busy;
   $('#start-button').disabled = busy || meetingBusy(latestStatus);
   if (label) $('#start-button').firstChild.textContent = `${label} `;
-  else $('#start-button').firstChild.textContent = 'Start colleague ';
+  else $('#start-button').firstChild.textContent = 'Start Smitline ';
 }
 
 function describePhase(phase, health, status = {}) {
@@ -94,7 +94,7 @@ function describePhase(phase, health, status = {}) {
     starting: ['Starting local services…', 'Building the meeting environment and checking connections.'],
     opening_meeting: ['Opening meeting…', 'Preparing the web meeting client.'],
     joining: ['Joining the meeting…', 'Processing the invitation.'],
-    waiting_for_admission: ['Waiting to be admitted.', 'The host will see Colleague AI in the lobby.'],
+    waiting_for_admission: ['Waiting to be admitted.', 'The host will see Smitline in the lobby.'],
     admitted: ['Admitted.', 'Connecting meeting audio.'],
     connecting_audio: ['Connecting audio…', 'Preparing the virtual microphone for GPT-Live output.'],
     live: ['Ready to contribute.', 'Listening continuously and waiting for a direct request or a useful factual correction.'],
@@ -107,7 +107,7 @@ function describePhase(phase, health, status = {}) {
       : ['Microsoft account connected.', 'Stop the account browser, then start your meeting.'],
     meeting_ended: ['The meeting has ended.', 'The transcript is available below.'],
     needs_attention: ['The agent needs attention.', status.daemonError || health?.error || 'Open the runtime log for details.'],
-    api_error: ['The voice connection failed.', 'Check the API error and restart the colleague.'],
+    api_error: ['The voice connection failed.', 'Check the API error and restart Smitline.'],
   };
   return states[phase] || ['Working…', 'The current stage is shown above.'];
 }
@@ -316,7 +316,7 @@ async function startColleague(event) {
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
-    announce('Colleague AI is starting. Admit it when it reaches the meeting lobby.');
+    announce('Smitline is starting. Admit it when it reaches the meeting lobby.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
   finally {
@@ -351,8 +351,8 @@ $('#clear-context-button').addEventListener('click', async () => {
   } catch (error) { announce(error.message, true); }
 });
 $('#stop-button').addEventListener('click', async () => {
-  $('#stop-button').disabled = true; announce('Stopping Colleague AI…');
-  try { await request('/api/stop', { method: 'POST', body: '{}' }); announce('Colleague AI stopped.'); await refresh(); }
+  $('#stop-button').disabled = true; announce('Stopping Smitline…');
+  try { await request('/api/stop', { method: 'POST', body: '{}' }); announce('Smitline stopped.'); await refresh(); }
   catch (error) { announce(error.message, true); }
 });
 

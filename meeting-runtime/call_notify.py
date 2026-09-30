@@ -101,7 +101,7 @@ class WebhookNotifier:
         body = json.dumps(self.payload(call), ensure_ascii=False).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',
-            'User-Agent': 'colleague-ai-webhook/1',
+            'User-Agent': 'smitline-webhook/1',
             'X-Colleague-Event': 'call.' + call['status'],
             'X-Colleague-Signature': signature(self.secret, body),
         }

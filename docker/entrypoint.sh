@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs as root only long enough to hand the data volume and the Docker socket to the app
-# user, then starts Colleague AI as that user. The meeting container runs as the same user,
+# user, then starts Smitline as that user. The meeting container runs as the same user,
 # so both can read the private files they share.
 set -eu
 DATA="${COLLEAGUE_ROOT:-/data}"

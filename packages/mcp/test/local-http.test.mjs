@@ -85,7 +85,7 @@ test('local MCP sessions: initialize, the call tools, notifications, and DELETE'
   const { port, handler } = await startLocal(t);
   const opened = await request(port, { body: INITIALIZE, headers: auth() });
   assert.equal(opened.status, 200);
-  assert.equal(opened.body.result.serverInfo.name, 'colleague-ai');
+  assert.equal(opened.body.result.serverInfo.name, 'smitline');
   assert.equal(opened.body.result.protocolVersion, '2025-06-18');
   const session = opened.headers['mcp-session-id'];
   assert.match(session, /^[A-Za-z0-9_-]{32}$/);

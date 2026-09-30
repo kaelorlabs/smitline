@@ -267,7 +267,7 @@ async function withPanel(run, extra = {}) {
       },
       settings: {
         meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
-        participantName: 'Colleague AI',
+        participantName: 'Smitline',
         meetingInstructions: 'Stay brief.',
         camera: { enabled: true, defaultOn: false },
       },

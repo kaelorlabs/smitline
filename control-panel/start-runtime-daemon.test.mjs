@@ -65,7 +65,7 @@ test('without a usable Python the launcher builds the image and runs the daemon 
   const lines = tools.log().trim().split('\n');
   assert.ok(lines.some((line) => /^build --quiet --label colleague\.hash=[0-9a-f]{12} -t colleague-daemon:local -f Dockerfile\.daemon -$/.test(line)));
   const run = lines.find((line) => line.startsWith('run '));
-  assert.match(run, /--name colleague-daemon-9876 --network host/);
+  assert.match(run, /--name smitline-daemon-9876 --network host/);
   assert.ok(run.includes(`-v ${ROOT}:${ROOT} -w ${ROOT}`));
   assert.match(run, /--user \d+:\d+/);
   assert.match(run, /-e OPENAI_API_KEY( |$)/);

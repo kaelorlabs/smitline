@@ -33,9 +33,9 @@ export const GPT_LIVE_VOICES = Object.freeze([
 ]);
 const E164 = /^\+[1-9][0-9]{7,14}$/;
 const VOICE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;
-const MCP_NAME = 'colleague-ai';
+const MCP_NAME = 'smitline';
 // Skills a local agent can use without opening this repository.
-const INSTALLED_SKILLS = ['call-with-colleague-ai'];
+const INSTALLED_SKILLS = ['call-with-smitline'];
 
 /** 'twilio' or 'signalwire', chosen the same way as the daemon (call_hooks.phone_provider). */
 export function phoneProvider(env) {
@@ -121,21 +121,21 @@ export function connectorOrigin(value, { allowLoopback = false } = {}) {
   try {
     url = new URL(String(value).trim());
   } catch {
-    throw new Error('COLLEAGUE_CONNECTOR_URL must be an https URL such as https://colleague.example.com');
+    throw new Error('COLLEAGUE_CONNECTOR_URL must be an https URL such as https://smitline.example.com');
   }
   const loopback = allowLoopback && url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
   if (url.protocol !== 'https:' && !loopback) {
     throw new Error(`COLLEAGUE_CONNECTOR_URL must be an https URL${allowLoopback ? ' (plain http is allowed only for 127.0.0.1 and localhost)' : ''}`);
   }
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
-    throw new Error('COLLEAGUE_CONNECTOR_URL must be only the origin, such as https://colleague.example.com, with no path');
+    throw new Error('COLLEAGUE_CONNECTOR_URL must be only the origin, such as https://smitline.example.com, with no path');
   }
   return url.origin;
 }
 
 export function validateSetting(key, value, { env = process.env } = {}) {
   if (!SETTING_KEYS.includes(key)) {
-    if (SECRET_KEYS.includes(key)) throw new Error(`${key} is a secret: enter it on the page from "colleague setup secrets"`);
+    if (SECRET_KEYS.includes(key)) throw new Error(`${key} is a secret: enter it on the page from "smitline setup secrets"`);
     throw new Error(`unknown setting ${key}; allowed: ${SETTING_KEYS.join(', ')}`);
   }
   const text = String(value ?? '').trim();
@@ -232,9 +232,9 @@ async function verifyOpenAi(key, fetchImpl) {
       signal: AbortSignal.timeout(10_000),
     });
     if (response.status === 200) return { ok: true, detail: 'key works and has GPT-Live access' };
-    if (response.status === 401) return { ok: false, detail: 'OpenAI rejected the key', fix: 'colleague setup secrets' };
+    if (response.status === 401) return { ok: false, detail: 'OpenAI rejected the key', fix: 'smitline setup secrets' };
     if (response.status === 404 || response.status === 403) {
-      return { ok: false, detail: 'the key cannot use gpt-live-1; GPT-Live needs a paid API tier', fix: 'Add billing at platform.openai.com, then rerun colleague setup status' };
+      return { ok: false, detail: 'the key cannot use gpt-live-1; GPT-Live needs a paid API tier', fix: 'Add billing at platform.openai.com, then rerun smitline setup status' };
     }
     return { ok: false, detail: `OpenAI answered ${response.status}` };
   } catch {
@@ -253,7 +253,7 @@ async function verifyPhoneAccount(env, fetchImpl, provider) {
   try {
     const account = await fetchImpl(`${base}.json`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) });
     if (account.status === 401 || account.status === 404) {
-      return { ok: false, detail: `${name} rejected the ${sw ? 'Space, project ID, or API token' : 'account SID or auth token'}`, fix: 'colleague setup secrets' };
+      return { ok: false, detail: `${name} rejected the ${sw ? 'Space, project ID, or API token' : 'account SID or auth token'}`, fix: 'smitline setup secrets' };
     }
     if (!account.ok) return { ok: null, detail: `${name} answered ${account.status}` };
     const body = await account.json();
@@ -272,8 +272,8 @@ async function verifyPhoneAccount(env, fetchImpl, provider) {
       return {
         ...found,
         ok: false,
-        detail: "Twilio's free trial blocks the live call audio Colleague AI needs; upgrade the Twilio account (add funds), or use SignalWire's free trial",
-        fix: 'Upgrade in the Twilio console, or add SignalWire on the setup page (colleague setup secrets)',
+        detail: "Twilio's free trial blocks the live call audio Smitline needs; upgrade the Twilio account (add funds), or use SignalWire's free trial",
+        fix: 'Upgrade in the Twilio console, or add SignalWire on the setup page (smitline setup secrets)',
       };
     }
     return {
@@ -327,7 +327,7 @@ export function colleagueVersion(codeRoot, env = process.env) {
 /**
  * options.root      the data root (.env); COLLEAGUE_ROOT in the container.
  * options.codeRoot  the checkout (launcher, node_modules, .venv); defaults to root.
- * options.managed   in the Colleague AI container (COLLEAGUE_MANAGED=1): host-only checks
+ * options.managed   in the Smitline container (COLLEAGUE_MANAGED=1): host-only checks
  *                   (operating system, checkout, line endings, Node dependencies, where the
  *                   daemon runs) are replaced by one passing "runs in its container" check.
  */
@@ -340,22 +340,22 @@ export async function setupStatus({
   const env = { ...readEnv(root), ...Object.fromEntries(Object.entries(overrides || process.env).filter(relevant)) };
   const checks = [];
   // Always passes; it puts the version in the plain-text status too.
-  checks.push(check('version', 'Colleague AI version', true, { required: false, detail: version }));
+  checks.push(check('version', 'Smitline version', true, { required: false, detail: version }));
   const major = Number(process.versions.node.split('.')[0]);
   checks.push(check('node', 'Node.js 22 or newer', major >= 22, { detail: process.version, fix: 'Install Node.js 22 or newer' }));
   let docker;
   if (managed) {
     // The daemon and console run in the container, which reaches Docker through the mounted socket.
-    checks.push(check('runtime', 'Where Colleague AI runs', true, { detail: 'in its Docker container' }));
+    checks.push(check('runtime', 'Where Smitline runs', true, { detail: 'in its Docker container' }));
     docker = runner('docker', ['info'], { timeout: 12_000 });
     checks.push(check('docker', 'Docker is running', docker.status === 0, {
       group: 'meetings', required: false, detail: 'needed to join meetings; the container uses the Docker socket mounted into it',
       fix: 'Start the container with -v /var/run/docker.sock:/var/run/docker.sock',
-      ask: 'Meetings need Docker access from the Colleague AI container. Please restart it with the Docker socket mounted and tell me when it is running.',
+      ask: 'Meetings need Docker access from the Smitline container. Please restart it with the Docker socket mounted and tell me when it is running.',
     }));
   } else {
     if (process.platform === 'win32') {
-      checks.push(check('platform', 'Operating system', false, { detail: 'Windows', fix: 'Install WSL2 with Ubuntu and clone Colleague AI inside the Linux home directory' }));
+      checks.push(check('platform', 'Operating system', false, { detail: 'Windows', fix: 'Install WSL2 with Ubuntu and clone Smitline inside the Linux home directory' }));
     } else {
       checks.push(check('platform', 'Operating system', true, { detail: inWsl() ? 'Linux on WSL2' : process.platform }));
       if (inWsl() && codeRoot.startsWith('/mnt/')) {
@@ -367,7 +367,7 @@ export async function setupStatus({
     checks.push(check('line_endings', 'Unix line endings', !crlf, { fix: 'Clone again inside WSL or Linux' }));
     docker = runner('docker', ['info'], { timeout: 12_000 });
     checks.push(check('docker', 'Docker is running', docker.status === 0, {
-      group: 'meetings', required: false, detail: 'needed to join meetings; also runs Colleague AI when Python is not set up',
+      group: 'meetings', required: false, detail: 'needed to join meetings; also runs Smitline when Python is not set up',
       fix: 'Start Docker, or install it inside WSL', ask: 'Please start Docker (or Docker Desktop) and tell me when it is running.',
     }));
     checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(codeRoot, 'node_modules', 'mammoth')), { fix: 'npm install' }));
@@ -381,10 +381,10 @@ export async function setupStatus({
     const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
       : inDocker ? 'Docker; the first start builds a small image. Python is not needed'
         : 'needs Docker (recommended) or Python 3.10 or newer with venv';
-    checks.push(check('runtime', 'Where Colleague AI runs', onHost || inDocker, {
+    checks.push(check('runtime', 'Where Smitline runs', onHost || inDocker, {
       detail: runtimeDetail,
       fix: 'Start or install Docker (or install Python with venv: sudo apt install -y python3-venv)',
-      ask: 'Colleague AI runs in Docker. Please install or start Docker (Docker Desktop on a Mac) and tell me when it is running.',
+      ask: 'Smitline runs in Docker. Please install or start Docker (Docker Desktop on a Mac) and tell me when it is running.',
     }));
   }
 
@@ -393,12 +393,12 @@ export async function setupStatus({
   checks.push(check('openai_key', 'OpenAI API key with GPT-Live access', openai.ok, {
     detail: openai.detail || (present(env.OPENAI_API_KEY) ? 'saved' : 'missing'),
     ask: 'Please enter your OpenAI API key on the setup page I opened in your browser. Do not paste it into this chat.',
-    fix: openai.fix || 'colleague setup secrets',
+    fix: openai.fix || 'smitline setup secrets',
   }));
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
     detail: present(env.COLLEAGUE_OWNER_NAME) ? env.COLLEAGUE_OWNER_NAME : 'missing',
     ask: "Please add your name on the setup page; every call opens with \"this is [your name]'s AI assistant\".",
-    fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_NAME "<name>")',
+    fix: 'smitline setup secrets (or: smitline setup set COLLEAGUE_OWNER_NAME "<name>")',
   }));
 
   // Phone calls go through SignalWire (free trial works) or Twilio (upgraded account).
@@ -413,8 +413,8 @@ export async function setupStatus({
   if (accountSaved && verify) account = await verifyPhoneAccount(env, fetchImpl, provider);
   checks.push(check('phone_account', accountSaved ? `${providerName} account` : 'Phone provider account', account.ok, {
     group: 'phone', required: false, detail: account.detail || (accountSaved ? 'saved' : 'not set up'),
-    ask: 'Do you want phone calls too? SignalWire has a free trial that works with Colleague AI: sign up at https://signalwire.com, then enter its details on the setup page.',
-    fix: account.fix || 'colleague setup secrets',
+    ask: 'Do you want phone calls too? SignalWire has a free trial that works with Smitline: sign up at https://signalwire.com, then enter its details on the setup page.',
+    fix: account.fix || 'smitline setup secrets',
   }));
   // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else the provider number.
   // Incoming calls can only ring a number bought from the provider.
@@ -422,7 +422,7 @@ export async function setupStatus({
   let callerOk = present(from) && E164.test(from);
   let callerDetail = !present(from) ? 'no number chosen yet' : (callerOk ? from : `${from} is not an E.164 number`);
   let callerAsk = `Should calls come from your ${providerName} number, or show your own mobile number (verified in ${providerName})?`;
-  let callerFix = `colleague setup set ${numberKey} +1... (or COLLEAGUE_CALLER_ID for a verified mobile)`;
+  let callerFix = `smitline setup set ${numberKey} +1... (or COLLEAGUE_CALLER_ID for a verified mobile)`;
   let suggest = null;
   if (Array.isArray(account.numbers)) {
     const verified = account.verified || [];
@@ -434,7 +434,7 @@ export async function setupStatus({
       suggest = { key: numberKey, value: account.numbers[0] };
       callerDetail = `this ${providerName} account has one number, ${account.numbers[0]}`;
       callerAsk = undefined;
-      callerFix = `colleague setup set ${numberKey} ${account.numbers[0]}`;
+      callerFix = `smitline setup set ${numberKey} ${account.numbers[0]}`;
     } else if (!present(from) && account.numbers.length > 1) {
       callerDetail = `${providerName} numbers: ${account.numbers.join(', ')}`;
       callerAsk = `Which number should calls come from: ${account.numbers.join(', ')}?`;
@@ -442,7 +442,7 @@ export async function setupStatus({
       suggest = { key: 'COLLEAGUE_CALLER_ID', value: verified[0] };
       callerDetail = `no ${providerName} number yet; ${verified[0]} is verified and can be shown on outgoing calls`;
       callerAsk = undefined;
-      callerFix = `colleague setup set COLLEAGUE_CALLER_ID ${verified[0]}`;
+      callerFix = `smitline setup set COLLEAGUE_CALLER_ID ${verified[0]}`;
     }
   }
   if (callerOk && !present(env[numberKey])) {
@@ -459,8 +459,8 @@ export async function setupStatus({
   }
   checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.COLLEAGUE_OWNER_PHONE), {
     group: 'phone', required: false, detail: ownerDetail,
-    ask: 'Please add your phone number on the setup page; I will call it once so you can hear Colleague AI.',
-    fix: 'colleague setup secrets (or: colleague setup set COLLEAGUE_OWNER_PHONE +1...)',
+    ask: 'Please add your phone number on the setup page; I will call it once so you can hear Smitline.',
+    fix: 'smitline setup secrets (or: smitline setup set COLLEAGUE_OWNER_PHONE +1...)',
   }));
   // Direct SIP keeps call audio between the provider and OpenAI; the relay passes it through here.
   const audioMode = PHONE_AUDIO_MODES.includes(env.COLLEAGUE_PHONE_AUDIO) ? env.COLLEAGUE_PHONE_AUDIO : 'relay';
@@ -468,14 +468,14 @@ export async function setupStatus({
     'sip-webhook': ['OPENAI_PROJECT_ID', 'OPENAI_WEBHOOK_SECRET'], relay: [] }[audioMode];
   const audioMissing = audioNeeds.filter((key) => !present(env[key]));
   const audioDetail = {
-    relay: 'relayed through this computer; direct SIP sounds more natural: colleague setup sip-trunk',
+    relay: 'relayed through this computer; direct SIP sounds more natural: smitline setup sip-trunk',
     sip: 'direct SIP: OpenAI dials out through the provider trunk. Until OpenAI enables outbound SIP for your organization, calls are relayed',
-    'sip-webhook': 'direct SIP: the provider hands answered calls to OpenAI, which notifies Colleague AI with a webhook',
+    'sip-webhook': 'direct SIP: the provider hands answered calls to OpenAI, which notifies Smitline with a webhook',
   }[audioMode];
   checks.push(check('phone_audio', 'How call audio travels', audioMissing.length === 0, {
     group: 'phone', required: false,
     detail: audioMissing.length ? `${audioDetail}; missing ${audioMissing.join(', ')}` : audioDetail,
-    fix: audioMode === 'sip' ? 'colleague setup sip-trunk' : 'colleague setup secrets',
+    fix: audioMode === 'sip' ? 'smitline setup sip-trunk' : 'smitline setup secrets',
   }));
   const reachable = audioMode === 'sip' || present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
   checks.push(check('public_url', 'The phone provider can reach this computer', reachable, {
@@ -488,21 +488,21 @@ export async function setupStatus({
     // Agents run on the host, which the container cannot see.
     checks.push(check('agents', 'Registered with a local agent', null, {
       group: 'agents', required: false,
-      detail: 'agents run outside the container; colleague setup register prints how to connect them',
-      fix: 'colleague setup register',
+      detail: 'agents run outside the container; smitline setup register prints how to connect them',
+      fix: 'smitline setup register',
     }));
   } else {
     const agents = registeredAgents(root, { runner, find });
     checks.push(check('agents', 'Registered with a local agent', agents.some((a) => a.registered), {
       group: 'agents', required: false,
       detail: agents.length ? agents.map((a) => `${a.id}${a.registered ? ' (registered)' : ''}`).join(', ') : 'no supported local agent CLI found',
-      fix: 'colleague setup register',
+      fix: 'smitline setup register',
     }));
   }
   const daemon = await portOpen(Number(process.env.COLLEAGUE_DAEMON_PORT || 8765));
   if (managed) {
     checks.push(check('daemon', 'Runtime daemon', daemon, {
-      required: false, detail: daemon ? 'running' : 'not running', fix: 'Restart the container: docker restart colleague',
+      required: false, detail: daemon ? 'running' : 'not running', fix: 'Restart the container: docker restart smitline',
     }));
   } else {
     checks.push(check('daemon', 'Runtime daemon', true, { required: false, detail: daemon ? 'running' : 'starts automatically on first use' }));
@@ -544,11 +544,11 @@ export async function setupStatus({
  * runs it (encryption required, Opus offered). Returns the trunk settings to save; the
  * password is generated here and never shown.
  */
-export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch, password = crypto.randomBytes(24).toString('base64url'), name = 'colleague-ai-openai' }) {
+export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch, password = crypto.randomBytes(24).toString('base64url'), name = 'smitline-openai' }) {
   const space = signalwireSpace(env.SIGNALWIRE_SPACE);
   const number = env.COLLEAGUE_CALLER_ID || env.SIGNALWIRE_FROM_NUMBER;
   if (!space || !present(env.SIGNALWIRE_PROJECT_ID) || !present(env.SIGNALWIRE_API_TOKEN)) {
-    throw new Error('Set up SignalWire first: colleague setup secrets');
+    throw new Error('Set up SignalWire first: smitline setup secrets');
   }
   if (!E164.test(String(number || ''))) throw new Error('Choose the number calls come from first (SIGNALWIRE_FROM_NUMBER)');
   const auth = `Basic ${Buffer.from(`${env.SIGNALWIRE_PROJECT_ID}:${env.SIGNALWIRE_API_TOKEN}`).toString('base64')}`;
@@ -614,19 +614,19 @@ export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch,
 const FIELDS = [
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
   { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, this is [your name]’s AI assistant.”' },
-  { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Colleague AI rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
+  { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
   { key: 'SIGNALWIRE_PROJECT_ID', label: 'Project ID', group: 'SignalWire (free trial)', hint: 'On the API Credentials page of your SignalWire Dashboard.' },
   { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
-  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Colleague AI check that call updates really come from SignalWire.' },
+  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Smitline check that call updates really come from SignalWire.' },
   { key: 'SIGNALWIRE_FROM_NUMBER', label: 'SignalWire phone number', group: 'SignalWire (free trial)', hint: 'A number from Phone Numbers in SignalWire. You can leave it empty and show a verified number instead ("Show my own number" above).' },
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
   { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (COLLEAGUE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
   { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
-  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
+  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
 
@@ -717,14 +717,14 @@ form{display:grid;gap:16px}
  */
 export function renderSecretsPage(saved, action, message = '', options = {}) {
   const { tone = 'info', savedNow = [], errors = [], done = false, finished = false } = options;
-  const brand = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Colleague <b>AI</b></span></div>';
+  const brand = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Smitline</span></div>';
   const groupTitles = { Required: 'The basics' };
   const groupHints = {
     Required: 'Required for every call and meeting.',
-    'Phone calls (optional)': 'Skip the phone sections if you only want Colleague AI in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Colleague AI.',
+    'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline.',
     'SignalWire (free trial)': 'Sign up free at https://signalwire.com (no card needed). A trial calls only numbers you verify in SignalWire (Phone Numbers > Verified Caller IDs), up to 10, in the US and Canada. Adding $5 lifts that.',
-    'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Colleague AI needs, so use Twilio only with an upgraded account.",
-    'Remote connector (server mode)': 'Only for running Colleague AI on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',
+    'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Smitline needs, so use Twilio only with an upgraded account.",
+    'Remote connector (server mode)': 'Only for running Smitline on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',
   };
   const isSaved = (field) => present(saved[field.key]);
   const required = (field) => field.group === 'Required';
@@ -754,7 +754,7 @@ ${PAGE_STYLE}</style></head>`;
   if (finished) {
     const savedLabels = FIELDS.filter(isSaved).map((f) => `<li>${escapeHtml(f.label)}</li>`).join('');
     const missing = FIELDS.filter((f) => required(f) && !isSaved(f)).map((f) => f.label);
-    return `${head('Colleague AI setup: done')}
+    return `${head('Smitline setup: done')}
 <body><main>${brand}
 <section class="card done" aria-labelledby="done-title">
 <div class="done-check${missing.length ? ' warn' : ''}" aria-hidden="true">${missing.length ? '!' : '✓'}</div>
@@ -821,9 +821,9 @@ ${field.hint ? `<p class="hint" id="${id}-hint">${linked(field.hint)}</p>` : ''}
   const submitHint = done
     ? 'Save as often as you like. Done saves anything you typed, closes this page, and lets your agent continue.'
     : 'Fill in what you have, then press Save. Your agent continues setup from there.';
-  return `${head('Colleague AI setup')}
+  return `${head('Smitline setup')}
 <body><main>${brand}
-<header><h1>Colleague AI setup</h1></header>
+<header><h1>Smitline setup</h1></header>
 <p class="lead">Type your keys here, not in the chat with your agent.</p>
 <ul class="promises">
 <li><span class="icon" aria-hidden="true">✓</span><span><strong>Saved only on this computer</strong><span class="muted">In the project’s private <code>.env</code> file, readable only by your user account.</span></span></li>
@@ -1073,7 +1073,7 @@ export function localMcpConnection({ token, port = Number(process.env.COLLEAGUE_
  * where the call skill is. Nothing is written.
  */
 export function containerRegistration({
-  codeRoot, token, port, container = process.env.COLLEAGUE_CONTAINER_NAME || 'colleague',
+  codeRoot, token, port, container = process.env.COLLEAGUE_CONTAINER_NAME || 'smitline',
 } = {}) {
   const mcp = localMcpConnection({ token, port });
   const authorization = mcp.headers.Authorization;
@@ -1101,13 +1101,13 @@ export function containerRegistration({
       },
       'claude-desktop': {
         file: 'claude_desktop_config.json (Claude Desktop: Settings > Developer > Edit Config)',
-        json: { mcpServers: { [MCP_NAME]: { command: 'docker', args: ['exec', '-i', container, 'colleague', 'mcp'] } } },
+        json: { mcpServers: { [MCP_NAME]: { command: 'docker', args: ['exec', '-i', container, 'smitline', 'mcp'] } } },
         note: 'Merge into the file, then quit and reopen Claude Desktop. If it cannot start the server, it may not find docker '
           + '(apps opened from the macOS Dock often lack /usr/local/bin): replace "docker" with the full path that '
           + '`which docker` prints (`where docker` on Windows), such as /usr/local/bin/docker on macOS.',
       },
       other: {
-        note: `Other MCP clients: Streamable HTTP at ${mcp.url} with the Authorization header, or stdio with: docker exec -i ${container} colleague mcp`,
+        note: `Other MCP clients: Streamable HTTP at ${mcp.url} with the Authorization header, or stdio with: docker exec -i ${container} smitline mcp`,
       },
     },
     skill: {
@@ -1134,7 +1134,7 @@ export function formatContainerRegistration(report) {
   const { mcp, agents, skill } = report;
   const indent = (text) => String(text).trimEnd().split('\n').map((line) => `  ${line}`).join('\n');
   return [
-    'Colleague AI runs in its container, so connect your agents on this computer (the host):',
+    'Smitline runs in its container, so connect your agents on this computer (the host):',
     '',
     `MCP URL:  ${mcp.url}`,
     `Header:   Authorization: ${mcp.headers.Authorization}`,
@@ -1162,7 +1162,7 @@ export function formatContainerRegistration(report) {
     indent(skill.copyPowerShell['claude-code']),
     indent(skill.copyPowerShell.codex),
     '',
-    'Restart each agent after adding Colleague AI. Keep the token private: it lets a program on this computer place calls.',
+    'Restart each agent after adding Smitline. Keep the token private: it lets a program on this computer place calls.',
     '',
   ].join('\n');
 }

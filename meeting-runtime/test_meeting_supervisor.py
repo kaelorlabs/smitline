@@ -385,7 +385,7 @@ class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_published_image_pulls_the_meeting_image(self):
         from meeting_supervisor import CODE_ROOT, ComposeMeetingAgent
         runner = FakeRunner()
-        environ = {'COLLEAGUE_MEETING_IMAGE': 'ghcr.io/kaelorlabs/colleague-meeting:main'}
+        environ = {'COLLEAGUE_MEETING_IMAGE': 'ghcr.io/kaelorlabs/smitline-meeting:main'}
         agent = ComposeMeetingAgent(runner, environ=environ)
         await agent.up({})
         await agent.stop()
@@ -469,7 +469,7 @@ class RuntimeStateConfigTests(unittest.TestCase):
 
     def test_missing_state_keeps_environ(self):
         config = RuntimeConfig.from_environ({})
-        self.assertEqual(config.participant_name, 'Colleague AI')
+        self.assertEqual(config.participant_name, 'Smitline')
         with self.assertRaises(KeyError):
             resolve_meeting_url({})
 

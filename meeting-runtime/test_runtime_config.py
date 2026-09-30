@@ -7,7 +7,7 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_product_defaults_are_scenario_independent(self):
         config = RuntimeConfig.from_environ({})
         from phone_prompts import DEFAULT_BACKEND_MODEL
-        self.assertEqual(config.participant_name, 'Colleague AI')
+        self.assertEqual(config.participant_name, 'Smitline')
         self.assertEqual(config.meeting_instructions, '')
         self.assertTrue(config.camera_enabled)
         self.assertTrue(config.camera_default_on)

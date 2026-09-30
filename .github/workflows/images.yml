@@ -1,5 +1,5 @@
 # Tests every pull request and every push to main. A version tag (v0.1.0, ...) also publishes
-# the two images new users pull: ghcr.io/kaelorlabs/colleague and ghcr.io/kaelorlabs/colleague-meeting.
+# the two images new users pull: ghcr.io/kaelorlabs/smitline and ghcr.io/kaelorlabs/smitline-meeting.
 # To release: git tag v0.1.0 && git push origin v0.1.0
 name: Images
 
@@ -38,35 +38,35 @@ jobs:
           file: Dockerfile.meeting
           load: true
           build-args: VERSION=test
-          tags: colleague-meeting:test
+          tags: smitline-meeting:test
           cache-from: type=gha,scope=meeting
           cache-to: type=gha,scope=meeting,mode=max
       - name: Runtime tests, inside the meeting image
         run: >
           docker run --rm --entrypoint /app/.venv/bin/python -w /meeting-runtime
-          colleague-meeting:test -m unittest discover -s /meeting-runtime -p 'test_*.py'
-      - name: Build the colleague image
+          smitline-meeting:test -m unittest discover -s /meeting-runtime -p 'test_*.py'
+      - name: Build the smitline image
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
           build-args: VERSION=test
-          tags: colleague:test
-          cache-from: type=gha,scope=colleague
-          cache-to: type=gha,scope=colleague,mode=max
-      - name: The colleague image starts and answers
+          tags: smitline:test
+          cache-from: type=gha,scope=smitline
+          cache-to: type=gha,scope=smitline,mode=max
+      - name: The smitline image starts and answers
         run: |
-          docker volume create colleague-test
-          docker run -d --name colleague-test --network host -v colleague-test:/data \
-            -v /var/run/docker.sock:/var/run/docker.sock colleague:test
+          docker volume create smitline-test
+          docker run -d --name smitline-test --network host -v smitline-test:/data \
+            -v /var/run/docker.sock:/var/run/docker.sock smitline:test
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8095/calls >/dev/null && break
             sleep 1
           done
-          docker exec colleague-test colleague setup status --json | python3 -c 'import json,sys; json.load(sys.stdin)'
+          docker exec smitline-test smitline setup status --json | python3 -c 'import json,sys; json.load(sys.stdin)'
           curl -fsS -o /dev/null http://127.0.0.1:8095/calls
-          docker logs colleague-test
-          docker rm -f colleague-test
+          docker logs smitline-test
+          docker rm -f smitline-test
 
   publish:
     needs: test
@@ -88,8 +88,8 @@ jobs:
         id: names
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "meeting=ghcr.io/$owner/colleague-meeting" >> "$GITHUB_OUTPUT"
-          echo "colleague=ghcr.io/$owner/colleague" >> "$GITHUB_OUTPUT"
+          echo "meeting=ghcr.io/$owner/smitline-meeting" >> "$GITHUB_OUTPUT"
+          echo "smitline=ghcr.io/$owner/smitline" >> "$GITHUB_OUTPUT"
           echo "sha=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           # v0.1.0 -> 0.1.0; anything that is not a version tag is named by its commit.
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; else version="sha-${GITHUB_SHA::7}"; fi
@@ -115,26 +115,26 @@ jobs:
           labels: ${{ steps.meeting-tags.outputs.labels }}
           cache-from: type=gha,scope=meeting-publish
           cache-to: type=gha,scope=meeting-publish,mode=max
-      - id: colleague-tags
+      - id: smitline-tags
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.names.outputs.colleague }}
+          images: ${{ steps.names.outputs.smitline }}
           tags: |
             type=sha,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
-      - name: Publish the colleague image
+      - name: Publish the smitline image
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          # Each colleague image starts the meeting image built from the same commit.
+          # Each smitline image starts the meeting image built from the same commit.
           build-args: |
             MEETING_IMAGE=${{ steps.names.outputs.meeting }}:${{ steps.names.outputs.sha }}
             VERSION=${{ steps.names.outputs.version }}
-          tags: ${{ steps.colleague-tags.outputs.tags }}
-          labels: ${{ steps.colleague-tags.outputs.labels }}
-          cache-from: type=gha,scope=colleague-publish
-          cache-to: type=gha,scope=colleague-publish,mode=max
+          tags: ${{ steps.smitline-tags.outputs.tags }}
+          labels: ${{ steps.smitline-tags.outputs.labels }}
+          cache-from: type=gha,scope=smitline-publish
+          cache-to: type=gha,scope=smitline-publish,mode=max

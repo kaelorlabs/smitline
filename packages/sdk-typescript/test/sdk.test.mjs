@@ -142,12 +142,12 @@ test('profile reads and updates, and silent notes, use the daemon routes', async
   });
   const colleague = new Colleague({ transport });
   await colleague.getProfile();
-  await colleague.updateProfile({ about: 'Robin builds Colleague AI.' });
+  await colleague.updateProfile({ about: 'Robin builds Smitline.' });
   await colleague.instructCall('call-0123456789abcdef', 'He tried it yesterday', { silent: true });
   await colleague.instructCall('call-0123456789abcdef', 'Ask about parking');
   assert.deepEqual(seen, [
     ['GET', '/v1/profile', null],
-    ['PATCH', '/v1/profile', { about: 'Robin builds Colleague AI.' }],
+    ['PATCH', '/v1/profile', { about: 'Robin builds Smitline.' }],
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'He tried it yesterday', silent: true }],
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'Ask about parking' }],
   ]);
@@ -176,7 +176,7 @@ test('managed (COLLEAGUE_MANAGED=1): the SDK never starts a daemon and says to r
     root, port: 1, managed: true, isPortOpen: async () => false,
     spawnDaemon: () => { spawns += 1; return { unref() {} }; },
   });
-  await assert.rejects(() => explicit.startCall({ channel: 'meeting', to: ZOOM, objective: 'x' }), /docker restart colleague/);
+  await assert.rejects(() => explicit.startCall({ channel: 'meeting', to: ZOOM, objective: 'x' }), /docker restart smitline/);
   assert.equal(spawns, 0);
 });
 

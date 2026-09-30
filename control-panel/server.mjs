@@ -164,7 +164,7 @@ export function createServer(options = {}) {
     return parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8'));
   }
 
-  // COLLEAGUE_OWNER_NAME lives in .env (colleague setup); .env.meeting may also set it.
+  // COLLEAGUE_OWNER_NAME lives in .env (smitline setup); .env.meeting may also set it.
   function meetingOwner() {
     let secrets = {};
     try { secrets = secretsEnv(); } catch { /* no .env yet */ }
@@ -566,6 +566,6 @@ export function createServer(options = {}) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   createServer().listen(PORT, '127.0.0.1', () => {
-    console.log(`Colleague AI control panel: http://127.0.0.1:${PORT}`);
+    console.log(`Smitline control panel: http://127.0.0.1:${PORT}`);
   });
 }

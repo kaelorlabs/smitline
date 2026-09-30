@@ -9,17 +9,17 @@ test('client validation blocks empty or non-HTTPS required fields', () => {
     participantName: 'Enter the name that should appear in the meeting.',
   });
   assert.equal(
-    clientMeetingErrors({ meetingUrl: 'http://zoom.us/j/1', participantName: 'Colleague AI' }).meetingUrl,
+    clientMeetingErrors({ meetingUrl: 'http://zoom.us/j/1', participantName: 'Smitline' }).meetingUrl,
     'Use a full https:// Zoom, Teams, or Google Meet invitation.',
   );
   assert.equal(
-    clientMeetingErrors({ meetingUrl: 'not-a-url', participantName: 'Colleague AI' }).meetingUrl,
+    clientMeetingErrors({ meetingUrl: 'not-a-url', participantName: 'Smitline' }).meetingUrl,
     'Paste a full https:// invitation URL.',
   );
   assert.deepEqual(
     clientMeetingErrors({
       meetingUrl: 'https://us05web.zoom.us/j/123456789',
-      participantName: 'Colleague AI',
+      participantName: 'Smitline',
     }),
     {},
   );

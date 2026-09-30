@@ -1,18 +1,19 @@
 {
-  "name": "colleague",
+  "name": "smitline",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Colleague AI CLI for phone calls and Zoom, Teams, and Google Meet meetings.",
-  "homepage": "https://github.com/kaelorlabs/colleague-ai",
+  "description": "Smitline CLI for phone calls and Zoom, Teams, and Google Meet meetings.",
+  "homepage": "https://github.com/kaelorlabs/smitline",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kaelorlabs/colleague-ai.git",
+    "url": "git+https://github.com/kaelorlabs/smitline.git",
     "directory": "packages/cli"
   },
   "bin": {
-    "colleague": "./src/colleague.mjs"
+    "smitline": "./src/smitline.mjs",
+    "colleague": "./src/smitline.mjs"
   },
   "files": [
     "src",

@@ -22,7 +22,7 @@ def write_auth_token(root, token=None):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description='Colleague AI runtime daemon')
+    parser = argparse.ArgumentParser(description='Smitline runtime daemon')
     # --root holds .env and .colleague/; --runtime-root holds meeting run/, recordings/, and
     # profiles/. From a checkout both default to the checkout; the image sets COLLEAGUE_ROOT and
     # COLLEAGUE_MEETING_DATA to its data volume.

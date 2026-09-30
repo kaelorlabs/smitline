@@ -6,6 +6,12 @@ from voice_core import append_event
 
 
 FALLBACK_OWNER = 'the person who invited me'
+# The name the disclosure asks people to use.
+CALL_NAME = 'Smitline'
+# How speech recognition often hears "Smitline".
+CALL_NAME_HEARD_AS = ('smit line', 'Smith line', 'Smithline', 'Smitlin')
+# The product's earlier name; people who learned it can still call on the assistant with it.
+FORMER_CALL_NAME = 'Colleague'
 # meeting_line.context_from_brief writes this task for meetings started through /v1/calls.
 CALL_TASK = re.compile(r'^Take part in this meeting on behalf of (.+?)\.?$')
 MAX_NAME = 120
@@ -33,7 +39,21 @@ def owner_name(state=None, environ=None):
 
 def intro_line(owner):
     who = f"{owner}'s AI assistant" if owner else f'an AI assistant for {FALLBACK_OWNER}'
-    return f"Hi everyone, I'm {who}. I'll mostly listen; say 'Colleague' if you need me."
+    return f"Hi everyone, I'm {who}. I'll mostly listen; say '{CALL_NAME}' if you need me."
+
+
+def addressing_instructions(participant_name=''):
+    """Which names address the assistant: its participant name, Smitline as it is often heard,
+    and the former name Colleague. GPT-Live hears the meeting, so this is how it recognizes them."""
+    names = [f'"{CALL_NAME}"']
+    name = ' '.join(str(participant_name or '').split())
+    if name and name.casefold() != CALL_NAME.casefold():
+        names.insert(0, f'"{name}"')
+    heard = ', '.join(f'"{variant}"' for variant in CALL_NAME_HEARD_AS)
+    return ('\nYour name: people address you as ' + ' or '.join(names) + '. You may hear '
+            f'{CALL_NAME} as {heard}, or similar; treat those as your name. "{FORMER_CALL_NAME}" '
+            'also addresses you when someone uses it as a name to call on you, such as '
+            f'"{FORMER_CALL_NAME}, what do you think?", but not when they talk about a colleague of theirs.')
 
 
 def intro_instructions(owner):

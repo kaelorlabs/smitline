@@ -2,7 +2,7 @@
 # microphone, a speaker, and a screen; bridge.py carries the audio to and from GPT-Live, which
 # does all listening and speaking. No speech models run here.
 # The code is in the image. Its data (runtime state, recordings, browser profiles) lives on
-# the volume the colleague container keeps at /data (compose.meeting.image.yaml). From a
+# the volume the smitline container keeps at /data (compose.meeting.image.yaml). From a
 # checkout, compose.meeting.yaml mounts the code and data over /meeting-runtime instead.
 FROM python:3.12-slim-bookworm
 

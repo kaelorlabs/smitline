@@ -4,14 +4,15 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Local MCP adapter for Colleague AI. Thin stdio JSON-RPC wrapper over the TypeScript SDK.",
-  "homepage": "https://github.com/kaelorlabs/colleague-ai",
+  "description": "Local MCP adapter for Smitline. Thin stdio JSON-RPC wrapper over the TypeScript SDK.",
+  "homepage": "https://github.com/kaelorlabs/smitline",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kaelorlabs/colleague-ai.git",
+    "url": "git+https://github.com/kaelorlabs/smitline.git",
     "directory": "packages/mcp"
   },
   "bin": {
+    "smitline-mcp": "./src/server.mjs",
     "colleague-mcp": "./src/server.mjs"
   },
   "main": "./src/session.mjs",

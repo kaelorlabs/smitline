@@ -89,7 +89,7 @@ class Participation:
             self._discard_pending()
             await self.gate.set_muted(True)
             self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
-        self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+        self.state['error'] = 'The meeting microphone was muted. Smitline will not override it.'
         if self.on_presence:
             self.on_presence()
         return True
@@ -160,7 +160,7 @@ class Participation:
                         self.platform_ready = False
                         self.state['discarded_audio_bytes'] += len(data)
                         self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
-                        self.state['error'] = 'The meeting microphone was muted. Colleague AI will not override it.'
+                        self.state['error'] = 'The meeting microphone was muted. Smitline will not override it.'
                         if self.on_presence:
                             self.on_presence()
                         continue

@@ -55,7 +55,7 @@ const PAGE_EXTRA = `.eyebrow{font-size:13px;font-weight:600;color:var(--muted);m
 .scope.cannot .icon{background:var(--good-bg);color:var(--good)}
 .decide .actions button{min-width:120px}
 @media (max-width:480px){.decide .actions button{min-width:0}}`;
-const BRAND = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Colleague <b>AI</b></span></div>';
+const BRAND = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Smitline</span></div>';
 
 // Configuration ---------------------------------------------------------------
 
@@ -69,7 +69,7 @@ export function loadConnectorConfig({ root = DEFAULT_ROOT, env = process.env } =
   const problems = [];
   let baseUrl = '';
   if (!value('COLLEAGUE_CONNECTOR_URL')) {
-    problems.push('COLLEAGUE_CONNECTOR_URL is not set. Set it to the public https address of this server: colleague setup set COLLEAGUE_CONNECTOR_URL https://colleague.example.com');
+    problems.push('COLLEAGUE_CONNECTOR_URL is not set. Set it to the public https address of this server: smitline setup set COLLEAGUE_CONNECTOR_URL https://smitline.example.com');
   } else {
     try {
       baseUrl = connectorOrigin(value('COLLEAGUE_CONNECTOR_URL'), { allowLoopback: true });
@@ -79,7 +79,7 @@ export function loadConnectorConfig({ root = DEFAULT_ROOT, env = process.env } =
   }
   const passphrase = value('COLLEAGUE_CONNECTOR_PASSPHRASE');
   if (!passphrase) {
-    problems.push('COLLEAGUE_CONNECTOR_PASSPHRASE is not set. Run colleague setup secrets and choose an owner passphrase under "Remote connector (server mode)".');
+    problems.push('COLLEAGUE_CONNECTOR_PASSPHRASE is not set. Run smitline setup secrets and choose an owner passphrase under "Remote connector (server mode)".');
   } else if (passphrase.length < CONNECTOR_PASSPHRASE_MIN) {
     problems.push(`COLLEAGUE_CONNECTOR_PASSPHRASE must be at least ${CONNECTOR_PASSPHRASE_MIN} characters.`);
   }
@@ -180,7 +180,7 @@ ${PAGE_EXTRA}</style></head>
 }
 
 function errorPage(message) {
-  return page('Colleague AI connection', `<h1>This connection request can’t continue</h1>
+  return page('Smitline connection', `<h1>This connection request can’t continue</h1>
 <p class="error" role="alert">${escapeHtml(message)}</p>
 <p class="lead">Nothing was shared. Go back to the app and connect again.</p>`);
 }
@@ -192,9 +192,9 @@ function approvalPage(request, csrf, error = '') {
   const hidden = Object.entries({ ...request.fields, csrf })
     .map(([key, value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}">`)
     .join('\n');
-  return page('Allow access to Colleague AI', `<header><p class="eyebrow">Connection request</p>
-<h1>Allow ${name} to use Colleague AI?</h1></header>
-<p class="lead">An app is asking to connect to your Colleague AI server. Check who is asking, then allow or deny.</p>
+  return page('Allow access to Smitline', `<header><p class="eyebrow">Connection request</p>
+<h1>Allow ${name} to use Smitline?</h1></header>
+<p class="lead">An app is asking to connect to your Smitline server. Check who is asking, then allow or deny.</p>
 <section class="card" aria-labelledby="who-title">
 <h2 id="who-title">Who is asking</h2>
 <dl class="facts">
@@ -226,7 +226,7 @@ ${error ? `<p class="error" role="alert" id="passphrase-error">${escapeHtml(erro
 <div class="actions"><button type="submit" name="decision" value="approve">Allow</button>
 <button type="submit" name="decision" value="deny" class="secondary" formnovalidate>Deny</button></div>
 </form>
-<p class="hint">Access renews while the app uses it and ends after 30 days without use. Revoke it at any time with <code>colleague connector revoke</code>.</p>`);
+<p class="hint">Access renews while the app uses it and ends after 30 days without use. Revoke it at any time with <code>smitline connector revoke</code>.</p>`);
 }
 
 // Server ---------------------------------------------------------------------------------
@@ -272,7 +272,7 @@ export function createConnector({
       authorization_servers: [base],
       bearer_methods_supported: ['header'],
       scopes_supported: [SCOPE],
-      resource_name: 'Colleague AI',
+      resource_name: 'Smitline',
     };
   }
 
@@ -330,7 +330,7 @@ export function createConnector({
       return values.length > 1 ? null : values[0];
     };
     const client = store.getClient(one('client_id'));
-    if (!client) return { fatal: 'This app is not registered with this Colleague AI server.' };
+    if (!client) return { fatal: 'This app is not registered with this Smitline server.' };
     const given = one('redirect_uri');
     const redirectUri = given === undefined ? (client.redirectUris.length === 1 ? client.redirectUris[0] : null) : given;
     if (!redirectUri || !client.redirectUris.includes(redirectUri)) {
@@ -672,17 +672,17 @@ async function main() {
   try {
     config = loadConnectorConfig({ root: path.resolve(process.env.COLLEAGUE_ROOT || DEFAULT_ROOT) });
   } catch (error) {
-    process.stderr.write(`Colleague AI connector cannot start.\n${error.message}\nSee docs/agents.md, "Remote connector for cloud agents".\n`);
+    process.stderr.write(`Smitline connector cannot start.\n${error.message}\nSee docs/agents.md, "Remote connector for cloud agents".\n`);
     process.exit(1);
   }
   let connector;
   try {
     connector = await startConnector(config);
   } catch (error) {
-    process.stderr.write(`Colleague AI connector cannot listen on 127.0.0.1:${config.port}: ${error.code || error.message}\n`);
+    process.stderr.write(`Smitline connector cannot listen on 127.0.0.1:${config.port}: ${error.code || error.message}\n`);
     process.exit(1);
   }
-  process.stderr.write(`Colleague AI connector listening on 127.0.0.1:${config.port}\nConnector URL for cloud agents: ${config.baseUrl}/mcp\n`);
+  process.stderr.write(`Smitline connector listening on 127.0.0.1:${config.port}\nConnector URL for cloud agents: ${config.baseUrl}/mcp\n`);
   const stop = () => connector.close().then(() => process.exit(0));
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);

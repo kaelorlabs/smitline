@@ -212,7 +212,7 @@ function setChip(element, { text, tone, live }, extraClass = '') {
 }
 
 function speakerName(speaker, call) {
-  if (speaker === 'agent') return 'Colleague AI';
+  if (speaker === 'agent') return 'Smitline';
   if (speaker === 'meeting') return 'Meeting';
   return call.direction === 'inbound' ? 'Caller' : 'Other party';
 }
@@ -236,7 +236,7 @@ function announce(text) {
 }
 
 function setConnection(kind) {
-  const labels = { live: 'Connected', down: 'Colleague AI not running', offline: 'Console offline' };
+  const labels = { live: 'Connected', down: 'Smitline not running', offline: 'Console offline' };
   const element = $('connection');
   element.classList.toggle('live', kind === 'live');
   element.classList.toggle('down', kind === 'offline');
@@ -261,7 +261,7 @@ function handleLoadError(error) {
     showBanner('The console stopped responding.', 'Start it again (./start-control-panel.sh), then reload this page.', 'bad');
   } else if (['daemon_offline', 'daemon_unavailable'].includes(error.code) || error.status === 503) {
     setConnection('down');
-    showBanner('Colleague AI isn’t running right now, so calls can’t be shown.',
+    showBanner('Smitline isn’t running right now, so calls can’t be shown.',
       'It starts by itself when your agent places a call. This page keeps checking.', 'info');
   } else {
     setConnection('down');
@@ -475,7 +475,7 @@ function renderEmptyDetail() {
   $('welcome').hidden = !empty;
   $('pick').hidden = empty || !state.loaded;
   $('call').hidden = true;
-  document.title = 'Calls · Colleague AI';
+  document.title = 'Calls · Smitline';
 }
 
 function renderMeta(call) {
@@ -724,7 +724,7 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('call').hidden = false;
   const title = callTitle(call);
   $('call-title').textContent = title;
-  document.title = `${title} · Calls · Colleague AI`;
+  document.title = `${title} · Calls · Smitline`;
   renderMeta(call);
   const status = statusInfo(call);
   setChip($('call-status'), status);
@@ -860,7 +860,7 @@ function cancelConfirm() {
 
 function actionError(error) {
   if (/COLLEAGUE_OWNER_PHONE/.test(error.message)) {
-    return 'Colleague AI does not have your phone number yet. Ask your agent to set it (COLLEAGUE_OWNER_PHONE), then try again.';
+    return 'Smitline does not have your phone number yet. Ask your agent to set it (COLLEAGUE_OWNER_PHONE), then try again.';
   }
   if (error.status === 403) return 'This page is out of date. Reload it and try again.';
   if (error.code === 'console_offline') return 'The console is not responding. Reload the page and try again.';
@@ -878,7 +878,7 @@ $('join-button').addEventListener('click', async () => {
   if (!state.confirmJoin) {
     state.confirmJoin = true;
     renderActions(state.call);
-    note('Press again to confirm. Colleague AI tells them it is connecting you, then rings your phone and hands you the call.');
+    note('Press again to confirm. Smitline tells them it is connecting you, then rings your phone and hands you the call.');
     $('action-note').dataset.kind = 'confirm';
     state.confirmTimer = setTimeout(cancelConfirm, CONFIRM_MS);
     return;
@@ -910,7 +910,7 @@ $('end-button').addEventListener('click', async () => {
   state.endRequested.add(callId);
   renderActions(state.call);
   $('action-note').dataset.kind = '';
-  note(beforeAnswer ? 'Canceling the call.' : 'Asked Colleague AI to wrap up and hang up.');
+  note(beforeAnswer ? 'Canceling the call.' : 'Asked Smitline to wrap up and hang up.');
   try {
     await withToken();
     await api(`/api/calls/${callId}/end`, { method: 'POST', body: '{}' });

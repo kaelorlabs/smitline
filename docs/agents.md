@@ -1,13 +1,13 @@
 # Agents
 
-Any agent can ask Colleague AI to phone someone or join a meeting: it sends a [brief](calls.md#brief) and gets back a [result](calls.md#result). Agents on this computer talk to the loopback daemon directly. Cloud agents such as ChatGPT and Claude cannot reach this computer, so they use the remote connector.
+Any agent can ask Smitline to phone someone or join a meeting: it sends a [brief](calls.md#brief) and gets back a [result](calls.md#result). Agents on this computer talk to the loopback daemon directly. Cloud agents such as ChatGPT and Claude cannot reach this computer, so they use the remote connector.
 
 | Agent | Connect with | Setup |
 | --- | --- | --- |
-| Claude Code, Codex, Cursor | Local MCP over HTTP | `docker exec colleague colleague setup register` prints the command or config entry |
-| Claude Desktop | Local MCP over stdio | `docker exec -i colleague colleague mcp`, from the same output |
+| Claude Code, Codex, Cursor | Local MCP over HTTP | `docker exec smitline smitline setup register` prints the command or config entry |
+| Claude Desktop | Local MCP over stdio | `docker exec -i smitline smitline mcp`, from the same output |
 | OpenClaw, Hermes, other MCP clients | Local MCP over HTTP | The URL and `Authorization` header from the same output |
-| Agents that run shell commands | CLI | `docker exec colleague colleague call ... --wait` |
+| Agents that run shell commands | CLI | `docker exec smitline smitline call ... --wait` |
 | Your own code | REST API or SDKs | `/v1/calls`, `@colleague-ai/sdk`, `colleague_ai` |
 | ChatGPT, Claude on the web, other cloud agents | Remote connector | Server mode, below |
 
@@ -15,7 +15,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 
 ## Local MCP server
 
-The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with a local bearer token, and `colleague mcp` serves the same tools over stdio. These are the tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
+The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with a local bearer token, and `smitline mcp` serves the same tools over stdio. These are the tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -29,28 +29,28 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | `list_voices` | GPT-Live voices. |
 | `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. |
 
-In the image, `docker exec colleague colleague setup register --json` prints the URL and header and, for each agent, what to run on this computer: a `claude mcp add --transport http --scope user colleague-ai ...` command for Claude Code, a `[mcp_servers.colleague-ai]` block with `url` and `http_headers` for `~/.codex/config.toml`, an entry with `url` and `headers` for `~/.cursor/mcp.json`, and the `docker exec -i colleague colleague mcp` entry for Claude Desktop. It also says how to copy the skill out of the container with `docker cp`. The container cannot write those files itself.
+In the image, `docker exec smitline smitline setup register --json` prints the URL and header and, for each agent, what to run on this computer: a `claude mcp add --transport http --scope user smitline ...` command for Claude Code, a `[mcp_servers.smitline]` block with `url` and `http_headers` for `~/.codex/config.toml`, an entry with `url` and `headers` for `~/.cursor/mcp.json`, and the `docker exec -i smitline smitline mcp` entry for Claude Desktop. It also says how to copy the skill out of the container with `docker cp`. The container cannot write those files itself.
 
-From a checkout, `colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
+From a checkout, `smitline setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-smitline` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
 
-The skill in `.agents/skills/call-with-colleague-ai` teaches agents to write a complete brief with the context of what they and the user are working on, keep the user's profile current, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
+The skill in `.agents/skills/call-with-smitline` teaches agents to write a complete brief with the context of what they and the user are working on, keep the user's profile current, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
 
 ## CLI
 
 ```bash
-colleague call --to +14155550142 --objective "Book a table for 4 at 7pm" \
+smitline call --to +14155550142 --objective "Book a table for 4 at 7pm" \
   --context "Indoor is fine" --agree "6:30pm; 7:30pm" --never-share "card number" --wait
-colleague call --to +14155550199 --objective "Ask Alex whether to launch now or wait" \
+smitline call --to +14155550199 --objective "Ask Alex whether to launch now or wait" \
   --questions "Launch now or wait?; What would make him use it?" --tone casual --context-file context.json --wait
-colleague call --meeting "https://zoom.us/j/123" --objective "Help with the Q3 numbers" --wait
-colleague call --brief-file brief.json --check
-colleague calls list
-colleague calls wait --call-id call-0123456789abcdef
-colleague calls transfer --call-id call-0123456789abcdef
-colleague voices
-colleague profile set --about "Sam Rivera runs a small design studio." --style "Warm and brief"
-colleague profile person --name Alex --relationship "close friend" --phone +14155550199
-colleague profile show
+smitline call --meeting "https://zoom.us/j/123" --objective "Help with the Q3 numbers" --wait
+smitline call --brief-file brief.json --check
+smitline calls list
+smitline calls wait --call-id call-0123456789abcdef
+smitline calls transfer --call-id call-0123456789abcdef
+smitline voices
+smitline profile set --about "Sam Rivera runs a small design studio." --style "Warm and brief"
+smitline profile person --name Alex --relationship "close friend" --phone +14155550199
+smitline profile show
 ```
 
 `--on-behalf-of` defaults to `COLLEAGUE_OWNER_NAME`. Lists (`--agree`, `--never-share`, `--questions`, `--boundaries`) are separated by semicolons. `--context-file` takes a JSON [context](calls.md#context) object or plain text. With `--wait`, progress goes to stderr and the finished call to stdout as JSON. Exit codes: 0 the call completed (read `result.outcome` for how it went, including `not_reached` or `voicemail`), 2 invalid or incomplete brief (the missing questions are printed), 3 not configured or the daemon could not start (`--check` also exits 3 when the brief cannot be placed yet), 4 the call failed or was canceled, 130 interrupted. Without `--wait` the command exits 0 as soon as the call is queued and prints its id.
@@ -63,7 +63,7 @@ When the daemon runs from that checkout, the SDKs read the token and start the d
 
 ```js
 import { Colleague } from './packages/sdk-typescript/src/index.mjs';
-const colleague = new Colleague({ root: '/path/to/colleague-ai' });
+const colleague = new Colleague({ root: '/path/to/smitline' });
 const call = await colleague.startCall({ channel: 'phone', to: '+14155550142', onBehalfOf: 'Sam Rivera', objective: 'Book a table for 4 at 7pm' });
 let done = call;
 while (!['completed', 'failed', 'canceled'].includes(done.status)) done = await colleague.waitForCall(call.id, 60);
@@ -72,17 +72,17 @@ console.log(done.result.summary);
 
 ```python
 from colleague_ai import Colleague
-colleague = Colleague(root='/path/to/colleague-ai')
+colleague = Colleague(root='/path/to/smitline')
 call = await colleague.start_call({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Sam Rivera', 'objective': 'Book a table for 4 at 7pm'})
 done = await colleague.wait_for_call(call['id'], 120)
 ```
 
-When the daemon runs in the `colleague` container, it listens on `127.0.0.1:8765` of this computer, and its token is `/data/.colleague/daemon.auth` inside the container. The token changes every time the container starts, so read it when needed rather than copying it: `docker exec -u app colleague cat /data/.colleague/daemon.auth`. Both SDKs take a function that returns the token and call it again after a `401`:
+When the daemon runs in the `smitline` container, it listens on `127.0.0.1:8765` of this computer, and its token is `/data/.colleague/daemon.auth` inside the container. The token changes every time the container starts, so read it when needed rather than copying it: `docker exec -u app smitline cat /data/.colleague/daemon.auth`. Both SDKs take a function that returns the token and call it again after a `401`:
 
 ```js
 import { execFileSync } from 'node:child_process';
 import { Colleague } from './packages/sdk-typescript/src/index.mjs';
-const readAuth = () => execFileSync('docker', ['exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim();
+const readAuth = () => execFileSync('docker', ['exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim();
 const colleague = new Colleague({ readAuth, autostart: false });
 ```
 
@@ -91,7 +91,7 @@ import subprocess
 from colleague_ai import Colleague
 
 def read_auth():
-    return subprocess.run(['docker', 'exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'],
+    return subprocess.run(['docker', 'exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'],
                           capture_output=True, text=True, check=True).stdout.strip()
 
 colleague = Colleague(read_auth=read_auth, autostart=False)
@@ -109,15 +109,15 @@ ChatGPT / Claude ──HTTPS──► your proxy (TLS) ──► connector 127.0
 
 ### Set up server mode
 
-The connector runs from a checkout (see [Run from a checkout](../README.md#run-from-a-checkout)); the `colleague` image does not start it yet. The `colleague connector` commands below work in both.
+The connector runs from a checkout (see [Run from a checkout](../README.md#run-from-a-checkout)); the `smitline` image does not start it yet. The `smitline connector` commands below work in both.
 
-You need a machine that stays on and already places calls (see [phone calls](phone.md); meetings also need Docker), and a domain name for it, such as `colleague.example.com`.
+You need a machine that stays on and already places calls (see [phone calls](phone.md); meetings also need Docker), and a domain name for it, such as `smitline.example.com`.
 
 1. Point the domain's DNS record at the machine and open ports 80 and 443.
 2. Put a TLS proxy in front of the connector. Forward only `/mcp`, `/oauth/*`, and `/.well-known/*` to port 8767. With [Caddy](https://caddyserver.com/), which gets the certificate by itself:
 
    ```caddyfile
-   colleague.example.com {
+   smitline.example.com {
    	@connector path /mcp /oauth/* /.well-known/*
    	handle @connector {
    		reverse_proxy 127.0.0.1:8767
@@ -132,21 +132,21 @@ You need a machine that stays on and already places calls (see [phone calls](pho
 3. Set the public address. It must be the https origin only, with no path:
 
    ```bash
-   colleague setup set COLLEAGUE_CONNECTOR_URL https://colleague.example.com
+   smitline setup set COLLEAGUE_CONNECTOR_URL https://smitline.example.com
    ```
 
-4. Choose the owner passphrase: run `colleague setup secrets` and fill in **Owner passphrase** under **Remote connector (server mode)**. It needs at least 12 characters; a few random words work well. The setup page only opens on the machine itself, so on a headless server run `colleague setup secrets --no-open` and forward the printed port over SSH (`ssh -L PORT:127.0.0.1:PORT server`). You can also write `COLLEAGUE_CONNECTOR_PASSPHRASE=...` into `.env` yourself.
+4. Choose the owner passphrase: run `smitline setup secrets` and fill in **Owner passphrase** under **Remote connector (server mode)**. It needs at least 12 characters; a few random words work well. The setup page only opens on the machine itself, so on a headless server run `smitline setup secrets --no-open` and forward the printed port over SSH (`ssh -L PORT:127.0.0.1:PORT server`). You can also write `COLLEAGUE_CONNECTOR_PASSPHRASE=...` into `.env` yourself.
 5. Start the connector and keep it running under your process manager (systemd, tmux, or similar):
 
    ```bash
    ./start-connector.sh
    ```
 
-   It refuses to start, and says what is missing, until the address and passphrase are set. It prints the connector URL, `https://colleague.example.com/mcp`. If the daemon is not running, the first call starts it. The connector does not need the daemon's own server mode (`COLLEAGUE_SERVER_MODE`); the daemon stays on loopback.
+   It refuses to start, and says what is missing, until the address and passphrase are set. It prints the connector URL, `https://smitline.example.com/mcp`. If the daemon is not running, the first call starts it. The connector does not need the daemon's own server mode (`COLLEAGUE_SERVER_MODE`); the daemon stays on loopback.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COLLEAGUE_CONNECTOR_URL` | none | Public https origin of the connector, such as `https://colleague.example.com`. Required. |
+| `COLLEAGUE_CONNECTOR_URL` | none | Public https origin of the connector, such as `https://smitline.example.com`. Required. |
 | `COLLEAGUE_CONNECTOR_PASSPHRASE` | none | Owner passphrase for approving agents, at least 12 characters. Required. |
 | `COLLEAGUE_CONNECTOR_PORT` | `8767` | Loopback port the proxy forwards to. |
 | `COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS` | none | Comma-separated browser origins, besides the connector's own, that may call `/mcp` and `/oauth/*`. Only needed for browser-based MCP clients, such as a local MCP Inspector. |
@@ -155,7 +155,7 @@ The connector reads these from its environment first, then from `.env`, when it 
 
 ### Add the connector to your agent
 
-Add `https://colleague.example.com/mcp` as a custom connector (also called a remote MCP server) in the agent. The agent registers itself, then opens an approval page from your server in the browser. Check the app name and the return address on that page, enter the owner passphrase, and choose **Allow**.
+Add `https://smitline.example.com/mcp` as a custom connector (also called a remote MCP server) in the agent. The agent registers itself, then opens an approval page from your server in the browser. Check the app name and the return address on that page, enter the owner passphrase, and choose **Allow**.
 
 Menus change often, and custom connectors may depend on your plan or on workspace settings, so check each product's current help pages. At the time of writing:
 
@@ -177,9 +177,9 @@ Then ask the agent something like "Call the restaurant at +1 415 555 0142 and bo
 See and revoke access with the CLI. Revoking takes effect on a running connector.
 
 ```bash
-colleague connector status                  # registered agents and active grants, never tokens
-colleague connector revoke --client <id>    # one agent
-colleague connector revoke --all            # every agent
+smitline connector status                  # registered agents and active grants, never tokens
+smitline connector revoke --client <id>    # one agent
+smitline connector revoke --all            # every agent
 ```
 
-Changing the passphrase does not revoke existing grants; run `colleague connector revoke --all` as well. Changing `COLLEAGUE_CONNECTOR_URL` invalidates all tokens, because they are bound to the old address.
+Changing the passphrase does not revoke existing grants; run `smitline connector revoke --all` as well. Changing `COLLEAGUE_CONNECTOR_URL` invalidates all tokens, because they are bound to the old address.

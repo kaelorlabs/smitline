@@ -20,12 +20,12 @@ export function publicSettings(values = {}) {
     platform: detectPlatform(values.MEETING_URL),
     meetingUrl: values.MEETING_URL || '',
     hasPasscode: Boolean(values.MEETING_PASSCODE),
-    participantName: values.COLLEAGUE_PARTICIPANT_NAME || 'Colleague AI',
+    participantName: values.COLLEAGUE_PARTICIPANT_NAME || 'Smitline',
     meetingInstructions: values.COLLEAGUE_MEETING_INSTRUCTIONS || '',
   };
 }
 
-// The person Colleague AI acts for in meetings, from COLLEAGUE_OWNER_NAME. Empty when unset.
+// The person Smitline acts for in meetings, from COLLEAGUE_OWNER_NAME. Empty when unset.
 export function ownerName(values = {}) {
   const name = String(values.COLLEAGUE_OWNER_NAME || '').replace(/\s+/g, ' ').trim();
   return name && name.length <= 80 && !/[\u0000-\u001f]/.test(name) ? name : '';

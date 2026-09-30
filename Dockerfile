@@ -1,12 +1,12 @@
-# Colleague AI in one image: the runtime daemon (calls API, phone gateway, meetings), the
-# local console with its MCP endpoint, and the colleague CLI. Run it with host networking,
+# Smitline in one image: the runtime daemon (calls API, phone gateway, meetings), the
+# local console with its MCP endpoint, and the smitline CLI. Run it with host networking,
 # a data volume, and the Docker socket (meetings run in a second container):
 #
-#   docker run -d --name colleague --restart unless-stopped --network host \
-#     -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock \
-#     ghcr.io/kaelorlabs/colleague
+#   docker run -d --name smitline --restart unless-stopped --network host \
+#     -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock \
+#     ghcr.io/kaelorlabs/smitline
 #
-# Settings and records live in the volume. Everything else: docker exec colleague colleague ...
+# Settings and records live in the volume. Everything else: docker exec smitline smitline ...
 FROM node:22-bookworm-slim AS node
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -18,7 +18,7 @@ FROM cloudflare/cloudflared:2026.9.3 AS cloudflared
 
 FROM python:3.12-slim-bookworm
 # The meeting image this build goes with; the workflow sets the published tag.
-ARG MEETING_IMAGE=colleague-meeting:local
+ARG MEETING_IMAGE=smitline-meeting:local
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
@@ -37,7 +37,9 @@ COPY docker ./docker
 COPY packages ./packages
 COPY control-panel ./control-panel
 COPY meeting-runtime ./meeting-runtime
-RUN ln -s /app/docker/colleague /usr/local/bin/colleague
+# `colleague` stays as an alias of `smitline` for scripts written before the rename.
+RUN ln -s /app/docker/smitline /usr/local/bin/smitline \
+    && ln -s /app/docker/smitline /usr/local/bin/colleague
 
 # The release version (0.1.0); the workflow sets it, local builds say dev.
 ARG VERSION=dev

@@ -1,6 +1,6 @@
 // Registered OAuth clients and grants for the remote connector. Tokens are
 // stored only as SHA-256 digests, in private files under .colleague/connector/.
-// The files are re-read when they change on disk, so `colleague connector
+// The files are re-read when they change on disk, so `smitline connector
 // revoke` takes effect on a running connector.
 import crypto from 'node:crypto';
 import fs from 'node:fs';

@@ -74,7 +74,7 @@ export const BRIEF_SCHEMA = {
 export const CALL_TOOL_DEFINITIONS = [
   {
     name: 'start_call',
-    description: "Place a phone call or join a video meeting for the user. Colleague AI talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
+    description: "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
     inputSchema: BRIEF_SCHEMA,
   },
   {
@@ -297,7 +297,7 @@ export function createMcpSession(options = {}) {
       return rpcResult(id, {
         protocolVersion,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'colleague-ai', version: MCP_SERVER_VERSION },
+        serverInfo: { name: 'smitline', version: MCP_SERVER_VERSION },
         instructions: CALLS_INSTRUCTIONS,
       });
     }

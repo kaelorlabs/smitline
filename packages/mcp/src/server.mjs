@@ -90,7 +90,7 @@ export function startStdioServer(options = {}) {
   });
 
   async function shutdown(signal) {
-    process.stderr.write(`colleague-mcp ${signal}: shutting down\n`);
+    process.stderr.write(`smitline-mcp ${signal}: shutting down\n`);
     await session.shutdown();
     process.exit(signal === 'SIGINT' ? 130 : 0);
   }

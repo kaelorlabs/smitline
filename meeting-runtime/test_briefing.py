@@ -25,7 +25,7 @@ PROFILE = {
                 'notes': 'Works in product; likes blunt feedback.'}],
 }
 SESSION = {
-    'summary': 'Colleague AI lets any agent make phone calls and join meetings.',
+    'summary': 'Smitline lets any agent make phone calls and join meetings.',
     'facts': ['It is open source under Apache-2.0.', 'The first live calls happened today.'],
     'decisions': ['Direct SIP is next.'],
     'openQuestions': ['Launch now or wait?'],

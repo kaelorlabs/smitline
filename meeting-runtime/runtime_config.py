@@ -1,4 +1,4 @@
-"""Validated runtime configuration for a Colleague AI meeting participant."""
+"""Validated runtime configuration for a Smitline meeting participant."""
 from dataclasses import dataclass
 import logging
 import os
@@ -56,7 +56,7 @@ class RuntimeConfig:
             state = read_json(state_path) or {}
             overlay = environ_from_state(state)
             env.update(overlay)
-        name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Colleague AI').strip()
+        name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Smitline').strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError('COLLEAGUE_PARTICIPANT_NAME must contain 1–80 printable characters')
 

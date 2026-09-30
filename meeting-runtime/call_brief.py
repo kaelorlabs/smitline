@@ -1,4 +1,4 @@
-"""Call briefs: what an agent asks Colleague AI to do on a phone call or in a meeting."""
+"""Call briefs: what an agent asks Smitline to do on a phone call or in a meeting."""
 from dataclasses import dataclass, field
 import ipaddress
 import re
