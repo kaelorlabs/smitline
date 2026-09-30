@@ -3,7 +3,6 @@ import path from 'node:path';
 
 import { detectPlatform } from './config.mjs';
 
-export const LOCAL_PORTAL_SESSION_ID = 'local-portal';
 export const CONTROL_DIR = '.colleague';
 export const ACTIVE_MEETING_NAME = 'portal-active.json';
 export const SUPERVISOR_ACTIVE_NAME = 'active-meeting.json';
@@ -11,44 +10,6 @@ const ACTIVE_PHASES = new Set([
   'starting', 'opening_meeting', 'joining', 'waiting_for_admission', 'admitted',
   'connecting_audio', 'live',
 ]);
-
-export function continuityFromAgentSession(agentSession = {}) {
-  const sessionId = String(agentSession.sessionId || '');
-  const metadata = agentSession.metadata || {};
-  if (metadata.continuity === 'exact' || metadata.continuity === 'context') {
-    if (metadata.continuity === 'exact'
-        && (metadata.source === 'local-portal' || sessionId === LOCAL_PORTAL_SESSION_ID)) {
-      return 'context';
-    }
-    return metadata.continuity;
-  }
-  if (metadata.source === 'local-portal' || sessionId === LOCAL_PORTAL_SESSION_ID) {
-    return 'context';
-  }
-  return 'exact';
-}
-
-export function defaultWorkspace(root) {
-  return path.join(root, 'meeting-runtime', 'codex-workspace');
-}
-
-export function ensureDefaultWorkspace(root) {
-  const workspace = defaultWorkspace(root);
-  fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
-  return workspace;
-}
-
-export function permissionsForTools(tools = {}) {
-  const coding = Boolean(tools.codex || tools.cursor || tools.claudeCode);
-  return {
-    workspace: coding ? 'read-only' : 'none',
-    commands: 'disabled',
-    edits: 'disabled',
-    network: tools.webSearch ? 'allowed' : 'disabled',
-    commits: 'disabled',
-    pushes: 'disabled',
-  };
-}
 
 function clip(value, max = 8000) {
   const text = String(value ?? '');
@@ -80,32 +41,20 @@ export function contextHandoffFromSources(sources = [], { meetingInstructions = 
   };
 }
 
-export function buildMeetingCreatePayload(settings, { sources = [], workspace, root } = {}) {
-  const tools = settings.tools || {};
-  const resolved = workspace
-    || String(settings.workspace || '').trim()
-    || (root ? defaultWorkspace(root) : '');
+// The daemon's POST /v1/meetings body: meetingUrl, context, camera, and onBehalfOf when the owner is known.
+export function buildMeetingCreatePayload(settings, { sources = [], onBehalfOf = '' } = {}) {
+  const owner = String(onBehalfOf || '').trim();
   return {
     meetingUrl: settings.meetingUrl,
-    agentSession: {
-      provider: tools.cursor ? 'cursor' : tools.claudeCode ? 'claude-code' : tools.codex ? 'codex' : 'generic',
-      sessionId: LOCAL_PORTAL_SESSION_ID,
-      workspace: resolved,
-      model: settings.model,
-      metadata: { source: 'local-portal', continuity: 'context' },
-    },
     context: contextHandoffFromSources(sources, {
       meetingInstructions: settings.meetingInstructions,
     }),
-    permissions: permissionsForTools(tools),
     camera: {
       enabled: settings.camera?.enabled !== false,
       defaultOn: settings.camera?.defaultOn !== false,
       ...(settings.camera?.avatarDataUri ? { avatarDataUri: settings.camera.avatarDataUri } : {}),
     },
-    screenShare: {
-      enabled: settings.screenShare?.enabled === true,
-    },
+    ...(owner ? { onBehalfOf: owner } : {}),
   };
 }
 

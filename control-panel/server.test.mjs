@@ -129,6 +129,8 @@ test('meeting controls reject unauthenticated requests', async () => {
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 
+const MEETING_FIELDS = new Set(['meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice']);
+
 function createFakeDaemon() {
   const meetings = new Map();
   const calls = [];
@@ -148,6 +150,14 @@ function createFakeDaemon() {
     async createMeeting(payload) {
       calls.push({ method: 'POST', path: '/v1/meetings', body: payload });
       await this.ensure();
+      // Mirrors the daemon contract: coding-agent fields are refused.
+      const unknown = Object.keys(payload).filter(key => !MEETING_FIELDS.has(key));
+      if (unknown.length) {
+        const error = new Error(`unknown meeting fields: ${unknown.join(', ')}`);
+        error.status = 400;
+        error.code = 'invalid_request';
+        throw error;
+      }
       if ([...meetings.values()].some(meeting => meeting.state !== 'ended')) {
         const error = new Error('meeting agent is already running');
         error.status = 409;
@@ -158,9 +168,8 @@ function createFakeDaemon() {
         id: `mtg-portal${String(meetings.size + 1).padStart(8, '0')}`,
         state: 'joining',
         meetingUrl: payload.meetingUrl,
-        agentSession: payload.agentSession,
         context: payload.context,
-        permissions: payload.permissions,
+        onBehalfOf: payload.onBehalfOf,
       };
       meetings.set(session.id, session);
       return session;
@@ -213,175 +222,13 @@ function createFakeDaemon() {
       session.context = payload;
       return session;
     },
-    async leaseStatus() {
-      return { state: 'in_meeting' };
-    },
-    approvals: new Map(),
-    artifacts: new Map(),
-    commits: new Map(),
-    pushes: new Map(),
-    async listApprovals(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/approvals` });
-      return { approvals: this.approvals.get(id) || [] };
-    },
-    async listArtifacts(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts` });
-      return { artifacts: this.artifacts.get(id) || [] };
-    },
-    async listCommits(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/commits` });
-      return { commits: this.commits.get(id) || [] };
-    },
-    async listPushes(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/pushes` });
-      return { pushes: this.pushes.get(id) || [] };
-    },
-    screenShare: new Map(),
-    async getScreenShare(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/screen-share` });
-      return this.screenShare.get(id) || {
-        status: { enabled: false, paused: false, capturing: false, degradedReason: 'disabled' },
-        observations: [],
-      };
-    },
-    async pauseScreenShare(id) {
-      calls.push({ method: 'POST', path: `/v1/meetings/${id}/screen-share/pause`, body: {} });
-      const current = this.screenShare.get(id) || { status: { enabled: true }, observations: [] };
-      current.status = { ...current.status, enabled: true, paused: true, capturing: false };
-      this.screenShare.set(id, current);
-      return current;
-    },
-    async resumeScreenShare(id) {
-      calls.push({ method: 'POST', path: `/v1/meetings/${id}/screen-share/resume`, body: {} });
-      const current = this.screenShare.get(id) || { status: { enabled: true }, observations: [] };
-      current.status = { ...current.status, enabled: true, paused: false };
-      this.screenShare.set(id, current);
-      return current;
-    },
-    async listScreenShareObservations(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/screen-share/observations` });
-      const current = this.screenShare.get(id) || { observations: [] };
-      return { observations: current.observations || [] };
-    },
-    async listProviders() {
-      calls.push({ method: 'GET', path: '/v1/providers' });
-      return {
-        providers: [
-          { id: 'codex', installed: true, usable: true, exactSessionResume: true, contextContinuity: true },
-        ],
-      };
-    },
-    runner: { paired: false, pending: null },
-    async runnerStatus() {
-      calls.push({ method: 'GET', path: '/v1/runner' });
-      return {
-        paired: Boolean(this.runner.paired),
-        mode: 'loopback',
-        protocolVersion: 1,
-        controlPlane: this.runner.paired ? 'mock-remote' : 'local',
-      };
-    },
-    async pairRunner(payload = {}) {
-      calls.push({ method: 'POST', path: '/v1/runner/pair', body: payload });
-      this.runner.pending = { pairingId: 'pair-test1', pairingCode: 'ABCD2345', used: false };
-      return {
-        pairingId: 'pair-test1',
-        pairingCode: 'ABCD2345',
-        expiresAt: '2026-09-17T12:02:00Z',
-      };
-    },
-    async completeRunnerPair(payload) {
-      calls.push({ method: 'POST', path: '/v1/runner/pair/complete', body: payload });
-      if (!this.runner.pending || this.runner.pending.used) {
-        const error = new Error('pairing code was already used');
-        error.status = 409;
-        error.code = 'pairing_replay';
-        throw error;
-      }
-      if (payload.pairingId !== this.runner.pending.pairingId || payload.pairingCode !== this.runner.pending.pairingCode) {
-        const error = new Error('pairing code is invalid');
-        error.status = 401;
-        error.code = 'pairing_mismatch';
-        throw error;
-      }
-      this.runner.pending.used = true;
-      this.runner.paired = true;
-      return {
-        deviceId: 'dev-test1',
-        deviceEnrollment: 'enroll-once-value',
-        tenantId: 'ten-local',
-        userId: 'usr-local',
-      };
-    },
-    async unpairRunner() {
-      calls.push({ method: 'POST', path: '/v1/runner/unpair', body: {} });
-      this.runner = { paired: false, pending: null };
-      return { paired: false, mode: 'loopback', controlPlane: 'local' };
-    },
-    async getArtifactContent(id, artifactId) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/artifacts/${artifactId}/content` });
-      const found = (this.artifacts.get(id) || []).find((item) => item.id === artifactId);
-      if (!found) {
-        const error = new Error('artifact not found');
-        error.status = 404;
-        error.code = 'not_found';
-        throw error;
-      }
-      return { mediaType: 'application/json', body: Buffer.from(JSON.stringify(found)) };
-    },
-    async decideApproval(id, approvalId, body) {
-      calls.push({ method: 'POST', path: `/v1/meetings/${id}/approvals/${approvalId}/decision`, body });
-      const current = this.approvals.get(id) || [];
-      const found = current.find((item) => item.id === approvalId);
-      if (!found) {
-        const error = new Error('approval not found');
-        error.status = 404;
-        error.code = 'not_found';
-        throw error;
-      }
-      found.status = body.decision;
-      found.decision = body.decision;
-      return found;
-    },
-    async getHandoff(id) {
-      calls.push({ method: 'GET', path: `/v1/meetings/${id}/handoff` });
-      const handoff = this.handoffs.get(id);
-      if (!handoff) {
-        const error = new Error('handoff is not ready');
-        error.status = 404;
-        error.code = 'not_found';
-        throw error;
-      }
-      return handoff;
-    },
-    async retryHandoff(id) {
-      calls.push({ method: 'POST', path: `/v1/meetings/${id}/handoff/retry`, body: {} });
-      if (this.failRetry) {
-        const error = new Error('exact append still failed');
-        error.status = 409;
-        error.code = 'handoff_append_failed';
-        throw error;
-      }
-      const handoff = {
-        version: 1,
-        meetingId: id,
-        summary: 'Meeting ended.',
-        handoffId: `hnd-${id}`,
-        partial: false,
-      };
-      this.handoffs.set(id, handoff);
-      return handoff;
-    },
-    handoffs: new Map(),
-    failRetry: false,
   };
 }
 
 async function withPanel(run, extra = {}) {
+  const { env = 'OPENAI_API_KEY=sk-test\n', ...options } = extra;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-panel-'));
-  fs.writeFileSync(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\n', { mode: 0o600 });
-  const workspace = path.join(root, 'project');
-  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(root, '.env'), env, { mode: 0o600 });
   const runtimeRoot = path.join(root, 'meeting-runtime');
   const daemon = extra.daemon || createFakeDaemon();
   const accountSpawns = [];
@@ -396,7 +243,7 @@ async function withPanel(run, extra = {}) {
       return { stdout: { on() {} }, stderr: { on() {} }, on() {}, exitCode: null, signalCode: null };
     },
     runCommand: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
-    ...extra,
+    ...options,
     daemon,
     root,
     runtimeRoot,
@@ -407,7 +254,7 @@ async function withPanel(run, extra = {}) {
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     await run({
-      base, root, workspace, runtimeRoot, daemon, accountSpawns,
+      base, root, runtimeRoot, daemon, accountSpawns,
       async bootstrap() {
         return (await fetch(`${base}/api/bootstrap`)).json();
       },
@@ -421,10 +268,8 @@ async function withPanel(run, extra = {}) {
       settings: {
         meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
         participantName: 'Colleague AI',
-        model: 'gpt-5.6-terra',
-        workspace,
         meetingInstructions: 'Stay brief.',
-        tools: { webSearch: false, codex: true, charts: false },
+        camera: { enabled: true, defaultOn: false },
       },
     });
   } finally {
@@ -446,10 +291,10 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(body.started, true);
     const created = panel.daemon.calls.find((item) => item.path === '/v1/meetings');
     assert.ok(created);
-    assert.equal(created.body.agentSession.sessionId, 'local-portal');
-    assert.equal(created.body.agentSession.workspace, panel.workspace);
-    assert.equal(created.body.screenShare.enabled, false);
-    assert.ok(panel.daemon.calls.some((item) => item.path === '/v1/providers'));
+    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'context', 'meetingUrl']);
+    assert.equal(created.body.meetingUrl, panel.settings.meetingUrl);
+    assert.equal(created.body.context.objective, 'Stay brief.');
+    assert.deepEqual(created.body.camera, { enabled: true, defaultOn: false });
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
     assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), true);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);
@@ -458,88 +303,66 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     const status = await (await fetch(`${panel.base}/api/status`)).json();
     assert.equal(status.running, true);
     assert.equal(status.phase, 'starting');
-    assert.equal(status.continuity, 'context');
     const encoded = JSON.stringify({ bootstrap, status, body });
     assert.equal(encoded.includes('Bearer'), false);
     assert.equal('OPENAI_API_KEY' in (bootstrap.settings || {}), false);
   });
 });
 
-test('status lists pending approvals and decide posts a single decision', async () => {
+test('start sends the owner name from .env as onBehalfOf', async () => {
   await withPanel(async panel => {
     const bootstrap = await panel.bootstrap();
     const started = await fetch(`${panel.base}/api/start`, {
       method: 'POST',
       headers: panel.headers(bootstrap.token),
-      body: JSON.stringify(panel.settings),
+      // Stale coding-agent fields from an old page are not forwarded.
+      body: JSON.stringify({ ...panel.settings, model: 'gpt-5.5', workspace: '/tmp', tools: { codex: true }, screenShare: { enabled: true } }),
     });
     assert.equal(started.status, 202);
-    const meetingId = [...panel.daemon.meetings.keys()][0];
-    panel.daemon.approvals.set(meetingId, [{
-      id: 'appr-1',
-      meetingId,
-      category: 'commands',
-      summary: 'Run a workspace lookup',
-      scope: { host: 'workspace' },
-      status: 'pending',
-      expiresAt: '2026-09-16T00:15:00Z',
-    }]);
-    const status = await (await fetch(`${panel.base}/api/status`)).json();
-    assert.equal(status.pendingApprovals[0].id, 'appr-1');
-    assert.equal(status.pendingApprovals[0].summary, 'Run a workspace lookup');
+    const created = panel.daemon.calls.find((item) => item.path === '/v1/meetings');
+    assert.equal(created.body.onBehalfOf, 'Sam Rivera');
+    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'context', 'meetingUrl', 'onBehalfOf']);
+    assert.equal(JSON.stringify(await (await fetch(`${panel.base}/api/status`)).json()).includes('sk-test'), false);
+  }, { env: 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME="Sam Rivera"\n' });
+});
+
+test('the meetings console has no coding-agent controls or routes', async () => {
+  await withPanel(async panel => {
     const html = await (await fetch(`${panel.base}/`)).text();
-    assert.match(html, /Pending approvals/);
-    assert.equal(html.includes('Approve all'), false);
-    panel.daemon.artifacts.set(meetingId, [{
-      id: 'art-1', kind: 'plan', description: 'Workspace action plan', bytes: 24,
-      changedFiles: [{ path: 'src.py' }],
-    }]);
-    const workspaceStatus = await (await fetch(`${panel.base}/api/status`)).json();
-    assert.equal(workspaceStatus.workspaceArtifacts[0].id, 'art-1');
-    const workspaceHtml = await (await fetch(`${panel.base}/`)).text();
-    assert.match(workspaceHtml, /Workspace activity/);
-    panel.daemon.commits.set(meetingId, [{
-      id: 'cmt-1', kind: 'commit', status: 'requested', meetingId,
-    }]);
-    const gitStatus = await (await fetch(`${panel.base}/api/status`)).json();
-    assert.equal(gitStatus.gitOperations[0].id, 'cmt-1');
-    const gitHtml = await (await fetch(`${panel.base}/`)).text();
-    assert.match(gitHtml, /Git operations/);
-    panel.daemon.screenShare.set(meetingId, {
-      status: { enabled: true, paused: false, capturing: true, available: true, active: true },
-      observations: [{
-        id: 'obs-1', meetingId, summary: 'A red slide with a chart', confidence: 0.8,
-        frameArtifactId: 'art-1', timestamp: '2026-09-16T00:00:00Z',
-      }],
-    });
-    const shareStatus = await (await fetch(`${panel.base}/api/status`)).json();
-    assert.equal(shareStatus.screenShare.status.enabled, true);
-    assert.equal(shareStatus.screenShare.observations[0].summary, 'A red slide with a chart');
-    const shareHtml = await (await fetch(`${panel.base}/`)).text();
-    assert.match(shareHtml, /Understand shared content/);
-    assert.match(shareHtml, /Shared content/);
-    const pausedShare = await fetch(`${panel.base}/api/meetings/${meetingId}/screen-share/pause`, {
+    for (const text of ['Codex', 'Cursor', 'Claude', 'workspace"', 'runner', 'approval', 'Screen-share', 'Retry']) {
+      assert.equal(html.includes(text), false, text);
+    }
+    const bootstrap = await panel.bootstrap();
+    assert.equal('models' in bootstrap, false);
+    assert.deepEqual(Object.keys(bootstrap.settings).sort(), ['hasPasscode', 'meetingInstructions', 'meetingUrl', 'participantName', 'platform']);
+    for (const key of ['lease', 'pendingApprovals', 'workspaceArtifacts', 'gitOperations', 'screenShare', 'providers', 'runner', 'continuity', 'provider']) {
+      assert.equal(key in bootstrap.status, false, key);
+    }
+    const preflight = await fetch(`${panel.base}/api/preflight`, {
       method: 'POST',
       headers: panel.headers(bootstrap.token),
-      body: JSON.stringify({}),
+      body: JSON.stringify({ ...panel.settings, tools: { codex: true, cursor: true, claudeCode: true, webSearch: true } }),
     });
-    assert.equal(pausedShare.status, 200);
-    assert.equal((await pausedShare.json()).status.paused, true);
-    const downloaded = await fetch(`${panel.base}/api/meetings/${meetingId}/artifacts/art-1/content`, {
-      headers: panel.headers(bootstrap.token),
-    });
-    assert.equal(downloaded.status, 200);
-    assert.match(downloaded.headers.get('content-disposition') || '', /attachment/);
-    const decided = await fetch(`${panel.base}/api/meetings/${meetingId}/approvals/appr-1/decision`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: JSON.stringify({ decision: 'denied' }),
-    });
-    assert.equal(decided.status, 200);
-    const call = panel.daemon.calls.find((item) => String(item.path).includes('/decision'));
-    assert.equal(call.body.decision, 'denied');
-    const dumped = JSON.stringify({ status, html, decided: await decided.json() });
-    assert.equal(dumped.includes('sk-test'), false);
+    assert.deepEqual(await preflight.json(), { ready: true, errors: {} });
+    for (const [method, route] of [
+      ['GET', '/api/runner'], ['POST', '/api/runner/pair'], ['POST', '/api/runner/pair/complete'], ['POST', '/api/runner/unpair'],
+      ['GET', '/api/meetings/mtg-1/artifacts'], ['GET', '/api/meetings/mtg-1/artifacts/art-1/content'],
+      ['POST', '/api/sessions/mtg-1/retry'], ['POST', '/api/meetings/mtg-1/approvals/appr-1/decision'],
+      ['GET', '/api/meetings/mtg-1/screen-share'], ['POST', '/api/meetings/mtg-1/screen-share/pause'],
+      ['POST', '/api/meetings/mtg-1/screen-share/resume'],
+    ]) {
+      const response = await fetch(`${panel.base}${route}`, {
+        method,
+        headers: panel.headers(bootstrap.token),
+        ...(method === 'POST' ? { body: '{}' } : {}),
+      });
+      assert.equal(response.status, 404, route);
+    }
+  }, {
+    runCommand: async (command) => {
+      assert.equal(command, 'docker');
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
   });
 });
 
@@ -756,76 +579,9 @@ test('history lists and downloads structured handoff status without secrets', as
     assert.equal(detail.handoffStatus, 'failed');
     assert.equal(detail.handoff.handoffId, `hnd-${meetingId}`);
     assert.equal('apiKey' in detail.handoff, false);
-    const denied = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    assert.equal(denied.status, 403);
+    assert.equal(JSON.stringify({ status, detail }).includes('sk-should-be-stripped'), false);
     const traversal = await fetch(`${panel.base}/api/sessions/not.valid`);
     assert.equal(traversal.status, 400);
-    const bootstrap = await panel.bootstrap();
-    panel.daemon.failRetry = true;
-    const failed = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: '{}',
-    });
-    assert.equal(failed.status, 409);
-    panel.daemon.failRetry = false;
-    const retried = await fetch(`${panel.base}/api/sessions/${meetingId}/retry`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: '{}',
-    });
-    assert.equal(retried.status, 200);
-    const body = await retried.json();
-    assert.equal(body.handoffStatus, 'ready');
-    assert.equal(body.handoff.handoffId, `hnd-${meetingId}`);
-    assert.equal(JSON.stringify(body).includes('sk-should-be-stripped'), false);
-  });
-});
-
-test('runner pairing reveals the code once and omits enrollment from status', async () => {
-  await withPanel(async panel => {
-    const html = await (await fetch(`${panel.base}/`)).text();
-    assert.match(html, /Pair runner/);
-    assert.match(html, /shown once/);
-    const bootstrap = await panel.bootstrap();
-    assert.equal(bootstrap.status.runner.paired, false);
-    assert.equal('pairingCode' in bootstrap.status.runner, false);
-    const started = await fetch(`${panel.base}/api/runner/pair`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: '{}',
-    });
-    assert.equal(started.status, 201);
-    const pairing = await started.json();
-    assert.equal(typeof pairing.pairingCode, 'string');
-    const completed = await fetch(`${panel.base}/api/runner/pair/complete`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: JSON.stringify({ pairingId: pairing.pairingId, pairingCode: pairing.pairingCode }),
-    });
-    assert.equal(completed.status, 201);
-    const enrollment = await completed.json();
-    assert.equal('deviceEnrollment' in enrollment, false);
-    const replay = await fetch(`${panel.base}/api/runner/pair/complete`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: JSON.stringify({ pairingId: pairing.pairingId, pairingCode: pairing.pairingCode }),
-    });
-    assert.equal(replay.status, 409);
-    const status = await (await fetch(`${panel.base}/api/status`)).json();
-    assert.equal(status.runner.paired, true);
-    const dumped = JSON.stringify({ pairing, enrollment, status });
-    assert.equal(dumped.includes('enroll-once-value'), false);
-    const unpaired = await fetch(`${panel.base}/api/runner/unpair`, {
-      method: 'POST',
-      headers: panel.headers(bootstrap.token),
-      body: '{}',
-    });
-    assert.equal((await unpaired.json()).paired, false);
   });
 });
 

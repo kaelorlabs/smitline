@@ -1,33 +1,31 @@
-"""Versioned coding-agent session, permission, and meeting session records."""
+"""Versioned meeting session records."""
 from dataclasses import dataclass
-from types import MappingProxyType
+import re
 
 from context_handoff import ContextHandoff
 from meeting_urls import platform_for_url
 from schema_validation import (
     omit_none, optional_bool, optional_field, reject_unknown_fields,
-    require_enum, require_field, require_id, require_mapping, require_meeting_id,
-    require_string, require_timestamp, require_workspace,
+    require_enum, require_field, require_mapping, require_meeting_id,
+    require_string, require_timestamp,
 )
 
 
-AGENT_PROVIDERS = ('codex', 'cursor', 'claude-code', 'generic')
 MEETING_PLATFORMS = ('zoom', 'teams', 'meet')
 MEETING_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
-WORKSPACE_PERMISSIONS = ('none', 'read-only', 'workspace-write')
-COMMAND_PERMISSIONS = ('disabled', 'approval-required', 'allowed')
-COMMIT_PERMISSIONS = ('disabled', 'approval-required')
-AGENT_SESSION_FIELDS = ('provider', 'sessionId', 'workspace', 'model', 'metadata')
-PERMISSION_FIELDS = ('workspace', 'commands', 'edits', 'network', 'commits', 'pushes')
 MEETING_SESSION_FIELDS = (
-    'id', 'platform', 'meetingUrl', 'agentSession', 'context', 'permissions', 'state', 'startedAt',
+    'id', 'platform', 'meetingUrl', 'context', 'onBehalfOf', 'voice', 'state', 'startedAt',
     'cameraEnabled', 'cameraState', 'visualState', 'degradedReason',
 )
+# Fields older snapshots stored for coding-agent sessions; ignored when read back.
+LEGACY_SESSION_FIELDS = ('agentSession', 'permissions')
 CAMERA_STATES = ('off', 'starting', 'on', 'blocked', 'degraded')
 VISUAL_STATES = (
     'joining', 'listening', 'working', 'speaking', 'finalizing', 'needs_attention', 'ended',
 )
 DEGRADED_REASONS = ('platform_blocked', 'unsupported', 'unconfirmed', 'policy')
+MAX_ON_BEHALF_OF = 120
+VOICE_NAME = re.compile(r'^[a-z][a-z0-9_-]{1,31}$')
 
 
 def _optional_enum(value, name, allowed):
@@ -36,105 +34,41 @@ def _optional_enum(value, name, allowed):
     return require_enum(value, name, allowed)
 
 
-def _string_metadata(value):
+def optional_on_behalf_of(value):
+    """The owner's name spoken in the meeting's AI disclosure, or None."""
     if value is None:
         return None
-    payload = require_mapping(value, 'metadata')
-    if len(payload) > 32:
-        raise ValueError('metadata exceeds 32 keys')
-    if not payload:
+    text = ' '.join(require_string(value, 'onBehalfOf', max_length=MAX_ON_BEHALF_OF).split())
+    return text or None
+
+
+def optional_voice(value, environ=None):
+    """A GPT-Live voice name (see /v1/voices), or None for the default voice."""
+    if value is None:
         return None
-    items = []
-    for key, item in payload.items():
-        require_string(key, 'metadata key', max_length=64)
-        require_string(item, f'metadata.{key}', max_length=1024)
-        items.append((key, item))
-    return MappingProxyType(dict(items))
+    from call_brief import available_voices
+    name = require_string(value, 'voice', max_length=32)
+    voices = available_voices(environ)
+    if not VOICE_NAME.fullmatch(name) or name not in voices:
+        raise ValueError('voice must be one of: ' + ', '.join(voices))
+    return name
 
 
-@dataclass(frozen=True)
-class AgentSessionRef:
-    provider: str
-    session_id: str
-    workspace: str
-    model: str = None
-    metadata: MappingProxyType = None
-
-    def to_dict(self):
-        return omit_none({
-            'provider': self.provider,
-            'sessionId': self.session_id,
-            'workspace': self.workspace,
-            'model': self.model,
-            'metadata': None if self.metadata is None else dict(self.metadata),
-        })
-
-    @classmethod
-    def from_dict(cls, data):
-        payload = require_mapping(data, 'agentSession')
-        reject_unknown_fields(payload, AGENT_SESSION_FIELDS, 'agentSession')
-        model = optional_field(payload, 'model')
-        return cls(
-            provider=require_enum(require_field(payload, 'provider', 'agentSession'),
-                                  'provider', AGENT_PROVIDERS),
-            session_id=require_id(require_field(payload, 'sessionId', 'agentSession'),
-                                  'sessionId', max_length=256),
-            workspace=require_workspace(require_field(payload, 'workspace', 'agentSession')),
-            model=None if model is None else require_string(model, 'model', max_length=128),
-            metadata=_string_metadata(optional_field(payload, 'metadata')),
-        )
-
-
-@dataclass(frozen=True)
-class MeetingPermissions:
-    workspace: str
-    commands: str
-    edits: str
-    network: str
-    commits: str
-    pushes: str
-
-    def to_dict(self):
-        return {
-            'workspace': self.workspace,
-            'commands': self.commands,
-            'edits': self.edits,
-            'network': self.network,
-            'commits': self.commits,
-            'pushes': self.pushes,
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        payload = require_mapping(data, 'permissions')
-        reject_unknown_fields(payload, PERMISSION_FIELDS, 'permissions')
-        workspace=require_enum(require_field(payload, 'workspace', 'permissions'),
-                              'permissions.workspace', WORKSPACE_PERMISSIONS)
-        commands=require_enum(require_field(payload, 'commands', 'permissions'),
-                             'permissions.commands', COMMAND_PERMISSIONS)
-        edits=require_enum(require_field(payload, 'edits', 'permissions'),
-                          'permissions.edits', COMMAND_PERMISSIONS)
-        network=require_enum(require_field(payload, 'network', 'permissions'),
-                            'permissions.network', COMMAND_PERMISSIONS)
-        commits=require_enum(require_field(payload, 'commits', 'permissions'),
-                            'permissions.commits', COMMIT_PERMISSIONS)
-        pushes=require_enum(require_field(payload, 'pushes', 'permissions'),
-                           'permissions.pushes', COMMIT_PERMISSIONS)
-        if workspace == 'none':
-            if commands == 'allowed':
-                raise ValueError('commands cannot be allowed when workspace is none')
-            if edits != 'disabled' or commits != 'disabled' or pushes != 'disabled':
-                raise ValueError('workspace none cannot authorize edits, commits, or pushes')
-        if workspace == 'read-only' and edits == 'allowed':
-            raise ValueError('edits cannot be allowed without workspace-write')
-        if workspace != 'workspace-write' and (commits != 'disabled' or pushes != 'disabled'):
-            raise ValueError('commits and pushes require workspace-write')
-        if pushes == 'approval-required' and commits != 'approval-required':
-            raise ValueError('pushes require commits to be approval-required')
-        return cls(
-            workspace=workspace, commands=commands, edits=edits, network=network,
-            commits=commits, pushes=pushes,
-        )
+def upgrade_legacy_session(payload):
+    """Map a snapshot written before coding-agent sessions were removed onto today's fields."""
+    payload = dict(payload)
+    agent = payload.pop('agentSession', None)
+    payload.pop('permissions', None)
+    context = payload.get('context')
+    if isinstance(context, dict) and 'git' in context:
+        payload['context'] = {key: value for key, value in context.items() if key != 'git'}
+    metadata = agent.get('metadata') if isinstance(agent, dict) else None
+    if isinstance(metadata, dict):
+        if metadata.get('onBehalfOf') and 'onBehalfOf' not in payload:
+            payload['onBehalfOf'] = metadata['onBehalfOf']
+        if metadata.get('voice') and 'voice' not in payload:
+            payload['voice'] = metadata['voice']
+    return payload
 
 
 @dataclass(frozen=True)
@@ -142,11 +76,11 @@ class MeetingSession:
     id: str
     platform: str
     meeting_url: str
-    agent_session: AgentSessionRef
     context: ContextHandoff
-    permissions: MeetingPermissions
     state: str
     started_at: str
+    on_behalf_of: str = None
+    voice: str = None
     camera_enabled: bool = None
     camera_state: str = None
     visual_state: str = None
@@ -157,9 +91,9 @@ class MeetingSession:
             'id': self.id,
             'platform': self.platform,
             'meetingUrl': self.meeting_url,
-            'agentSession': self.agent_session.to_dict(),
             'context': self.context.to_dict(),
-            'permissions': self.permissions.to_dict(),
+            'onBehalfOf': self.on_behalf_of,
+            'voice': self.voice,
             'state': self.state,
             'startedAt': self.started_at,
             'cameraEnabled': self.camera_enabled,
@@ -179,19 +113,19 @@ class MeetingSession:
         detected = platform_for_url(meeting_url)
         if detected != platform:
             raise ValueError('meetingUrl does not match platform')
+        voice = optional_field(payload, 'voice')
         return cls(
             id=require_meeting_id(require_field(payload, 'id', 'meetingSession'), 'id'),
             platform=platform,
             meeting_url=meeting_url,
-            agent_session=AgentSessionRef.from_dict(require_field(payload, 'agentSession',
-                                                                 'meetingSession')),
             context=ContextHandoff.from_dict(require_field(payload, 'context', 'meetingSession')),
-            permissions=MeetingPermissions.from_dict(require_field(payload, 'permissions',
-                                                                  'meetingSession')),
             state=require_enum(require_field(payload, 'state', 'meetingSession'),
                                'state', MEETING_STATES),
             started_at=require_timestamp(require_field(payload, 'startedAt', 'meetingSession'),
                                          'startedAt'),
+            on_behalf_of=optional_on_behalf_of(optional_field(payload, 'onBehalfOf')),
+            # Stored voices were validated at create time; later reads keep them as written.
+            voice=None if voice is None else require_string(voice, 'voice', max_length=32),
             camera_enabled=optional_bool(optional_field(payload, 'cameraEnabled'), 'cameraEnabled'),
             camera_state=_optional_enum(optional_field(payload, 'cameraState'), 'cameraState',
                                         CAMERA_STATES),

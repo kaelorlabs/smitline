@@ -1,18 +1,16 @@
-"""Versioned context handoff from a coding-agent conversation into a meeting."""
+"""Versioned context handoff: what the meeting agent should know before it joins."""
 from dataclasses import dataclass
 
 from schema_validation import (
-    omit_none, optional_bool, optional_field, optional_string, reject_unknown_fields,
-    require_enum, require_field, require_mapping, require_object_list, require_string,
-    require_string_list, require_version,
+    reject_unknown_fields, require_enum, require_field, require_mapping, require_object_list,
+    require_string, require_string_list, require_version,
 )
 
 
 CONVERSATION_ROLES = ('user', 'assistant')
-GIT_FIELDS = ('branch', 'commit', 'dirty')
 HANDOFF_FIELDS = (
     'version', 'objective', 'currentTask', 'summary', 'decisions', 'constraints',
-    'openQuestions', 'importantFiles', 'recentConversation', 'git',
+    'openQuestions', 'importantFiles', 'recentConversation',
 )
 
 
@@ -37,30 +35,6 @@ class ConversationTurn:
 
 
 @dataclass(frozen=True)
-class GitState:
-    branch: str = None
-    commit: str = None
-    dirty: bool = None
-
-    def to_dict(self):
-        return omit_none({
-            'branch': self.branch,
-            'commit': self.commit,
-            'dirty': self.dirty,
-        })
-
-    @classmethod
-    def from_dict(cls, data):
-        payload = require_mapping(data, 'git')
-        reject_unknown_fields(payload, GIT_FIELDS, 'git')
-        return cls(
-            branch=optional_string(optional_field(payload, 'branch'), 'git.branch', max_length=256),
-            commit=optional_string(optional_field(payload, 'commit'), 'git.commit', max_length=64),
-            dirty=optional_bool(optional_field(payload, 'dirty'), 'git.dirty'),
-        )
-
-
-@dataclass(frozen=True)
 class ContextHandoff:
     version: int
     objective: str
@@ -71,10 +45,9 @@ class ContextHandoff:
     open_questions: tuple
     important_files: tuple
     recent_conversation: tuple
-    git: GitState = None
 
     def to_dict(self):
-        payload = {
+        return {
             'version': self.version,
             'objective': self.objective,
             'currentTask': self.current_task,
@@ -85,15 +58,11 @@ class ContextHandoff:
             'importantFiles': list(self.important_files),
             'recentConversation': [turn.to_dict() for turn in self.recent_conversation],
         }
-        if self.git is not None:
-            payload['git'] = self.git.to_dict()
-        return payload
 
     @classmethod
     def from_dict(cls, data):
         payload = require_mapping(data, 'context')
         reject_unknown_fields(payload, HANDOFF_FIELDS, 'context')
-        git_value = optional_field(payload, 'git')
         return cls(
             version=require_version(require_field(payload, 'version', 'context')),
             objective=require_string(require_field(payload, 'objective', 'context'), 'objective',
@@ -112,5 +81,4 @@ class ContextHandoff:
             recent_conversation=require_object_list(
                 require_field(payload, 'recentConversation', 'context'),
                 'recentConversation', ConversationTurn.from_dict, max_items=128),
-            git=None if git_value is None else GitState.from_dict(git_value),
         )

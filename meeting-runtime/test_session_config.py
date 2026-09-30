@@ -8,13 +8,13 @@ from bridge import browser_environment, build_session_config
 from meeting_intro import intro_event, introduce
 from runtime_config import RuntimeConfig
 from runtime_state import write_private_json
-from test_schemas import context_payload, permissions_payload
+from test_schemas import context_payload
 
 
 class BrowserEnvironmentTests(unittest.TestCase):
     def test_keys_and_meeting_details_stay_out_of_the_browser(self):
         env = browser_environment({
-            'OPENAI_API_KEY': 'x', 'TAVILY_API_KEY': 'x', 'TWILIO_ACCOUNT_SID': 'x',
+            'OPENAI_API_KEY': 'x', 'TWILIO_ACCOUNT_SID': 'x',
             'TWILIO_AUTH_TOKEN': 'x', 'COLLEAGUE_CONNECTOR_PASSPHRASE': 'x',
             'MEETING_URL': 'x', 'MEETING_PASSCODE': 'x', 'SOME_SECRET': 'x',
             'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse', 'COLLEAGUE_OWNER_NAME': 'Robin',
@@ -31,27 +31,37 @@ class SessionConfigTests(unittest.TestCase):
         self.assertIn('default to listening silently', prompt)
         self.assertIn('if it is unclear whether someone addressed you, remain silent', prompt)
         self.assertIn('continue through brief listener backchannels', prompt)
-        self.assertIn('never delegate merely because the conversation mentions a related topic', prompt)
-        self.assertEqual(config['delegation'], {'type': 'client'})
+        self.assertIn('hand it to the backend instead of guessing', prompt)
+        for removed in ('delegation policy', 'workspace', 'repository', 'codex', 'edited files'):
+            self.assertNotIn(removed, prompt)
         self.assertFalse(config['store'])
-        self.assertNotIn('responses', config['delegation'])
         self.assertNotIn('input', config)
         self.assertEqual(config['model'], 'gpt-live-1')
 
+    def test_hard_questions_use_responses_delegation(self):
+        from phone_prompts import DEFAULT_BACKEND_MODEL
+        config = build_session_config(RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'}))
+        delegation = config['delegation']
+        self.assertEqual(delegation['type'], 'responses')
+        responses = delegation['responses']
+        self.assertEqual(responses['model'], DEFAULT_BACKEND_MODEL)
+        self.assertEqual(responses['tool_choice'], 'auto')
+        self.assertNotIn('tools', responses)
+        self.assertIn('on behalf of Robin', responses['instructions'])
+        searching = build_session_config(RuntimeConfig.from_environ({
+            'COLLEAGUE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'COLLEAGUE_MEETING_WEB_SEARCH': '1'}))
+        self.assertEqual(searching['delegation']['responses']['model'], 'gpt-5.6-mini')
+        self.assertEqual(searching['delegation']['responses']['tools'], [{'type': 'web_search'}])
+
     def test_operator_guidance_and_handoff_input_are_applied(self):
         runtime = RuntimeConfig.from_environ({
-            'COLLEAGUE_ENABLE_WEB_SEARCH': '0',
-            'COLLEAGUE_ENABLE_CODEX': '1',
-            'COLLEAGUE_ENABLE_CHARTS': '1',
             'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on release blockers.',
         })
-        config = build_session_config(runtime, {
-            'context': context_payload(),
-            'permissions': permissions_payload(),
-        })
+        config = build_session_config(runtime, {'context': context_payload()})
         self.assertIn('Focus on release blockers.', config['instructions'])
-        self.assertIn('chart or plot requests', config['instructions'])
-        self.assertEqual(config['delegation'], {'type': 'client'})
+        backend = config['delegation']['responses']['instructions']
+        self.assertIn('Focus on release blockers.', backend)
+        self.assertIn('Ship the developer platform', backend)
         self.assertLessEqual(len(config['input']), 128)
         roles = [item['role'] for item in config['input']]
         self.assertEqual(roles[0], 'developer')

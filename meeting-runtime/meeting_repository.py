@@ -1,4 +1,4 @@
-"""Durable meeting snapshots, private lease tokens, and handoff files."""
+"""Durable meeting snapshots and handoff files."""
 from dataclasses import dataclass
 from pathlib import Path
 import errno
@@ -8,23 +8,15 @@ import os
 import stat
 import threading
 
-from agent_sessions import MeetingSession
-from meeting_handoff import MeetingHandoff
+from agent_sessions import MeetingSession, upgrade_legacy_session
+from meeting_handoff import MeetingHandoff, upgrade_legacy_handoff
 from schema_validation import reject_secrets, require_meeting_id
 
 
 _GLOBAL_LOCKS_GUARD = threading.Lock()
 _GLOBAL_LOCKS = {}
 _SNAPSHOT_NAME = 'snapshot.json'
-_LEASE_NAME = 'lease.json'
 _HANDOFF_NAME = 'handoff.json'
-_APPROVALS_NAME = 'approvals.json'
-_GIT_OPS_NAME = 'git-ops.json'
-_SCREEN_SHARE_NAME = 'screen-share.json'
-_OWNER_FIELDS = ('leaseId',)
-_APPROVAL_FILE_FIELDS = ('version', 'approvals')
-_GIT_OPS_FILE_FIELDS = ('version', 'operations')
-_SCREEN_SHARE_FILE_FIELDS = ('version', 'settings', 'status', 'observations', 'paused')
 
 
 class MeetingRepositoryError(Exception):
@@ -85,7 +77,6 @@ def _read_all(fd):
 @dataclass(frozen=True)
 class MeetingRecord:
     session: MeetingSession
-    lease_token: str = None
     handoff: MeetingHandoff = None
 
 
@@ -233,30 +224,19 @@ class MeetingRepository:
         payload = self._parse_object(snapshot_raw, 'meeting snapshot')
         try:
             reject_secrets(payload, 'meeting snapshot')
-            session = MeetingSession.from_dict(payload)
+            session = MeetingSession.from_dict(upgrade_legacy_session(payload))
         except (TypeError, ValueError) as error:
             raise MeetingCorruptionError('meeting snapshot does not match the schema') from error
-        lease_raw = self._read_named(dir_fd, _LEASE_NAME)
-        lease_token = None
-        if lease_raw is not None:
-            lease_payload = self._parse_object(lease_raw, 'meeting lease record')
-            extra = set(lease_payload) - set(_OWNER_FIELDS)
-            if extra:
-                raise MeetingCorruptionError('meeting lease record does not match the schema')
-            token = lease_payload.get('leaseId')
-            if not isinstance(token, str) or not token:
-                raise MeetingCorruptionError('meeting lease record does not match the schema')
-            lease_token = token
         handoff = None
         handoff_raw = self._read_named(dir_fd, _HANDOFF_NAME)
         if handoff_raw is not None:
             handoff_payload = self._parse_object(handoff_raw, 'meeting handoff')
             try:
                 reject_secrets(handoff_payload, 'meeting handoff')
-                handoff = MeetingHandoff.from_dict(handoff_payload)
+                handoff = MeetingHandoff.from_dict(upgrade_legacy_handoff(handoff_payload))
             except (TypeError, ValueError) as error:
                 raise MeetingCorruptionError('meeting handoff does not match the schema') from error
-        return MeetingRecord(session=session, lease_token=lease_token, handoff=handoff)
+        return MeetingRecord(session=session, handoff=handoff)
 
     def get(self, meeting_id):
         meeting_id = require_meeting_id(meeting_id)
@@ -271,7 +251,7 @@ class MeetingRepository:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
                 os.close(dir_fd)
 
-    def put(self, session, lease_token=None):
+    def put(self, session):
         if not isinstance(session, MeetingSession):
             raise ValueError('session must be a MeetingSession')
         meeting_id = require_meeting_id(session.id)
@@ -282,8 +262,6 @@ class MeetingRepository:
                 snapshot = session.to_dict()
                 reject_secrets(snapshot, 'meeting snapshot')
                 self._atomic_write(dir_fd, _SNAPSHOT_NAME, snapshot)
-                if lease_token is not None:
-                    self._atomic_write(dir_fd, _LEASE_NAME, {'leaseId': lease_token})
                 os.fsync(self._root_fd)
             finally:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
@@ -310,215 +288,6 @@ class MeetingRepository:
                 fcntl.flock(dir_fd, fcntl.LOCK_UN)
                 os.close(dir_fd)
         return self.get(meeting_id)
-
-    def clear_lease_token(self, meeting_id):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                return None
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_EX)
-                try:
-                    os.unlink(_LEASE_NAME, dir_fd=dir_fd)
-                except FileNotFoundError:
-                    pass
-                except OSError as error:
-                    _raise_unsafe_path(error, 'meeting storage path must not be a symlink')
-                os.fsync(dir_fd)
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-        return self.get(meeting_id)
-
-    def _read_approvals(self, dir_fd, *, workspace=None):
-        from approvals import ApprovalRecord
-        raw = self._read_named(dir_fd, _APPROVALS_NAME)
-        if raw is None:
-            return []
-        payload = self._parse_object(raw, 'meeting approvals')
-        extra = set(payload) - set(_APPROVAL_FILE_FIELDS)
-        if extra:
-            raise MeetingCorruptionError('meeting approvals do not match the schema')
-        items = payload.get('approvals')
-        if items is None:
-            return []
-        if not isinstance(items, list):
-            raise MeetingCorruptionError('meeting approvals do not match the schema')
-        try:
-            reject_secrets(payload, 'meeting approvals')
-            return [ApprovalRecord.from_dict(item, workspace=workspace).to_dict() for item in items]
-        except (TypeError, ValueError) as error:
-            raise MeetingCorruptionError('meeting approvals do not match the schema') from error
-
-    def list_approvals(self, meeting_id, *, workspace=None):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                return None
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_SH)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    return None
-                return self._read_approvals(dir_fd, workspace=workspace)
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-
-    def update_approvals(self, meeting_id, mutator, *, workspace=None):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                raise FileNotFoundError('meeting does not exist')
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_EX)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    raise FileNotFoundError('meeting does not exist')
-                current = list(self._read_approvals(dir_fd, workspace=workspace))
-                updated = list(mutator(list(current)))
-                if updated == current:
-                    return updated
-                payload = {'version': 1, 'approvals': updated}
-                reject_secrets(payload, 'meeting approvals')
-                self._atomic_write(dir_fd, _APPROVALS_NAME, payload)
-                return updated
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-
-    def _read_git_ops(self, dir_fd):
-        from git_actions import GitOperation
-        raw = self._read_named(dir_fd, _GIT_OPS_NAME)
-        if raw is None:
-            return []
-        payload = self._parse_object(raw, 'meeting git operations')
-        extra = set(payload) - set(_GIT_OPS_FILE_FIELDS)
-        if extra:
-            raise MeetingCorruptionError('meeting git operations do not match the schema')
-        items = payload.get('operations')
-        if items is None:
-            return []
-        if not isinstance(items, list):
-            raise MeetingCorruptionError('meeting git operations do not match the schema')
-        try:
-            reject_secrets(payload, 'meeting git operations')
-            return [GitOperation.from_dict(item).to_dict() for item in items]
-        except (TypeError, ValueError) as error:
-            raise MeetingCorruptionError('meeting git operations do not match the schema') from error
-
-    def list_git_ops(self, meeting_id):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                return None
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_SH)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    return None
-                return self._read_git_ops(dir_fd)
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-
-    def update_git_ops(self, meeting_id, mutator):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                raise FileNotFoundError('meeting does not exist')
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_EX)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    raise FileNotFoundError('meeting does not exist')
-                current = list(self._read_git_ops(dir_fd))
-                updated = list(mutator(list(current)))
-                if updated == current:
-                    return updated
-                payload = {'version': 1, 'operations': updated}
-                reject_secrets(payload, 'meeting git operations')
-                self._atomic_write(dir_fd, _GIT_OPS_NAME, payload)
-                return updated
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-
-    def _read_screen_share(self, dir_fd):
-        from screen_share import parse_screen_share_settings, public_status, VisualObservation
-        raw = self._read_named(dir_fd, _SCREEN_SHARE_NAME)
-        if raw is None:
-            return {
-                'version': 1,
-                'settings': parse_screen_share_settings(None),
-                'status': public_status({'enabled': False, 'degradedReason': 'disabled'}),
-                'observations': [],
-                'paused': False,
-            }
-        payload = self._parse_object(raw, 'meeting screen share')
-        extra = set(payload) - set(_SCREEN_SHARE_FILE_FIELDS)
-        if extra:
-            raise MeetingCorruptionError('meeting screen share does not match the schema')
-        try:
-            reject_secrets(payload, 'meeting screen share')
-            settings = parse_screen_share_settings(payload.get('settings'))
-            status = public_status(payload.get('status') or {'enabled': settings['enabled']})
-            observations = []
-            for item in payload.get('observations') or []:
-                observations.append(VisualObservation.from_dict(item).to_dict())
-            return {
-                'version': 1,
-                'settings': settings,
-                'status': status,
-                'observations': observations,
-                'paused': bool(payload.get('paused')),
-            }
-        except (TypeError, ValueError) as error:
-            raise MeetingCorruptionError('meeting screen share does not match the schema') from error
-
-    def get_screen_share(self, meeting_id):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                return None
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_SH)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    return None
-                return self._read_screen_share(dir_fd)
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
-
-    def update_screen_share(self, meeting_id, mutator):
-        meeting_id = require_meeting_id(meeting_id)
-        with self._lock(meeting_id):
-            dir_fd = self._open_meeting_dir(meeting_id, create=False)
-            if dir_fd is None:
-                raise FileNotFoundError('meeting does not exist')
-            try:
-                fcntl.flock(dir_fd, fcntl.LOCK_EX)
-                if self._read_named(dir_fd, _SNAPSHOT_NAME) is None:
-                    raise FileNotFoundError('meeting does not exist')
-                current = self._read_screen_share(dir_fd)
-                updated = mutator(dict(current))
-                if not isinstance(updated, dict):
-                    raise ValueError('screen share state is invalid')
-                payload = {
-                    'version': 1,
-                    'settings': updated.get('settings') or current['settings'],
-                    'status': updated.get('status') or current['status'],
-                    'observations': list(updated.get('observations') or []),
-                    'paused': bool(updated.get('paused')),
-                }
-                reject_secrets(payload, 'meeting screen share')
-                self._atomic_write(dir_fd, _SCREEN_SHARE_NAME, payload)
-                return payload
-            finally:
-                fcntl.flock(dir_fd, fcntl.LOCK_UN)
-                os.close(dir_fd)
 
     def list_ids(self):
         self._ensure_open()

@@ -4,10 +4,7 @@ from pathlib import Path
 import json
 
 from call_record import CallRecord
-from context_handoff import GitState
-from meeting_handoff import (
-    ActionItem, AgentWorkRecord, ArtifactReference, DecisionRecord, MeetingHandoff,
-)
+from meeting_handoff import MeetingHandoff
 from schema_validation import reject_secrets, require_meeting_id
 from startup_input import clip_tokens
 
@@ -43,115 +40,7 @@ def _clip(value, limit=MAX_ITEM):
     return clip_tokens(text, limit) if text else ''
 
 
-def _git_from_session(session):
-    context = getattr(session, 'context', None)
-    git = getattr(context, 'git', None) if context is not None else None
-    if git is None and isinstance(context, dict):
-        git = context.get('git')
-    if git is None:
-        return None
-    if isinstance(git, GitState):
-        return git
-    try:
-        return GitState.from_dict(git)
-    except (TypeError, ValueError):
-        return None
-
-
-def _work_from_events(events):
-    started = {}
-    completed = {}
-    for event in events:
-        kind = event.get('type')
-        result = event.get('result') if isinstance(event.get('result'), dict) else {}
-        delegation_id = (
-            event.get('delegationId') or event.get('delegation_id') or result.get('delegationId')
-        )
-        if kind == 'delegation.started' and isinstance(delegation_id, str):
-            started[delegation_id] = event
-        elif kind in ('delegation.completed', 'delegation.cancelled', 'workspace.action.completed',
-                      'git.action.completed') and isinstance(delegation_id, str):
-            completed[delegation_id] = event
-    records = []
-    for delegation_id, event in list(completed.items())[:50]:
-        status = 'cancelled' if event.get('type') == 'delegation.cancelled' else 'completed'
-        result = event.get('result') or {}
-        summary = _clip(
-            event.get('message') or event.get('summary') or result.get('summary')
-            or ('Delegated turn ' + delegation_id))
-        records.append(AgentWorkRecord(
-            task_id=delegation_id[:128],
-            summary=summary or ('Delegated turn ' + delegation_id),
-            status=status,
-            started_at=None,
-            ended_at=None,
-        ))
-    for event in events:
-        kind = event.get('type')
-        if kind not in ('git.action.completed', 'git.action.failed', 'git.action.cancelled'):
-            continue
-        result = event.get('result') if isinstance(event.get('result'), dict) else {}
-        operation_id = result.get('operationId') or event.get('operationId')
-        if not isinstance(operation_id, str):
-            continue
-        if kind == 'git.action.completed':
-            status = 'completed'
-        elif kind == 'git.action.cancelled':
-            status = 'cancelled'
-        else:
-            status = 'failed'
-        records.append(AgentWorkRecord(
-            task_id=operation_id[:128],
-            summary=_clip(result.get('summary') or 'Recorded reviewed files'),
-            status=status,
-        ))
-    for event in events:
-        if event.get('type') != 'screen_share.observation':
-            continue
-        observation = event.get('observation') if isinstance(event.get('observation'), dict) else {}
-        obs_id = observation.get('id')
-        if not isinstance(obs_id, str):
-            continue
-        records.append(AgentWorkRecord(
-            task_id=obs_id[:128],
-            summary=_clip(observation.get('summary') or 'Shared-content observation'),
-            status='completed',
-        ))
-    return tuple(records[:50])
-
-
-def _artifacts_from_events(events, directory):
-    artifacts = []
-    for event in events:
-        if event.get('type') != 'plot':
-            continue
-        path = event.get('path') or event.get('file')
-        if not isinstance(path, str) or not path:
-            continue
-        name = Path(path).name
-        if not name or name in ('.', '..'):
-            continue
-        artifacts.append(ArtifactReference(
-            artifact_id=('plot-' + str(len(artifacts) + 1)),
-            path=str((directory / name).name),
-        ))
-    for event in events:
-        if event.get('type') != 'artifact.created':
-            continue
-        artifact = event.get('artifact') or {}
-        path = artifact.get('path')
-        artifact_id = artifact.get('id')
-        if not isinstance(path, str) or not artifact_id:
-            continue
-        artifacts.append(ArtifactReference(artifact_id=str(artifact_id)[:128], path=path[:4096]))
-    for path in sorted(Path(directory).glob('*.png'))[:24]:
-        if any(item.path == path.name for item in artifacts):
-            continue
-        artifacts.append(ArtifactReference(artifact_id='file-' + path.stem[:32], path=path.name))
-    return tuple(artifacts[:32])
-
-
-def _files_discussed(session, events):
+def _files_discussed(session):
     names = []
     context = getattr(session, 'context', None)
     important = getattr(context, 'important_files', None) if context is not None else None
@@ -195,8 +84,7 @@ def handoff_id_for(meeting_id):
     return STABLE_HANDOFF_PREFIX + require_meeting_id(meeting_id)
 
 
-def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=None,
-                          approvals=None):
+def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=None):
     directory = Path(archive.directory) if isinstance(archive, CallRecord) else Path(archive)
     meeting_id = getattr(session, 'id', None) or getattr(archive, 'meeting_id', None)
     meeting_id = require_meeting_id(meeting_id)
@@ -210,16 +98,9 @@ def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=N
         except (OSError, ValueError):
             usage = {}
     ended = ended_at or usage.get('endedAt') or _now()
-    session_id = getattr(getattr(session, 'agent_session', None), 'session_id', None)
-    provider = getattr(getattr(session, 'agent_session', None), 'provider', 'codex')
-    if session_id in (None, 'local-portal'):
-        next_action = 'Review the local meeting archive.'
-    elif provider == 'codex':
-        next_action = 'Continue in the original Codex thread.'
-    else:
-        next_action = 'Continue in the originating coding-agent session.'
+    next_action = 'Review the meeting transcript and follow up on open questions.'
     if partial:
-        next_action = 'Review the partial meeting archive, then continue the original work.'
+        next_action = 'Review the partial meeting transcript; the meeting did not finish normally.'
     handoff = MeetingHandoff(
         version=1,
         meeting_id=meeting_id,
@@ -230,18 +111,15 @@ def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=N
         requirements=(),
         action_items=(),
         unresolved_questions=_questions(session),
-        files_discussed=_files_discussed(session, events),
-        work_performed=_work_from_events(events),
-        artifacts=_artifacts_from_events(events, directory),
+        files_discussed=_files_discussed(session),
+        work_performed=(),
+        artifacts=(),
         transcript_path='transcript.txt',
         recommended_next_action=next_action,
         handoff_id=handoff_id_for(meeting_id),
         partial=bool(partial),
         end_reason=_clip(reason or 'ended', 256) or 'ended',
         archive_path=str(directory.name),
-        git=_git_from_session(session),
-        permissions=getattr(session, 'permissions', None),
-        approvals=tuple(approvals or ()),
     )
     reject_secrets(handoff.to_dict(), 'meeting handoff')
     return handoff

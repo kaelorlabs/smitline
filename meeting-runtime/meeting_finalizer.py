@@ -1,11 +1,10 @@
-"""Persist local meeting handoffs and complete exact Codex append before lease release."""
+"""Persist local meeting handoffs and hand them to the daemon once a meeting ends."""
 from pathlib import Path
 import json
 
 from call_record import CallRecord
 from handoff_builder import build_meeting_handoff, handoff_id_for
 from schema_validation import reject_secrets, require_meeting_id
-from session_continuity import EXACT, continuity_mode
 
 
 FINALIZATION_NAME = 'finalization.json'
@@ -45,10 +44,9 @@ def load_finalization(directory):
 
 
 class MeetingFinalizer:
-    def __init__(self, runtime_root, *, daemon=None, append=None):
+    def __init__(self, runtime_root, *, daemon=None):
         self.runtime_root = Path(runtime_root)
         self.daemon = daemon
-        self.append = append
 
     def directory(self, meeting_id):
         return archive_dir(self.runtime_root, meeting_id)
@@ -59,21 +57,14 @@ class MeetingFinalizer:
         directory.mkdir(parents=True, exist_ok=True)
         existing = _read_json(directory / HANDOFF_NAME)
         if existing and existing.get('handoffId') == handoff_id_for(meeting_id):
-            from meeting_handoff import MeetingHandoff
-            handoff = MeetingHandoff.from_dict(existing)
+            from meeting_handoff import MeetingHandoff, upgrade_legacy_handoff
+            handoff = MeetingHandoff.from_dict(upgrade_legacy_handoff(existing))
         else:
             archive = CallRecord(self.runtime_root / 'recordings', meeting_id=meeting_id)
-            approvals = []
-            if self.daemon is not None:
-                try:
-                    approvals = self.daemon.public_approvals(session.id)
-                except Exception:
-                    approvals = []
-            handoff = build_meeting_handoff(
-                archive, session, reason=reason, partial=partial, approvals=approvals)
+            handoff = build_meeting_handoff(archive, session, reason=reason, partial=partial)
             _write_json(directory / HANDOFF_NAME, handoff.to_dict())
         status = load_finalization(directory)
-        if status.get('status') not in ('appended', 'ready'):
+        if status.get('status') != 'ready':
             _write_json(directory / FINALIZATION_NAME, {
                 'status': 'local',
                 'handoffId': handoff.handoff_id,
@@ -83,13 +74,9 @@ class MeetingFinalizer:
             })
         return handoff
 
-    def _continuity(self, session):
-        return continuity_mode(session.agent_session)
-
     async def complete(self, session, *, reason, partial=False):
         meeting_id = require_meeting_id(session.id)
         directory = self.directory(meeting_id)
-        status = load_finalization(directory)
         if self.daemon is not None:
             try:
                 record = self.daemon.meetings.get(meeting_id)
@@ -105,41 +92,6 @@ class MeetingFinalizer:
                 })
                 return {'status': 'ready', 'handoff': record.handoff, 'idempotent': True}
         handoff = self.persist_local(session, reason=reason, partial=partial)
-        continuity = self._continuity(session)
-        if continuity == EXACT and self.daemon is not None:
-            try:
-                self.daemon.prepare_finalization(meeting_id)
-            except Exception:
-                pass
-        if continuity == EXACT:
-            if status.get('status') not in ('appended', 'ready'):
-                if self.append is None:
-                    result = {'error': 'exact append is unavailable'}
-                else:
-                    result = await self.append(session, handoff)
-                if not isinstance(result, dict) or result.get('error'):
-                    error = 'exact append failed'
-                    if isinstance(result, dict) and result.get('error'):
-                        error = str(result.get('error'))[:240]
-                    _write_json(directory / FINALIZATION_NAME, {
-                        'status': 'append_failed',
-                        'handoffId': handoff.handoff_id,
-                        'partial': bool(handoff.partial),
-                        'endReason': reason,
-                        'meetingId': meeting_id,
-                        'error': error,
-                    })
-                    if self.daemon is not None:
-                        self.daemon.note_append_failure(
-                            meeting_id, handoff.handoff_id, error)
-                    return {'status': 'append_failed', 'handoff': handoff, 'error': error}
-            _write_json(directory / FINALIZATION_NAME, {
-                'status': 'appended',
-                'handoffId': handoff.handoff_id,
-                'partial': bool(handoff.partial),
-                'endReason': reason,
-                'meetingId': meeting_id,
-            })
         if self.daemon is not None:
             stored = self.daemon.store_handoff(handoff)
             handoff = stored
@@ -150,4 +102,4 @@ class MeetingFinalizer:
             'endReason': reason,
             'meetingId': meeting_id,
         })
-        return {'status': 'ready', 'handoff': handoff, 'continuity': continuity}
+        return {'status': 'ready', 'handoff': handoff}

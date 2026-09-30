@@ -33,7 +33,7 @@ def _message_tokens(message):
     return sum(estimate_tokens(part.get('text', '')) for part in message.get('content') or ())
 
 
-def _developer_text(handoff, permissions=None):
+def _developer_text(handoff):
     lines = [
         'Objective: ' + (handoff.objective or ''),
         'Current task: ' + (handoff.current_task or ''),
@@ -45,18 +45,31 @@ def _developer_text(handoff, permissions=None):
         lines.append('Decisions: ' + '; '.join(handoff.decisions))
     if handoff.important_files:
         lines.append('Important files: ' + ', '.join(handoff.important_files))
-    if permissions:
-        payload = permissions.to_dict() if hasattr(permissions, 'to_dict') else dict(permissions)
-        lines.append('Permissions: ' + ', '.join(f'{key}={value}' for key, value in payload.items()))
-    if handoff.git is not None:
-        git = handoff.git.to_dict() if hasattr(handoff.git, 'to_dict') else dict(handoff.git)
-        if git:
-            lines.append('Git: ' + ', '.join(f'{key}={value}' for key, value in git.items()
-                                             if value not in (None, '')))
     return '\n'.join(line for line in lines if line.split(': ', 1)[-1])
 
 
-def handoff_to_session_input(handoff, permissions=None):
+def context_text(handoff):
+    """The handoff as plain text for backend instructions; empty when there is none."""
+    if handoff is None:
+        return ''
+    lines = [_developer_text(handoff)]
+    if handoff.open_questions:
+        lines.append('Open questions: ' + '; '.join(handoff.open_questions))
+    return '\n'.join(line for line in lines if line)
+
+
+def handoff_from_state(meeting_state):
+    """The meeting's ContextHandoff from its runtime state, or None."""
+    payload = (meeting_state or {}).get('context')
+    if payload is None or isinstance(payload, ContextHandoff):
+        return payload
+    try:
+        return ContextHandoff.from_dict(payload)
+    except (TypeError, ValueError):
+        return None
+
+
+def handoff_to_session_input(handoff):
     if handoff is None:
         return []
     if not isinstance(handoff, ContextHandoff):
@@ -65,7 +78,7 @@ def handoff_to_session_input(handoff, permissions=None):
         except (TypeError, ValueError):
             return []
     messages = []
-    developer = _developer_text(handoff, permissions)
+    developer = _developer_text(handoff)
     if developer:
         messages.append(_part('developer', developer))
     for turn in handoff.recent_conversation:

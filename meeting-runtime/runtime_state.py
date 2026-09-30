@@ -5,7 +5,6 @@ import os
 import stat
 
 from schema_validation import reject_secrets, require_mapping, require_meeting_id
-from session_continuity import continuity_mode
 
 
 STATE_VERSION = 1
@@ -71,12 +70,6 @@ def meeting_state_path(root, meeting_id):
     return run_root(root) / MEETINGS_DIR / meeting_id / 'runtime.json'
 
 
-def context_index_path(root, meeting_id=None):
-    if meeting_id is None:
-        return Path(root) / 'context' / 'index.json'
-    return run_root(root) / MEETINGS_DIR / require_meeting_id(meeting_id) / 'context.json'
-
-
 def active_meeting_path(project_root):
     return control_root(project_root) / ACTIVE_NAME
 
@@ -97,72 +90,22 @@ def file_mode(path):
     return stat.S_IMODE(Path(path).stat().st_mode)
 
 
-def context_index_from_handoff(context):
-    payload = context.to_dict() if hasattr(context, 'to_dict') else dict(context)
-    reject_secrets(payload, 'context handoff')
-    sources = []
-    for name in ('objective', 'currentTask', 'summary'):
-        text = payload.get(name)
-        if isinstance(text, str) and text.strip():
-            sources.append({'name': name, 'text': text})
-    for label, values in (
-        ('decisions', payload.get('decisions') or ()),
-        ('constraints', payload.get('constraints') or ()),
-        ('openQuestions', payload.get('openQuestions') or ()),
-        ('importantFiles', payload.get('importantFiles') or ()),
-    ):
-        if not values:
-            continue
-        text = '\n'.join(str(item) for item in values)
-        if text.strip():
-            sources.append({'name': label, 'text': text})
-    turns = payload.get('recentConversation') or ()
-    if turns:
-        lines = []
-        for turn in turns:
-            if isinstance(turn, dict):
-                lines.append(f"{turn.get('role', 'unknown')}: {turn.get('text', '')}")
-            else:
-                lines.append(str(turn))
-        sources.append({'name': 'recentConversation', 'text': '\n'.join(lines)})
-    git = payload.get('git')
-    if isinstance(git, dict) and git:
-        sources.append({'name': 'git', 'text': json.dumps(git, ensure_ascii=False)})
-    return {'version': 1, 'sources': sources}
-
-
 def state_from_session(session):
-    agent = session.agent_session
     context = session.context.to_dict() if hasattr(session.context, 'to_dict') else session.context
-    permissions = (session.permissions.to_dict()
-                   if hasattr(session.permissions, 'to_dict') else session.permissions)
-    metadata = dict(agent.metadata or {})
     payload = {
         'version': STATE_VERSION,
         'meetingId': session.id,
         'platform': session.platform,
         'meetingUrl': session.meeting_url,
         'participantName': 'Colleague AI',
-        'workspace': agent.workspace,
-        'provider': agent.provider,
-        'sessionId': agent.session_id,
-        'continuity': continuity_mode(agent),
-        'authorizeModel': agent.model is not None,
-        'defaultCodexModel': agent.model or 'gpt-5.6-terra',
-        'webSearchEnabled': True,
-        'codexEnabled': agent.provider in ('codex', 'cursor', 'claude-code'),
-        'chartsEnabled': False,
         'meetingInstructions': '',
         'context': context,
-        'permissions': permissions,
     }
-    if metadata.get('source'):
-        payload['source'] = metadata['source']
-    if metadata.get('onBehalfOf'):
+    if session.on_behalf_of:
         # Named in the meeting's opening AI disclosure (meeting_intro.owner_name).
-        payload['onBehalfOf'] = metadata['onBehalfOf']
-    if metadata.get('voice'):
-        payload['voice'] = metadata['voice']
+        payload['onBehalfOf'] = session.on_behalf_of
+    if session.voice:
+        payload['voice'] = session.voice
     if session.camera_enabled is not None:
         payload['cameraEnabled'] = bool(session.camera_enabled)
     return payload
@@ -171,18 +114,9 @@ def state_from_session(session):
 def environ_from_state(payload):
     if not payload:
         return {}
-    flags = {True: '1', False: '0'}
     mapping = {}
     if payload.get('participantName'):
         mapping['COLLEAGUE_PARTICIPANT_NAME'] = str(payload['participantName'])
-    if payload.get('defaultCodexModel'):
-        mapping['COLLEAGUE_CODEX_MODEL'] = str(payload['defaultCodexModel'])
-    if 'webSearchEnabled' in payload:
-        mapping['COLLEAGUE_ENABLE_WEB_SEARCH'] = flags[bool(payload['webSearchEnabled'])]
-    if 'codexEnabled' in payload:
-        mapping['COLLEAGUE_ENABLE_CODEX'] = flags[bool(payload['codexEnabled'])]
-    if 'chartsEnabled' in payload:
-        mapping['COLLEAGUE_ENABLE_CHARTS'] = flags[bool(payload['chartsEnabled'])]
     if payload.get('meetingInstructions') is not None:
         mapping['COLLEAGUE_MEETING_INSTRUCTIONS'] = str(payload['meetingInstructions'])
     if payload.get('meetingUrl'):

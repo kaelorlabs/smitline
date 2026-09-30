@@ -270,7 +270,7 @@ function approvalPage(request, csrf, error = '') {
 </ul>
 <h2>It cannot</h2>
 <ul class="scope cannot">
-<li><span class="icon" aria-hidden="true">✕</span><span>Read your API keys, your files, or your coding workspaces</span></li>
+<li><span class="icon" aria-hidden="true">✕</span><span>Read your API keys or your files</span></li>
 </ul>
 </section>
 <form method="post" action="/oauth/authorize" class="card decide" aria-labelledby="decide-title">
@@ -650,7 +650,7 @@ export function createConnector({
       id: crypto.randomBytes(24).toString('base64url'),
       grantId: grant.grantId,
       lastSeen: now(),
-      session: createMcpSession({ colleague: calls, tools: 'calls', protocolVersions: PROTOCOL_VERSIONS, notify() {}, log }),
+      session: createMcpSession({ colleague: calls, protocolVersions: PROTOCOL_VERSIONS, notify() {}, log }),
     };
   }
 

@@ -71,8 +71,6 @@ export function startStdioServer(options = {}) {
     },
   });
 
-  const leaveRunning = Boolean(options.leaveRunningOnShutdown ?? process.env.COLLEAGUE_MCP_LEAVE_RUNNING === '1');
-
   async function onMessage(message) {
     const response = await session.dispatch(message);
     if (response) framer.write(response);
@@ -95,7 +93,7 @@ export function startStdioServer(options = {}) {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
   }
 
-  return { session, reading, framer, leaveRunning };
+  return { session, reading, framer };
 }
 
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

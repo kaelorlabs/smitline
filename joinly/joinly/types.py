@@ -1,63 +1,8 @@
-from dataclasses import dataclass
-from typing import Literal
-
-from joinly_common.types import (
-    MeetingChatHistory,
-    MeetingChatMessage,
-    MeetingParticipant,
-    MeetingParticipantList,
-    ServiceUsage,
-    SpeakerRole,
-    Transcript,
-    TranscriptSegment,
-    UIAnimationContent,
-    UIHtmlContent,
-    UIUpdate,
-    Usage,
-    VideoSnapshot,
-)
-
-ActionAnimation = Literal["typing", "reading", "interrupted", "sharing"]
-
-__all__ = [
-    "ActionAnimation",
-    "MeetingChatHistory",
-    "MeetingChatMessage",
-    "MeetingParticipant",
-    "MeetingParticipantList",
-    "ServiceUsage",
-    "SpeakerRole",
-    "Transcript",
-    "TranscriptSegment",
-    "UIAnimationContent",
-    "UIHtmlContent",
-    "UIUpdate",
-    "Usage",
-    "VideoSnapshot",
-]
+from dataclasses import dataclass, field
 
 
 class ProviderNotSupportedError(Exception):
     """Raised when a provider does not support a requested feature."""
-
-
-class IncompatibleAudioFormatError(Exception):
-    """Raised when an audio format is incompatible with the expected or given format."""
-
-
-class SpeechInterruptedError(Exception):
-    """Raised when speech is interrupted by detected speech."""
-
-    _TEMPLATE = 'Interrupted by detected speech. Spoken until now: "%s..."'
-
-    def __init__(self, spoken_text: str = "") -> None:
-        """Initialize the SpeechInterruptedError with the spoken text."""
-        self.spoken_text: str = spoken_text
-        super().__init__(self.__str__())
-
-    def __str__(self) -> str:
-        """Return a string representation of the error."""
-        return self._TEMPLATE % self.spoken_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +20,7 @@ class AudioFormat:
 
 @dataclass(frozen=True, slots=True)
 class AudioChunk:
-    """A class to represent a chunk of audio data.
+    """A chunk of audio data.
 
     Attributes:
         data (bytes): The raw PCM audio data.
@@ -89,17 +34,25 @@ class AudioChunk:
 
 
 @dataclass(frozen=True, slots=True)
-class SpeechWindow:
-    """A class to represent an audio window with voice activity detection.
+class MeetingChatMessage:
+    """A chat message in a meeting."""
 
-    Attributes:
-        data (bytes): The raw PCM audio data for the window.
-        time_ns (int): The timestamp of the audio window in nanoseconds.
-        is_speech (bool): Whether the window contains speech.
-        speaker (str | None): The speaker of the audio window, if available.
-    """
+    text: str
+    timestamp: str | None = None
+    sender: str | None = None
 
-    data: bytes
-    time_ns: int
-    is_speech: bool
-    speaker: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class MeetingChatHistory:
+    """The chat history of a meeting."""
+
+    messages: list[MeetingChatMessage] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingParticipant:
+    """A participant in a meeting."""
+
+    name: str
+    email: str | None = None
+    infos: list[str] = field(default_factory=list)

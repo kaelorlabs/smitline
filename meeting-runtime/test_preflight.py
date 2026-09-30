@@ -8,7 +8,7 @@ from preflight import validate
 class PreflightTests(unittest.TestCase):
     def configured_root(self, directory):
         root = Path(directory)
-        (root / '.env').write_text('OPENAI_API_KEY=secret\nTAVILY_API_KEY=search-secret\n')
+        (root / '.env').write_text('OPENAI_API_KEY=secret\n')
         (root / '.env.meeting').write_text(
             'MEETING_URL=https://us05web.zoom.us/j/123456789\n'
             'COLLEAGUE_MEETING_INSTRUCTIONS=Focus on release readiness.\n'
@@ -33,18 +33,16 @@ class PreflightTests(unittest.TestCase):
                 validate(root)
             message = str(caught.exception)
             self.assertIn('OPENAI_API_KEY', message)
-            self.assertIn('TAVILY_API_KEY', message)
             self.assertIn('HTTPS Zoom, Teams, or Google Meet', message)
             self.assertIn('COLLEAGUE_MEETING_INSTRUCTIONS', message)
             self.assertNotIn('replace_with_your_project_api_key', message)
 
-    def test_tavily_is_optional_when_web_search_is_disabled(self):
+    def test_meeting_web_search_needs_no_extra_key(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.configured_root(directory)
-            (root / '.env').write_text('OPENAI_API_KEY=secret\n')
             with (root / '.env.meeting').open('a') as stream:
-                stream.write('COLLEAGUE_ENABLE_WEB_SEARCH=0\n')
-            self.assertFalse(validate(root).web_search_enabled)
+                stream.write('COLLEAGUE_MEETING_WEB_SEARCH=1\n')
+            self.assertTrue(validate(root).web_search)
 
 
 if __name__ == '__main__':

@@ -17,6 +17,6 @@ Follow [SETUP.md](../../../SETUP.md) in the repository root. It is the canonical
 
 - Keys stay in the ignored `.env`; never print them or write them elsewhere.
 - Every phone call opens with the AI disclosure naming the user. Do not suggest removing it.
-- Meetings: GPT-Live owns pauses, backchannels, and interruptions, and a host or participant mute is authoritative. Exact coding-agent continuity needs the real originating session id; never pass `last`, `latest`, or a URL hash.
+- Meetings: GPT-Live owns pauses, backchannels, and interruptions, and a host or participant mute is authoritative. An agent joins a meeting with `start_call` on the `meeting` channel, the invite URL as `to`.
 - The optional operations console is `./start-control-panel.sh` on http://127.0.0.1:8095. It is not needed for the agent path.
 - Fixture tests do not prove live call or meeting compatibility. Say so when reporting results.

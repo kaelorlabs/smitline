@@ -10,7 +10,6 @@ from api_tokens import ApiTokenStore
 from meeting_supervisor import ProductionMeetingSupervisor
 from runtime_daemon import create_app, require_loopback_bind, require_server_bind
 from runtime_state import daemon_data_path, daemon_token_path, write_private_file
-from visual_analysis import CodexVisualAnalysisProvider
 
 
 def write_auth_token(root, token=None):
@@ -33,8 +32,7 @@ def build_parser():
     return parser
 
 
-def build_call_service(project_root, runtime_root, data_root, daemon, lines=None,
-                       gateway_port=None):
+def build_call_service(project_root, data_root, daemon, lines=None, gateway_port=None):
     from call_hooks import load_hooks, read_env_file
     from call_notify import WebhookNotifier, load_or_create_secret
     from call_service import CallService
@@ -53,12 +51,10 @@ def build_call_service(project_root, runtime_root, data_root, daemon, lines=None
     hooks = load_hooks(startup_env.get('COLLEAGUE_CALL_HOOKS'), env_file=project_root / '.env',
                        store=store, notifier=notifier)
     environ = lambda: getattr(hooks, 'environ', os.environ)
-    workspace = runtime_root / 'codex-workspace'
-    workspace.mkdir(parents=True, exist_ok=True)
     port = gateway_port or int(startup_env.get('COLLEAGUE_GATEWAY_PORT') or GATEWAY_PORT)
     public = PublicUrl(environ, port)
     phone = PhoneLine(public_url=public.get, public_available=public.available, environ=environ)
-    available = {'meeting': MeetingLine(daemon, workspace=workspace), 'phone': phone}
+    available = {'meeting': MeetingLine(daemon), 'phone': phone}
     available.update(lines or {})
     service = CallService(store, hooks=hooks, lines=available)
     service.phone_line = phone
@@ -146,10 +142,7 @@ def build_app(args):
         auth_token=token,
         on_auth_token=publish_auth_token,
         supervisor=supervisor,
-        jobs_dir=runtime_root / 'jobs',
-        visual_analyzer=CodexVisualAnalysisProvider(),
-        call_service_factory=lambda daemon: build_call_service(
-            project_root, runtime_root, data_root, daemon),
+        call_service_factory=lambda daemon: build_call_service(project_root, data_root, daemon),
         api_tokens=api_tokens,
         server_mode=args.server,
     )

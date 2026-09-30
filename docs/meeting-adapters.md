@@ -1,8 +1,10 @@
 # Meeting adapters
 
-Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared local browser/audio runtime. Paste a supported invitation into the console; platform detection is automatic. Government Teams is not enabled.
+Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared browser/audio runtime in one Docker container (`colleague-meeting:local`). An agent joins with `start_call` on the `meeting` channel and the invite URL as `to` (see [calls](calls.md)); you can also paste the invitation into the console. Platform detection is automatic. Government Teams is not enabled.
 
 ## Operation
+
+The steps below use the console. When an agent starts the meeting, steps 1 and 2 happen through the calls API, and the rest is the same.
 
 1. Run `./start-control-panel.sh` and open http://127.0.0.1:8095.
 2. Paste an HTTPS Zoom, Teams commercial, Teams Free, or Google Meet (`https://meet.google.com/xxx-yyyy-zzz`) meeting URL.
@@ -19,9 +21,9 @@ A connected profile marker means a signed-in account menu was seen. Google or Mi
 
 ## Voice context and usage
 
-The runtime keeps **one continuous `gpt-live-1` session** from admission to shutdown, preserving the original audio conversation within the model's context limits. Its live instructions default to silence and permit a response only for a direct address, explicit question or task, requested tool result, or an important factual correction that can be established.
+The runtime keeps **one continuous `gpt-live-1` session** from admission to shutdown, preserving the original audio conversation within the model's context limits. Its live instructions default to silence and permit a response only for a direct address, an explicit question or task, or an important factual correction that can be established. Questions that need careful reasoning or precise facts go to a backend model through Responses delegation (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). The backend gets the meeting context and guidance.
 
-**Quiet participation is not zero API usage.** Live has no Realtime `create_response: false` control. Prompted selectivity reduces unnecessary responses but does not guarantee that the service never generates one. The tool policy limits delegation to explicit actionable requests. Work already submitted to an external tool can finish after the conversation changes.
+**Quiet participation is not zero API usage.** Live has no Realtime `create_response: false` control. Prompted selectivity reduces unnecessary responses but does not guarantee that the service never generates one. A backend answer already requested can arrive after the conversation has moved on.
 
 The health record exposes `generated_audio_bytes`, `discarded_audio_bytes`, and `output_bytes`. These measure application audio handling, not a billing estimate. `usage_seconds` is the provider's cumulative Live usage. No transcription-only replacement or voice model switch is implemented.
 
@@ -31,9 +33,9 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 `MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams and Google Meet reuse Joinly controllers for chat and leave, with explicit admission and microphone checks in Colleague AI. Signed-in fallback is declared on the adapter (`signed_in_profile`); the join path does not branch on platform id.
 
-The bridge owns the GPT-Live connection, virtual devices, tool dispatch, transcripts, and selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
+The bridge (`meeting-runtime/bridge.py`) owns the GPT-Live connection, Responses delegation, virtual devices, transcripts, and the selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
-Text chat delivery is available through `send_meeting_chat` when requested by a participant. Submission is not proof of recipient delivery. Teams charts are saved locally. Zoom chart upload remains experimental. Adapters do not share this computer's desktop. Optional incoming shared-content capture is disabled by default and only screenshots the meeting share or presentation surface.
+Adapters do not share a screen and do not read shared screens.
 
 ## Troubleshooting
 
@@ -42,11 +44,11 @@ Text chat delivery is available through `send_meeting_chat` when requested by a 
 
 ## Breaking migration
 
-The current names are `meeting-runtime/`, `.env.meeting`, `MEETING_URL`, `MEETING_PASSCODE`, `compose.meeting.yaml`, Docker service `meeting-agent`, and `start-meeting-agent.sh`. Old Zoom-specific settings are not read. Move existing local jobs, workspace, context, and recordings with the runtime directory; do not delete them. Update local launch scripts and stop the previous runtime before starting the new one. Secret files and browser profiles stay ignored by Git.
+The current names are `meeting-runtime/`, `.env.meeting`, `MEETING_URL`, `MEETING_PASSCODE`, `compose.meeting.yaml`, Docker service `meeting-agent`, and `start-meeting-agent.sh`. Old Zoom-specific settings are not read. Move existing local context, recordings, and profiles with the runtime directory; do not delete them. Update local launch scripts and stop the previous runtime before starting the new one. Secret files and browser profiles stay ignored by Git.
 
 ## Verification
 
-Run `node --test control-panel/*.test.mjs` and the runtime unittest suite inside the built meeting image. Browser fixtures use that image's Chromium with no meeting accounts or API credentials. They verify URL rejection, lobby versus admission, account requirements, and individual microphone controls. Participation tests verify model-audio transport, stable microphone connection, blocked microphones, and external mute handling.
+Run `node --test control-panel/*.test.mjs` and the runtime unittest suite inside the built meeting image (the command is in [AGENTS.md](../AGENTS.md#tests)). Browser fixtures use that image's Chromium with no meeting accounts or API credentials. They verify URL rejection, lobby versus admission, account requirements, and individual microphone controls. Participation tests verify model-audio transport, stable microphone connection, blocked microphones, and external mute handling.
 
 See [capabilities](capabilities.md) for the adapter matrix and [architecture](architecture.md#guest-then-signed-in-fallback) for the guest-then-signed-in sequence. Live Zoom/Teams/Meet calls remain necessary to validate actual tenant admission, signed-in fallback, two-way audio, chat submission, and restart. Browser fixture tests alone do not establish production compatibility.
 

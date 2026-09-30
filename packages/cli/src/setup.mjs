@@ -1,5 +1,5 @@
 // Setup that an agent can drive: status as JSON, a local page for keys, and
-// registration with the coding agents installed on this machine. Secrets never
+// registration with the AI agents installed on this machine. Secrets never
 // pass through the agent: they are typed into a loopback page and written to
 // the ignored .env file with 0600 permissions.
 import { spawnSync } from 'node:child_process';
@@ -12,7 +12,7 @@ import path from 'node:path';
 
 export const SECRET_KEYS = Object.freeze([
   'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
-  'TAVILY_API_KEY', 'COLLEAGUE_CONNECTOR_PASSPHRASE', 'COLLEAGUE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
+  'COLLEAGUE_CONNECTOR_PASSPHRASE', 'COLLEAGUE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
 ]);
 export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
@@ -32,7 +32,7 @@ const E164 = /^\+[1-9][0-9]{7,14}$/;
 const VOICE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;
 const MCP_NAME = 'colleague-ai';
 // Skills a local agent can use without opening this repository.
-const INSTALLED_SKILLS = ['call-with-colleague-ai', 'join-colleague-ai-meeting'];
+const INSTALLED_SKILLS = ['call-with-colleague-ai'];
 
 /** 'twilio' or 'signalwire', chosen the same way as the daemon (call_hooks.phone_provider). */
 export function phoneProvider(env) {
@@ -337,7 +337,7 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
   const onHost = python.status === 0 && forced !== 'docker';
   const inDocker = !onHost && docker.status === 0 && forced !== 'host';
   const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
-    : inDocker ? 'Docker; the first start builds a small image. Python is not needed, except to hand meeting work to Codex, Cursor, or Claude Code'
+    : inDocker ? 'Docker; the first start builds a small image. Python is not needed'
       : 'needs Docker (recommended) or Python 3.10 or newer with venv';
   checks.push(check('runtime', 'Where Colleague AI runs', onHost || inDocker, {
     detail: runtimeDetail,
@@ -567,7 +567,6 @@ const FIELDS = [
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
   { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (COLLEAGUE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
   { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
-  { key: 'TAVILY_API_KEY', label: 'Tavily API key', group: 'Web search in meetings (optional extra)', secret: true, hint: 'Lets Colleague AI look things up on the web during meetings. Get a key at https://app.tavily.com. Leave empty to skip.' },
   { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as colleague.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
@@ -997,7 +996,7 @@ export function registerAgents(root, {
   if (want('codex') && find('codex')) {
     runner('codex', ['mcp', 'remove', MCP_NAME]);
     const added = runner('codex', ['mcp', 'add', MCP_NAME, '--', process.execPath, server]);
-    results.push({ id: 'codex', registered: added.status === 0, detail: added.status === 0 ? 'for exact meeting continuity also run scripts/install-codex-integration.sh' : (added.stderr || '').trim().slice(0, 200) });
+    results.push({ id: 'codex', registered: added.status === 0, detail: added.status === 0 ? 'restart Codex to load it' : (added.stderr || '').trim().slice(0, 200) });
   }
   const cursorDir = path.join(home, '.cursor');
   if (want('cursor') && fs.existsSync(cursorDir)) {

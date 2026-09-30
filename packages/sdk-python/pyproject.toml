@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "colleague-ai"
 version = "1.0.0"
-description = "Local Colleague AI SDK for joining Zoom, Teams, and Google Meet meetings through the runtime daemon."
+description = "Local Colleague AI SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"

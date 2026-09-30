@@ -57,17 +57,6 @@
               </div>
               <small class="hint">Sign in through Open meeting view. After connection, stop the account browser before starting your meeting.</small>
             </div>
-            <div class="field full" id="runner-pair">
-              <label>Hosted runner <span>foundation pairing; local loopback stays supported</span></label>
-              <p class="hint" id="runner-state">Checking pairing…</p>
-              <p class="hint" id="pairing-code" hidden></p>
-              <div class="actions">
-                <button class="button secondary" type="button" id="pair-runner">Pair runner</button>
-                <button class="button secondary" type="button" id="complete-runner-pair" hidden>Confirm pairing</button>
-                <button class="button ghost" type="button" id="unpair-runner">Unpair</button>
-              </div>
-              <small class="hint">The pairing code is shown once. This computer keeps profiles, microphone, workspace, and credentials.</small>
-            </div>
             <div class="field-row">
               <div class="field">
                 <label for="passcode">Passcode</label>
@@ -80,27 +69,6 @@
                 <small class="error" id="participantName-error" data-error="participantName"></small>
               </div>
             </div>
-
-            <div class="field full">
-              <label for="model">Codex model</label>
-              <select id="model" name="model"></select>
-              <small class="error" data-error="model"></small>
-            </div>
-
-            <fieldset>
-              <legend>Tools for this meeting</legend>
-              <div class="tool-grid">
-                <label class="tool-card"><input type="checkbox" name="webSearch"><span class="tool-icon" aria-hidden="true">↗</span><span><b>Web search</b><small>Current facts and sources</small></span></label>
-                <label class="tool-card"><input type="checkbox" name="codex"><span class="tool-icon">›_</span><span><b>Codex</b><small>Read-only project analysis</small></span></label>
-                <label class="tool-card"><input type="checkbox" name="cursor"><span class="tool-icon">›_</span><span><b>Cursor</b><small>Host Cursor CLI, context or exact session</small></span></label>
-                <label class="tool-card"><input type="checkbox" name="claudeCode"><span class="tool-icon">›_</span><span><b>Claude Code</b><small>Host Claude CLI, context or exact session</small></span></label>
-                <label class="tool-card"><input type="checkbox" name="charts"><span class="tool-icon" aria-hidden="true">▤</span><span><b>Charts</b><small>Local PNG artifacts</small></span></label>
-              </div>
-              <small class="error" data-error="charts"></small>
-              <small class="error" data-error="codex"></small>
-              <small class="error" data-error="cursor"></small>
-              <small class="error" data-error="claudeCode"></small>
-            </fieldset>
 
             <fieldset>
               <legend>Meeting camera</legend>
@@ -131,21 +99,6 @@
                 </div>
               </div>
             </fieldset>
-
-            <fieldset>
-              <legend>Screen-share understanding</legend>
-              <div class="tool-grid camera-grid">
-                <label class="tool-card"><input type="checkbox" name="screenShareEnabled"><span><b>Understand shared content</b><small>Capture the meeting share surface at a low rate. Off by default. Voice cannot enable this.</small></span></label>
-              </div>
-              <small class="hint">This setting locks after the meeting starts. Pause and resume stay available. Colleague AI never shares this computer's desktop.</small>
-            </fieldset>
-
-            <div class="field full" id="workspace-field">
-              <label for="workspace">Codex workspace <span>optional</span></label>
-              <input id="workspace" name="workspace" autocomplete="off" placeholder="/Users/you/Projects/product">
-              <small class="hint">Codex receives read-only access to this directory. Leave empty to use a separate local workspace.</small>
-              <small class="error" data-error="workspace"></small>
-            </div>
 
             <div class="field full">
               <label for="meeting-instructions">Meeting guidance <span>optional</span></label>
@@ -182,7 +135,7 @@
 
             <div class="preflight" id="preflight-results" aria-live="polite">
               <span class="preflight-mark">i</span>
-              <p>Run checks before joining. We’ll verify credentials, Docker, Codex, and meeting settings. Start and stop go through the local runtime daemon.</p>
+              <p>Run checks before joining. We’ll verify your OpenAI key, Docker, and meeting settings. Start and stop go through the local runtime daemon.</p>
             </div>
 
             <div class="actions">
@@ -209,38 +162,10 @@
             <div><dt>Microphone</dt><dd id="mic-state">—</dd></div>
             <div><dt>Voice output</dt><dd id="floor-state">—</dd></div>
             <div><dt>Camera</dt><dd id="camera-state">—</dd></div>
-            <div><dt>Shared content</dt><dd id="share-state">—</dd></div>
             <div><dt>Presence</dt><dd id="visual-state">—</dd></div>
             <div><dt>Listening</dt><dd id="listening-state">—</dd></div>
-            <div><dt>Tool activity</dt><dd id="tool-state">—</dd></div>
-            <div><dt>Codex session</dt><dd id="continuity-state">—</dd></div>
             <div><dt>Session time</dt><dd id="session-time">0:00</dd></div>
           </dl>
-
-          <section class="approvals" id="approvals-panel" hidden>
-            <h3>Pending approvals</h3>
-            <p class="hint">Approve or deny each action. Voice cannot grant permission.</p>
-            <ul id="approval-list"></ul>
-          </section>
-
-          <section class="approvals" id="workspace-panel" hidden>
-            <h3>Workspace activity</h3>
-            <p class="hint">Planned edits, test results, and downloadable artifacts. Each action is approved separately.</p>
-            <ul id="workspace-list"></ul>
-          </section>
-
-          <section class="approvals" id="git-panel" hidden>
-            <h3>Git operations</h3>
-            <p class="hint">Commits and pushes stay disabled until you approve each one. Voice cannot grant permission.</p>
-            <ul id="git-list"></ul>
-          </section>
-
-          <section class="approvals" id="screen-share-panel" hidden>
-            <h3>Shared content</h3>
-            <p class="hint">Concise observations from the shared surface. Voice cannot enable capture.</p>
-            <div class="approval-actions" id="screen-share-actions"></div>
-            <ul id="screen-share-list"></ul>
-          </section>
 
           <div class="live-actions">
             <a class="button ghost" href="http://127.0.0.1:6082/vnc.html?autoconnect=true" target="_blank" rel="noreferrer">Open meeting view</a>
@@ -267,7 +192,6 @@
             <p id="handoff-status" class="hint" hidden></p>
             <div id="handoff-actions" class="transcript-actions" hidden>
               <button class="button" type="button" id="download-handoff">Download handoff</button>
-              <button class="button" type="button" id="retry-handoff" hidden>Retry Codex append</button>
             </div>
             <pre id="transcript-body">Your local transcript will open here.</pre>
             <div id="handoff-view" class="handoff-view" hidden>
@@ -278,7 +202,7 @@
         </div>
       </section>
     </main>
-    <footer><span>Colleague AI runs locally on this computer.</span><span>Voice and tool requests use your connected accounts.</span></footer>
+    <footer><span>Colleague AI runs locally on this computer.</span><span>Meetings use your own OpenAI account.</span></footer>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

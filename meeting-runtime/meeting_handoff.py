@@ -1,8 +1,6 @@
-"""Version 1 structured meeting handoff returned to the originating conversation."""
+"""Version 1 structured meeting handoff returned to the agent that started the meeting."""
 from dataclasses import dataclass
 
-from agent_sessions import MeetingPermissions
-from context_handoff import GitState
 from schema_validation import (
     omit_none, optional_bool, optional_field, optional_int, optional_string, reject_unknown_fields,
     require_enum, require_field, require_id, require_mapping, require_meeting_id,
@@ -21,13 +19,14 @@ HANDOFF_FIELDS = (
     'version', 'meetingId', 'startedAt', 'endedAt', 'summary', 'decisions', 'requirements',
     'actionItems', 'unresolvedQuestions', 'filesDiscussed', 'workPerformed', 'artifacts',
     'transcriptPath', 'recommendedNextAction', 'handoffId', 'partial', 'endReason',
-    'archivePath', 'git', 'permissions', 'approvals',
+    'archivePath',
 )
+# Fields handoffs stored before coding-agent sessions were removed; dropped when read back.
+LEGACY_HANDOFF_FIELDS = ('git', 'permissions', 'approvals')
 
 
-def _approval_item(data):
-    from approvals import ApprovalRecord, public_approval
-    return public_approval(ApprovalRecord.from_dict(data).to_dict())
+def upgrade_legacy_handoff(payload):
+    return {key: value for key, value in dict(payload).items() if key not in LEGACY_HANDOFF_FIELDS}
 
 
 @dataclass(frozen=True)
@@ -174,9 +173,6 @@ class MeetingHandoff:
     partial: bool = None
     end_reason: str = None
     archive_path: str = None
-    git: GitState = None
-    permissions: MeetingPermissions = None
-    approvals: tuple = ()
 
     def to_dict(self):
         return omit_none({
@@ -198,9 +194,6 @@ class MeetingHandoff:
             'partial': self.partial,
             'endReason': self.end_reason,
             'archivePath': self.archive_path,
-            'git': None if self.git is None else self.git.to_dict(),
-            'permissions': None if self.permissions is None else self.permissions.to_dict(),
-            'approvals': None if not self.approvals else [dict(item) for item in self.approvals],
         })
 
     @classmethod
@@ -240,10 +233,4 @@ class MeetingHandoff:
                                        max_length=256),
             archive_path=optional_string(optional_field(payload, 'archivePath'), 'archivePath',
                                          max_length=4096),
-            git=None if optional_field(payload, 'git') is None else GitState.from_dict(
-                payload['git']),
-            permissions=None if optional_field(payload, 'permissions') is None else (
-                MeetingPermissions.from_dict(payload['permissions'])),
-            approvals=() if optional_field(payload, 'approvals') is None else require_object_list(
-                payload['approvals'], 'approvals', _approval_item),
         )

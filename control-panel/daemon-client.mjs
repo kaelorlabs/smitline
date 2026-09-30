@@ -203,49 +203,6 @@ export function createDaemonClient(options = {}) {
     getHandoff(meetingId, { startIfNeeded = false } = {}) {
       return send('GET', `/v1/meetings/${meetingId}/handoff`, undefined, { startIfNeeded });
     },
-    retryHandoff(meetingId) {
-      return send('POST', `/v1/meetings/${meetingId}/handoff/retry`, {}, { startIfNeeded: true });
-    },
-    listApprovals(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/approvals`, undefined, { startIfNeeded: false });
-    },
-    getApproval(meetingId, approvalId) {
-      return send('GET', `/v1/meetings/${meetingId}/approvals/${approvalId}`, undefined, { startIfNeeded: false });
-    },
-    decideApproval(meetingId, approvalId, decision) {
-      const body = typeof decision === 'string' ? { decision } : decision;
-      return send('POST', `/v1/meetings/${meetingId}/approvals/${approvalId}/decision`, body, { startIfNeeded: true });
-    },
-    listArtifacts(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/artifacts`, undefined, { startIfNeeded: false });
-    },
-    getArtifact(meetingId, artifactId) {
-      return send('GET', `/v1/meetings/${meetingId}/artifacts/${artifactId}`, undefined, { startIfNeeded: false });
-    },
-    listCommits(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/commits`, undefined, { startIfNeeded: false });
-    },
-    listPushes(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/pushes`, undefined, { startIfNeeded: false });
-    },
-    getScreenShare(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/screen-share`, undefined, { startIfNeeded: false });
-    },
-    pauseScreenShare(meetingId) {
-      return send('POST', `/v1/meetings/${meetingId}/screen-share/pause`, {}, { startIfNeeded: true });
-    },
-    resumeScreenShare(meetingId) {
-      return send('POST', `/v1/meetings/${meetingId}/screen-share/resume`, {}, { startIfNeeded: true });
-    },
-    listScreenShareObservations(meetingId) {
-      return send('GET', `/v1/meetings/${meetingId}/screen-share/observations`, undefined, { startIfNeeded: false });
-    },
-    listProviders() {
-      return send('GET', '/v1/providers', undefined, { startIfNeeded: false });
-    },
-    runnerStatus() {
-      return send('GET', '/v1/runner', undefined, { startIfNeeded: false });
-    },
     listCalls(limit = 30, tzOffset = '') {
       // tzOffset: the reader's minutes east of UTC, so spend is grouped by their local day.
       const zone = /^-?\d{1,3}$/.test(String(tzOffset)) ? `&tzOffset=${tzOffset}` : '';
@@ -263,51 +220,6 @@ export function createDaemonClient(options = {}) {
     },
     transferCall(callId) {
       return send('POST', `/v1/calls/${encodeURIComponent(callId)}/transfer`, {}, { startIfNeeded: false });
-    },
-    pairRunner(payload = {}) {
-      return send('POST', '/v1/runner/pair', payload, { startIfNeeded: true });
-    },
-    completeRunnerPair(payload) {
-      return send('POST', '/v1/runner/pair/complete', payload, { startIfNeeded: true });
-    },
-    unpairRunner() {
-      return send('POST', '/v1/runner/unpair', {}, { startIfNeeded: true });
-    },
-    async getArtifactContent(meetingId, artifactId, { startIfNeeded = false } = {}) {
-      let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
-      if (!token) {
-        if (!startIfNeeded) throw daemonError('Runtime daemon is not running.', { code: 'daemon_offline' });
-        token = await ensure();
-      }
-      const headers = { Authorization: `Bearer ${token}` };
-      let response;
-      try {
-        response = await fetchImpl(`${baseUrl()}/v1/meetings/${meetingId}/artifacts/${artifactId}/content`, {
-          method: 'GET',
-          headers,
-          signal: AbortSignal.timeout(30_000),
-        });
-      } catch {
-        throw daemonError('Runtime daemon is unavailable. Start it or retry from the console.');
-      }
-      if (response.status === 401) {
-        throw daemonError('Runtime daemon rejected the auth token.', { status: 401, code: 'unauthorized' });
-      }
-      if (!response.ok) {
-        const text = await response.text();
-        const payload = parseDaemonBody(text);
-        throw daemonError(payload?.error?.message || 'Runtime daemon request failed.', {
-          status: response.status,
-          code: payload?.error?.code || 'daemon_error',
-        });
-      }
-      return {
-        mediaType: response.headers.get('content-type') || 'application/octet-stream',
-        body: Buffer.from(await response.arrayBuffer()),
-      };
-    },
-    leaseStatus(provider, sessionId) {
-      return send('GET', `/v1/agent-sessions/${provider}/${sessionId}/status`, undefined, { startIfNeeded: false });
     },
   };
 }

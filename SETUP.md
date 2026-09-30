@@ -1,6 +1,6 @@
 # Set up Colleague AI
 
-This file is written for the user's coding agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar). The user pastes this prompt into their agent:
+This file is written for the user's agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar). The user pastes this prompt into their agent:
 
 > Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 
@@ -22,7 +22,7 @@ Colleague AI runs on macOS and Linux. On Windows it runs inside WSL2 (Ubuntu).
 | Everything | Node.js 22 or newer | `node --version` |
 | Everything | Docker running (Docker Engine in WSL or Linux, or Docker Desktop) | `docker info` |
 
-That is all. Colleague AI runs in Docker: the first start builds a small image with Python and the phone tunnel (`cloudflared`) inside, so nothing else needs installing. If this computer already has Python 3.10 or newer with `venv`, Colleague AI uses it instead; that is only required to hand meeting work to Codex, Cursor, or Claude Code, which run on this computer with the user's own logins.
+That is all. Colleague AI runs in Docker: the first start builds a small image with Python and the phone tunnel (`cloudflared`) inside, so nothing else needs installing. If this computer already has Python 3.10 or newer with `venv`, Colleague AI uses it instead; nothing needs it.
 
 If Docker is missing, help the user install it: Docker Engine inside WSL or Linux (https://docs.docker.com/engine/install/), or Docker Desktop on a Mac. Docker Desktop needs host networking turned on (Settings > Resources > Network) so this computer can reach Colleague AI.
 
@@ -112,7 +112,7 @@ colleague setup call-me --wait
 
 Tell the user: "Your phone will ring in a few seconds. That's Colleague AI." Every call opens with a short hello that says whose AI assistant is calling ("Hi, this is <name>'s AI assistant."), and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Colleague' if you need me." Afterwards, ask whether they like the voice. To try another one, `colleague setup voice --preview <name>` calls them in that voice; `colleague setup voice --set <name>` keeps it; `colleague setup voice` lists the voices. The voice can be changed the same way at any time.
 
-Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running. The first meeting builds the meeting image, which can take several minutes; tell the user before it starts.
+Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Colleague AI join." Meetings need Docker running. The first meeting builds the meeting image (a couple of minutes, about 1.8 GB of disk); tell the user before it starts.
 
 ## 7. Tell Colleague AI about the user
 
@@ -131,7 +131,7 @@ Tell the user in one line what you saved, and that they can say something like "
 colleague setup register
 ```
 
-This adds the Colleague AI MCP server to Claude Code, Codex, and Cursor when they are installed. From WSL it also adds it to Claude Desktop, Cursor, and Claude Code on the Windows side, and it installs the call and meeting skills. It prints the command for other MCP clients. Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
+This adds the Colleague AI MCP server to Claude Code, Codex, and Cursor when they are installed. From WSL it also adds it to Claude Desktop, Cursor, and Claude Code on the Windows side, and it installs the `call-with-colleague-ai` skill, which covers phone calls and meetings. It prints the command for other MCP clients. Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
 
 ## 9. Finish
 
@@ -141,7 +141,7 @@ Tell the user in two or three sentences what works now, then give examples:
 - "Practice the call on me first."
 - "Join this meeting and help with the Q3 numbers: <link>"
 
-Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `colleague call --to ... --objective ... --wait`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
+Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `colleague call --to ... --objective ... --wait`. For a meeting, use channel `meeting` with the invite link as `to` (`colleague call --meeting <url> ...`). Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
 
 ## Troubleshooting
 

@@ -76,8 +76,6 @@ def map_visual_state(state=None, **overrides):
         return 'needs_attention'
     if floor == 'speaking':
         return 'speaking'
-    if payload.get('awaitingApproval') or backend == 'waiting_approval':
-        return 'needs_attention'
     if backend == 'working':
         return 'working'
     if stage in JOINING_STAGES:

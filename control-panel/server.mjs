@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseEnv, publicSettings, validateSettings, MODELS } from './config.mjs';
+import { ownerName, parseEnv, publicSettings, validateSettings } from './config.mjs';
 import { addContext, clearContext, publicContext, readContext } from './context-store.mjs';
 import { createDaemonClient } from './daemon-client.mjs';
 import { launcherActive } from './lifecycle.mjs';
@@ -13,8 +13,6 @@ import {
   buildMeetingCreatePayload,
   clearActiveMeetingId,
   contextHandoffFromSources,
-  continuityFromAgentSession,
-  ensureDefaultWorkspace,
   meetingIsActive,
   phaseFromDaemon,
   readActiveMeetingId,
@@ -45,16 +43,6 @@ function headers(type = 'application/json; charset=utf-8') {
 function json(response, status, body) {
   response.writeHead(status, headers());
   response.end(JSON.stringify(body));
-}
-
-function publicRunner(payload) {
-  if (!payload || typeof payload !== 'object') {
-    return { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
-  }
-  const {
-    pairingCode, deviceEnrollment, pairingSecret, enrollment, ...rest
-  } = payload;
-  return rest;
 }
 
 function run(command, args, options = {}) {
@@ -138,6 +126,17 @@ export function createServer({
 
   function currentEnv() {
     try { return parseEnv(fs.readFileSync(meetingEnv, 'utf8')); } catch { return {}; }
+  }
+
+  function secretsEnv() {
+    return parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8'));
+  }
+
+  // COLLEAGUE_OWNER_NAME lives in .env (colleague setup); .env.meeting may also set it.
+  function meetingOwner() {
+    let secrets = {};
+    try { secrets = secretsEnv(); } catch { /* no .env yet */ }
+    return ownerName(secrets) || ownerName(currentEnv());
   }
 
   async function bridgeHealth() {
@@ -245,90 +244,18 @@ export function createServer({
     }
   }
 
-  async function leaseSnapshot(session) {
-    if (!session?.agentSession) return null;
-    try {
-      return await daemonClient.leaseStatus(session.agentSession.provider, session.agentSession.sessionId);
-    } catch {
-      return null;
-    }
-  }
-
-  async function pendingApprovals(meetingId, session) {
-    if (!meetingId || !meetingIsActive(session)) return [];
-    try {
-      const payload = await daemonClient.listApprovals(meetingId);
-      return (payload.approvals || []).filter((item) => item.status === 'pending');
-    } catch {
-      return [];
-    }
-  }
-
-  async function workspaceSnapshot(meetingId, session) {
-    if (!meetingId || !meetingIsActive(session)) return { artifacts: [] };
-    try {
-      const payload = await daemonClient.listArtifacts(meetingId);
-      return { artifacts: payload.artifacts || [] };
-    } catch {
-      return { artifacts: [] };
-    }
-  }
-
   async function status() {
     const health = await bridgeHealth();
     const { meetingId, session, daemonError } = await loadMeeting();
-    const phase = phaseFromDaemon({ session, health, daemonError });
-    const running = meetingIsActive(session);
-    const lease = running ? await leaseSnapshot(session) : null;
-    const approvals = running ? await pendingApprovals(meetingId, session) : [];
-    const workspace = running ? await workspaceSnapshot(meetingId, session) : { artifacts: [] };
-    let gitOperations = [];
-    let screenShare = null;
-    let providers = [];
-    let runner = { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
-    try {
-      const listed = await daemonClient.listProviders();
-      providers = listed.providers || [];
-    } catch {
-      providers = [];
-    }
-    try {
-      runner = publicRunner(await daemonClient.runnerStatus());
-    } catch {
-      runner = { paired: false, mode: 'loopback', protocolVersion: 1, controlPlane: 'local' };
-    }
-    if (running && meetingId) {
-      try {
-        const commits = await daemonClient.listCommits(meetingId);
-        const pushes = await daemonClient.listPushes(meetingId);
-        gitOperations = [...(commits.commits || []), ...(pushes.pushes || [])];
-      } catch {
-        gitOperations = [];
-      }
-      try {
-        screenShare = await daemonClient.getScreenShare(meetingId);
-      } catch {
-        screenShare = null;
-      }
-    }
     return {
-      phase,
-      running,
+      phase: phaseFromDaemon({ session, health, daemonError }),
+      running: meetingIsActive(session),
       meetingId: meetingId || undefined,
-      continuity: session ? continuityFromAgentSession(session.agentSession) : undefined,
       health,
-      lease,
       lastExit,
       logs: logs.slice(-40),
       sessions: sessions(),
       daemonError: daemonError ? daemonError.message : undefined,
-      pendingApprovals: approvals,
-      workspaceArtifacts: workspace.artifacts,
-      gitOperations,
-      screenShare,
-      providers,
-      runner,
-      provider: session?.agentSession?.provider,
     };
   }
 
@@ -336,9 +263,8 @@ export function createServer({
     const validation = validateSettings(settings);
     const errors = { ...validation.errors };
     let secrets = {};
-    try { secrets = parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8')); } catch { errors.credentials = 'Create .env with your OpenAI and Tavily keys.'; }
+    try { secrets = secretsEnv(); } catch { errors.credentials = 'Create .env with your OpenAI key.'; }
     if (!secrets.OPENAI_API_KEY || /replace_with|your_/i.test(secrets.OPENAI_API_KEY)) errors.credentials = 'Configure OPENAI_API_KEY in .env.';
-    if (settings.tools?.webSearch && (!secrets.TAVILY_API_KEY || /replace_with|your_/i.test(secrets.TAVILY_API_KEY))) errors.webSearch = 'Configure TAVILY_API_KEY in .env or disable web search.';
     const docker = await withTimeout(
       runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], {
         cwd: root,
@@ -348,16 +274,6 @@ export function createServer({
       { code: -1, stdout: '', stderr: 'timed out' },
     );
     if (docker.code !== 0) errors.docker = 'Docker is unavailable. Start Docker (Docker Desktop, or Docker Engine inside WSL) and try again.';
-    const codex = await runCommand('/bin/bash', ['-lc', 'if command -v codex >/dev/null 2>&1; then codex login status; elif [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then /Applications/ChatGPT.app/Contents/Resources/codex login status; else exit 127; fi'], { cwd: root });
-    if (settings.tools?.codex && codex.code !== 0) errors.codex = 'Codex is unavailable or signed out. Run codex login.';
-    if (settings.tools?.cursor) {
-      const cursor = await runCommand('/bin/bash', ['-lc', 'command -v "${CURSOR_BIN:-cursor-agent}" >/dev/null 2>&1'], { cwd: root });
-      if (cursor.code !== 0) errors.cursor = 'Cursor CLI not found. Install cursor-agent and complete its official login.';
-    }
-    if (settings.tools?.claudeCode) {
-      const claude = await runCommand('/bin/bash', ['-lc', 'command -v "${CLAUDE_BIN:-claude}" >/dev/null 2>&1'], { cwd: root });
-      if (claude.code !== 0) errors.claudeCode = 'Claude Code CLI not found. Install claude and run claude login.';
-    }
     return { ready: Object.keys(errors).length === 0, errors };
   }
 
@@ -386,7 +302,6 @@ export function createServer({
         token,
         settings: publicSettings(currentEnv()),
         context: publicContext(readContext(contextIndex)),
-        models: MODELS,
         status: await status(),
       });
     }
@@ -396,20 +311,9 @@ export function createServer({
     if (request.method === 'GET' && pathname === '/api/platforms/google/status') {
       return json(response, 200, { connected: fs.existsSync(path.join(profileRoot, 'google-connected')) });
     }
-    if (request.method === 'GET' && pathname === '/api/runner') {
-      try {
-        return json(response, 200, publicRunner(await daemonClient.runnerStatus()));
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
     if (request.method === 'GET' && pathname === '/api/status') return json(response, 200, await status());
     if (request.method === 'GET' && pathname.startsWith('/api/sessions/')) {
-      const rest = pathname.slice('/api/sessions/'.length);
-      if (rest.endsWith('/retry')) {
-        return json(response, 405, { error: 'Use POST to retry finalization.' });
-      }
-      const id = rest;
+      const id = pathname.slice('/api/sessions/'.length);
       const directory = sessionDirectory(id);
       if (!directory) return json(response, 400, { error: 'Invalid session.' });
       const transcriptPath = path.join(directory, 'transcript.txt');
@@ -462,44 +366,6 @@ export function createServer({
           ? await daemonClient.endCall(callId)
           : await daemonClient.transferCall(callId);
         return json(response, 200, payload);
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    const artifactMatch =pathname.match(/^\/api\/meetings\/([^/]+)\/artifacts(?:\/([^/]+)(?:\/(content))?)?$/);
-    if (request.method === 'GET' && artifactMatch) {
-      const meetingId = decodeURIComponent(artifactMatch[1]);
-      const artifactId = artifactMatch[2] ? decodeURIComponent(artifactMatch[2]) : '';
-      const wantContent = artifactMatch[3] === 'content';
-      try {
-        if (!artifactId) {
-          return json(response, 200, await daemonClient.listArtifacts(meetingId));
-        }
-        if (wantContent) {
-          const payload = await daemonClient.getArtifactContent(meetingId, artifactId);
-          const media = payload.mediaType || 'application/octet-stream';
-          response.writeHead(200, {
-            'Content-Type': media,
-            'Content-Disposition': `attachment; filename="${artifactId}"`,
-            'X-Content-Type-Options': 'nosniff',
-            'Cache-Control': 'no-store',
-          });
-          response.end(payload.body);
-          return;
-        }
-        return json(response, 200, await daemonClient.getArtifact(meetingId, artifactId));
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    const shareGet = pathname.match(/^\/api\/meetings\/([^/]+)\/screen-share(?:\/(observations))?$/);
-    if (request.method === 'GET' && shareGet) {
-      const meetingId = decodeURIComponent(shareGet[1]);
-      try {
-        if (shareGet[2] === 'observations') {
-          return json(response, 200, await daemonClient.listScreenShareObservations(meetingId));
-        }
-        return json(response, 200, await daemonClient.getScreenShare(meetingId));
       } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });
       }
@@ -576,36 +442,6 @@ export function createServer({
       fs.rmSync(path.join(profileRoot, 'google-connected'), { force: true });
       return json(response, 200, { connected: false });
     }
-    if (request.method === 'POST' && pathname === '/api/runner/pair') {
-      try {
-        const started = await daemonClient.pairRunner(body || {});
-        return json(response, 201, {
-          pairingId: started.pairingId,
-          pairingCode: started.pairingCode,
-          expiresAt: started.expiresAt,
-        });
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    if (request.method === 'POST' && pathname === '/api/runner/pair/complete') {
-      try {
-        const completed = await daemonClient.completeRunnerPair({
-          pairingId: body.pairingId,
-          pairingCode: body.pairingCode,
-        });
-        return json(response, 201, publicRunner(completed));
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    if (request.method === 'POST' && pathname === '/api/runner/unpair') {
-      try {
-        return json(response, 200, publicRunner(await daemonClient.unpairRunner()));
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
     if (request.method === 'POST' && pathname === '/api/preflight') return json(response, 200, await preflight(body));
     if (request.method === 'POST' && pathname === '/api/start') {
       if (startInFlight || launcherActive(accountLauncher)) {
@@ -618,11 +454,9 @@ export function createServer({
         }
         const check = await preflight(body);
         if (!check.ready) return json(response, 422, check);
-        const workspace = String(body.workspace || '').trim() || ensureDefaultWorkspace(root);
         const payload = buildMeetingCreatePayload(body, {
           sources: readContext(contextIndex).sources,
-          workspace,
-          root,
+          onBehalfOf: meetingOwner(),
         });
         logs.length = 0;
         lastExit = null;
@@ -640,30 +474,6 @@ export function createServer({
         startInFlight = false;
       }
     }
-    if (request.method === 'POST' && pathname.startsWith('/api/sessions/') && pathname.endsWith('/retry')) {
-      const id = pathname.slice('/api/sessions/'.length, pathname.length - '/retry'.length).replace(/\/$/, '');
-      const directory = sessionDirectory(id);
-      if (!directory) return json(response, 400, { error: 'Invalid session.' });
-      try {
-        const handoff = await daemonClient.retryHandoff(id);
-        return json(response, 200, {
-          id,
-          handoff,
-          handoffStatus: 'ready',
-        });
-      } catch (error) {
-        const archive = archiveStatus(directory);
-        return json(response, error.status || 503, {
-          error: error.message,
-          code: error.code,
-          id,
-          handoff: archive.handoff,
-          handoffStatus: archive.status === 'none' ? 'failed' : archive.status,
-          partial: archive.partial,
-          endReason: archive.endReason,
-        });
-      }
-    }
     if (request.method === 'POST' && pathname === '/api/stop') {
       const meetingId = readActiveMeetingId(root);
       if (!meetingId) return json(response, 200, { stopped: true });
@@ -678,34 +488,6 @@ export function createServer({
           return json(response, 200, { stopped: true });
         }
         addLog('system', error.message);
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    const approvalMatch = pathname.match(/^\/api\/meetings\/([^/]+)\/approvals\/([^/]+)\/decision$/);
-    if (request.method === 'POST' && approvalMatch) {
-      const meetingId = decodeURIComponent(approvalMatch[1]);
-      const approvalId = decodeURIComponent(approvalMatch[2]);
-      try {
-        const approval = await daemonClient.decideApproval(meetingId, approvalId, {
-          decision: body.decision,
-        });
-        addLog('system', `Approval ${approvalId} ${approval.status}.`);
-        return json(response, 200, { approval });
-      } catch (error) {
-        return json(response, error.status || 503, { error: error.message, code: error.code });
-      }
-    }
-    const shareAction = pathname.match(/^\/api\/meetings\/([^/]+)\/screen-share\/(pause|resume)$/);
-    if (request.method === 'POST' && shareAction) {
-      const meetingId = decodeURIComponent(shareAction[1]);
-      const action = shareAction[2];
-      try {
-        const payload = action === 'pause'
-          ? await daemonClient.pauseScreenShare(meetingId)
-          : await daemonClient.resumeScreenShare(meetingId);
-        addLog('system', `Screen-share ${action}.`);
-        return json(response, 200, payload);
-      } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });
       }
     }

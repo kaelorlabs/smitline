@@ -1,6 +1,5 @@
 """Shared process-boundary validation for versioned runtime schemas."""
 from datetime import datetime
-from pathlib import Path
 import re
 
 
@@ -145,13 +144,6 @@ def require_timestamp(value, name):
         raise ValueError(f'{name} must be an ISO-8601 timestamp') from error
     if parsed.tzinfo is None:
         raise ValueError(f'{name} must include a timezone')
-    return text
-
-
-def require_workspace(value, name='workspace'):
-    text = require_string(value, name, max_length=4096)
-    if not Path(text).is_absolute():
-        raise ValueError(f'{name} must be an absolute path')
     return text
 
 

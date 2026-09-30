@@ -11,7 +11,7 @@ from meeting_supervisor import DaemonError, ProductionMeetingSupervisor
 from runtime_state import (
     active_meeting_path, daemon_token_path, file_mode, meeting_state_path, read_json,
 )
-from test_schemas import ZOOM_URL, context_payload, meeting_session_payload, agent_session_payload
+from test_schemas import ZOOM_URL, context_payload, meeting_session_payload
 
 from daemon_main import write_auth_token
 from runtime_config import RuntimeConfig, resolve_meeting_url
@@ -46,61 +46,6 @@ class FakeLauncher:
         return {'running': self.running, 'unknown': self.unknown}
 
 
-class FakeHostWorkerHandle:
-    def __init__(self, exit_code=None):
-        self.exit_code = exit_code
-        self.terminated = False
-        self.waited = False
-
-    def poll(self):
-        return self.exit_code
-
-    def terminate(self):
-        self.terminated = True
-        if self.exit_code is None:
-            self.exit_code = 0
-
-    async def wait(self):
-        self.waited = True
-        if self.exit_code is None:
-            self.exit_code = 0
-        return self.exit_code
-
-
-class FakeHostWorker:
-    def __init__(self):
-        self.codex_bin = '/usr/local/bin/codex'
-        self.login_ok = True
-        self.fail_start = False
-        self.early_exit = False
-        self.starts = []
-        self.handles = []
-
-    def discover_codex(self):
-        return self.codex_bin
-
-    def check_login(self, _codex_bin):
-        if not self.login_ok:
-            raise RuntimeError('Codex CLI is not logged in. Run codex login first.')
-
-    async def start(self, *, env, cwd, command=None):
-        if self.fail_start:
-            raise RuntimeError('worker start failed')
-        handle = FakeHostWorkerHandle(exit_code=1 if self.early_exit else None)
-        self.starts.append({'env': dict(env), 'cwd': cwd, 'command': command})
-        self.handles.append(handle)
-        return handle
-
-    def discover_provider(self, provider_id):
-        if provider_id == 'codex':
-            return self.codex_bin
-        bins = getattr(self, 'provider_bins', None) or {
-            'cursor': '/usr/local/bin/cursor-agent',
-            'claude-code': '/usr/local/bin/claude',
-        }
-        return bins.get(provider_id)
-
-
 class FakeHealth:
     def __init__(self, payload=None):
         self.payload = payload if payload is not None else {'stage': 'starting'}
@@ -122,56 +67,35 @@ class FakeMeetings:
         return tuple(sorted(self.records))
 
 
-class FakeLeases:
-    def __init__(self):
-        self.records = {}
-
-    def get(self, provider, session_id):
-        return self.records.get((provider, session_id), True)
-
-
 class FakeRecord:
-    def __init__(self, session, lease_token='lease-secret', handoff=None):
+    def __init__(self, session, handoff=None):
         self.session = session
-        self.lease_token = lease_token
         self.handoff = handoff
 
 
 class FakeDaemon:
     def __init__(self):
         self.transitions = []
-        self.heartbeats = []
+        self.presence = []
         self.failures = []
         self.handoffs = []
-        self.prepared = []
-        self.append_failures = []
         self.meetings = FakeMeetings()
-        self.leases = FakeLeases()
 
     def transition(self, meeting_id, state, **_kwargs):
         self.transitions.append((meeting_id, state))
 
-    def heartbeat_lease(self, provider, session_id):
-        self.heartbeats.append((provider, session_id))
-        return {'provider': provider, 'sessionId': session_id}
+    def apply_presence(self, meeting_id, **fields):
+        self.presence.append((meeting_id, fields))
 
     def record_finalization_failure(self, meeting_id, reason):
         self.failures.append((meeting_id, reason))
-        return None
-
-    def prepare_finalization(self, meeting_id):
-        self.prepared.append(meeting_id)
-        return None
-
-    def note_append_failure(self, meeting_id, handoff_id, reason):
-        self.append_failures.append((meeting_id, handoff_id, reason))
         return None
 
     def store_handoff(self, handoff):
         self.handoffs.append(handoff)
         record = self.meetings.records.get(handoff.meeting_id)
         if record is None:
-            record = FakeRecord(session(id=handoff.meeting_id), lease_token=None)
+            record = FakeRecord(session(id=handoff.meeting_id))
             self.meetings.records[handoff.meeting_id] = record
         record.handoff = handoff
         return handoff
@@ -185,21 +109,12 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.mkdir()
         self.launcher = FakeLauncher()
         self.health = FakeHealth()
-        self.host_worker = FakeHostWorker()
         self.daemon = FakeDaemon()
-        self.appended = []
-
-        async def append(_session, handoff):
-            self.appended.append(handoff)
-            return {'ok': True, 'idempotent': False}
-
         self.supervisor = ProductionMeetingSupervisor(
             self.root,
             runtime_root=self.runtime,
             launcher=self.launcher,
             health=self.health,
-            host_worker=self.host_worker,
-            append_handoff=append,
             poll_interval=0.02,
             start_timeout=0.4,
             stop_timeout=0.4,
@@ -225,96 +140,67 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('/Users/Taylor/secret.png', json.dumps(stored))
         await self.supervisor.cancel(meeting.id)
 
-    async def test_on_behalf_of_metadata_reaches_the_runtime_state(self):
-        meeting = session(agentSession=agent_session_payload(
-            metadata={'source': 'call-api', 'onBehalfOf': 'Maya Shah'}))
+    async def test_on_behalf_of_and_voice_reach_the_runtime_state(self):
+        meeting = session(onBehalfOf='Maya Shah', voice='cinder')
         await self.supervisor.start(meeting)
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(stored['onBehalfOf'], 'Maya Shah')
+        self.assertEqual(stored['voice'], 'cinder')
+        config = RuntimeConfig.from_environ({
+            'COLLEAGUE_RUNTIME_STATE': str(meeting_state_path(self.runtime, meeting.id))})
+        self.assertEqual(config.owner_name, 'Maya Shah')
+        self.assertEqual(config.voice, 'cinder')
         await self.supervisor.cancel(meeting.id)
 
-    async def test_launch_to_live_context_cancel_and_heartbeat(self):
+    async def test_launch_to_live_context_and_cancel(self):
         meeting = session()
         await self.supervisor.start(meeting)
         self.assertEqual(len(self.launcher.ups), 1)
-        self.assertEqual(len(self.host_worker.starts), 1)
-        worker_env = self.host_worker.starts[0]['env']
-        self.assertEqual(worker_env['COLLEAGUE_WORKSPACE'], '/Users/Taylor/project')
-        self.assertEqual(worker_env['CODEX_BIN'], '/usr/local/bin/codex')
-        self.assertEqual(self.host_worker.starts[0]['cwd'], str(self.runtime))
-        self.assertNotIn('OPENAI_API_KEY', worker_env)
-        self.assertNotIn('TAVILY_API_KEY', worker_env)
-        self.assertNotIn('MEETING_PASSCODE', worker_env)
-        self.assertIn('/meeting-runtime/run/meetings/' + meeting.id, self.launcher.ups[0]['COLLEAGUE_RUNTIME_STATE'])
+        self.assertIn('/meeting-runtime/run/meetings/' + meeting.id,
+                      self.launcher.ups[0]['COLLEAGUE_RUNTIME_STATE'])
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(stored['meetingId'], meeting.id)
         self.assertEqual(stored['meetingUrl'], ZOOM_URL)
-        self.assertEqual(stored['sessionId'], 'thread-origin-1')
-        self.assertEqual(stored['continuity'], 'exact')
+        for removed in ('workspace', 'provider', 'sessionId', 'continuity', 'permissions',
+                        'codexEnabled', 'defaultCodexModel'):
+            self.assertNotIn(removed, stored)
         dumped = json.dumps(stored)
-        self.assertNotIn('leaseId', dumped)
         self.assertNotIn('OPENAI', dumped)
         self.assertNotIn('apiKey', dumped)
         self.assertEqual(file_mode(meeting_state_path(self.runtime, meeting.id)), 0o600)
         self.assertEqual(file_mode(self.runtime / 'run'), 0o700)
+        self.assertFalse((self.runtime / 'run' / 'meetings' / meeting.id / 'context.json').exists())
         self.health.payload = {'stage': 'waiting_for_admission'}
         await asyncio.sleep(0.08)
         self.health.payload = {'stage': 'live'}
         await asyncio.sleep(0.08)
         self.assertIn((meeting.id, 'waiting_for_admission'), self.daemon.transitions)
         self.assertIn((meeting.id, 'live'), self.daemon.transitions)
-        self.assertTrue(self.daemon.heartbeats)
-        updated = meeting.context
-        await self.supervisor.add_context(meeting.id, updated)
+        self.assertTrue(self.daemon.presence)
+        await self.supervisor.add_context(meeting.id, meeting.context)
         again = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(again['context']['objective'], 'Ship the developer platform')
         await self.supervisor.cancel(meeting.id)
         self.assertGreaterEqual(self.launcher.stops, 1)
         self.assertFalse(self.launcher.running)
-        handle = self.host_worker.handles[0]
-        self.assertTrue(handle.terminated)
-        self.assertTrue(handle.waited)
-        self.assertIsNone(self.supervisor._worker)
         self.assertEqual(self.daemon.handoffs[-1].end_reason, 'cancelled')
         self.assertTrue(self.daemon.handoffs[-1].partial)
         await self.supervisor.cancel(meeting.id)
         self.assertFalse(self.launcher.running)
-        self.assertEqual(len(self.host_worker.handles), 1)
-
-    async def test_cursor_worker_uses_isolated_jobs_and_skips_codex(self):
-        meeting = session(agentSession=agent_session_payload(
-            provider='cursor', sessionId='sess-cursor-1',
-            metadata={'source': 'host', 'continuity': 'context'}))
-        await self.supervisor.start(meeting)
-        env = self.host_worker.starts[0]['env']
-        self.assertEqual(env['COLLEAGUE_PROVIDER'], 'cursor')
-        self.assertTrue(env['PROVIDER_JOBS_DIR'].endswith('/cursor'))
-        self.assertNotIn('CODEX_BIN', env)
-        self.assertEqual(env['CURSOR_BIN'], '/usr/local/bin/cursor-agent')
-        command = self.host_worker.starts[0]['command']
-        self.assertTrue(str(command[-1]).endswith('provider_worker.py'))
-        stored = read_json(meeting_state_path(self.runtime, meeting.id))
-        self.assertEqual(stored['provider'], 'cursor')
-        await self.supervisor.cancel(meeting.id)
 
     async def test_capacity_is_exclusive_and_idempotent(self):
         first = session()
         await self.supervisor.start(first)
         await self.supervisor.start(first)
         self.assertEqual(len(self.launcher.ups), 1)
-        self.assertEqual(len(self.host_worker.starts), 1)
-        other = session(id='mtg-other0000001', agentSession={
-            **meeting_session_payload()['agentSession'], 'sessionId': 'thread-other-1',
-        })
+        other = session(id='mtg-other0000001')
         with self.assertRaises(DaemonError) as raised:
             await self.supervisor.start(other)
         self.assertEqual(raised.exception.code, 'capacity_exceeded')
         self.assertEqual(len(self.launcher.ups), 1)
         await self.supervisor.cancel(first.id)
         first = session()
-        other = session(id='mtg-other0000002', agentSession={
-            **meeting_session_payload()['agentSession'], 'sessionId': 'thread-other-2',
-        })
+        other = session(id='mtg-other0000002')
         first_result, second_result = await asyncio.gather(
             self.supervisor.start(first),
             self.supervisor.start(other),
@@ -331,8 +217,6 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             await self.supervisor.start(session())
         self.assertGreaterEqual(self.launcher.stops, 1)
         self.assertIsNone(self.supervisor._active_id)
-        self.assertEqual(self.host_worker.starts, [])
-        self.assertIsNone(self.supervisor._worker)
 
         self.launcher.fail_up = False
         self.health.payload = None
@@ -341,7 +225,6 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             await self.supervisor.start(session(id='mtg-healthfail0001'))
         self.assertFalse(self.launcher.running)
         self.assertIsNone(self.supervisor._active_id)
-        self.assertEqual(self.host_worker.starts, [])
 
     async def test_unexpected_exit_persists_partial_handoff(self):
         meeting = session()
@@ -352,10 +235,6 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon.handoffs[0].meeting_id, meeting.id)
         self.assertTrue(self.daemon.handoffs[0].partial)
         self.assertEqual(self.daemon.handoffs[0].end_reason, 'container_exited')
-        handle = self.host_worker.handles[0]
-        self.assertTrue(handle.terminated)
-        self.assertTrue(handle.waited)
-        self.assertIsNone(self.supervisor._worker)
 
     async def test_finished_without_handoff_still_builds_handoff(self):
         meeting = session()
@@ -365,31 +244,25 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon.failures, [])
         self.assertEqual(self.daemon.handoffs[-1].end_reason, 'finished')
         self.assertFalse(self.daemon.handoffs[-1].partial)
-        handle = self.host_worker.handles[0]
-        self.assertTrue(handle.terminated)
-        self.assertTrue(handle.waited)
-        self.assertIsNone(self.supervisor._worker)
+        self.assertFalse(self.launcher.running)
 
-    async def test_default_codex_handoff_uses_host_jobs_directory(self):
-        captured = {}
+    async def test_natural_end_releases_agent_capacity(self):
+        first = session()
+        await self.supervisor.start(first)
+        self.health.payload = {'stage': 'meeting_ended'}
+        await asyncio.sleep(0.08)
+        self.assertIsNone(self.supervisor._active_id)
+        self.assertFalse(self.launcher.running)
+        self.assertEqual(read_json(active_meeting_path(self.root)), {})
+        payload = json.loads(
+            (self.runtime / 'recordings' / first.id / 'finalization.json').read_text())
+        self.assertEqual(payload['status'], 'ready')
 
-        class Client:
-            def __init__(self, jobs=None, **_kwargs):
-                captured['jobs'] = Path(jobs)
-
-            async def append_handoff(self, handoff, **fields):
-                captured['handoff'] = handoff
-                captured['fields'] = fields
-                return {'ok': True}
-
-        self.supervisor.append_handoff = None
-        meeting = session()
-        with mock.patch('codex_tool.CodexJobClient', Client):
-            result = await self.supervisor._provider_append(
-                meeting, {'meetingId': meeting.id, 'summary': 'Done.'})
-        self.assertTrue(result['ok'])
-        self.assertEqual(captured['jobs'], self.runtime / 'jobs')
-        self.assertEqual(captured['fields']['session_id'], meeting.agent_session.session_id)
+        self.health.payload = {'stage': 'starting'}
+        second = session(id='mtg-nextmeeting001')
+        await self.supervisor.start(second)
+        self.assertEqual(self.supervisor._active_id, second.id)
+        self.assertTrue(self.launcher.running)
 
     async def test_restart_reconciliation(self):
         meeting = session()
@@ -399,7 +272,12 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon.handoffs[-1].meeting_id, meeting.id)
         self.assertEqual(self.daemon.handoffs[-1].end_reason, 'runtime_unavailable_on_restart')
 
+        ended = session(id='mtg-endedalready01', state='ended')
+        self.daemon.meetings.records[ended.id] = FakeRecord(ended)
         self.daemon.handoffs.clear()
+        await self.supervisor.reconcile(self.daemon)
+        self.assertEqual(self.daemon.handoffs, [])
+
         self.launcher.unknown = True
         await self.supervisor.reconcile(self.daemon)
         self.assertEqual(self.daemon.failures, [])
@@ -407,15 +285,13 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
 
         self.launcher.unknown = False
         self.launcher.running = True
-        write_path = active_meeting_path(self.root)
+        live = session(id='mtg-stilllive00001')
+        self.daemon.meetings.records[live.id] = FakeRecord(live)
         from runtime_state import write_private_json
-        write_private_json(write_path, {'meetingId': meeting.id})
+        write_private_json(active_meeting_path(self.root), {'meetingId': live.id})
         await self.supervisor.reconcile(self.daemon)
-        self.assertEqual(self.supervisor._active_id, meeting.id)
+        self.assertEqual(self.supervisor._active_id, live.id)
         self.assertTrue(self.supervisor._watch_task)
-        self.assertEqual(len(self.host_worker.starts), 2)
-        await self.supervisor.reconcile(self.daemon)
-        self.assertEqual(len(self.host_worker.starts), 2)
 
     async def test_uncertain_running_container_is_not_taken_over(self):
         meeting = session()
@@ -446,136 +322,12 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
                 'password': 'meeting-passcode',
             })
 
-    async def test_codex_disabled_does_not_start_worker(self):
-        self.supervisor.wants_codex = lambda _session: False
-        meeting = session()
-        await self.supervisor.start(meeting)
-        self.assertEqual(self.host_worker.starts, [])
-        self.assertIsNone(self.supervisor._worker)
-        await self.supervisor.cancel(meeting.id)
-        self.assertEqual(self.host_worker.handles, [])
-
-    async def test_missing_codex_and_login_failure_are_truthful(self):
-        self.host_worker.codex_bin = None
-        with self.assertRaises(RuntimeError) as raised:
-            await self.supervisor.start(session())
-        self.assertIn('Codex CLI not found', str(raised.exception))
-        self.assertFalse(self.launcher.running)
-        self.assertEqual(self.launcher.ups, [])
-        self.assertIsNone(self.supervisor._worker)
-        self.assertEqual(self.host_worker.starts, [])
-
-        self.host_worker.codex_bin = '/usr/local/bin/codex'
-        self.host_worker.login_ok = False
-        with self.assertRaises(RuntimeError) as raised:
-            await self.supervisor.start(session(id='mtg-loginfail00001'))
-        self.assertIn('not logged in', str(raised.exception))
-        self.assertFalse(self.launcher.running)
-        self.assertEqual(self.host_worker.starts, [])
-
-    async def test_early_worker_exit_stops_container(self):
-        self.host_worker.early_exit = True
-        with self.assertRaises(RuntimeError) as raised:
-            await self.supervisor.start(session())
-        self.assertIn('exited during startup', str(raised.exception))
-        self.assertFalse(self.launcher.running)
-        self.assertIsNone(self.supervisor._worker)
-        handle = self.host_worker.handles[0]
-        self.assertTrue(handle.waited)
-
-    async def test_worker_death_records_handoff_and_stops(self):
-        meeting = session()
-        await self.supervisor.start(meeting)
-        handle = self.host_worker.handles[0]
-        handle.exit_code = 1
-        await asyncio.sleep(0.08)
-        self.assertEqual(self.daemon.failures, [])
-        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'codex_worker_exited')
-        self.assertTrue(handle.waited)
-        self.assertIsNone(self.supervisor._worker)
-        self.assertFalse(self.launcher.running)
-
-    async def test_exact_append_failure_keeps_local_handoff(self):
-        async def fail(_session, _handoff):
-            return {'error': 'codex unavailable'}
-
-        self.supervisor.append_handoff = fail
-        meeting = session()
-        await self.supervisor.start(meeting)
-        await self.supervisor.cancel(meeting.id)
-        self.assertEqual(self.daemon.handoffs, [])
-        self.assertEqual(self.daemon.failures, [])
-        self.assertEqual(self.daemon.append_failures[-1][0], meeting.id)
-        payload = json.loads(
-            (self.runtime / 'recordings' / meeting.id / 'finalization.json').read_text())
-        self.assertEqual(payload['status'], 'append_failed')
-        stored = json.loads((self.runtime / 'recordings' / meeting.id / 'handoff.json').read_text())
-        self.assertEqual(stored['handoffId'], 'hnd-' + meeting.id)
-        self.assertNotIn('leaseId', json.dumps(stored))
-
-    async def test_natural_end_with_append_failure_releases_agent_capacity(self):
-        async def fail(_session, _handoff):
-            return {'error': 'codex unavailable'}
-
-        self.supervisor.append_handoff = fail
-        first = session()
-        await self.supervisor.start(first)
-        self.health.payload = {'stage': 'meeting_ended'}
-        await asyncio.sleep(0.08)
-
-        self.assertIsNone(self.supervisor._active_id)
-        self.assertFalse(self.launcher.running)
-        self.assertEqual(read_json(active_meeting_path(self.root)), {})
-        payload = json.loads(
-            (self.runtime / 'recordings' / first.id / 'finalization.json').read_text())
-        self.assertEqual(payload['status'], 'append_failed')
-
-        self.health.payload = {'stage': 'starting'}
-        second = session(id='mtg-nextmeeting001', agentSession={
-            **meeting_session_payload()['agentSession'], 'sessionId': 'thread-next-1',
-        })
-        await self.supervisor.start(second)
-        self.assertEqual(self.supervisor._active_id, second.id)
-        self.assertTrue(self.launcher.running)
-
-    async def test_shutdown_and_reconcile_await_worker(self):
-        meeting = session()
-        await self.supervisor.start(meeting)
-        handle = self.host_worker.handles[0]
-        await self.supervisor.shutdown()
-        self.assertTrue(handle.terminated)
-        self.assertTrue(handle.waited)
-        self.assertIsNone(self.supervisor._worker)
-        self.assertTrue(self.launcher.running)
-
-        self.host_worker.starts.clear()
-        self.daemon.meetings.records[meeting.id] = FakeRecord(meeting)
-        from runtime_state import write_private_json
-        write_private_json(active_meeting_path(self.root), {'meetingId': meeting.id})
-        await self.supervisor.reconcile(self.daemon)
-        self.assertEqual(len(self.host_worker.starts), 1)
-        restarted = self.host_worker.handles[-1]
-        self.launcher.running = False
-        await self.supervisor.reconcile(self.daemon)
-        self.assertTrue(restarted.terminated)
-        self.assertTrue(restarted.waited)
-        self.assertIsNone(self.supervisor._worker)
-        await self.supervisor.reconcile(self.daemon)
-        self.assertIsNone(self.supervisor._worker)
-
-
     async def test_mounted_runtime_tree_excludes_daemon_control_secrets(self):
-        from runtime_state import daemon_data_path, write_private_file
         token, token_path = write_auth_token(self.root, 'host-only-daemon-token')
-        write_private_file(
-            daemon_data_path(self.root) / 'leases' / 'lease.json',
-            '{"leaseId":"lease-secret-value","provider":"codex"}\n',
-        )
         meeting = session()
         await self.supervisor.start(meeting)
         self.assertEqual(token_path, self.root / '.colleague' / 'daemon.auth')
         self.assertTrue((self.root / '.colleague' / 'active-meeting.json').is_file())
-        self.assertTrue((daemon_data_path(self.root) / 'leases' / 'lease.json').is_file())
         for path in self.runtime.rglob('*'):
             self.assertNotEqual(path.name, 'daemon.auth')
             self.assertNotEqual(path.name, 'daemon-data')
@@ -584,8 +336,6 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             if path.is_file():
                 text = path.read_text(encoding='utf-8', errors='replace')
                 self.assertNotIn('host-only-daemon-token', text)
-                self.assertNotIn('lease-secret-value', text)
-                self.assertNotIn('leaseId', text)
         self.assertTrue((self.runtime / 'run' / 'meetings' / meeting.id / 'runtime.json').is_file())
         self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
         self.assertEqual(file_mode(token_path), 0o600)
@@ -603,6 +353,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(token_path.is_file())
             self.assertFalse((self.runtime / 'run' / 'daemon.auth').exists())
             self.assertFalse((self.runtime / 'run' / 'daemon-data').exists())
+            self.assertFalse((self.runtime / 'codex-workspace').exists())
             self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
             self.assertEqual(file_mode(daemon_data_path(self.root)), 0o700)
         finally:
@@ -610,55 +361,26 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeRunner:
-    """Records host commands; answers `docker image inspect` from `base_present`."""
+    """Records host commands and answers each with success."""
 
-    def __init__(self, base_present=True, build_fails=False):
+    def __init__(self):
         from meeting_supervisor import CommandResult
         self.result = CommandResult
-        self.base_present = base_present
-        self.build_fails = build_fails
         self.calls = []
 
     async def run(self, args, *, env=None):
         self.calls.append((list(args), dict(env) if env else None))
-        if args[:3] == ['docker', 'image', 'inspect']:
-            return self.result(0 if self.base_present else 1, '', 'No such image')
-        if 'build' in args and 'up' not in args:
-            if self.build_fails:
-                return self.result(1, '', 'step 3/9\nfailed to solve: network unreachable\n')
-            self.base_present = True
         return self.result(0, '', '')
 
 
 class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fresh_machine_builds_the_joinly_base_before_up(self):
+    async def test_up_builds_and_starts_the_one_meeting_image(self):
         from meeting_supervisor import ComposeMeetingAgent
-        runner = FakeRunner(base_present=False)
-        agent = ComposeMeetingAgent(runner, environ={})
-        await agent.up({'MEETING_URL': ZOOM_URL})
+        runner = FakeRunner()
+        await ComposeMeetingAgent(runner, environ={}).up({'MEETING_URL': ZOOM_URL})
         commands = [args for args, _env in runner.calls]
-        self.assertEqual(commands[0][:3], ['docker', 'image', 'inspect'])
-        self.assertIn('meeting-agent-joinly:local', commands[0])
-        self.assertEqual(commands[1], ['docker', 'compose', '-f', 'compose.yaml', 'build', 'joinly'])
-        self.assertEqual(commands[2], ['docker', 'compose', '-f', 'compose.meeting.yaml',
-                                       'up', '-d', '--build', 'meeting-agent'])
-
-    async def test_existing_base_is_not_rebuilt(self):
-        from meeting_supervisor import ComposeMeetingAgent
-        runner = FakeRunner(base_present=True)
-        await ComposeMeetingAgent(runner, environ={}).up({})
-        commands = [args for args, _env in runner.calls]
-        self.assertEqual(len(commands), 2)
-        self.assertNotIn('joinly', commands[1])
-        self.assertIn('up', commands[1])
-
-    async def test_base_build_failure_is_reported_without_starting(self):
-        from meeting_supervisor import ComposeMeetingAgent
-        runner = FakeRunner(base_present=False, build_fails=True)
-        with self.assertRaises(RuntimeError) as raised:
-            await ComposeMeetingAgent(runner, environ={}).up({})
-        self.assertIn('network unreachable', str(raised.exception))
-        self.assertFalse(any('up' in args for args, _env in runner.calls))
+        self.assertEqual(commands, [['docker', 'compose', '-f', 'compose.meeting.yaml',
+                                     'up', '-d', '--build', 'meeting-agent']])
 
     async def test_up_runs_the_container_as_the_host_user(self):
         from meeting_supervisor import ComposeMeetingAgent
@@ -680,54 +402,33 @@ class MountPreparationTests(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             runtime = root / 'meeting-runtime'
             runtime.mkdir()
-            (runtime / 'jobs').mkdir(mode=0o755)
+            (runtime / 'recordings').mkdir(mode=0o755)
             seen = {}
 
             class Launcher(FakeLauncher):
                 async def up(self, env):
                     seen.update({name: file_mode(runtime / name)
-                                 for name in ('jobs', 'recordings', 'profiles')})
+                                 for name in ('recordings', 'profiles')})
                     await super().up(env)
 
             supervisor = ProductionMeetingSupervisor(
                 root, runtime_root=runtime, launcher=Launcher(), health=FakeHealth(),
-                host_worker=FakeHostWorker(), wants_codex=lambda _session: False,
                 poll_interval=0.02, start_timeout=0.4, stop_timeout=0.4)
             meeting = session()
             await supervisor.start(meeting)
-            self.assertEqual(seen, {'jobs': 0o700, 'recordings': 0o700, 'profiles': 0o700})
+            self.assertEqual(seen, {'recordings': 0o700, 'profiles': 0o700})
             await supervisor.shutdown()
 
     def test_foreign_owned_mount_source_explains_the_fix(self):
         from meeting_supervisor import ProductionMeetingSupervisor as Supervisor
         with tempfile.TemporaryDirectory() as directory:
             supervisor = Supervisor(directory, runtime_root=directory, launcher=FakeLauncher(),
-                                    health=FakeHealth(), host_worker=FakeHostWorker())
+                                    health=FakeHealth())
             with mock.patch('meeting_supervisor.ensure_private_dir',
                             side_effect=PermissionError('Operation not permitted')):
                 with self.assertRaises(RuntimeError) as raised:
                     supervisor._prepare_mounts()
             self.assertIn('sudo chown -R', str(raised.exception))
-
-
-class HostWorkerEnvTests(unittest.TestCase):
-    def test_sanitized_environ_drops_provider_secrets(self):
-        from meeting_supervisor import SubprocessHostWorker
-        worker = SubprocessHostWorker('/tmp/runtime')
-        env = worker.sanitized_environ({
-            'CODEX_BIN': '/usr/local/bin/codex',
-            'COLLEAGUE_WORKSPACE': '/Users/Taylor/project',
-            'OPENAI_API_KEY': 'sk-secret',
-            'TAVILY_API_KEY': 'tvly-secret',
-            'MEETING_PASSCODE': '1234',
-            'MEETING_URL': 'https://zoom.us/j/1',
-        })
-        self.assertEqual(env['CODEX_BIN'], '/usr/local/bin/codex')
-        self.assertEqual(env['COLLEAGUE_WORKSPACE'], '/Users/Taylor/project')
-        self.assertNotIn('OPENAI_API_KEY', env)
-        self.assertNotIn('TAVILY_API_KEY', env)
-        self.assertNotIn('MEETING_PASSCODE', env)
-        self.assertNotIn('MEETING_URL', env)
 
 
 class RuntimeStateConfigTests(unittest.TestCase):
@@ -745,17 +446,11 @@ class RuntimeStateConfigTests(unittest.TestCase):
             'meetingId': 'mtg-config0000001',
             'meetingUrl': ZOOM_URL,
             'participantName': 'Runtime Colleague',
-            'workspace': '/tmp/workspace',
-            'defaultCodexModel': 'gpt-5.6-terra',
-            'webSearchEnabled': False,
-            'codexEnabled': True,
-            'chartsEnabled': False,
             'meetingInstructions': 'Stay brief.',
         })
         env = {'COLLEAGUE_RUNTIME_STATE': str(self.path), 'MEETING_URL': 'https://example.com/old'}
         config = RuntimeConfig.from_environ(env)
         self.assertEqual(config.participant_name, 'Runtime Colleague')
-        self.assertFalse(config.web_search_enabled)
         self.assertEqual(config.meeting_instructions, 'Stay brief.')
         self.assertEqual(resolve_meeting_url(env), ZOOM_URL)
 
