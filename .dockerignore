@@ -1,2 +1,21 @@
-# No image copies files from the checkout; send Docker an empty build context.
+# Build contexts carry only the code the images copy, never settings or records.
 *
+!package.json
+!package-lock.json
+!compose.meeting.image.yaml
+!start-meeting-agent.sh
+!.agents/
+!docker/
+!packages/
+!control-panel/
+!meeting-runtime/
+!joinly/
+**/__pycache__
+**/node_modules
+**/test
+**/tests
+meeting-runtime/run
+meeting-runtime/recordings
+meeting-runtime/profiles
+meeting-runtime/jobs
+meeting-runtime/codex-workspace

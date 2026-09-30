@@ -644,3 +644,118 @@ test('console only answers loopback host names', async () => {
     assert.equal(rebound, 421);
   });
 });
+
+test('data paths follow COLLEAGUE_ROOT and COLLEAGUE_MEETING_DATA, and default to the checkout', async () => {
+  const { consolePaths } = await import('./server.mjs');
+  const code = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const unset = consolePaths({ env: {} });
+  assert.equal(unset.root, code);
+  assert.equal(unset.runtimeRoot, path.join(code, 'meeting-runtime'));
+  assert.equal(unset.contextIndex, path.join(code, 'meeting-runtime', 'context', 'index.json'));
+  assert.equal(unset.meetingEnv, path.join(code, '.env.meeting'));
+  const image = consolePaths({ env: { COLLEAGUE_ROOT: '/data', COLLEAGUE_MEETING_DATA: '/data/meetings' } });
+  assert.deepEqual(image, {
+    codeRoot: code,
+    root: '/data',
+    runtimeRoot: '/data/meetings',
+    contextIndex: '/data/meetings/context/index.json',
+    meetingEnv: '/data/.env.meeting',
+    recordings: '/data/meetings/recordings',
+    profileRoot: '/data/meetings/profiles',
+  });
+  // Only the data root moved: meeting data stays in the checkout.
+  assert.equal(consolePaths({ env: { COLLEAGUE_ROOT: '/data' } }).runtimeRoot, path.join(code, 'meeting-runtime'));
+  // An explicit root keeps its own meeting-runtime directory.
+  assert.equal(consolePaths({ env: {}, root: '/tmp/x' }).runtimeRoot, '/tmp/x/meeting-runtime');
+});
+
+test('the console reads settings, recordings, and profiles from the data directories', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-data-'));
+  const meetings = path.join(data, 'meetings');
+  fs.mkdirSync(path.join(meetings, 'profiles'), { recursive: true });
+  fs.writeFileSync(path.join(meetings, 'profiles', 'teams-connected'), '');
+  fs.mkdirSync(path.join(meetings, 'recordings', 'mtg-1'), { recursive: true });
+  fs.writeFileSync(path.join(meetings, 'recordings', 'mtg-1', 'transcript.txt'), 'hello');
+  fs.writeFileSync(path.join(data, '.env.meeting'), 'MEETING_URL=https://us05web.zoom.us/j/123456789\n');
+  const previous = { root: process.env.COLLEAGUE_ROOT, meetings: process.env.COLLEAGUE_MEETING_DATA };
+  process.env.COLLEAGUE_ROOT = data;
+  process.env.COLLEAGUE_MEETING_DATA = meetings;
+  let server;
+  try {
+    server = createServer({
+      daemon: { async getMeeting() { throw Object.assign(new Error('Runtime daemon is not running.'), { code: 'daemon_offline', status: 503 }); } },
+      runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    });
+  } finally {
+    for (const [key, value] of [['COLLEAGUE_ROOT', previous.root], ['COLLEAGUE_MEETING_DATA', previous.meetings]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.deepEqual(await (await fetch(`${base}/api/platforms/teams/status`)).json(), { connected: true });
+    assert.deepEqual(await (await fetch(`${base}/api/platforms/google/status`)).json(), { connected: false });
+    const bootstrap = await (await fetch(`${base}/api/bootstrap`)).json();
+    assert.equal(bootstrap.settings.meetingUrl, 'https://us05web.zoom.us/j/123456789');
+    assert.deepEqual(bootstrap.status.sessions.map((item) => item.id), ['mtg-1']);
+    assert.equal((await (await fetch(`${base}/api/sessions/mtg-1`)).json()).transcript, 'hello');
+  } finally {
+    server.close();
+    await once(server, 'close');
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test('/mcp is the local agents endpoint, behind its own token rather than the console session', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-console-mcp-'));
+  const logs = [];
+  const server = createServer({
+    root,
+    runtimeRoot: path.join(root, 'meeting-runtime'),
+    daemon: {},
+    runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    mcpLog: (line) => logs.push(line),
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  const post = (headers, body) => new Promise((resolve, reject) => {
+    const text = JSON.stringify(body);
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/mcp', method: 'POST',
+      headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), ...headers },
+    }, (response) => {
+      let data = '';
+      response.on('data', (chunk) => { data += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: data ? JSON.parse(data) : null }));
+    });
+    req.on('error', reject);
+    req.end(text);
+  });
+  const initialize = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } };
+  try {
+    // The console's session token is no use here, and browsers are refused.
+    const bootstrap = await (await fetch(`http://127.0.0.1:${port}/api/bootstrap`)).json();
+    assert.equal((await post({ 'X-Colleague-Token': bootstrap.token }, initialize)).status, 401);
+    assert.equal((await post({ Authorization: `Bearer ${bootstrap.token}` }, initialize)).status, 401);
+    const token = fs.readFileSync(path.join(root, '.colleague', 'mcp.token'), 'utf8').trim();
+    assert.equal(fs.statSync(path.join(root, '.colleague', 'mcp.token')).mode & 0o777, 0o600);
+    assert.equal((await post({ Authorization: `Bearer ${token}`, Origin: `http://127.0.0.1:${port}` }, initialize)).status, 403);
+    assert.equal((await post({ Authorization: `Bearer ${token}`, Host: `evil.example:${port}` }, initialize)).status, 421);
+    const opened = await post({ Authorization: `Bearer ${token}` }, initialize);
+    assert.equal(opened.status, 200);
+    const listed = await post({ Authorization: `Bearer ${token}`, 'Mcp-Session-Id': opened.headers['mcp-session-id'] },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    assert.equal(listed.body.result.tools.length, 11);
+    assert.ok(logs.some((line) => /session opened/.test(line)));
+    assert.ok(!logs.join('\n').includes(token));
+  } finally {
+    server.close();
+    server.closeAllConnections();
+    await once(server, 'close');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

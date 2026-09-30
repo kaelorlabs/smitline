@@ -2,10 +2,15 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+import { MANAGED_NOT_RUNNING, isManaged } from '../packages/sdk-typescript/src/index.mjs';
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1';
 export const DEFAULT_DAEMON_PORT = 8765;
 export const DEFAULT_DAEMON_READY_MS = 60_000;
+// start-runtime-daemon.sh lives with this code, never under the data root.
+const CODE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -58,6 +63,9 @@ function parseDaemonBody(text) {
 
 export function createDaemonClient(options = {}) {
   const root = options.root;
+  const codeRoot = options.codeRoot || CODE_ROOT;
+  // In the container (COLLEAGUE_MANAGED=1) the container runs the daemon; never start one here.
+  const managed = options.managed ?? isManaged();
   const host = options.host || process.env.COLLEAGUE_DAEMON_HOST || DEFAULT_DAEMON_HOST;
   const port = Number(options.port || process.env.COLLEAGUE_DAEMON_PORT || DEFAULT_DAEMON_PORT);
   const tokenPath = options.tokenPath || path.join(root, '.colleague', 'daemon.auth');
@@ -67,8 +75,8 @@ export function createDaemonClient(options = {}) {
     const logDir = path.join(root, '.colleague');
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const log = fs.openSync(path.join(logDir, 'daemon.log'), 'a');
-    const child = spawn('/bin/bash', ['start-runtime-daemon.sh'], {
-      cwd: root,
+    const child = spawn('/bin/bash', [path.join(codeRoot, 'start-runtime-daemon.sh')], {
+      cwd: codeRoot,
       detached: true,
       stdio: ['ignore', log, log],
       env: process.env,
@@ -103,6 +111,7 @@ export function createDaemonClient(options = {}) {
   }
 
   async function startDaemon() {
+    if (managed) throw daemonError(MANAGED_NOT_RUNNING, { code: 'daemon_unavailable' });
     const child = spawnDaemon();
     owned.child = child;
     child?.unref?.();
@@ -160,7 +169,7 @@ export function createDaemonClient(options = {}) {
   async function send(method, pathname, body, { startIfNeeded = true } = {}) {
     let token = startIfNeeded ? await ensure() : readTokenFile(tokenPath);
     if (!token) {
-      if (!startIfNeeded) throw daemonError('Runtime daemon is not running.', { code: 'daemon_offline' });
+      if (!startIfNeeded) throw daemonError(managed ? MANAGED_NOT_RUNNING : 'Runtime daemon is not running.', { code: 'daemon_offline' });
       token = await ensure();
     }
     try {
@@ -180,6 +189,7 @@ export function createDaemonClient(options = {}) {
     host,
     port,
     tokenPath,
+    managed,
     get child() { return owned.child; },
     ensure,
     request(method, pathname, body) {

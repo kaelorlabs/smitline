@@ -238,9 +238,10 @@ Run repeatable real calls and meetings covering:
 
 ### Milestone C — Distribution
 
-- [ ] Decide supported installation form: packaged CLI, desktop helper, plugin, or combined installer.
-- [ ] Package the daemon, Docker assets, SDK/MCP configuration, and update mechanism.
-- [ ] Document uninstall, credential removal, data deletion, and version migration.
+- [x] Decide supported installation form: one Docker image, `ghcr.io/kaelorlabs/colleague`, started with one `docker run`.
+- [x] Package the daemon, console, CLI, MCP endpoint, and meeting image; update by pulling the image again.
+- [x] Document uninstall, credential removal, and data deletion (SETUP.md, architecture retention table).
+- [ ] Make the GHCR packages public, and confirm a first install on a clean Mac and a clean Windows machine.
 - [ ] Recruit a small external cohort and capture consented reliability metrics.
 
 **Exit criterion:** someone outside the original machine can install Colleague AI from their agent and complete a first call and a first meeting.
@@ -326,6 +327,7 @@ Entries before 2026-09-30 describe the product as it was then, including the cod
 
 ### 2026-09-30
 
+- One service: users need only Docker. `ghcr.io/kaelorlabs/colleague` (about 600 MB) runs the daemon and the console, carries the CLI (`docker exec colleague colleague ...`), and serves MCP to local agents over Streamable HTTP at `127.0.0.1:8095/mcp` with a local token (Claude Desktop uses `docker exec -i colleague colleague mcp`). Settings and records live in the `colleague` volume. The meeting image carries its code and shares that volume. `.github/workflows/images.yml` tests pull requests and publishes both images for amd64 and arm64. SETUP.md is now Docker-only. Checked end to end on a fresh volume: setup status, the setup page, MCP over HTTP and stdio, and starting the meeting container from inside the colleague container.
 - Product direction narrowed to phone calls and meetings for any AI agent. The coding-agent direction was dropped: bringing Codex, Cursor, or Claude Code into meetings, exact-session continuity, session leases, and handoff append. Recorded decision 24 and retired decisions 6, 7, 8, 14, 15, and 18.
 - Removed with it: coding-agent providers and workers, runner pairing and the hosted-runtime mock control plane, approvals, workspace actions, the Git broker, charts, Tavily web search, screen-share capture and analysis, the unused `gpt-live/` voice demo, the separate meeting MCP tools and SDK meeting handles, the CLI meeting commands, the `join-colleague-ai-meeting` skill, and the Codex installer.
 - Agents join meetings through the calls API: `start_call` with channel `meeting` and the invite URL as `to` (CLI: `colleague call --meeting <url>`). `/v1/meetings` keeps only what the console uses, and the call brief no longer has `agentSession`.

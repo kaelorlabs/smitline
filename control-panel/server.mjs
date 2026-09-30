@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { ownerName, parseEnv, publicSettings, validateSettings } from './config.mjs';
 import { addContext, clearContext, publicContext, readContext } from './context-store.mjs';
 import { createDaemonClient } from './daemon-client.mjs';
+import { LOCAL_MCP_PATH, createLocalMcpHandler } from '../packages/mcp/src/local-http.mjs';
+import { redact } from '../packages/sdk-typescript/src/index.mjs';
 import { launcherActive } from './lifecycle.mjs';
 import {
   buildMeetingCreatePayload,
@@ -20,9 +22,32 @@ import {
 } from './meeting-contract.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.dirname(HERE);
-const CONTEXT_INDEX = path.join(ROOT, 'meeting-runtime', 'context', 'index.json');
+// The code (this repository, /app in the container): scripts and static files.
+const CODE_ROOT = path.dirname(HERE);
 const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
+
+/**
+ * Where the console keeps and reads data. COLLEAGUE_ROOT is the data root (.env,
+ * .env.meeting, .colleague/); COLLEAGUE_MEETING_DATA holds run/, recordings/,
+ * profiles/, and context/. Unset, both are the repository as before: the repository
+ * root and its meeting-runtime directory. An explicit root (tests) keeps its own
+ * meeting-runtime directory unless COLLEAGUE_MEETING_DATA is set.
+ */
+export function consolePaths({ env = process.env, root, codeRoot = CODE_ROOT } = {}) {
+  const dataRoot = path.resolve(root || env.COLLEAGUE_ROOT || codeRoot);
+  const runtimeRoot = env.COLLEAGUE_MEETING_DATA
+    ? path.resolve(env.COLLEAGUE_MEETING_DATA)
+    : path.join(root ? dataRoot : codeRoot, 'meeting-runtime');
+  return {
+    codeRoot,
+    root: dataRoot,
+    runtimeRoot,
+    contextIndex: path.join(runtimeRoot, 'context', 'index.json'),
+    meetingEnv: path.join(dataRoot, '.env.meeting'),
+    recordings: path.join(runtimeRoot, 'recordings'),
+    profileRoot: path.join(runtimeRoot, 'profiles'),
+  };
+}
 export const DOCKER_INFO_TIMEOUT_MS = 8000;
 
 export function loopbackHost(host) {
@@ -46,7 +71,7 @@ function json(response, status, body) {
 }
 
 function run(command, args, options = {}) {
-  const { timeoutMs, cwd = ROOT, ...spawnOptions } = options;
+  const { timeoutMs, cwd = CODE_ROOT, ...spawnOptions } = options;
   return new Promise(resolve => {
     const child = spawn(command, args, { cwd, ...spawnOptions });
     let stdout = '', stderr = '';
@@ -96,24 +121,31 @@ async function readBody(request, maximumBytes = 64 * 1024) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 
-export function createServer({
-  contextIndex = CONTEXT_INDEX,
-  root = ROOT,
-  runtimeRoot = path.join(root, 'meeting-runtime'),
-  meetingEnv = path.join(root, '.env.meeting'),
-  recordings = path.join(runtimeRoot, 'recordings'),
-  profileRoot = path.join(runtimeRoot, 'profiles'),
-  daemon = null,
-  spawnAccount = null,
-  runCommand = run,
-  dockerTimeoutMs = DOCKER_INFO_TIMEOUT_MS,
-} = {}) {
+export function createServer(options = {}) {
+  const defaults = consolePaths({ root: options.root, codeRoot: options.codeRoot });
+  const {
+    codeRoot = defaults.codeRoot,
+    root = defaults.root,
+    runtimeRoot = defaults.runtimeRoot,
+    contextIndex = path.join(runtimeRoot, 'context', 'index.json'),
+    meetingEnv = path.join(root, '.env.meeting'),
+    recordings = path.join(runtimeRoot, 'recordings'),
+    profileRoot = path.join(runtimeRoot, 'profiles'),
+    daemon = null,
+    spawnAccount = null,
+    runCommand = run,
+    dockerTimeoutMs = DOCKER_INFO_TIMEOUT_MS,
+    mcpHandler = null,
+    mcpLog = (line) => process.stderr.write(`${new Date().toISOString()} mcp ${redact(line)}\n`),
+  } = options;
   const token = crypto.randomBytes(24).toString('base64url');
   const logs = [];
   let lastExit = null;
   let accountLauncher = null;
   let startInFlight = false;
-  const daemonClient = daemon || createDaemonClient({ root });
+  const daemonClient = daemon || createDaemonClient({ root, codeRoot });
+  // Local agents' MCP endpoint; it checks its own bearer token, Host, and Origin.
+  const localMcp = mcpHandler || createLocalMcpHandler({ root, codeRoot, log: mcpLog });
 
   function addLog(source, chunk) {
     for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
@@ -290,8 +322,9 @@ export function createServer({
   }
 
   function spawnPlatformAccount(mode) {
-    const spawnFn = spawnAccount || ((env) => spawn('/bin/bash', ['start-meeting-agent.sh'], {
-      cwd: root, env,
+    // The launcher lives with the code; COLLEAGUE_* in the environment point it at the data.
+    const spawnFn = spawnAccount || ((env) => spawn('/bin/bash', [path.join(codeRoot, 'start-meeting-agent.sh')], {
+      cwd: codeRoot, env,
     }));
     return spawnFn({ ...process.env, COLLEAGUE_AUTH_MODE: mode });
   }
@@ -494,8 +527,12 @@ export function createServer({
     return json(response, 404, { error: 'Not found.' });
   }
 
-  return http.createServer(async (request, response) => {
+  const server = http.createServer(async (request, response) => {
     try {
+      // /mcp has its own checks (bearer token, exact Host, no Origin) and never reaches the console's.
+      if (new URL(request.url, `http://127.0.0.1:${PORT}`).pathname === LOCAL_MCP_PATH) {
+        return await localMcp(request, response);
+      }
       // DNS rebinding: a page served from another name that resolves to 127.0.0.1
       // must not read this console, so only loopback host names are served.
       if (!loopbackHost(request.headers.host)) {
@@ -523,6 +560,8 @@ export function createServer({
       json(response, error.status || 500, { error: error instanceof SyntaxError ? 'Invalid JSON request.' : error.message, code: error.code });
     }
   });
+  server.localMcp = localMcp;
+  return server;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

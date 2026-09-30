@@ -2,27 +2,13 @@
 
 The local console is an optional operator interface for Colleague AI. Agents do not need it: they place calls and join meetings through the calls API. The console has two tabs: **Meetings**, to start a meeting by hand and follow it, and **Calls**, to follow calls that agents started.
 
-## Before the first run
+## Open the console
 
-Install the local requirements from the repository root:
+The `colleague` container serves it: open [http://127.0.0.1:8095](http://127.0.0.1:8095). Add your keys first with `docker exec colleague colleague setup secrets` (see [SETUP.md](../SETUP.md)).
 
-```bash
-cp .env.example .env
-chmod 600 .env
-npm install
-```
+The console never returns API keys to the browser. Keys, uploaded context, meeting transcripts, and browser profiles stay in the container's data volume.
 
-Add `OPENAI_API_KEY` to `.env`, or run `colleague setup secrets` and use the setup page. Install Docker: Docker Desktop, or Docker Engine inside WSL on Windows.
-
-The console never returns API keys to the browser. `.env`, `.env.meeting`, uploaded context, meeting transcripts, and browser profiles are ignored by Git.
-
-## Start the console
-
-```bash
-bash start-control-panel.sh
-```
-
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095). Keep the terminal open while you use it. The console starts the runtime daemon when it is not running.
+From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep the terminal open; it starts the runtime daemon when it is not running, and the files above stay in the checkout, ignored by Git.
 
 ## Calls
 
@@ -77,7 +63,7 @@ It reads `.env.meeting`, checks the configuration with `python3`, and builds and
 
 ## Troubleshooting
 
-- If the console cannot start, run `npm install` and confirm Node.js 22 or later is active.
+- If the console does not answer, check `docker ps` for the `colleague` container and `docker logs colleague`. From a checkout, run `npm install` and confirm Node.js 22 or later is active.
 - If the checks report Docker unavailable, start Docker (Docker Desktop, or the Docker Engine service inside WSL) and rerun the checks.
 - If the participant is silent, address it directly with a question or task and inspect `floorState`, `microphoneState`, the runtime log, and health state. If the platform microphone was externally muted, unmute it through the meeting UI before expecting audio; in Zoom the host can click **Ask to unmute** on its tile.
 - If the meeting does not admit the participant, inspect the browser viewer for a waiting-room, sign-in, passcode, or host-removal message.

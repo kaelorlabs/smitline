@@ -1,0 +1,131 @@
+# Tests every pull request and push. On main and on version tags it then publishes the two
+# images new users pull: ghcr.io/kaelorlabs/colleague and ghcr.io/kaelorlabs/colleague-meeting.
+name: Images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - name: Python SDK tests
+        run: cd packages/sdk-python && python3 -m unittest discover -s tests
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the meeting image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.meeting
+          load: true
+          tags: colleague-meeting:test
+          cache-from: type=gha,scope=meeting
+          cache-to: type=gha,scope=meeting,mode=max
+      - name: Runtime tests, inside the meeting image
+        run: >
+          docker run --rm --entrypoint /app/.venv/bin/python -w /meeting-runtime
+          colleague-meeting:test -m unittest discover -s /meeting-runtime -p 'test_*.py'
+      - name: Build the colleague image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: colleague:test
+          cache-from: type=gha,scope=colleague
+          cache-to: type=gha,scope=colleague,mode=max
+      - name: The colleague image starts and answers
+        run: |
+          docker volume create colleague-test
+          docker run -d --name colleague-test --network host -v colleague-test:/data \
+            -v /var/run/docker.sock:/var/run/docker.sock colleague:test
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8095/calls >/dev/null && break
+            sleep 1
+          done
+          docker exec colleague-test colleague setup status --json | python3 -c 'import json,sys; json.load(sys.stdin)'
+          curl -fsS -o /dev/null http://127.0.0.1:8095/calls
+          docker logs colleague-test
+          docker rm -f colleague-test
+
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Names and tags
+        id: names
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "meeting=ghcr.io/$owner/colleague-meeting" >> "$GITHUB_OUTPUT"
+          echo "colleague=ghcr.io/$owner/colleague" >> "$GITHUB_OUTPUT"
+          echo "sha=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - id: meeting-tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.names.outputs.meeting }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Publish the meeting image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.meeting
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meeting-tags.outputs.tags }}
+          labels: ${{ steps.meeting-tags.outputs.labels }}
+          cache-from: type=gha,scope=meeting-publish
+          cache-to: type=gha,scope=meeting-publish,mode=max
+      - id: colleague-tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.names.outputs.colleague }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Publish the colleague image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Each colleague image starts the meeting image built from the same commit.
+          build-args: MEETING_IMAGE=${{ steps.names.outputs.meeting }}:${{ steps.names.outputs.sha }}
+          tags: ${{ steps.colleague-tags.outputs.tags }}
+          labels: ${{ steps.colleague-tags.outputs.labels }}
+          cache-from: type=gha,scope=colleague-publish
+          cache-to: type=gha,scope=colleague-publish,mode=max

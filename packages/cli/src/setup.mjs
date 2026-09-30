@@ -9,6 +9,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { isManaged } from '../../sdk-typescript/src/index.mjs';
 
 export const SECRET_KEYS = Object.freeze([
   'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
@@ -305,45 +306,67 @@ export function registeredAgents(root, { runner = run, home = os.homedir(), find
   return agents;
 }
 
-export async function setupStatus({ root, env: overrides, fetchImpl = globalThis.fetch, verify = true, runner = run, find = which } = {}) {
+/**
+ * options.root      the data root (.env); COLLEAGUE_ROOT in the container.
+ * options.codeRoot  the checkout (launcher, node_modules, .venv); defaults to root.
+ * options.managed   in the Colleague AI container (COLLEAGUE_MANAGED=1): host-only checks
+ *                   (operating system, checkout, line endings, Node dependencies, where the
+ *                   daemon runs) are replaced by one passing "runs in its container" check.
+ */
+export async function setupStatus({
+  root, codeRoot = root, env: overrides, fetchImpl = globalThis.fetch, verify = true, runner = run, find = which,
+  managed = isManaged(),
+} = {}) {
   // The daemon reads the process environment first, then .env; mirror that here.
   const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|SIGNALWIRE_|COLLEAGUE_)/.test(key) && present(value);
   const env = { ...readEnv(root), ...Object.fromEntries(Object.entries(overrides || process.env).filter(relevant)) };
   const checks = [];
   const major = Number(process.versions.node.split('.')[0]);
   checks.push(check('node', 'Node.js 22 or newer', major >= 22, { detail: process.version, fix: 'Install Node.js 22 or newer' }));
-  if (process.platform === 'win32') {
-    checks.push(check('platform', 'Operating system', false, { detail: 'Windows', fix: 'Install WSL2 with Ubuntu and clone Colleague AI inside the Linux home directory' }));
+  let docker;
+  if (managed) {
+    // The daemon and console run in the container, which reaches Docker through the mounted socket.
+    checks.push(check('runtime', 'Where Colleague AI runs', true, { detail: 'in its Docker container' }));
+    docker = runner('docker', ['info'], { timeout: 12_000 });
+    checks.push(check('docker', 'Docker is running', docker.status === 0, {
+      group: 'meetings', required: false, detail: 'needed to join meetings; the container uses the Docker socket mounted into it',
+      fix: 'Start the container with -v /var/run/docker.sock:/var/run/docker.sock',
+      ask: 'Meetings need Docker access from the Colleague AI container. Please restart it with the Docker socket mounted and tell me when it is running.',
+    }));
   } else {
-    checks.push(check('platform', 'Operating system', true, { detail: inWsl() ? 'Linux on WSL2' : process.platform }));
-    if (inWsl() && root.startsWith('/mnt/')) {
-      checks.push(check('checkout', 'Checkout inside Linux', false, { required: false, detail: 'the checkout is under /mnt, where Docker may not see files', fix: 'Clone inside the Linux home directory' }));
+    if (process.platform === 'win32') {
+      checks.push(check('platform', 'Operating system', false, { detail: 'Windows', fix: 'Install WSL2 with Ubuntu and clone Colleague AI inside the Linux home directory' }));
+    } else {
+      checks.push(check('platform', 'Operating system', true, { detail: inWsl() ? 'Linux on WSL2' : process.platform }));
+      if (inWsl() && codeRoot.startsWith('/mnt/')) {
+        checks.push(check('checkout', 'Checkout inside Linux', false, { required: false, detail: 'the checkout is under /mnt, where Docker may not see files', fix: 'Clone inside the Linux home directory' }));
+      }
     }
+    const launcher = path.join(codeRoot, 'start-runtime-daemon.sh');
+    const crlf = fs.existsSync(launcher) && fs.readFileSync(launcher, 'utf8').includes('\r\n');
+    checks.push(check('line_endings', 'Unix line endings', !crlf, { fix: 'Clone again inside WSL or Linux' }));
+    docker = runner('docker', ['info'], { timeout: 12_000 });
+    checks.push(check('docker', 'Docker is running', docker.status === 0, {
+      group: 'meetings', required: false, detail: 'needed to join meetings; also runs Colleague AI when Python is not set up',
+      fix: 'Start Docker, or install it inside WSL', ask: 'Please start Docker (or Docker Desktop) and tell me when it is running.',
+    }));
+    checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(codeRoot, 'node_modules', 'mammoth')), { fix: 'npm install' }));
+    // start-runtime-daemon.sh runs the daemon on this computer's Python when it can make a
+    // venv, otherwise in Docker. A venv made without python3-venv has no pip, so look for pip.
+    const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(codeRoot, '.venv', 'bin', 'pip'));
+    const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
+    const forced = process.env.COLLEAGUE_DAEMON_RUNTIME;
+    const onHost = python.status === 0 && forced !== 'docker';
+    const inDocker = !onHost && docker.status === 0 && forced !== 'host';
+    const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
+      : inDocker ? 'Docker; the first start builds a small image. Python is not needed'
+        : 'needs Docker (recommended) or Python 3.10 or newer with venv';
+    checks.push(check('runtime', 'Where Colleague AI runs', onHost || inDocker, {
+      detail: runtimeDetail,
+      fix: 'Start or install Docker (or install Python with venv: sudo apt install -y python3-venv)',
+      ask: 'Colleague AI runs in Docker. Please install or start Docker (Docker Desktop on a Mac) and tell me when it is running.',
+    }));
   }
-  const launcher = path.join(root, 'start-runtime-daemon.sh');
-  const crlf = fs.existsSync(launcher) && fs.readFileSync(launcher, 'utf8').includes('\r\n');
-  checks.push(check('line_endings', 'Unix line endings', !crlf, { fix: 'Clone again inside WSL or Linux' }));
-  const docker = runner('docker', ['info'], { timeout: 12_000 });
-  checks.push(check('docker', 'Docker is running', docker.status === 0, {
-    group: 'meetings', required: false, detail: 'needed to join meetings; also runs Colleague AI when Python is not set up',
-    fix: 'Start Docker, or install it inside WSL', ask: 'Please start Docker (or Docker Desktop) and tell me when it is running.',
-  }));
-  checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(root, 'node_modules', 'mammoth')), { fix: 'npm install' }));
-  // start-runtime-daemon.sh runs the daemon on this computer's Python when it can make a
-  // venv, otherwise in Docker. A venv made without python3-venv has no pip, so look for pip.
-  const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(root, '.venv', 'bin', 'pip'));
-  const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
-  const forced = process.env.COLLEAGUE_DAEMON_RUNTIME;
-  const onHost = python.status === 0 && forced !== 'docker';
-  const inDocker = !onHost && docker.status === 0 && forced !== 'host';
-  const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
-    : inDocker ? 'Docker; the first start builds a small image. Python is not needed'
-      : 'needs Docker (recommended) or Python 3.10 or newer with venv';
-  checks.push(check('runtime', 'Where Colleague AI runs', onHost || inDocker, {
-    detail: runtimeDetail,
-    fix: 'Start or install Docker (or install Python with venv: sudo apt install -y python3-venv)',
-    ask: 'Colleague AI runs in Docker. Please install or start Docker (Docker Desktop on a Mac) and tell me when it is running.',
-  }));
 
   let openai = { ok: present(env.OPENAI_API_KEY) };
   if (openai.ok && verify) openai = await verifyOpenAi(env.OPENAI_API_KEY, fetchImpl);
@@ -441,14 +464,29 @@ export async function setupStatus({ root, env: overrides, fetchImpl = globalThis
     fix: 'Start Docker or install cloudflared, or set COLLEAGUE_PUBLIC_URL on a server',
   }));
 
-  const agents = registeredAgents(root, { runner, find });
-  checks.push(check('agents', 'Registered with a local agent', agents.some((a) => a.registered), {
-    group: 'agents', required: false,
-    detail: agents.length ? agents.map((a) => `${a.id}${a.registered ? ' (registered)' : ''}`).join(', ') : 'no supported local agent CLI found',
-    fix: 'colleague setup register',
-  }));
+  if (managed) {
+    // Agents run on the host, which the container cannot see.
+    checks.push(check('agents', 'Registered with a local agent', null, {
+      group: 'agents', required: false,
+      detail: 'agents run outside the container; colleague setup register prints how to connect them',
+      fix: 'colleague setup register',
+    }));
+  } else {
+    const agents = registeredAgents(root, { runner, find });
+    checks.push(check('agents', 'Registered with a local agent', agents.some((a) => a.registered), {
+      group: 'agents', required: false,
+      detail: agents.length ? agents.map((a) => `${a.id}${a.registered ? ' (registered)' : ''}`).join(', ') : 'no supported local agent CLI found',
+      fix: 'colleague setup register',
+    }));
+  }
   const daemon = await portOpen(Number(process.env.COLLEAGUE_DAEMON_PORT || 8765));
-  checks.push(check('daemon', 'Runtime daemon', true, { required: false, detail: daemon ? 'running' : 'starts automatically on first use' }));
+  if (managed) {
+    checks.push(check('daemon', 'Runtime daemon', daemon, {
+      required: false, detail: daemon ? 'running' : 'not running', fix: 'Restart the container: docker restart colleague',
+    }));
+  } else {
+    checks.push(check('daemon', 'Runtime daemon', true, { required: false, detail: daemon ? 'running' : 'starts automatically on first use' }));
+  }
 
   const coreReady = checks.filter((c) => c.required).every((c) => c.ok === true);
   const phoneReady = coreReady && checks.filter((c) => c.group === 'phone' && c.id !== 'owner_phone').every((c) => c.ok === true);
@@ -980,9 +1018,104 @@ function installSkills(root, skillsDir) {
   return installed;
 }
 
+/** The console's MCP endpoint for local agents, with the header they send. */
+export function localMcpConnection({ token, port = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095) } = {}) {
+  return {
+    url: `http://127.0.0.1:${port}/mcp`,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+/**
+ * In the container, registration cannot touch the host's agent settings, so it returns
+ * what to run or paste on the host: the MCP URL and header, one snippet per agent, and
+ * where the call skill is. Nothing is written.
+ */
+export function containerRegistration({
+  codeRoot, token, port, container = process.env.COLLEAGUE_CONTAINER_NAME || 'colleague',
+} = {}) {
+  const mcp = localMcpConnection({ token, port });
+  const authorization = mcp.headers.Authorization;
+  const httpEntry = { url: mcp.url, headers: { Authorization: authorization } };
+  const skill = INSTALLED_SKILLS[0];
+  const skillDir = path.posix.join(String(codeRoot).split(path.sep).join('/'), '.agents', 'skills', skill);
+  return {
+    managed: true,
+    registered: [],
+    mcp,
+    agents: {
+      'claude-code': {
+        command: `claude mcp add --transport http --scope user ${MCP_NAME} ${mcp.url} --header "Authorization: ${authorization}"`,
+        note: 'Run on this computer, then restart Claude Code.',
+      },
+      codex: {
+        file: '~/.codex/config.toml',
+        toml: `[mcp_servers.${MCP_NAME}]\nurl = "${mcp.url}"\nhttp_headers = { Authorization = "${authorization}" }\n`,
+        note: 'Add to the file, then restart Codex.',
+      },
+      cursor: {
+        file: '~/.cursor/mcp.json',
+        json: { mcpServers: { [MCP_NAME]: httpEntry } },
+        note: 'Merge into the file, then restart Cursor.',
+      },
+      'claude-desktop': {
+        file: 'claude_desktop_config.json (Claude Desktop: Settings > Developer > Edit Config)',
+        json: { mcpServers: { [MCP_NAME]: { command: 'docker', args: ['exec', '-i', container, 'colleague', 'mcp'] } } },
+        note: 'Merge into the file, then quit and reopen Claude Desktop.',
+      },
+      other: {
+        note: `Other MCP clients: Streamable HTTP at ${mcp.url} with the Authorization header, or stdio with: docker exec -i ${container} colleague mcp`,
+      },
+    },
+    skill: {
+      name: skill,
+      path: `${skillDir}/SKILL.md`,
+      copy: {
+        'claude-code': `docker cp ${container}:${skillDir} ~/.claude/skills/`,
+        codex: `docker cp ${container}:${skillDir} ~/.codex/skills/`,
+      },
+      note: 'The skill teaches an agent to write a good call brief and wait for the result. Create the skills folder first if it does not exist.',
+    },
+  };
+}
+
+/** Plain-text version of containerRegistration, for a person reading the terminal. */
+export function formatContainerRegistration(report) {
+  const { mcp, agents, skill } = report;
+  const indent = (text) => String(text).trimEnd().split('\n').map((line) => `  ${line}`).join('\n');
+  return [
+    'Colleague AI runs in its container, so connect your agents on this computer (the host):',
+    '',
+    `MCP URL:  ${mcp.url}`,
+    `Header:   Authorization: ${mcp.headers.Authorization}`,
+    '',
+    'Claude Code (run in a terminal):',
+    indent(agents['claude-code'].command),
+    '',
+    `Codex (add to ${agents.codex.file}):`,
+    indent(agents.codex.toml),
+    '',
+    `Cursor (merge into ${agents.cursor.file}):`,
+    indent(JSON.stringify(agents.cursor.json, null, 2)),
+    '',
+    `Claude Desktop (merge into ${agents['claude-desktop'].file}):`,
+    indent(JSON.stringify(agents['claude-desktop'].json, null, 2)),
+    '',
+    agents.other.note,
+    '',
+    `Call skill (${skill.path} in the container); copy it out with:`,
+    indent(skill.copy['claude-code']),
+    indent(`${skill.copy.codex}   (Codex)`),
+    '',
+    'Restart each agent after adding Colleague AI. Keep the token private: it lets a program on this computer place calls.',
+    '',
+  ].join('\n');
+}
+
 export function registerAgents(root, {
   agents, runner = run, home = os.homedir(), find = which,
   windows = inWsl() ? windowsProfile({ runner, find }) : null,
+  http = null,
 } = {}) {
   const server = mcpServerPath(root);
   const results = [];
@@ -1039,7 +1172,8 @@ export function registerAgents(root, {
     command: process.execPath,
     args: [server],
     ...(windows ? { windows: bridged } : {}),
-    note: 'Other MCP clients (OpenClaw, Hermes, and others): add a stdio server with this command. Cloud agents use the remote connector; see docs/agents.md.',
+    ...(http ? { http } : {}),
+    note: `Other MCP clients (OpenClaw, Hermes, and others): add a stdio server with this command${http ? `, or, while the console runs, connect over Streamable HTTP to ${http.url} with the Authorization header under http` : ''}. Cloud agents use the remote connector; see docs/agents.md.`,
   };
   return { results, skills, manual };
 }

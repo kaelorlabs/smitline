@@ -10,8 +10,11 @@ import { Colleague, redact } from '../../sdk-typescript/src/index.mjs';
 import { CONNECTOR_PASSPHRASE_MIN, PAGE_STYLE, connectorOrigin, escapeHtml, readEnv } from '../../cli/src/setup.mjs';
 import { createMcpSession } from './session.mjs';
 import { openConnectorStore, sha256 } from './connector-store.mjs';
+import {
+  PROTOCOL_VERSIONS, createSessionStore, handleMcpRequest, mediaType, readBody, rpcError, safeEqual, send,
+} from './streamable-http.mjs';
 
-export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26']);
+export { PROTOCOL_VERSIONS };
 export const DEFAULT_CONNECTOR_PORT = 8767;
 const DEFAULT_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const CODE_TTL_MS = 10 * 60_000;
@@ -19,7 +22,6 @@ const FORM_TTL_MS = 10 * 60_000;
 const FAILURE_WINDOW_MS = 10 * 60_000;
 const LOCKOUT_MS = 10 * 60_000;
 const MAX_FAILURES = 5;
-const MAX_BODY = 1024 * 1024;
 const MAX_SESSIONS = 500;
 const SESSION_IDLE_MS = 24 * 60 * 60_000;
 const SCOPE = 'calls';
@@ -100,65 +102,13 @@ function defaultLog(line) {
   process.stderr.write(`${new Date().toISOString()} ${redact(line)}\n`);
 }
 
-function httpError(status, message) {
-  return Object.assign(new Error(message), { status });
-}
-
-function readBody(request, limit = MAX_BODY) {
-  return new Promise((resolve, reject) => {
-    if (Number(request.headers['content-length'] || 0) > limit) {
-      reject(httpError(413, 'The request body is larger than 1 MB'));
-      return;
-    }
-    const chunks = [];
-    let size = 0;
-    request.on('data', (chunk) => {
-      if (size > limit) return;
-      size += chunk.length;
-      if (size > limit) {
-        request.pause();
-        reject(httpError(413, 'The request body is larger than 1 MB'));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    request.on('error', reject);
-  });
-}
-
-function mediaType(request) {
-  return String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-}
-
-function send(response, status, body, headers = {}) {
-  const text = body === undefined ? '' : JSON.stringify(body);
-  response.writeHead(status, {
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    ...(text ? { 'Content-Type': 'application/json' } : {}),
-    ...headers,
-  });
-  response.end(text);
-}
-
 function oauthError(response, status, error, description, headers = {}) {
   send(response, status, { error, error_description: description }, headers);
-}
-
-function rpcError(id, code, message) {
-  return { jsonrpc: '2.0', id: id ?? null, error: { code, message } };
 }
 
 function sendPage(response, status, html, headers = {}) {
   response.writeHead(status, { ...PAGE_HEADERS, ...headers });
   response.end(html);
-}
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function pkceChallenge(verifier) {
@@ -167,13 +117,6 @@ function pkceChallenge(verifier) {
 
 function trimSlash(value) {
   return typeof value === 'string' ? value.replace(/\/$/, '') : value;
-}
-
-function classify(message) {
-  if (!message || typeof message !== 'object' || Array.isArray(message) || message.jsonrpc !== '2.0') return 'invalid';
-  if (typeof message.method === 'string') return Object.hasOwn(message, 'id') ? 'request' : 'notification';
-  if (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')) return 'response';
-  return 'invalid';
 }
 
 function basicClientId(header) {
@@ -302,14 +245,20 @@ export function createConnector({
     throw new Error(`the owner passphrase must be at least ${CONNECTOR_PASSPHRASE_MIN} characters`);
   }
   const store = openConnectorStore(root, { now });
-  const calls = colleague || new Colleague({ root, host: '127.0.0.1', port: daemonPort || process.env.COLLEAGUE_DAEMON_PORT });
+  const calls = colleague || new Colleague({ root, codeRoot: DEFAULT_ROOT, host: '127.0.0.1', port: daemonPort || process.env.COLLEAGUE_DAEMON_PORT });
   const passphraseDigest = crypto.createHash('sha256').update(passphrase).digest();
   const formKey = crypto.randomBytes(32);
   const allowed = new Set(allowedOrigins);
   const codes = new Map();
   const usedCodes = new Map();
   const usedForms = new Map();
-  const sessions = new Map();
+  const sessionStore = createSessionStore({
+    now,
+    maxSessions: MAX_SESSIONS,
+    idleMs: SESSION_IDLE_MS,
+    createSession: () => createMcpSession({ colleague: calls, protocolVersions: PROTOCOL_VERSIONS, notify() {}, log }),
+  });
+  const { sessions } = sessionStore;
   let failures = [];
   let lockedUntil = 0;
   let base = baseUrl ? connectorOrigin(baseUrl, { allowLoopback: true }) : null;
@@ -642,91 +591,13 @@ export function createConnector({
     }, { 'WWW-Authenticate': `Bearer ${challenge}` });
   }
 
-  function openSession(grant) {
-    const cutoff = now() - SESSION_IDLE_MS;
-    for (const [id, entry] of sessions) if (entry.lastSeen < cutoff) sessions.delete(id);
-    while (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
-    return {
-      id: crypto.randomBytes(24).toString('base64url'),
-      grantId: grant.grantId,
-      lastSeen: now(),
-      session: createMcpSession({ colleague: calls, protocolVersions: PROTOCOL_VERSIONS, notify() {}, log }),
-    };
-  }
-
-  function sessionFor(request, grant) {
-    const id = request.headers['mcp-session-id'];
-    if (!id) return { status: 400, message: 'The Mcp-Session-Id header is required' };
-    const entry = sessions.get(id);
-    if (!entry || entry.grantId !== grant.grantId) return { status: 404, message: 'Session not found; initialize a new session' };
-    // Keep the map in least-recently-used order.
-    sessions.delete(id);
-    sessions.set(id, entry);
-    entry.lastSeen = now();
-    return { entry };
-  }
-
-  async function handleMcpPost(request, response, grant) {
-    if (mediaType(request) !== 'application/json') {
-      return send(response, 415, rpcError(null, -32700, 'Content-Type must be application/json'));
-    }
-    let payload;
-    try {
-      payload = JSON.parse(await readBody(request));
-    } catch (error) {
-      if (error.status) throw error;
-      return send(response, 400, rpcError(null, -32700, 'Parse error'));
-    }
-    const batch = Array.isArray(payload);
-    const messages = batch ? payload : [payload];
-    if (!messages.length) return send(response, 400, rpcError(null, -32600, 'Empty batch'));
-    const initializing = messages.some((message) => message?.method === 'initialize');
-    let entry;
-    if (initializing) {
-      if (messages.length > 1) return send(response, 400, rpcError(null, -32600, 'initialize must be sent on its own'));
-      entry = openSession(grant);
-    } else {
-      const found = sessionFor(request, grant);
-      if (!found.entry) return send(response, found.status, rpcError(null, -32000, found.message));
-      entry = found.entry;
-    }
-    const replies = [];
-    for (const message of messages) {
-      const kind = classify(message);
-      if (kind === 'invalid') replies.push(rpcError(message?.id, -32600, 'Invalid Request'));
-      if (kind === 'notification') await entry.session.dispatch(message);
-      if (kind !== 'request') continue;
-      if (message.method === 'tools/call') {
-        log(`tool ${String(message.params?.name).replace(/[^\w.-]/g, '?').slice(0, 64)} for client ${grant.clientId}`);
-      }
-      replies.push(await entry.session.dispatch(message));
-    }
-    const headers = {};
-    if (initializing) {
-      sessions.set(entry.id, entry);
-      headers['Mcp-Session-Id'] = entry.id;
-      log(`session opened for client ${grant.clientId}`);
-    }
-    if (!replies.length) return send(response, 202, undefined, headers);
-    return send(response, 200, batch ? replies : replies[0], headers);
-  }
-
   async function handleMcp(request, response) {
     if (!originAllowed(request)) return send(response, 403, rpcError(null, -32000, 'Origin not allowed'));
     const { grant, error } = grantFor(request);
     if (!grant) return unauthorized(response, error);
-    const version = request.headers['mcp-protocol-version'];
-    if (version !== undefined && !PROTOCOL_VERSIONS.includes(version)) {
-      return send(response, 400, rpcError(null, -32600, `Unsupported MCP-Protocol-Version; use ${PROTOCOL_VERSIONS.join(' or ')}`));
-    }
-    if (request.method === 'POST') return handleMcpPost(request, response, grant);
-    if (request.method === 'DELETE') {
-      const found = sessionFor(request, grant);
-      if (!found.entry) return send(response, found.status, rpcError(null, -32000, found.message));
-      sessions.delete(found.entry.id);
-      return send(response, 204);
-    }
-    return send(response, 405, rpcError(null, -32000, 'Use POST; this server does not offer an SSE stream'), { Allow: 'POST, DELETE' });
+    return handleMcpRequest(request, response, {
+      store: sessionStore, owner: grant.grantId, label: `client ${grant.clientId}`, log,
+    });
   }
 
   // Routing ------------------------------------------------------------------------------------------

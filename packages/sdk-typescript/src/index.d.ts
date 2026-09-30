@@ -120,7 +120,12 @@ export interface DaemonTransport {
 
 export interface ColleagueOptions {
   transport?: DaemonTransport;
+  /** Data root holding .env and .colleague/daemon.auth; defaults to COLLEAGUE_ROOT, then the working directory. */
   root?: string;
+  /** Where start-runtime-daemon.sh lives, when it differs from root. */
+  codeRoot?: string;
+  /** True in the Colleague AI container (COLLEAGUE_MANAGED=1): the daemon is never started from here. */
+  managed?: boolean;
   host?: string;
   port?: number;
 }
@@ -143,15 +148,21 @@ export class Colleague {
 
 export function createLoopbackTransport(options?: {
   root?: string;
+  codeRoot?: string;
+  managed?: boolean;
   host?: string;
   port?: number;
   autostart?: boolean;
   startupTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   readAuth?: () => Promise<string>;
-  spawnDaemon?: ((options: { root: string; host: string; port: number }) => { unref?: () => void }) | null;
+  spawnDaemon?: ((options: { root: string; codeRoot: string; host: string; port: number }) => { unref?: () => void }) | null;
   isPortOpen?: (host: string, port: number) => Promise<boolean>;
 }): DaemonTransport;
+
+export const MANAGED_NOT_RUNNING: string;
+/** True when COLLEAGUE_MANAGED=1: the Colleague AI container runs the daemon. */
+export function isManaged(env?: Record<string, string | undefined>): boolean;
 
 export const EXIT: {
   readonly ok: 0;

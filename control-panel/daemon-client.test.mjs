@@ -96,6 +96,9 @@ test('default spawn writes daemon.log when the launcher is missing', async () =>
   const root = tempRoot();
   const client = createDaemonClient({
     root,
+    // The launcher comes from the code root; point it at an empty directory.
+    codeRoot: root,
+    managed: false,
     tokenPath: path.join(root, '.colleague', 'daemon.auth'),
     isPortOpen: async () => false,
     timeoutMs: 800,
@@ -161,5 +164,48 @@ test('status probes do not start a daemon when none is running', async () => {
     spawnDaemon() { spawns += 1; return { unref() {}, on() {} }; },
   });
   await assert.rejects(() => client.getMeeting('mtg-1', { startIfNeeded: false }), /not running/);
+  assert.equal(spawns, 0);
+});
+
+test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the container', async () => {
+  const root = tempRoot();
+  let spawns = 0;
+  const previous = process.env.COLLEAGUE_MANAGED;
+  process.env.COLLEAGUE_MANAGED = '1';
+  let client;
+  try {
+    client = createDaemonClient({
+      root,
+      isPortOpen: async () => false,
+      spawnDaemon() { spawns += 1; return { unref() {}, on() {} }; },
+      timeoutMs: 200,
+      pollMs: 5,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.COLLEAGUE_MANAGED;
+    else process.env.COLLEAGUE_MANAGED = previous;
+  }
+  assert.equal(client.managed, true);
+  assert.equal(client.tokenPath, path.join(root, '.colleague', 'daemon.auth'));
+  await assert.rejects(client.createMeeting({ meetingUrl: 'https://us05web.zoom.us/j/1' }), (error) => (
+    /docker restart colleague/.test(error.message) && error.code === 'daemon_unavailable' && error.status === 503
+  ));
+  await assert.rejects(client.getMeeting('mtg-1'), /docker restart colleague/);
+  assert.equal(spawns, 0);
+  assert.equal(fs.existsSync(path.join(root, '.colleague', 'daemon.log')), false);
+
+  // A running daemon is used as usual.
+  fs.writeFileSync(path.join(root, '.colleague', 'daemon.auth'), 'managed-token\n', { mode: 0o600 });
+  const running = createDaemonClient({
+    root,
+    managed: true,
+    isPortOpen: async () => true,
+    spawnDaemon() { spawns += 1; },
+    fetchImpl: async (_url, init) => {
+      assert.equal(init.headers.Authorization, 'Bearer managed-token');
+      return new Response(JSON.stringify({ id: 'mtg-2', state: 'joining' }), { status: 201 });
+    },
+  });
+  assert.equal((await running.createMeeting({ meetingUrl: 'https://us05web.zoom.us/j/1' })).id, 'mtg-2');
   assert.equal(spawns, 0);
 });

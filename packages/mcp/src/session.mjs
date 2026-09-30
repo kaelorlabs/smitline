@@ -259,7 +259,9 @@ export function createMcpSession(options = {}) {
     process.stderr.write(`${redact(line)}\n`);
   });
   const createColleague = options.createColleague || (() => new Colleague({
+    // Data (daemon.auth) under COLLEAGUE_ROOT; the daemon launcher stays with this code.
     root: options.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT,
+    codeRoot: DEFAULT_COLLEAGUE_ROOT,
     host: '127.0.0.1',
     port: options.port || process.env.COLLEAGUE_DAEMON_PORT,
   }));

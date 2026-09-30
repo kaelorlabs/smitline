@@ -19,6 +19,14 @@ export const EXIT = Object.freeze({
 // The first start creates a Python environment and installs packages.
 const DEFAULT_STARTUP_TIMEOUT_MS = 60000;
 
+// In the Colleague AI container (COLLEAGUE_MANAGED=1) the container runs the daemon;
+// nothing else may start one.
+export const MANAGED_NOT_RUNNING = 'Colleague AI is not running; restart the container: docker restart colleague';
+
+export function isManaged(env = process.env) {
+  return String(env?.COLLEAGUE_MANAGED ?? '').trim() === '1';
+}
+
 export class ColleagueError extends Error {
   constructor(message, { code = 'runtime', status, archivePath } = {}) {
     super(redact(message));
@@ -148,16 +156,19 @@ function defaultIsPortOpen(host, port) {
   });
 }
 
-function defaultSpawnDaemon({ root, host, port }) {
-  const repoRoot = path.resolve(root);
-  const script = path.join(repoRoot, 'start-runtime-daemon.sh');
+// start-runtime-daemon.sh lives with the code (codeRoot); the daemon keeps its data,
+// .env, and auth token under the data root (COLLEAGUE_ROOT).
+function defaultSpawnDaemon({ root, codeRoot, host, port }) {
+  const dataRoot = path.resolve(root);
+  const scriptRoot = path.resolve(codeRoot || root);
+  const script = path.join(scriptRoot, 'start-runtime-daemon.sh');
   return spawn('bash', [script], {
-    cwd: repoRoot,
+    cwd: scriptRoot,
     detached: true,
     stdio: 'ignore',
     env: {
       ...process.env,
-      COLLEAGUE_ROOT: repoRoot,
+      COLLEAGUE_ROOT: dataRoot,
       COLLEAGUE_DAEMON_HOST: host,
       COLLEAGUE_DAEMON_PORT: String(port),
     },
@@ -165,12 +176,15 @@ function defaultSpawnDaemon({ root, host, port }) {
 }
 export function createLoopbackTransport(options = {}) {
   const fsApi = options.fs || { readFile };
-  const root = options.root || process.cwd();
+  const root = options.root || process.env.COLLEAGUE_ROOT || process.cwd();
+  const codeRoot = options.codeRoot || root;
+  const managed = options.managed ?? isManaged();
   const host = options.host || '127.0.0.1';
   const port = Number(options.port || process.env.COLLEAGUE_DAEMON_PORT || 8765);
   const origin = `http://${host}:${port}`;
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis);
-  const spawnDaemon = options.spawnDaemon === undefined
+  // Managed: the container owns the daemon, so it is never started from here.
+  const spawnDaemon = managed ? null : options.spawnDaemon === undefined
     ? (options.autostart === false ? null : defaultSpawnDaemon)
     : options.spawnDaemon;
   const isPortOpen = options.isPortOpen || ((checkHost, checkPort) => defaultIsPortOpen(checkHost, checkPort));
@@ -191,11 +205,11 @@ export function createLoopbackTransport(options = {}) {
       return;
     }
     if (!spawnDaemon) {
-      throw new StartupError('runtime daemon is not running', { code: 'daemon_unavailable' });
+      throw new StartupError(managed ? MANAGED_NOT_RUNNING : 'runtime daemon is not running', { code: 'daemon_unavailable' });
     }
     if (!starting) {
       starting = Promise.resolve()
-        .then(() => spawnDaemon({ root, host, port }))
+        .then(() => spawnDaemon({ root, codeRoot, host, port }))
         .then(async (child) => {
           child?.unref?.();
           const ready = await waitForPort(host, port, options.startupTimeoutMs || DEFAULT_STARTUP_TIMEOUT_MS, isPortOpen);
