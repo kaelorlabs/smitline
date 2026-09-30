@@ -382,6 +382,19 @@ class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commands, [['docker', 'compose', '-f', 'compose.meeting.yaml',
                                      'up', '-d', '--build', 'meeting-agent']])
 
+    async def test_the_published_image_pulls_the_meeting_image(self):
+        from meeting_supervisor import CODE_ROOT, ComposeMeetingAgent
+        runner = FakeRunner()
+        environ = {'COLLEAGUE_MEETING_IMAGE': 'ghcr.io/kaelorlabs/colleague-meeting:main'}
+        agent = ComposeMeetingAgent(runner, environ=environ)
+        await agent.up({})
+        await agent.stop()
+        compose = ['docker', 'compose', '-f', str(CODE_ROOT / 'compose.meeting.image.yaml')]
+        self.assertEqual([args for args, _env in runner.calls], [
+            [*compose, 'up', '-d', '--pull', 'missing', 'meeting-agent'],
+            [*compose, 'stop', 'meeting-agent'],
+        ])
+
     async def test_up_runs_the_container_as_the_host_user(self):
         from meeting_supervisor import ComposeMeetingAgent
         runner = FakeRunner()

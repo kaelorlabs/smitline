@@ -76,10 +76,17 @@ export function startStdioServer(options = {}) {
     if (response) framer.write(response);
   }
 
+  const pending = new Set();
   const reading = readMessages(stdin, (message) => {
-    onMessage(message).catch((error) => {
+    const handled = onMessage(message).catch((error) => {
       process.stderr.write(`${redact(error.message)}\n`);
     });
+    pending.add(handled);
+    handled.finally(() => pending.delete(handled));
+  });
+  // Resolves once stdin has ended and every request read so far has been answered.
+  const drained = reading.then(async () => {
+    while (pending.size) await Promise.allSettled([...pending]);
   });
 
   async function shutdown(signal) {
@@ -93,7 +100,7 @@ export function startStdioServer(options = {}) {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
   }
 
-  return { session, reading, framer };
+  return { session, reading, drained, framer };
 }
 
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

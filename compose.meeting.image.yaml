@@ -1,0 +1,28 @@
+# The meeting container when Colleague AI runs from its published image. The runtime starts
+# it through the host's Docker (meeting_supervisor.py) with COLLEAGUE_MEETING_IMAGE,
+# COLLEAGUE_ROOT, and COLLEAGUE_VOLUME set. Its code is in the image; its data is the same
+# volume the colleague container keeps at /data. From a checkout, compose.meeting.yaml is used.
+name: colleague
+services:
+  meeting-agent:
+    image: ${COLLEAGUE_MEETING_IMAGE:?set by the colleague image}
+    user: "${COLLEAGUE_UID:-1001}:${COLLEAGUE_GID:-1001}"
+    env_file:
+      - path: ${COLLEAGUE_ROOT:-/data}/.env
+      - path: ${COLLEAGUE_ROOT:-/data}/.env.meeting
+        required: false
+    environment:
+      HOME: /tmp
+      COLLEAGUE_AUTH_MODE: ${COLLEAGUE_AUTH_MODE:-}
+      COLLEAGUE_RUNTIME_STATE: ${COLLEAGUE_RUNTIME_STATE:-}
+    shm_size: "2gb"
+    ports:
+      - "127.0.0.1:6082:6080"
+      - "127.0.0.1:8094:8094"
+    volumes:
+      - data:/data
+    stop_grace_period: 25s
+volumes:
+  data:
+    external: true
+    name: ${COLLEAGUE_VOLUME:-colleague}

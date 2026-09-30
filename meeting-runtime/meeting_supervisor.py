@@ -22,7 +22,9 @@ except ImportError:
 
 
 COMPOSE_FILE = 'compose.meeting.yaml'
+IMAGE_COMPOSE_FILE = 'compose.meeting.image.yaml'
 SERVICE = 'meeting-agent'
+CODE_ROOT = Path(__file__).resolve().parent.parent
 # Bind-mount sources the container writes; Docker would create missing ones as root.
 MOUNTED_DIRS = ('recordings', 'profiles')
 HEALTH_URL = 'http://127.0.0.1:8094/health'
@@ -111,6 +113,18 @@ def host_user_env(environ=None):
     return ids
 
 
+def compose_command(environ=None):
+    """The docker compose command for the meeting container, and how `up` gets its image.
+
+    The published image sets COLLEAGUE_MEETING_IMAGE: the meeting image is pulled and uses the
+    shared data volume. From a checkout it is built, with the code mounted.
+    """
+    env = os.environ if environ is None else environ
+    if str(env.get('COLLEAGUE_MEETING_IMAGE') or '').strip():
+        return ['docker', 'compose', '-f', str(CODE_ROOT / IMAGE_COMPOSE_FILE)], ['--pull', 'missing']
+    return ['docker', 'compose', '-f', COMPOSE_FILE], ['--build']
+
+
 class ComposeMeetingAgent:
     """Single-container meeting-agent capacity at the current fixed ports."""
 
@@ -119,9 +133,10 @@ class ComposeMeetingAgent:
         self.environ = environ
 
     async def up(self, env):
-        """Start the meeting container; the first start builds its image."""
+        """Start the meeting container, pulling or building its image the first time."""
+        compose, get_image = compose_command(self.environ)
         result = await self.runner.run(
-            ['docker', 'compose', '-f', COMPOSE_FILE, 'up', '-d', '--build', SERVICE],
+            [*compose, 'up', '-d', *get_image, SERVICE],
             env={**host_user_env(self.environ), **(env or {})},
         )
         if result.returncode != 0:
@@ -129,16 +144,12 @@ class ComposeMeetingAgent:
         return result
 
     async def stop(self):
-        return await self.runner.run(
-            ['docker', 'compose', '-f', COMPOSE_FILE, 'stop', SERVICE],
-            env=None,
-        )
+        compose, _ = compose_command(self.environ)
+        return await self.runner.run([*compose, 'stop', SERVICE], env=None)
 
     async def inspect(self):
-        result = await self.runner.run(
-            ['docker', 'compose', '-f', COMPOSE_FILE, 'ps', '-a', '--format', 'json'],
-            env=None,
-        )
+        compose, _ = compose_command(self.environ)
+        result = await self.runner.run([*compose, 'ps', '-a', '--format', 'json'], env=None)
         if result.returncode != 0:
             return {'running': False, 'unknown': True}
         text = result.stdout.strip()

@@ -8,6 +8,8 @@ import {
   ValidationError,
   StartupError,
   createLoopbackTransport,
+  isManaged,
+  MANAGED_NOT_RUNNING,
 } from '../src/index.mjs';
 import { startFakeDaemon } from './fake-daemon.mjs';
 
@@ -149,4 +151,52 @@ test('profile reads and updates, and silent notes, use the daemon routes', async
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'He tried it yesterday', silent: true }],
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'Ask about parking' }],
   ]);
+});
+
+test('managed (COLLEAGUE_MANAGED=1): the SDK never starts a daemon and says to restart the container', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-managed-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  assert.equal(isManaged({ COLLEAGUE_MANAGED: '1' }), true);
+  assert.equal(isManaged({ COLLEAGUE_MANAGED: '0' }), false);
+  assert.equal(isManaged({}), false);
+  let spawns = 0;
+  const previous = process.env.COLLEAGUE_MANAGED;
+  process.env.COLLEAGUE_MANAGED = '1';
+  let viaEnv;
+  try {
+    viaEnv = createLoopbackTransport({ root, port: 1, isPortOpen: async () => false });
+  } finally {
+    if (previous === undefined) delete process.env.COLLEAGUE_MANAGED;
+    else process.env.COLLEAGUE_MANAGED = previous;
+  }
+  await assert.rejects(() => viaEnv.listCalls(), (error) => (
+    error instanceof StartupError && error.code === 'daemon_unavailable' && error.message === MANAGED_NOT_RUNNING
+  ));
+  const explicit = createLoopbackTransport({
+    root, port: 1, managed: true, isPortOpen: async () => false,
+    spawnDaemon: () => { spawns += 1; return { unref() {} }; },
+  });
+  await assert.rejects(() => explicit.startCall({ channel: 'meeting', to: ZOOM, objective: 'x' }), /docker restart colleague/);
+  assert.equal(spawns, 0);
+});
+
+test('the daemon launcher comes from codeRoot while COLLEAGUE_ROOT points at the data', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-data-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const daemon = await startFakeDaemon({ root });
+  t.after(() => daemon.close());
+  let open = false;
+  let spawned;
+  const transport = createLoopbackTransport({
+    root,
+    codeRoot: '/opt/colleague-code',
+    managed: false,
+    port: daemon.port,
+    isPortOpen: async () => open,
+    spawnDaemon: (options) => { spawned = options; open = true; return { unref() {} }; },
+    startupTimeoutMs: 2000,
+  });
+  await transport.listCalls();
+  assert.equal(spawned.root, root);
+  assert.equal(spawned.codeRoot, '/opt/colleague-code');
 });

@@ -41,7 +41,7 @@ See [architecture](docs/architecture.md) for the runtime pieces, sequence diagra
 
 ```mermaid
 flowchart LR
-    Agent[Your agent] -->|MCP, CLI, SDK, REST| Daemon[Loopback daemon]
+    Agent[Your agent] -->|MCP, CLI, SDK, REST| Daemon[colleague container: daemon, console, MCP]
     Daemon -->|Calls API| Phone[Phone gateway]
     Phone <--> Provider[SignalWire or Twilio]
     Daemon -->|Meetings| Bot[Meeting container in Docker]
@@ -51,20 +51,19 @@ flowchart LR
     Daemon --> Records[Local call records and transcripts]
 ```
 
-The meeting browser, virtual display, virtual camera, and audio bridge run in Docker. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
+Colleague AI runs as one container, `colleague`, which starts a second container, `colleague-meeting`, for each meeting: the meeting browser, virtual display, virtual camera, and audio bridge. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
 
 ## Security model
 
 - **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's routes, which check the provider's signatures, are exposed through a tunnel.
-- **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the ignored `.env`, typed into a one-time local page rather than an agent chat. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
+- **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the `colleague` data volume (the ignored `.env` in a checkout), typed into a one-time local page rather than an agent chat. Local agents reach the MCP endpoint with a local token; browsers are refused. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
 - **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
 - **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
 - **Operator mute is authoritative.** Colleague AI does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
 ## Prerequisites
 
-- macOS or Linux (Windows through WSL2), Node.js 22+, npm, Git, and Docker with Docker Compose. Docker is enough: the runtime daemon uses Python 3.10+ with `venv` when this computer has it, and otherwise runs in Docker.
-- On Windows, use WSL2 with Ubuntu: install Docker inside WSL (or enable Docker Desktop's WSL integration) and clone the repository inside the Linux home directory, not under `/mnt/c` or `/mnt/d`. `npm run doctor` checks for this.
+- Docker: Docker Desktop on macOS or Windows (with host networking turned on), or Docker Engine on Linux or inside WSL2. Nothing else needs installing.
 - An OpenAI project API key with access to `gpt-live-1` and the backend model (default `gpt-5.6-terra`).
 - For phone calls, a SignalWire or Twilio account (see below).
 - For meetings, a Zoom, Teams, or Google Meet meeting that lets a guest join through the web client.
@@ -77,52 +76,51 @@ Copy this prompt into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, 
 Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-The agent follows [SETUP.md](SETUP.md). It checks your computer, opens a page in your browser where you enter your keys, your name, and (for phone calls) your SignalWire details and phone number, rings your phone so you hear Colleague AI, and then connects itself. You change the voice any time by asking your agent. Keys stay in the ignored `.env` file and never pass through the agent.
+The agent follows [SETUP.md](SETUP.md). It starts the `colleague` container:
+
+```bash
+docker run -d --name colleague --restart unless-stopped --network host \
+  -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/kaelorlabs/colleague
+```
+
+Then it opens a page in your browser where you enter your keys, your name, and (for phone calls) your SignalWire details and phone number, rings your phone so you hear Colleague AI, and connects itself over MCP. You change the voice any time by asking your agent. Keys stay in the container's data volume and never pass through the agent.
 
 Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
 
-**What phone calls need.** You need Node.js 22 and Docker, plus an OpenAI key with GPT-Live access for calls and meetings. For phone calls, you also need a phone provider account:
+**What phone calls need.** You need Docker, plus an OpenAI key with GPT-Live access for calls and meetings. For phone calls, you also need a phone provider account:
 
 - **SignalWire, free trial.** No card needed. The trial calls only numbers you verify in SignalWire (up to 10, US and Canada): your own phone, and friends who read back a code.
 - **SignalWire, paid.** Adding $5 of credit lets Colleague AI call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05.
 - **Twilio.** Works only with an upgraded (funded) account. Twilio's free trial blocks the live audio Colleague AI needs.
 
-To follow a call live, read its transcript as it happens, see what it cost, or take it over on your phone, run `./start-control-panel.sh` and open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
-
-Run the local diagnostic at any time:
-
-```bash
-npm run doctor
-```
+To follow a call live, read its transcript as it happens, see what it cost, or take it over on your phone, open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
 
 ## Meetings
 
 An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, or Google Meet link. From the CLI:
 
 ```bash
-colleague call --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
+docker exec colleague colleague call --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
   --objective "Help with the Q3 numbers" --wait
 ```
 
 `--channel meeting --to <url>` does the same, and so does a `--to` that starts with `http://` or `https://`. The result comes back like a phone call's. See [calls](docs/calls.md).
 
-The first meeting builds the meeting image, `colleague-meeting:local`, with `docker compose -f compose.meeting.yaml up --build`. That takes a couple of minutes and about 1.8 GB of disk.
+The first meeting downloads the meeting image, `ghcr.io/kaelorlabs/colleague-meeting` (about 1.8 GB of disk). From a checkout it is built instead.
 
 Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. It answers when someone addresses it and hands harder questions to the backend model (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to skip the disclosure.
 
 ### The local console
 
-```bash
-./start-control-panel.sh
-```
+Open [http://127.0.0.1:8095](http://127.0.0.1:8095); the `colleague` container serves it. The **Meetings** tab starts a meeting by hand: paste the meeting link, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop the colleague and follow its live status. Past meetings keep their transcript and handoff. The **Calls** tab lists phone calls and meetings started through the calls API. See the [control panel guide](docs/control-panel.md) and [meeting adapters](docs/meeting-adapters.md).
 
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095). The **Meetings** tab starts a meeting by hand: paste the meeting link, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop the colleague and follow its live status. Past meetings keep their transcript and handoff. The **Calls** tab lists phone calls and meetings started through the calls API. See the [control panel guide](docs/control-panel.md) and [meeting adapters](docs/meeting-adapters.md).
-
-The console talks to the **loopback daemon** and starts `start-runtime-daemon.sh` when needed. API keys remain in `.env` and are never returned to the browser.
+The console talks to the **loopback daemon** in the same container. API keys are never returned to the browser.
 
 | Local interface | Address |
 | --- | --- |
 | Meetings console | http://127.0.0.1:8095 |
+| MCP for local agents (bearer token from `colleague setup register`) | http://127.0.0.1:8095/mcp |
 | Calls (live transcript, results, costs, take over) | http://127.0.0.1:8095/calls |
 | Meeting browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
 | Meeting status and transcript | http://127.0.0.1:8094/health |
@@ -132,7 +130,7 @@ A `live` health status means the bridge reached the meeting audio loop. Verify a
 
 ### Manual meeting launch
 
-For debugging without the daemon:
+For debugging from a checkout, without the daemon:
 
 ```bash
 cp meeting-runtime/meeting.env.example .env.meeting
@@ -150,14 +148,14 @@ docker compose -f compose.meeting.yaml stop meeting-agent
 
 | Surface | Role |
 | --- | --- |
-| **Daemon** | `./start-runtime-daemon.sh`: loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
+| **Daemon** | In the `colleague` container (`./start-runtime-daemon.sh` from a checkout): loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
 | **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md). |
 | **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
-| **Console** | `./start-control-panel.sh`: Meetings and Calls tabs on `127.0.0.1:8095`. |
+| **Console** | Meetings and Calls tabs, and the local MCP endpoint `/mcp`, on `127.0.0.1:8095` (`./start-control-panel.sh` from a checkout). |
 | **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm. |
 | **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI. |
-| **CLI** | `packages/cli`: `colleague call`, `calls`, `profile`, `voices`, `setup`, and `connector`. |
-| **MCP** | `packages/mcp`: stdio server over the TypeScript SDK with the call tools; stdout is JSON-RPC only. |
+| **CLI** | `packages/cli`: `colleague call`, `calls`, `profile`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec colleague colleague ...`. |
+| **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`colleague mcp`; Claude Desktop runs `docker exec -i colleague colleague mcp`). |
 | **Remote connector** | `./start-connector.sh`: the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
 
 ## Data and privacy
@@ -177,8 +175,23 @@ Transcripts contain conversation content and are kept until you remove them. Gen
 | [`packages/sdk-typescript/`](packages/sdk-typescript/) · [`packages/sdk-python/`](packages/sdk-python/) | SDKs |
 | [`packages/cli/`](packages/cli/) · [`packages/mcp/`](packages/mcp/) | CLI, MCP server, and remote connector |
 | [`joinly/`](joinly/) | Vendored subset of Joinly: browser session, virtual devices, camera feed, Teams and Meet controllers |
-| `Dockerfile.meeting`, `compose.meeting.yaml` | The meeting container |
-| `Dockerfile.daemon` | The daemon image, used when this computer has no usable Python |
+| `Dockerfile`, `docker/` | The `colleague` image: daemon, console, CLI, and MCP, with Node and Python inside |
+| `Dockerfile.meeting`, `compose.meeting.image.yaml` | The meeting image, and how the `colleague` container starts it |
+| `compose.meeting.yaml`, `Dockerfile.daemon`, `start-*.sh` | Running from a checkout |
+| `.github/workflows/images.yml` | Tests every pull request; publishes both images to GHCR from `main` and version tags |
+
+### Run from a checkout
+
+Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.colleague/` in the checkout:
+
+```bash
+git clone https://github.com/kaelorlabs/colleague-ai.git ~/colleague-ai
+cd ~/colleague-ai && npm install
+node packages/cli/src/colleague.mjs setup start      # the daemon, in Docker or on Python 3.10+
+./start-control-panel.sh                             # the console and MCP endpoint
+```
+
+`colleague setup register` then writes the MCP server into Claude Code, Codex, and Cursor directly. To try the images locally, build them with `docker build -f Dockerfile.meeting -t colleague-meeting:local .` and `docker build --build-arg MEETING_IMAGE=colleague-meeting:local -t colleague:local .`.
 
 The runtime tests run in the meeting image:
 

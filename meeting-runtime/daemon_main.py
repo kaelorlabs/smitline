@@ -23,10 +23,14 @@ def write_auth_token(root, token=None):
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Colleague AI runtime daemon')
-    parser.add_argument('--root', default=str(Path(__file__).resolve().parent.parent))
+    # --root holds .env and .colleague/; --runtime-root holds meeting run/, recordings/, and
+    # profiles/. From a checkout both default to the checkout; the image sets COLLEAGUE_ROOT and
+    # COLLEAGUE_MEETING_DATA to its data volume.
+    parser.add_argument('--root', default=os.environ.get('COLLEAGUE_ROOT')
+                        or str(Path(__file__).resolve().parent.parent))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--runtime-root', default=None)
+    parser.add_argument('--runtime-root', default=os.environ.get('COLLEAGUE_MEETING_DATA') or None)
     parser.add_argument('--server', action='store_true',
                         help='allow a non-loopback bind; requires an API token')
     return parser

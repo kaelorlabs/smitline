@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  availableVoices, createSignalWireTrunk, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
+  availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv,
 } from '../src/setup.mjs';
 
@@ -577,4 +577,173 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   assert.deepEqual(brief.questions, ['Launch now or wait?', 'Who would use it?']);
   assert.equal(brief.tone, 'casual');
   assert.deepEqual(brief.context, { summary: 'Colleague AI lets agents call.', details: 'Pricing.' });
+});
+
+async function closedPort() {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+async function listing(dir) {
+  const out = [];
+  for (const entry of await fs.readdir(dir, { recursive: true })) out.push(entry);
+  return out.sort();
+}
+
+test('managed status skips host-only checks and says Colleague AI runs in its container', async (t) => {
+  const root = await tempRoot(t);
+  await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME=Robin\n');
+  const ran = [];
+  const runner = (binary, args) => { ran.push(`${binary} ${args.join(' ')}`); return fakeRunner({ 'docker info': 0 })(binary, args); };
+  const status = await setupStatus({ root, env: {}, verify: false, runner, find: () => null, managed: true });
+  const ids = status.checks.map((c) => c.id);
+  for (const hostOnly of ['platform', 'checkout', 'line_endings', 'dependencies']) assert.ok(!ids.includes(hostOnly), hostOnly);
+  const runtime = status.checks.find((c) => c.id === 'runtime');
+  assert.equal(runtime.ok, true);
+  assert.match(runtime.detail, /container/);
+  assert.equal(status.checks.find((c) => c.id === 'docker').ok, true);
+  for (const kept of ['node', 'openai_key', 'owner_name', 'phone_account', 'caller_id', 'owner_phone', 'phone_audio', 'public_url', 'agents', 'daemon']) {
+    assert.ok(ids.includes(kept), kept);
+  }
+  assert.ok(!ran.some((command) => command.startsWith('python3') || command.startsWith('claude') || command.startsWith('codex')));
+  assert.equal(status.ready, true);
+  assert.equal(status.meetingsReady, true);
+  // Without Docker access, meetings are what is missing; the basics are still ready.
+  const noDocker = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({}), find: () => null, managed: true });
+  assert.equal(noDocker.ready, true);
+  assert.equal(noDocker.meetingsReady, false);
+  // Outside the container the host checks are still there.
+  const host = await setupStatus({ root, env: {}, verify: false, runner: fakeRunner({ 'docker info': 0 }), find: () => null, managed: false });
+  assert.ok(host.checks.some((c) => c.id === 'line_endings'));
+});
+
+test('managed setup status from the CLI', async (t) => {
+  const root = await tempRoot(t);
+  const port = await closedPort();
+  const result = await runCli(['setup', 'status', '--json', '--no-verify'], {
+    COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port),
+  });
+  const report = JSON.parse(result.stdout);
+  assert.ok(!report.checks.some((c) => c.id === 'line_endings'));
+  assert.match(report.checks.find((c) => c.id === 'runtime').detail, /container/);
+  const daemon = report.checks.find((c) => c.id === 'daemon');
+  assert.equal(daemon.ok, false);
+  assert.match(daemon.fix, /docker restart colleague/);
+});
+
+test('managed setup register prints how to connect host agents and writes nothing there', async (t) => {
+  const root = await tempRoot(t);
+  const home = await tempRoot(t);
+  await fs.mkdir(path.join(home, '.claude'));
+  await fs.mkdir(path.join(home, '.cursor'));
+  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, HOME: home, PATH: process.env.PATH };
+  const result = await runCli(['setup', 'register', '--json'], env);
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  const token = (await fs.readFile(path.join(root, '.colleague', 'mcp.token'), 'utf8')).trim();
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(report.managed, true);
+  assert.deepEqual(report.mcp, { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(report.agents['claude-code'].command,
+    `claude mcp add --transport http --scope user colleague-ai http://127.0.0.1:8095/mcp --header "Authorization: Bearer ${token}"`);
+  assert.equal(report.agents.codex.toml,
+    `[mcp_servers.colleague-ai]\nurl = "http://127.0.0.1:8095/mcp"\nhttp_headers = { Authorization = "Bearer ${token}" }\n`);
+  assert.deepEqual(report.agents.cursor.json, {
+    mcpServers: { 'colleague-ai': { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } } },
+  });
+  assert.deepEqual(report.agents['claude-desktop'].json, {
+    mcpServers: { 'colleague-ai': { command: 'docker', args: ['exec', '-i', 'colleague', 'colleague', 'mcp'] } },
+  });
+  const code = path.resolve(path.dirname(cli), '../../..');
+  assert.equal(report.skill.path, `${code}/.agents/skills/call-with-colleague-ai/SKILL.md`);
+  assert.equal(report.skill.copy['claude-code'], `docker cp colleague:${code}/.agents/skills/call-with-colleague-ai ~/.claude/skills/`);
+  // Nothing on the "host" side changed; only the token was made, under the data root.
+  assert.deepEqual(await listing(home), ['.claude', '.cursor']);
+  assert.deepEqual(await listing(root), ['.colleague', path.join('.colleague', 'mcp.token')]);
+
+  // The same token again, and a plain-text version for a person.
+  const text = await runCli(['setup', 'register'], env);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.stdout, /claude mcp add --transport http --scope user colleague-ai http:\/\/127\.0\.0\.1:8095\/mcp/);
+  assert.ok(text.stdout.includes(`Authorization: Bearer ${token}`));
+  assert.match(text.stdout, /"command": "docker"/);
+  assert.match(text.stdout, /docker cp colleague:/);
+  assert.equal(containerRegistration({ codeRoot: '/app', token: 't', container: 'c2' }).skill.copy.codex,
+    'docker cp c2:/app/.agents/skills/call-with-colleague-ai ~/.codex/skills/');
+});
+
+test('register outside the container also offers the local HTTP endpoint', async (t) => {
+  const home = await tempRoot(t);
+  const runner = () => ({ status: 0, stdout: '', stderr: '' });
+  const http = localMcpConnection({ token: 'tok', port: 8095 });
+  assert.deepEqual(http, { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: 'Bearer tok' } });
+  const { manual } = registerAgents('/repo', { runner, find: () => null, home, windows: null, http });
+  assert.deepEqual(manual.http, http);
+  assert.equal(manual.args[0], '/repo/packages/mcp/src/server.mjs');
+  assert.match(manual.note, /Streamable HTTP to http:\/\/127\.0\.0\.1:8095\/mcp/);
+});
+
+test('managed setup start reports the daemon and never starts one', async (t) => {
+  const root = await tempRoot(t);
+  const port = await closedPort();
+  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) };
+  const down = await runCli(['setup', 'start'], env);
+  assert.equal(down.code, 3);
+  assert.deepEqual(JSON.parse(down.stdout), {
+    running: false, started: false, port, managed: true,
+    error: 'Colleague AI is not running; restart the container: docker restart colleague',
+  });
+  await assert.rejects(fs.access(path.join(root, '.colleague', 'daemon.log')));
+
+  const daemon = http.createServer((request, response) => response.end());
+  await new Promise((resolve) => daemon.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => daemon.close(resolve)));
+  const up = await runCli(['setup', 'start'], { ...env, COLLEAGUE_DAEMON_PORT: String(daemon.address().port) });
+  assert.equal(up.code, 0, up.stderr);
+  assert.deepEqual(JSON.parse(up.stdout), { running: true, started: false, port: daemon.address().port, managed: true });
+
+  // A call with the daemon down fails at once with the same advice.
+  const call = await runCli(['call', '--to', '+14155550142', '--objective', 'Book a table', '--port', String(port)], env);
+  assert.equal(call.code, 3);
+  assert.match(call.stderr, /Colleague AI is not running; restart the container: docker restart colleague/);
+  assert.match(call.stderr, /Hint: Restart the container/);
+});
+
+test('COLLEAGUE_ROOT is where the CLI keeps .env and the local MCP token', async (t) => {
+  const root = await tempRoot(t);
+  const saved = await runCli(['setup', 'set', 'COLLEAGUE_OWNER_NAME', 'Robin'], { COLLEAGUE_ROOT: root });
+  assert.equal(saved.code, 0, saved.stderr);
+  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.equal(statSync(path.join(root, '.env')).mode & 0o777, 0o600);
+  const { dataRoot } = await import('../src/colleague.mjs');
+  const previous = process.env.COLLEAGUE_ROOT;
+  process.env.COLLEAGUE_ROOT = root;
+  try {
+    assert.equal(dataRoot({}), root);
+    assert.equal(dataRoot({ root: '/elsewhere' }), '/elsewhere');
+  } finally {
+    if (previous === undefined) delete process.env.COLLEAGUE_ROOT;
+    else process.env.COLLEAGUE_ROOT = previous;
+  }
+  assert.equal(dataRoot({}), path.resolve(previous || path.resolve(path.dirname(cli), '../../..')));
+});
+
+test('colleague mcp serves MCP on stdin and stdout', async (t) => {
+  const root = await tempRoot(t);
+  const child = spawn(process.execPath, [cli, 'mcp'], {
+    env: { ...process.env, COLLEAGUE_ROOT: root }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })}\n`);
+  child.stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  const code = await new Promise((resolve) => child.on('close', resolve));
+  assert.equal(code, 0);
+  const replies = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
+  assert.equal(replies[0].result.serverInfo.name, 'colleague-ai');
+  assert.equal(replies[1].result.tools.length, 11);
 });

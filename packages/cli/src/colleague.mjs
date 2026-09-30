@@ -14,11 +14,16 @@ import {
   RuntimeError,
   FinalizationError,
   InterruptError,
+  MANAGED_NOT_RUNNING,
+  isManaged,
 } from '../../sdk-typescript/src/index.mjs';
 import {
   SECRETS_PAGE_MINUTES,
   availableVoices,
+  containerRegistration,
   createSignalWireTrunk,
+  formatContainerRegistration,
+  localMcpConnection,
   openBrowser,
   readEnv,
   registerAgents,
@@ -28,9 +33,17 @@ import {
   writeEnv,
 } from './setup.mjs';
 import { openConnectorStore } from '../../mcp/src/connector-store.mjs';
+import { readOrCreateLocalMcpToken } from '../../mcp/src/local-token.mjs';
 
 const interruptState = { requested: false, handler: null };
+// The checkout (/app in the container): scripts, skills, and the MCP server live here.
 const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+const CODE_ROOT = DEFAULT_COLLEAGUE_ROOT;
+
+/** The data root (.env, .colleague/): --root, else COLLEAGUE_ROOT, else the checkout. */
+function dataRoot(args = {}) {
+  return path.resolve(args.root && args.root !== true ? String(args.root) : process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+}
 
 function requestInterrupt() {
   interruptState.requested = true;
@@ -57,12 +70,13 @@ const USAGE = `Usage:
   colleague setup secrets [--no-open] [--wait]
   colleague setup set <KEY> <value>
   colleague setup start
-  colleague setup register [--agents claude-code,codex,cursor,claude-desktop]
+  colleague setup register [--agents claude-code,codex,cursor,claude-desktop] [--json]
   colleague setup voice [--set <name>] [--preview <name>]
   colleague setup sip-trunk
   colleague setup call-me [--wait]
   colleague connector status
   colleague connector revoke --all | --client <id>
+  colleague mcp                    (MCP server on stdin/stdout, for Claude Desktop and other stdio clients)
 `;
 
 function parseArgs(argv) {
@@ -92,7 +106,9 @@ function parseArgs(argv) {
 // A next step for errors a person can act on; agents read the exit code.
 function hintFor(error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (error?.code === 'daemon_unavailable') return 'Colleague AI\'s background service did not answer. Check the setup with: colleague setup status';
+  if (error?.code === 'daemon_unavailable') {
+    return isManaged() ? 'Restart the container: docker restart colleague' : 'Colleague AI\'s background service did not answer. Check the setup with: colleague setup status';
+  }
   if (error?.code === 'not_configured') return 'See what is missing with: colleague setup status';
   if (error?.code === 'not_found' && /call/i.test(message)) return 'List recent calls with: colleague calls list';
   if (/^unknown (command|\w+ command)/.test(message)) return 'See all commands with: colleague help';
@@ -121,11 +137,12 @@ function progress(line) {
 }
 
 function colleagueFromArgs(args) {
-  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const root = dataRoot(args);
   return {
     root,
     client: new Colleague({
       root,
+      codeRoot: CODE_ROOT,
       host: args.host || process.env.COLLEAGUE_DAEMON_HOST || '127.0.0.1',
       port: Number(args.port || process.env.COLLEAGUE_DAEMON_PORT || 8765),
     }),
@@ -376,16 +393,22 @@ function tail(file, lines = 15) {
   }
 }
 
-/** Start the runtime daemon in the background and wait for it, showing progress. */
-async function startDaemon(root, { timeoutMs = 240_000 } = {}) {
+/**
+ * Start the runtime daemon in the background and wait for it, showing progress.
+ * In the container (COLLEAGUE_MANAGED=1) the container runs the daemon: nothing is
+ * started, and a closed port is an error that says to restart the container.
+ */
+async function startDaemon(root, { timeoutMs = 240_000, managed = isManaged() } = {}) {
   const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
-  if (await portOpen(port)) return { running: true, started: false, port };
+  if (await portOpen(port)) return { running: true, started: false, port, ...(managed ? { managed: true } : {}) };
+  if (managed) throw new StartupError(MANAGED_NOT_RUNNING, { code: 'daemon_unavailable' });
   const dir = path.join(root, '.colleague');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const log = path.join(dir, 'daemon.log');
   const fd = openSync(log, 'a', 0o600);
-  const child = spawn('bash', [path.join(root, 'start-runtime-daemon.sh')], {
-    cwd: root,
+  // The launcher is part of the code; COLLEAGUE_ROOT tells it where the data is.
+  const child = spawn('bash', [path.join(CODE_ROOT, 'start-runtime-daemon.sh')], {
+    cwd: CODE_ROOT,
     detached: true,
     stdio: ['ignore', fd, fd],
     env: { ...process.env, COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) },
@@ -451,10 +474,10 @@ function launchSecretsPage(root, { open }) {
 }
 
 async function setupCommand(args) {
-  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const root = dataRoot(args);
   const action = args._[1] || 'status';
   if (action === 'status') {
-    const report = await setupStatus({ root, verify: !args['no-verify'] });
+    const report = await setupStatus({ root, codeRoot: CODE_ROOT, verify: !args['no-verify'] });
     if (args.json) printJson(report);
     else printStatus(report);
     return report.ready ? EXIT.ok : EXIT.startup;
@@ -500,6 +523,13 @@ async function setupCommand(args) {
     return EXIT.ok;
   }
   if (action === 'start') {
+    if (isManaged()) {
+      // The container runs the daemon; only say whether it is up.
+      const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+      const running = await portOpen(port);
+      printJson({ running, started: false, port, managed: true, ...(running ? {} : { error: MANAGED_NOT_RUNNING }) });
+      return running ? EXIT.ok : EXIT.startup;
+    }
     printJson(await startDaemon(root));
     return EXIT.ok;
   }
@@ -535,8 +565,16 @@ async function setupCommand(args) {
     return EXIT.ok;
   }
   if (action === 'register') {
+    const token = readOrCreateLocalMcpToken(root);
+    if (isManaged()) {
+      // Inside the container the host's agent settings are out of reach: print what to run there.
+      const report = containerRegistration({ codeRoot: CODE_ROOT, token });
+      if (args.json) printJson(report);
+      else process.stdout.write(formatContainerRegistration(report));
+      return EXIT.ok;
+    }
     const agents = args.agents && args.agents !== true ? String(args.agents).split(',').map((a) => a.trim()) : undefined;
-    printJson(registerAgents(root, { agents }));
+    printJson(registerAgents(CODE_ROOT, { agents, http: localMcpConnection({ token }) }));
     return EXIT.ok;
   }
   if (action === 'voice') {
@@ -632,7 +670,7 @@ async function profileCommand(args) {
 
 // Remote connector grants: listed and revoked without showing any token.
 async function connectorCommand(args) {
-  const root = path.resolve(args.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  const root = dataRoot(args);
   const store = openConnectorStore(root);
   const action = args._[1] || 'status';
   if (action === 'status') {
@@ -668,6 +706,14 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'setup') return await setupCommand(args);
     if (command === 'connector') return await connectorCommand(args);
     if (command === 'profile') return await profileCommand(args);
+    if (command === 'mcp') {
+      // The stdio MCP server in this process (docker exec -i colleague colleague mcp).
+      // stdout carries protocol frames only; this returns when stdin closes.
+      const { startStdioServer } = await import('../../mcp/src/server.mjs');
+      const { drained } = startStdioServer({ root: dataRoot(args) });
+      await drained;
+      return EXIT.ok;
+    }
     if (command === 'voices') {
       const { client } = colleagueFromArgs(args);
       printJson(await client.listVoices());
@@ -694,4 +740,4 @@ if (invoked) {
   main().then((code) => process.exit(code ?? 0), (error) => exitForError(error));
 }
 
-export { main, parseArgs, DEFAULT_COLLEAGUE_ROOT };
+export { main, parseArgs, dataRoot, DEFAULT_COLLEAGUE_ROOT };

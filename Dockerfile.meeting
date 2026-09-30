@@ -1,8 +1,9 @@
 # The meeting bot. Chromium joins Zoom, Teams, or Google Meet; PulseAudio and Xvfb give it a
 # microphone, a speaker, and a screen; bridge.py carries the audio to and from GPT-Live, which
 # does all listening and speaking. No speech models run here.
-# meeting-runtime/ and the joinly subset are mounted at run time (compose.meeting.yaml), so
-# only this file's changes need a rebuild.
+# The code is in the image. Its data (runtime state, recordings, browser profiles) lives on
+# the volume the colleague container keeps at /data (compose.meeting.image.yaml). From a
+# checkout, compose.meeting.yaml mounts the code and data over /meeting-runtime instead.
 FROM python:3.12-slim-bookworm
 
 ARG NOVNC_VERSION=1.5.0
@@ -26,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/* \
     && groupadd --gid 1001 app && useradd --uid 1001 --gid 1001 -m app \
     && chmod 0755 /home/app
+
+COPY joinly/joinly /opt/joinly/joinly
+COPY meeting-runtime /meeting-runtime
+RUN mkdir -p /data/meetings \
+    && for name in run recordings profiles; do ln -s /data/meetings/$name /meeting-runtime/$name; done
 
 USER app
 ENTRYPOINT ["/app/.venv/bin/python", "-u", "/meeting-runtime/bridge.py"]

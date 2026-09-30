@@ -10,9 +10,10 @@ See [capabilities](capabilities.md) for the meeting platform matrix, [calls](cal
 Your agent (Claude Code, Codex, Cursor, ChatGPT, your own code, ...)
         │
         ▼
-MCP server / remote connector / CLI / SDKs / REST
+MCP (127.0.0.1:8095/mcp or stdio) / remote connector / CLI / SDKs / REST
         │  brief in, result out
         ▼
+colleague container (ghcr.io/kaelorlabs/colleague, host networking, data volume at /data)
 Loopback daemon 127.0.0.1:8765
   ├─ calls API        /v1/calls, /v1/voices, /v1/profile
   ├─ phone gateway    127.0.0.1:8766 ──► SignalWire or Twilio ◄──► phone
@@ -22,20 +23,41 @@ Loopback daemon 127.0.0.1:8765
                                           ◄──► Zoom / Teams / Meet web client
                                           ◄──► GPT-Live (one gpt-live-1 session)
         ▲
-Local console 127.0.0.1:8095 (Meetings and Calls tabs)
+Local console 127.0.0.1:8095 (Meetings and Calls tabs, local MCP endpoint)
 ```
 
 A phone call and a meeting are both **calls**: an agent sends a brief to `/v1/calls` with channel `phone` or `meeting`, and reads the same kind of result. A meeting call starts an ordinary daemon meeting underneath. The console uses the small `/v1/meetings` API directly when you start a meeting by hand.
 
 In both, GPT-Live hands questions that need careful reasoning or precise facts to a backend model through Responses delegation. The backend knows the brief and context. Phone calls use `COLLEAGUE_PHONE_BACKEND_MODEL` and `COLLEAGUE_PHONE_WEB_SEARCH`; meetings use `COLLEAGUE_MEETING_BACKEND_MODEL` and `COLLEAGUE_MEETING_WEB_SEARCH`. Both models default to `gpt-5.6-terra`, and web search is off unless set to `1`.
 
+### The colleague container
+
+Users run one image, `ghcr.io/kaelorlabs/colleague` (`Dockerfile`, about 600 MB): Python with the daemon, Node with the console, CLI, and MCP server, the Docker CLI with Compose, and `cloudflared` for the phone tunnel. `docker/entrypoint.sh` gives the data volume and the Docker socket to the image's `app` user (uid 1001) and starts `docker/start.sh`, which runs the daemon and the console; if either stops, the container stops and Docker's restart policy starts it again. The `colleague` command (`docker/colleague`) runs as the same user, so settings it writes stay readable to the service.
+
+The image sets:
+
+| Variable | Value | Meaning |
+| --- | --- | --- |
+| `COLLEAGUE_ROOT` | `/data` | `.env`, `.env.meeting`, and `.colleague/`. In a checkout, the checkout. |
+| `COLLEAGUE_MEETING_DATA` | `/data/meetings` | Meeting `run/`, `recordings/`, `profiles/`, and `context/`. In a checkout, `meeting-runtime/`. |
+| `COLLEAGUE_MANAGED` | `1` | The container runs the daemon: nothing else starts it, `colleague setup start` only reports, and `colleague setup register` prints how to connect agents instead of writing their config. |
+| `COLLEAGUE_MEETING_IMAGE` | `ghcr.io/kaelorlabs/colleague-meeting:sha-…` | The meeting image from the same commit, pulled on the first meeting. |
+
+`COLLEAGUE_VOLUME` (default `colleague`) names the data volume, and `COLLEAGUE_CONTAINER_NAME` (default `colleague`) the container, for the commands `setup register` prints.
+
+Local agents connect to MCP over Streamable HTTP at `127.0.0.1:8095/mcp` with a bearer token kept in `.colleague/mcp.token`. The endpoint accepts only `Host: 127.0.0.1:8095` or `localhost:8095` and refuses any request with an `Origin` header, so a web page cannot reach it. Claude Desktop, which only starts stdio servers, runs `docker exec -i colleague colleague mcp`.
+
 ### The meeting container
 
-One image, `colleague-meeting:local`, built from `Dockerfile.meeting`: `python:3.12-slim-bookworm` with Playwright Chromium, PulseAudio, Xvfb, and x11vnc with noVNC for account sign-in. The daemon starts it with `docker compose -f compose.meeting.yaml up -d --build meeting-agent`, so the first meeting builds it (a couple of minutes, about 1.8 GB on disk). `meeting-runtime/` and the vendored `joinly/` subset are mounted read-only at run time, so code changes need no rebuild. No speech models run in the container.
+One image, `ghcr.io/kaelorlabs/colleague-meeting` (`Dockerfile.meeting`, about 1.8 GB on disk): `python:3.12-slim-bookworm` with Playwright Chromium, PulseAudio, Xvfb, and x11vnc with noVNC for account sign-in, plus `meeting-runtime/` and the vendored `joinly/` subset. No speech models run in it. The daemon starts it through the host's Docker with `compose.meeting.image.yaml`, pulling it on the first meeting. It runs as uid 1001 and mounts the same `colleague` volume at `/data`; its `/meeting-runtime/run`, `recordings`, and `profiles` are links into `/data/meetings`.
 
-### Where the daemon runs
+From a checkout, the daemon uses `compose.meeting.yaml` instead: it builds `colleague-meeting:local` and mounts `meeting-runtime/` and `joinly/` read-only, so code changes need no rebuild.
 
-`start-runtime-daemon.sh` runs the daemon on this computer's Python when it can create the daemon's venv (Python 3.10+ with `venv`), and otherwise in Docker (`Dockerfile.daemon`). `COLLEAGUE_DAEMON_RUNTIME=host` or `docker` picks one. Docker is enough; nothing needs host Python.
+`.github/workflows/images.yml` runs the tests on every pull request (including the runtime suite inside the meeting image and a start of the colleague image) and publishes both images, for `linux/amd64` and `linux/arm64`, from `main` and version tags.
+
+### Running from a checkout
+
+`start-runtime-daemon.sh` runs the daemon on this computer's Python when it can create the daemon's venv (Python 3.10+ with `venv`), and otherwise in Docker (`Dockerfile.daemon`). `COLLEAGUE_DAEMON_RUNTIME=host` or `docker` picks one.
 
 In Docker the container uses host networking, so the daemon and phone gateway listen on this computer's loopback exactly as they do without Docker. The checkout is mounted at the same path and the container runs as the host user, so `.colleague/`, `.env`, and call records stay the user's own files, and the meeting containers the daemon starts through the host's Docker socket see the same paths. The image holds only Python, aiohttp, the Docker CLI, and `cloudflared` for the phone tunnel; the code is mounted, so code changes need no rebuild, and the image is rebuilt only when `Dockerfile.daemon` or `requirements-daemon.txt` change. Settings exported in the shell reach the container by name, never by value on the command line. Docker Desktop needs host networking turned on for this computer to reach the daemon.
 
@@ -120,7 +142,7 @@ Disconnect removes the local profile directory. It does not revoke sessions on o
 
 ## Retention and deletion
 
-All of these paths are gitignored. Stop the meeting or daemon before deleting files in use.
+In the image, the `.colleague/` and `.env` paths below are under `/data`, and the `meeting-runtime/` paths are under `/data/meetings`, all in the `colleague` volume: `docker volume rm colleague` deletes everything. In a checkout they are in the checkout, and gitignored. Stop the meeting or daemon before deleting files in use.
 
 | Data | Location | How to delete |
 | --- | --- | --- |
@@ -132,12 +154,15 @@ All of these paths are gitignored. Stop the meeting or daemon before deleting fi
 | Daemon meetings, events, call records, webhook secret, API token digests | `.colleague/daemon-data/` | Stop the daemon, then delete the directory |
 | Owner profile | `.colleague/profile.json` | `colleague profile`, or delete the file |
 | Remote connector grants (digests) | `.colleague/connector/` | `colleague connector revoke --all`, or delete the directory |
+| Local MCP token | `.colleague/mcp.token` | Delete it; the next `colleague setup register` makes a new one, and agents need the new header |
 | Console active meeting | `.colleague/portal-active.json` | Stop the colleague from the console |
 | API keys / meeting invite | `.env`, `.env.meeting` | Edit or delete; never commit |
 
 Checkouts from before the cleanup may still have `meeting-runtime/jobs/` and `meeting-runtime/codex-workspace/`. Nothing uses them now; delete them.
 
 ### Container user and file permissions
+
+In the image, the colleague and meeting containers both run as uid 1001, so the private files they share need nothing more. The rest of this section is about running from a checkout.
 
 The daemon writes each meeting's state under `meeting-runtime/run/` and `meeting-runtime/context/` as private files (directories 0700, files 0600). The meeting container reads them, writes `recordings/` and `profiles/`, and the host reads those back. So `compose.meeting.yaml` runs the container as the host user, `user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"`, and nothing on the host is made group- or world-readable. The daemon (`meeting_supervisor.host_user_env`) and `start-meeting-agent.sh` set both values to your `id -u` and `id -g`. Inside the container `HOME` is `/tmp` and the image points Playwright at its bundled browsers, so the uid needs no account in the image.
 

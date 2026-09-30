@@ -6,7 +6,7 @@ Colleague AI runs Zoom, Microsoft Teams, and Google Meet through a shared browse
 
 The steps below use the console. When an agent starts the meeting, steps 1 and 2 happen through the calls API, and the rest is the same.
 
-1. Run `./start-control-panel.sh` and open http://127.0.0.1:8095.
+1. Open http://127.0.0.1:8095 (from a checkout, run `./start-control-panel.sh` first).
 2. Paste an HTTPS Zoom, Teams commercial, Teams Free, or Google Meet (`https://meet.google.com/xxx-yyyy-zzz`) meeting URL.
 3. For Teams or Meet meetings that require an account, choose **Connect Microsoft account** or **Connect Google account**, then **Open meeting view**. Complete sign-in yourself on the official page. Once the console reports account connected, stop the account browser. Browser profiles are stored locally in the ignored `meeting-runtime/profiles/` directory.
 4. Start the colleague. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.

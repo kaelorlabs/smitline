@@ -4,9 +4,10 @@ Any agent can ask Colleague AI to phone someone or join a meeting: it sends a [b
 
 | Agent | Connect with | Setup |
 | --- | --- | --- |
-| Claude Code, Codex, Cursor | Local MCP server | `colleague setup register` |
-| Claude Desktop, OpenClaw, Hermes, other MCP clients | Local MCP server | Add the stdio command that `colleague setup register` prints |
-| Agents that run shell commands | CLI | `colleague call ... --wait` |
+| Claude Code, Codex, Cursor | Local MCP over HTTP | `docker exec colleague colleague setup register` prints the command or config entry |
+| Claude Desktop | Local MCP over stdio | `docker exec -i colleague colleague mcp`, from the same output |
+| OpenClaw, Hermes, other MCP clients | Local MCP over HTTP | The URL and `Authorization` header from the same output |
+| Agents that run shell commands | CLI | `docker exec colleague colleague call ... --wait` |
 | Your own code | REST API or SDKs | `/v1/calls`, `@colleague-ai/sdk`, `colleague_ai` |
 | ChatGPT, Claude on the web, other cloud agents | Remote connector | Server mode, below |
 
@@ -14,7 +15,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 
 ## Local MCP server
 
-`packages/mcp/src/server.mjs` is a stdio MCP server with these tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
+The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with a local bearer token, and `colleague mcp` serves the same tools over stdio. These are the tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -28,7 +29,9 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 | `list_voices` | GPT-Live voices. |
 | `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. |
 
-`colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
+In the image, `docker exec colleague colleague setup register --json` prints the URL and header and, for each agent, what to run on this computer: a `claude mcp add --transport http --scope user colleague-ai ...` command for Claude Code, a `[mcp_servers.colleague-ai]` block with `url` and `http_headers` for `~/.codex/config.toml`, an entry with `url` and `headers` for `~/.cursor/mcp.json`, and the `docker exec -i colleague colleague mcp` entry for Claude Desktop. It also says how to copy the skill out of the container with `docker cp`. The container cannot write those files itself.
+
+From a checkout, `colleague setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-colleague-ai` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
 
 The skill in `.agents/skills/call-with-colleague-ai` teaches agents to write a complete brief with the context of what they and the user are working on, keep the user's profile current, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
 
