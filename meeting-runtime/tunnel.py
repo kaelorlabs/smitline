@@ -9,6 +9,7 @@ phone gateway is exposed; the daemon API stays on loopback.
 import asyncio
 import re
 import shutil
+import socket
 from urllib.parse import urlsplit
 
 
@@ -21,35 +22,104 @@ START_TIMEOUT = 90.0
 PROBE_TIMEOUT = 45.0
 # A quick tunnel that never becomes reachable is replaced by a fresh one this many times.
 QUICK_TUNNEL_ATTEMPTS = 2
+# Public DNS over HTTPS (JSON form), asked in order: Cloudflare, then Google.
+PUBLIC_DNS = ('https://1.1.1.1/dns-query', 'https://dns.google/resolve')
 
 
 class TunnelError(RuntimeError):
     pass
 
 
+def dns_answers(data):
+    """IPv4 addresses from a DNS-over-HTTPS JSON answer."""
+    answers = data.get('Answer') if isinstance(data, dict) else None
+    return [item['data'] for item in answers or []
+            if isinstance(item, dict) and item.get('type') == 1 and isinstance(item.get('data'), str)]
+
+
+async def ask_dns(endpoint, host):
+    """One DNS-over-HTTPS query, or [] when there is no answer or the server cannot be asked.
+
+    Each query opens a fresh connection. A kept-alive one reaches the same server every
+    time, which remembers "no such name" from before the tunnel existed; a fresh one is
+    routed to whichever server is nearest, and finds the new name within seconds.
+    """
+    from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=5), connector=TCPConnector(force_close=True)) as session:
+            async with session.get(endpoint, params={'name': host, 'type': 'A'},
+                                   headers={'Accept': 'application/dns-json'}) as response:
+                if response.status != 200:
+                    return []
+                return dns_answers(await response.json(content_type=None))
+    except (ClientError, OSError, asyncio.TimeoutError, ValueError):
+        return []
+
+
+async def public_addresses(host, ask=None):
+    """The addresses public DNS gives for `host`: the first provider that knows it, or []."""
+    ask = ask or ask_dns
+    for endpoint in PUBLIC_DNS:
+        addresses = await ask(endpoint, host)
+        if addresses:
+            return addresses
+    return []
+
+
+def _pinned_resolver(host, addresses):
+    """An aiohttp resolver that answers `host` with the given addresses (TLS still checks `host`)."""
+    from aiohttp.abc import AbstractResolver
+
+    class Pinned(AbstractResolver):
+        async def resolve(self, name, port=0, family=socket.AF_INET):
+            return [{'hostname': host, 'host': address, 'port': port, 'family': socket.AF_INET,
+                     'proto': 0, 'flags': socket.AI_NUMERICHOST} for address in addresses]
+
+        async def close(self):
+            pass
+
+    return Pinned()
+
+
+async def answers(url, addresses=None):
+    """None when `url` answers 200, else why not (resolving its host normally or at `addresses`)."""
+    from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector
+    connector = TCPConnector(resolver=_pinned_resolver(urlsplit(url).hostname, addresses)) if addresses else None
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=5), connector=connector) as session:
+            async with session.get(url) as response:
+                return None if response.status == 200 else f'HTTP {response.status}'
+    except (ClientError, OSError, asyncio.TimeoutError) as error:
+        return type(error).__name__
+
+
 async def reachable(url, timeout, problems=None):
     """Poll `url` until it answers 200: the tunnel's DNS name can lag its registration.
 
-    The last reason it did not answer is appended to `problems`.
+    Each round asks both this computer's DNS and public DNS. The phone provider resolves
+    a new trycloudflare.com name within seconds, but a home router's resolver can take
+    minutes and remembers the miss, which would fail a tunnel that works. The last reason
+    it did not answer is appended to `problems`.
     """
-    from aiohttp import ClientError, ClientSession, ClientTimeout
+    host = urlsplit(url).hostname
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last = None
-    async with ClientSession(timeout=ClientTimeout(total=5)) as session:
-        while True:
-            try:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        return True
-                    last = f'HTTP {response.status}'
-            except (ClientError, OSError, asyncio.TimeoutError) as error:
-                last = type(error).__name__
-            if loop.time() + 1 >= deadline:
-                if problems is not None and last:
-                    problems.append(last)
-                return False
-            await asyncio.sleep(1)
+    while True:
+        last = await answers(url)
+        if last is None:
+            return True
+        addresses = await public_addresses(host)
+        if addresses:
+            through_public = await answers(url, addresses)
+            if through_public is None:
+                return True
+            last = f'{through_public} through public DNS'
+        if loop.time() + 1 >= deadline:
+            if problems is not None and last:
+                problems.append(last)
+            return False
+        await asyncio.sleep(1)
 
 
 def configured_url(environ):
