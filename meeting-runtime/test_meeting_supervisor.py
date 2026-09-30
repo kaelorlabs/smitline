@@ -130,25 +130,25 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             'cameraEnabled': True,
             'cameraDefaultOn': False,
             'cameraAvatarDataUri': 'data:image/png;base64,abc',
-            'cameraAvatarPath': '/Users/Taylor/secret.png',
+            'cameraAvatarPath': '/Users/example/secret.png',
         })
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertTrue(stored['cameraEnabled'])
         self.assertFalse(stored['cameraDefaultOn'])
         self.assertEqual(stored['cameraAvatarDataUri'], 'data:image/png;base64,abc')
         self.assertNotIn('cameraAvatarPath', stored)
-        self.assertNotIn('/Users/Taylor/secret.png', json.dumps(stored))
+        self.assertNotIn('/Users/example/secret.png', json.dumps(stored))
         await self.supervisor.cancel(meeting.id)
 
     async def test_on_behalf_of_and_voice_reach_the_runtime_state(self):
-        meeting = session(onBehalfOf='Maya Shah', voice='cinder')
+        meeting = session(onBehalfOf='Jordan Lee', voice='cinder')
         await self.supervisor.start(meeting)
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
-        self.assertEqual(stored['onBehalfOf'], 'Maya Shah')
+        self.assertEqual(stored['onBehalfOf'], 'Jordan Lee')
         self.assertEqual(stored['voice'], 'cinder')
         config = RuntimeConfig.from_environ({
             'COLLEAGUE_RUNTIME_STATE': str(meeting_state_path(self.runtime, meeting.id))})
-        self.assertEqual(config.owner_name, 'Maya Shah')
+        self.assertEqual(config.owner_name, 'Jordan Lee')
         self.assertEqual(config.voice, 'cinder')
         await self.supervisor.cancel(meeting.id)
 

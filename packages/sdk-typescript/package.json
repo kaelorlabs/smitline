@@ -1,9 +1,15 @@
 {
   "name": "@colleague-ai/sdk",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Local Colleague AI SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon.",
+  "homepage": "https://github.com/kaelorlabs/colleague-ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kaelorlabs/colleague-ai.git",
+    "directory": "packages/sdk-typescript"
+  },
   "license": "Apache-2.0",
   "main": "./src/index.mjs",
   "types": "./src/index.d.ts",

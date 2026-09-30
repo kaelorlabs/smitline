@@ -5,7 +5,7 @@ description: Place a phone call or join a video meeting for the user with Collea
 
 # Calls with Colleague AI
 
-Colleague AI talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `colleague call ... --wait`.
+Colleague AI talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `colleague call ... --wait`. When Colleague AI runs in its Docker container, as it does after a normal setup, the CLI is `docker exec colleague colleague call ... --wait`.
 
 Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `colleague call --meeting <url> --objective "..." --wait`). Colleague AI joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`.
 
@@ -27,7 +27,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
 
-Every phone call also gets the user's profile: who they are, the people they know, how they like to come across, and standing boundaries. Read it with `get_profile`. When the user tells you about someone ("Sam is my close friend"), save it with `update_profile` so later calls know them too.
+Every phone call also gets the user's profile: who they are, the people they know, how they like to come across, and standing boundaries. Read it with `get_profile`. When the user tells you about someone ("Alex is my close friend"), save it with `update_profile` so later calls know them too.
 
 ## 2. Offer a rehearsal the first time
 

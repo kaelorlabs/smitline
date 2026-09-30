@@ -73,7 +73,7 @@ sequenceDiagram
     participant Live as GPT-Live
     Agent->>Daemon: POST /v1/calls (channel meeting, to = invite URL)
     Daemon->>Super: start meeting (context from the brief)
-    Super->>Bot: docker compose up --build meeting-agent
+    Super->>Bot: docker compose up --pull missing meeting-agent (--build from a checkout)
     Bot->>Meet: platform adapter opens the invitation and joins (guest first)
     alt waiting room
         Bot-->>Daemon: waiting_for_admission
@@ -157,8 +157,6 @@ In the image, the `.colleague/` and `.env` paths below are under `/data`, and th
 | Local MCP token | `.colleague/mcp.token` | Delete it; the next `colleague setup register` makes a new one, and agents need the new header |
 | Console active meeting | `.colleague/portal-active.json` | Stop the colleague from the console |
 | API keys / meeting invite | `.env`, `.env.meeting` | Edit or delete; never commit |
-
-Checkouts from before the cleanup may still have `meeting-runtime/jobs/` and `meeting-runtime/codex-workspace/`. Nothing uses them now; delete them.
 
 ### Container user and file permissions
 

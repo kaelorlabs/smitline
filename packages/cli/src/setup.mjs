@@ -18,7 +18,9 @@ export const SECRET_KEYS = Object.freeze([
 export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
   'TWILIO_FROM_NUMBER', 'COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_ALLOWED_CALLING_CODES',
-  'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE', 'COLLEAGUE_CONNECTOR_URL',
+  'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE',
+  'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH',
+  'COLLEAGUE_PHONE_BACKEND_MODEL', 'COLLEAGUE_MEETING_BACKEND_MODEL', 'COLLEAGUE_CONNECTOR_URL',
   'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND', 'COLLEAGUE_PHONE_PROVIDER',
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
   'COLLEAGUE_PHONE_AUDIO', 'COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
@@ -174,8 +176,14 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   if (key === 'COLLEAGUE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
     throw new Error('COLLEAGUE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
   }
-  if (['COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE'].includes(key) && !['0', '1'].includes(text)) {
+  if (['COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE',
+    'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH'].includes(key)
+    && !['0', '1'].includes(text)) {
     throw new Error(`${key} must be 0 or 1`);
+  }
+  if (['COLLEAGUE_PHONE_BACKEND_MODEL', 'COLLEAGUE_MEETING_BACKEND_MODEL'].includes(key)
+    && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(text)) {
+    throw new Error(`${key} must be a model name, such as gpt-5.6-terra`);
   }
   if (['COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK'].includes(key) && !/^https:\/\/[^\s/]+/.test(text)) {
     throw new Error(`${key} must be an https URL`);
@@ -306,6 +314,16 @@ export function registeredAgents(root, { runner = run, home = os.homedir(), find
   return agents;
 }
 
+/** This build's version: COLLEAGUE_VERSION (set in the image), else the root package.json, else 'dev'. */
+export function colleagueVersion(codeRoot, env = process.env) {
+  if (present(env.COLLEAGUE_VERSION)) return env.COLLEAGUE_VERSION.trim();
+  try {
+    const { version } = JSON.parse(fs.readFileSync(path.join(codeRoot, 'package.json'), 'utf8'));
+    if (typeof version === 'string' && version.trim()) return version.trim();
+  } catch { /* no package.json */ }
+  return 'dev';
+}
+
 /**
  * options.root      the data root (.env); COLLEAGUE_ROOT in the container.
  * options.codeRoot  the checkout (launcher, node_modules, .venv); defaults to root.
@@ -315,12 +333,14 @@ export function registeredAgents(root, { runner = run, home = os.homedir(), find
  */
 export async function setupStatus({
   root, codeRoot = root, env: overrides, fetchImpl = globalThis.fetch, verify = true, runner = run, find = which,
-  managed = isManaged(),
+  managed = isManaged(), version = colleagueVersion(codeRoot),
 } = {}) {
   // The daemon reads the process environment first, then .env; mirror that here.
   const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|SIGNALWIRE_|COLLEAGUE_)/.test(key) && present(value);
   const env = { ...readEnv(root), ...Object.fromEntries(Object.entries(overrides || process.env).filter(relevant)) };
   const checks = [];
+  // Always passes; it puts the version in the plain-text status too.
+  checks.push(check('version', 'Colleague AI version', true, { required: false, detail: version }));
   const major = Number(process.versions.node.split('.')[0]);
   checks.push(check('node', 'Node.js 22 or newer', major >= 22, { detail: process.version, fix: 'Install Node.js 22 or newer' }));
   let docker;
@@ -503,6 +523,7 @@ export async function setupStatus({
   const next = pending.filter(isNext).map(step);
   const optional = pending.filter((c) => !isNext(c) && ['phone', 'meetings'].includes(c.group)).map(step);
   return {
+    version,
     ready: coreReady,
     phoneReady,
     meetingsReady,
@@ -885,8 +906,16 @@ export function missingForDone(env) {
  */
 // Users often sign up for OpenAI or a phone provider while the page waits, so it lasts an hour.
 export const SECRETS_PAGE_MINUTES = 60;
+// A fixed port, so the address is predictable (Docker Desktop's host networking, SSH
+// forwarding). COLLEAGUE_SETUP_PORT overrides it; if it is busy, any free port is used.
+export const SETUP_PAGE_PORT = 8096;
 
-export function serveSecretsPage({ root, port = 0, timeoutMs = SECRETS_PAGE_MINUTES * 60_000, onUrl, onSaved } = {}) {
+export function setupPagePort(env = process.env) {
+  const port = Number(env.COLLEAGUE_SETUP_PORT);
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : SETUP_PAGE_PORT;
+}
+
+export function serveSecretsPage({ root, port = setupPagePort(), timeoutMs = SECRETS_PAGE_MINUTES * 60_000, onUrl, onSaved } = {}) {
   const token = crypto.randomBytes(18).toString('base64url');
   const pathName = `/setup/${token}`;
   const savedKeys = [];
@@ -957,12 +986,24 @@ export function serveSecretsPage({ root, port = 0, timeoutMs = SECRETS_PAGE_MINU
       if (savedKeys.length) resolve({ saved: [...savedKeys], timedOut: true });
       else reject(new Error('setup page timed out without a submission'));
     }, timeoutMs);
-    server.on('error', reject);
-    server.listen(port, '127.0.0.1', () => {
+    // Another setup page (or anything else) on the preferred port: take a free one instead.
+    let fallback = port !== 0;
+    server.on('error', (error) => {
+      if (fallback && error.code === 'EADDRINUSE') {
+        fallback = false;
+        server.listen(0, '127.0.0.1');
+        return;
+      }
+      clearTimeout(timer);
+      reject(error);
+    });
+    server.once('listening', () => {
+      fallback = false;
       const address = server.address();
       const url = `http://127.0.0.1:${address.port}${pathName}`;
       onUrl?.(url);
     });
+    server.listen(port, '127.0.0.1');
   });
 }
 
@@ -1061,7 +1102,9 @@ export function containerRegistration({
       'claude-desktop': {
         file: 'claude_desktop_config.json (Claude Desktop: Settings > Developer > Edit Config)',
         json: { mcpServers: { [MCP_NAME]: { command: 'docker', args: ['exec', '-i', container, 'colleague', 'mcp'] } } },
-        note: 'Merge into the file, then quit and reopen Claude Desktop.',
+        note: 'Merge into the file, then quit and reopen Claude Desktop. If it cannot start the server, it may not find docker '
+          + '(apps opened from the macOS Dock often lack /usr/local/bin): replace "docker" with the full path that '
+          + '`which docker` prints (`where docker` on Windows), such as /usr/local/bin/docker on macOS.',
       },
       other: {
         note: `Other MCP clients: Streamable HTTP at ${mcp.url} with the Authorization header, or stdio with: docker exec -i ${container} colleague mcp`,
@@ -1070,11 +1113,18 @@ export function containerRegistration({
     skill: {
       name: skill,
       path: `${skillDir}/SKILL.md`,
+      // docker cp copies a folder into an existing folder, but renames it to a missing one,
+      // so each command makes the skills folder first. `copy` is for bash and zsh.
       copy: {
-        'claude-code': `docker cp ${container}:${skillDir} ~/.claude/skills/`,
-        codex: `docker cp ${container}:${skillDir} ~/.codex/skills/`,
+        'claude-code': `mkdir -p "$HOME/.claude/skills" && docker cp ${container}:${skillDir} "$HOME/.claude/skills/"`,
+        codex: `mkdir -p "$HOME/.codex/skills" && docker cp ${container}:${skillDir} "$HOME/.codex/skills/"`,
       },
-      note: 'The skill teaches an agent to write a good call brief and wait for the result. Create the skills folder first if it does not exist.',
+      // Windows PowerShell 5.1 does not expand ~, and a trailing \ before a closing quote breaks native arguments.
+      copyPowerShell: {
+        'claude-code': `New-Item -ItemType Directory -Force "$HOME\\.claude\\skills" | Out-Null; docker cp ${container}:${skillDir} "$HOME\\.claude\\skills"`,
+        codex: `New-Item -ItemType Directory -Force "$HOME\\.codex\\skills" | Out-Null; docker cp ${container}:${skillDir} "$HOME\\.codex\\skills"`,
+      },
+      note: 'The skill teaches an agent to write a good call brief and wait for the result. Run the copy command on this computer: `copy` in bash or zsh, `copyPowerShell` in PowerShell.',
     },
   };
 }
@@ -1100,12 +1150,17 @@ export function formatContainerRegistration(report) {
     '',
     `Claude Desktop (merge into ${agents['claude-desktop'].file}):`,
     indent(JSON.stringify(agents['claude-desktop'].json, null, 2)),
+    indent(agents['claude-desktop'].note),
     '',
     agents.other.note,
     '',
-    `Call skill (${skill.path} in the container); copy it out with:`,
+    `Call skill (${skill.path} in the container); copy it out for Claude Code, then Codex.`,
+    'bash or zsh:',
     indent(skill.copy['claude-code']),
-    indent(`${skill.copy.codex}   (Codex)`),
+    indent(skill.copy.codex),
+    'PowerShell:',
+    indent(skill.copyPowerShell['claude-code']),
+    indent(skill.copyPowerShell.codex),
     '',
     'Restart each agent after adding Colleague AI. Keep the token private: it lets a program on this computer place calls.',
     '',

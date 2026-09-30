@@ -18,7 +18,7 @@ from runtime_daemon import create_app
 
 
 PROFILE = {
-    'about': 'Robin builds Colleague AI at Kaelor Labs in Toronto.',
+    'about': 'Robin runs a small design studio.',
     'style': 'Friendly and direct.',
     'boundaries': ['Never discuss money.'],
     'people': [{'name': 'Sam', 'relationship': 'close friend', 'phone': '+1 (415) 555-0143',
@@ -52,13 +52,13 @@ class ProfileTests(unittest.TestCase):
     def test_updates_merge_people_by_name(self):
         merged = merge_profile(validate_profile(PROFILE), {
             'style': 'Warm.',
-            'people': [{'name': 'aman', 'notes': 'Prefers texts.'}, {'name': 'Maya', 'relationship': 'wife'}],
+            'people': [{'name': 'sam', 'notes': 'Prefers texts.'}, {'name': 'Maya', 'relationship': 'colleague'}],
         })
         self.assertEqual(merged['style'], 'Warm.')
-        aman = contact_for(merged, '+14155550143')
-        self.assertEqual((aman['relationship'], aman['notes']), ('close friend', 'Prefers texts.'))
+        sam = contact_for(merged, '+14155550143')
+        self.assertEqual((sam['relationship'], sam['notes']), ('close friend', 'Prefers texts.'))
         self.assertEqual([p['name'] for p in merged['people']], ['Sam', 'Maya'])
-        removed = merge_profile(merged, {'removePeople': ['PRIYA']})
+        removed = merge_profile(merged, {'removePeople': ['MAYA']})
         self.assertEqual([p['name'] for p in removed['people']], ['Sam'])
         with self.assertRaisesRegex(ValueError, 'unknown profile fields'):
             merge_profile(merged, {'version': 2})
@@ -107,7 +107,7 @@ class AssemblyTests(unittest.TestCase):
         session = parse_session_context(SESSION)
         notes = voice_notes(profile, contact, session, 'Robin')
         self.assertTrue(notes.startswith(VOICE_NOTES_PREFACE))
-        self.assertIn('About Robin: Robin builds Colleague AI', notes)
+        self.assertIn('About Robin: Robin runs a small design studio', notes)
         self.assertIn("Speaking with: Sam, Robin's close friend. Works in product", notes)
         self.assertIn('- The first live calls happened today.', notes)
         self.assertNotIn('Pricing', notes)          # long details stay with the backend

@@ -108,8 +108,8 @@ class SpendTests(unittest.TestCase):
         early = dict(phone_record(), createdAt='2026-09-29T15:00:00Z',
                      cost={'total': 0.2, 'phone': 0.03, 'openai': 0.17, 'estimated': False})
         live = dict(phone_record(), status='in_progress', cost=None)
-        toronto = spend([late, early, live], tz_offset_minutes=-240)
-        self.assertEqual(toronto['days'], [{'day': '2026-09-29', 'calls': 2, 'total': 0.3,
+        eastern = spend([late, early, live], tz_offset_minutes=-240)
+        self.assertEqual(eastern['days'], [{'day': '2026-09-29', 'calls': 2, 'total': 0.3,
                                             'phone': 0.05, 'openai': 0.25, 'estimated': True}])
         utc = spend([late, early])
         self.assertEqual([day['day'] for day in utc['days']], ['2026-09-29', '2026-09-30'])

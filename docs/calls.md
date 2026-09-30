@@ -32,7 +32,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 {
   "channel": "phone",
   "to": "+14155550142",
-  "onBehalfOf": "Robin",
+  "onBehalfOf": "Sam Rivera",
   "objective": "Book a table for 4 at 7pm tonight",
   "context": "Indoor is fine if the patio is full.",
   "questions": ["How long will they hold the table?"],
@@ -69,12 +69,12 @@ The person called comes from `contact`, or else from the profile entry with the 
 {
   "channel": "phone",
   "to": "+14155550199",
-  "objective": "Ask Sam whether Robin should launch Colleague AI now or wait",
+  "objective": "Ask Alex whether Sam should launch the booking app now or wait",
   "questions": ["Launch now or wait, and why?", "What would make him use it?"],
   "tone": "casual; he is a close friend",
   "context": {
-    "summary": "Robin built Colleague AI, which lets any agent phone people or join meetings for its user.",
-    "facts": ["Phone calls work today with SignalWire or Twilio", "Meetings work on Zoom, Teams, and Google Meet"],
+    "summary": "Sam built a booking app that lets small restaurants take reservations by text message.",
+    "facts": ["The beta has 40 restaurants", "Payments work in the US and Canada"],
     "openQuestions": ["Pricing"],
     "details": "Longer notes, such as a changelog or a spec, that the voice can look things up in."
   }
@@ -90,7 +90,7 @@ Meetings get the session context and `questions` as their starting context, with
 ```json
 {
   "outcome": "achieved",
-  "summary": "Booked an indoor booth for 4 at 7:00 pm tonight under Robin.",
+  "summary": "Booked an indoor booth for 4 at 7:00 pm tonight under Sam Rivera.",
   "details": [
     { "label": "Confirmation", "value": "LG-2291" },
     { "label": "Table held", "value": "15 minutes" }
@@ -98,7 +98,7 @@ Meetings get the session context and `questions` as their starting context, with
   "decisions": [],
   "actionItems": [],
   "openQuestions": [],
-  "transcript": [{ "speaker": "agent", "text": "Hi, this is Robin's AI assistant. I'm calling to book a table for four tonight." }],
+  "transcript": [{ "speaker": "agent", "text": "Hi, this is Sam Rivera's AI assistant. I'm calling to book a table for four tonight." }],
   "durationSeconds": 252
 }
 ```
@@ -189,6 +189,8 @@ Set `COLLEAGUE_CALL_HOOKS=module:factory` to load different hooks.
 
 ## Access
 
-The daemon listens on loopback with a per-launch token by default. Server mode (`COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`) also accepts long-lived API tokens created with `python3 meeting-runtime/api_tokens.py create --name NAME`; only SHA-256 digests are stored. Server mode refuses to start without at least one API token and must sit behind a TLS-terminating proxy.
+The daemon listens on loopback with a per-launch token by default. The token is in `.colleague/daemon.auth` (`/data/.colleague/daemon.auth` in the image) and changes each time the daemon starts.
 
-Credentials come from the process environment first, then the project's ignored `.env`, which is reread for every call, so keys added during setup work without a restart.
+Server mode also accepts long-lived API tokens; only SHA-256 digests are stored. It refuses to start without at least one API token and must sit behind a TLS-terminating proxy. From a checkout, create a token with `python3 meeting-runtime/api_tokens.py create --name NAME`, then start the daemon with `COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`. In the image, create the token as the `app` user, so the file stays readable to the daemon: `docker exec -u app colleague python meeting-runtime/api_tokens.py --root /data create --name NAME`. The container's start script reads the same two variables, so pass `-e COLLEAGUE_SERVER_MODE=1 -e COLLEAGUE_DAEMON_HOST=0.0.0.0` to `docker run`.
+
+Credentials come from the process environment first, then the ignored `.env` (`/data/.env` in the image), which is reread for every call, so keys added during setup work without a restart.

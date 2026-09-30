@@ -5,10 +5,7 @@
 *.log
 **/__pycache__/
 *.py[cod]
-meeting-runtime/jobs/
-meeting-runtime/codex-workspace/
 meeting-runtime/recordings/
-.playwright-cli/
 node_modules/
 .venv/
 meeting-runtime/context/
@@ -16,3 +13,8 @@ meeting-runtime/context/
 meeting-runtime/profiles/
 meeting-runtime/run/
 .colleague/
+
+# Python package builds (packages/sdk-python)
+*.egg-info/
+dist/
+build/

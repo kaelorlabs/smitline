@@ -12,8 +12,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
 
-FROM docker:cli AS docker-cli
-FROM cloudflare/cloudflared:latest AS cloudflared
+# Pinned so a rebuild of the same release gets the same binaries.
+FROM docker:29.8.1-cli AS docker-cli
+FROM cloudflare/cloudflared:2026.9.3 AS cloudflared
 
 FROM python:3.12-slim-bookworm
 # The meeting image this build goes with; the workflow sets the published tag.
@@ -38,10 +39,14 @@ COPY control-panel ./control-panel
 COPY meeting-runtime ./meeting-runtime
 RUN ln -s /app/docker/colleague /usr/local/bin/colleague
 
+# The release version (0.1.0); the workflow sets it, local builds say dev.
+ARG VERSION=dev
+LABEL org.opencontainers.image.version=${VERSION}
 ENV PYTHONUNBUFFERED=1 \
     COLLEAGUE_ROOT=/data \
     COLLEAGUE_MEETING_DATA=/data/meetings \
     COLLEAGUE_MANAGED=1 \
-    COLLEAGUE_MEETING_IMAGE=${MEETING_IMAGE}
+    COLLEAGUE_MEETING_IMAGE=${MEETING_IMAGE} \
+    COLLEAGUE_VERSION=${VERSION}
 VOLUME /data
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/entrypoint.sh"]

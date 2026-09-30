@@ -40,6 +40,16 @@ const interruptState = { requested: false, handler: null };
 const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
 const CODE_ROOT = DEFAULT_COLLEAGUE_ROOT;
 
+/** The release: COLLEAGUE_VERSION (set in the image), else the checkout's package.json. */
+function colleagueVersion() {
+  if (process.env.COLLEAGUE_VERSION) return process.env.COLLEAGUE_VERSION;
+  try {
+    return JSON.parse(readFileSync(path.join(CODE_ROOT, 'package.json'), 'utf8')).version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 /** The data root (.env, .colleague/): --root, else COLLEAGUE_ROOT, else the checkout. */
 function dataRoot(args = {}) {
   return path.resolve(args.root && args.root !== true ? String(args.root) : process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
@@ -78,6 +88,7 @@ const USAGE = `Usage:
   colleague connector status
   colleague connector revoke --all | --client <id>
   colleague mcp                    (MCP server on stdin/stdout, for Claude Desktop and other stdio clients)
+  colleague version | --version
 `;
 
 function parseArgs(argv) {
@@ -725,6 +736,10 @@ async function connectorCommand(args) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
+  if (command === 'version' || args.version === true) {
+    process.stdout.write(`colleague-ai ${colleagueVersion()}\n`);
+    return EXIT.ok;
+  }
   if (!command || command === 'help' || args.help) {
     process.stdout.write(USAGE);
     return command ? EXIT.ok : EXIT.validation;

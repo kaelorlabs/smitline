@@ -104,17 +104,17 @@ class MeetingIntroTests(unittest.TestCase):
     def test_call_task_names_the_person_before_the_owner_setting(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.write_state(directory, {'context': context_payload(
-                currentTask='Take part in this meeting on behalf of Maya Shah.')})
+                currentTask='Take part in this meeting on behalf of Jordan Lee.')})
             runtime = RuntimeConfig.from_environ(env)
-        self.assertEqual(runtime.owner_name, 'Maya Shah')
-        self.assertIn(self.INTRO.format('Maya Shah'), intro_event(runtime)['content'])
+        self.assertEqual(runtime.owner_name, 'Jordan Lee')
+        self.assertIn(self.INTRO.format('Jordan Lee'), intro_event(runtime)['content'])
 
     def test_explicit_field_wins_and_other_tasks_are_not_parsed(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.write_state(directory, {
                 'onBehalfOf': 'Explicit Name',
                 'context': context_payload(
-                    currentTask='Take part in this meeting on behalf of Maya Shah.')})
+                    currentTask='Take part in this meeting on behalf of Jordan Lee.')})
             self.assertEqual(RuntimeConfig.from_environ(env).owner_name, 'Explicit Name')
             env = self.write_state(directory, {'context': context_payload(
                 currentTask='Draft the notes on behalf of the team.')})

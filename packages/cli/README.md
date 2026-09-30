@@ -2,7 +2,7 @@
 
 Command-line client for the local Colleague AI daemon: phone calls and Zoom, Teams, and Google Meet meetings from a brief, plus setup. It wraps the TypeScript SDK and talks only to the loopback daemon.
 
-Requires Node.js 22+. Not published to npm. Run `colleague help` for every option.
+It comes with the `colleague` image, where you run it with `docker exec colleague colleague ...` (the examples below leave out the `docker exec colleague` part). From a checkout it needs Node.js 22+ and runs as `node packages/cli/src/colleague.mjs`. Not published to npm. Run `colleague help` for every option.
 
 ## Phone calls
 

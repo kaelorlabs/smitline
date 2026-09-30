@@ -37,6 +37,7 @@ jobs:
           context: .
           file: Dockerfile.meeting
           load: true
+          build-args: VERSION=test
           tags: colleague-meeting:test
           cache-from: type=gha,scope=meeting
           cache-to: type=gha,scope=meeting,mode=max
@@ -49,6 +50,7 @@ jobs:
         with:
           context: .
           load: true
+          build-args: VERSION=test
           tags: colleague:test
           cache-from: type=gha,scope=colleague
           cache-to: type=gha,scope=colleague,mode=max
@@ -89,6 +91,9 @@ jobs:
           echo "meeting=ghcr.io/$owner/colleague-meeting" >> "$GITHUB_OUTPUT"
           echo "colleague=ghcr.io/$owner/colleague" >> "$GITHUB_OUTPUT"
           echo "sha=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          # v0.1.0 -> 0.1.0; anything that is not a version tag is named by its commit.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; else version="sha-${GITHUB_SHA::7}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - id: meeting-tags
         uses: docker/metadata-action@v5
         with:
@@ -105,6 +110,7 @@ jobs:
           file: Dockerfile.meeting
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: VERSION=${{ steps.names.outputs.version }}
           tags: ${{ steps.meeting-tags.outputs.tags }}
           labels: ${{ steps.meeting-tags.outputs.labels }}
           cache-from: type=gha,scope=meeting-publish
@@ -125,7 +131,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           # Each colleague image starts the meeting image built from the same commit.
-          build-args: MEETING_IMAGE=${{ steps.names.outputs.meeting }}:${{ steps.names.outputs.sha }}
+          build-args: |
+            MEETING_IMAGE=${{ steps.names.outputs.meeting }}:${{ steps.names.outputs.sha }}
+            VERSION=${{ steps.names.outputs.version }}
           tags: ${{ steps.colleague-tags.outputs.tags }}
           labels: ${{ steps.colleague-tags.outputs.labels }}
           cache-from: type=gha,scope=colleague-publish

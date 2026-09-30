@@ -51,14 +51,14 @@ Whichever is set up is used; with both, Twilio is used unless `COLLEAGUE_PHONE_P
 
 ## Setup
 
-1. Create a SignalWire account (free trial) or an upgraded Twilio account, and put its credentials on the setup page (`colleague setup secrets`).
+1. Create a SignalWire account (free trial) or an upgraded Twilio account, and put its credentials on the setup page (`docker exec colleague colleague setup secrets`).
 2. Choose the caller ID:
    - **A provider number:** get one under Phone Numbers and set `SIGNALWIRE_FROM_NUMBER` or `TWILIO_FROM_NUMBER`.
    - **Your own mobile:** verify it with the provider as a caller ID and set `COLLEAGUE_CALLER_ID`. People see a number they know; calls back ring your phone. This is enough for outgoing calls; incoming calls need a number bought from the provider.
    A SignalWire trial calls only verified numbers, including your own once you verify it.
-3. Put the values in `.env` (see `.env.example`). The daemon rereads `.env` for every call.
+3. Save settings with `docker exec colleague colleague setup set KEY VALUE` (such as `setup set SIGNALWIRE_FROM_NUMBER +14155550100`), and keys and tokens on the setup page. `setup set` accepts the settings it knows and refuses secrets. They are kept in `/data/.env` in the `colleague` volume, which the daemon rereads for every call. From a checkout, run `colleague setup set` there, or edit the checkout's `.env` (see `.env.example`).
 4. Give Twilio a way to reach the gateway:
-   - **Laptop:** do nothing. The first call starts a Cloudflare quick tunnel (`cloudflared` if installed, otherwise the `cloudflare/cloudflared` Docker image; override with `COLLEAGUE_CLOUDFLARED_IMAGE`) and checks that the new address answers before dialing. Later calls reuse the tunnel after checking it still answers: a quick tunnel does not survive sleep or a network change, though `cloudflared` keeps running, so a tunnel that stopped answering is replaced by a fresh one. The tunnel stays open until the daemon stops (`colleague setup stop`). The address changes each time a tunnel is started. The Docker fallback uses host networking, which Docker Engine on Linux and in WSL supports; Docker Desktop on macOS or Windows may not reach the gateway that way, so install `cloudflared` there.
+   - **Laptop:** do nothing. The first call starts a Cloudflare quick tunnel and checks that the new address answers before dialing. The `colleague` image includes `cloudflared`. From a checkout, the daemon uses `cloudflared` if it is installed, otherwise the `cloudflare/cloudflared` Docker image (override with `COLLEAGUE_CLOUDFLARED_IMAGE`). Later calls reuse the tunnel after checking it still answers: a quick tunnel does not survive sleep or a network change, though `cloudflared` keeps running, so a tunnel that stopped answering is replaced by a fresh one. The tunnel stays open until the daemon stops (`docker restart colleague`, or `colleague setup stop` from a checkout). The address changes each time a tunnel is started.
    - **Server:** put the gateway behind your TLS proxy and set `COLLEAGUE_PUBLIC_URL=https://calls.example.com`. Forward `/twilio/*` to `127.0.0.1:8766` (`COLLEAGUE_GATEWAY_PORT`), including WebSocket upgrades.
 5. Check with `POST /v1/calls/check`, then call yourself first with `"rehearsal": true`.
 
@@ -68,7 +68,7 @@ Only the gateway routes are public: `/twilio/status/{id}`, `/twilio/amd/{id}`, `
 
 Calls do not need this; it is an upgrade for OpenAI organizations that have outbound SIP enabled. Without it, calls are relayed.
 
-By default the call's audio is relayed: provider → tunnel → this computer → GPT-Live and back. From a home connection in Canada the detour measured about 30 to 50 ms each way, so roughly 50 to 100 ms per turn. With direct SIP the audio flows between the provider and OpenAI, and OpenAI's own voice stack handles interruptions, echo, and timing. Colleague AI steers the call over a text-only "sideband" WebSocket: call progress, transcripts, backend tool calls such as `end_call`, instructions from your agent, hang-up (`/hangup`), and transfer (`/refer`). The brief, disclosure check, hang-up rules, time limits, and result are the same as for relayed calls.
+By default the call's audio is relayed: provider → tunnel → this computer → GPT-Live and back. From one home connection the detour measured about 30 to 50 ms each way, so roughly 50 to 100 ms per turn. With direct SIP the audio flows between the provider and OpenAI, and OpenAI's own voice stack handles interruptions, echo, and timing. Colleague AI steers the call over a text-only "sideband" WebSocket: call progress, transcripts, backend tool calls such as `end_call`, instructions from your agent, hang-up (`/hangup`), and transfer (`/refer`). The brief, disclosure check, hang-up rules, time limits, and result are the same as for relayed calls.
 
 `COLLEAGUE_PHONE_AUDIO` picks how audio travels:
 
@@ -125,4 +125,4 @@ Calls leave through your provider account under your name. Automated and AI-voic
 
 ## Not yet verified
 
-Automated tests cover the Twilio messages, signatures, pacing, disclosure check, voicemail, transfer, recording, and result paths with fakes, plus a run through real local WebSockets. A real call through Twilio and GPT-Live has not been made yet. Test with a rehearsal call to your own phone before relying on it.
+Automated tests cover the Twilio messages, signatures, pacing, disclosure check, voicemail, transfer, recording, and result paths with fakes, plus a run through real local WebSockets. Real calls through SignalWire with relayed audio have been made since 2026-09-29, to the owner and to other people, and came back with the right result. A call through Twilio has not been verified live yet, and neither has direct SIP (see above). Test with a rehearsal call to your own phone before relying on it.

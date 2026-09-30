@@ -21,19 +21,29 @@ Colleague AI needs only Docker. It runs as one container, `colleague`, and start
 docker info
 ```
 
-If Docker is missing or not running, help the user install or start it: Docker Desktop on a Mac or Windows, or Docker Engine on Linux or inside WSL (https://docs.docker.com/engine/install/). Docker Desktop needs host networking turned on (Settings > Resources > Network > Enable host networking, Docker Desktop 4.34 or newer) so this computer can reach Colleague AI.
+If Docker is missing or not running, help the user install or start it: Docker Desktop on a Mac or Windows, or Docker Engine on Linux or inside WSL (https://docs.docker.com/engine/install/).
 
-Run the `docker` commands below wherever `docker info` works: a terminal on macOS or Linux, PowerShell on Windows with Docker Desktop, or inside WSL when Docker Engine runs there.
+Docker Desktop needs host networking so this computer can reach Colleague AI. It needs Docker Desktop 4.34 or newer, signed in to a Docker account: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. It does not work with Enhanced Container Isolation turned on. Docker Engine on Linux or in WSL needs nothing extra.
+
+Run the `docker` commands below wherever `docker info` works: a terminal on macOS or Linux, PowerShell or Command Prompt on Windows with Docker Desktop, or inside WSL when Docker Engine runs there. Each command is one line, so it works the same in bash, zsh, PowerShell, and cmd.
 
 ## 2. Start Colleague AI
 
 ```bash
-docker run -d --name colleague --restart unless-stopped --network host \
-  -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/kaelorlabs/colleague
+docker run -d --name colleague --restart unless-stopped --network host -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/colleague
 ```
 
+In Git Bash on Windows, which some agents use, put `MSYS_NO_PATHCONV=1 ` in front of the command, or write the socket as `-v //var/run/docker.sock:/var/run/docker.sock`: Git Bash otherwise rewrites `/var/run/docker.sock` into a Windows path.
+
 This downloads the image (about 600 MB) and starts it. It keeps running and starts again with Docker. Settings, keys, call records, and meeting recordings live in the `colleague` volume, never in the image. The Docker socket lets it start the meeting container.
+
+Check that this computer reaches it. The console must answer at http://127.0.0.1:8095 (give it a few seconds after the first start):
+
+```bash
+curl -fsS -o /dev/null http://127.0.0.1:8095/calls && echo ok
+```
+
+In PowerShell: `(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8095/calls).StatusCode` prints `200`. If it does not answer on Docker Desktop, turn on host networking as in step 1, then `docker restart colleague`. `docker logs colleague` shows whether the container itself started.
 
 From here on, every `colleague` command runs inside the container: `docker exec colleague colleague ...`. The steps below write it out in full. `docker exec -i` is only needed where a step says so.
 
@@ -43,8 +53,9 @@ From here on, every `colleague` command runs inside the container: `docker exec 
 docker exec colleague colleague setup status --json
 ```
 
-The result has:
+The command exits with code 3 until `ready` is true. That is expected: read the JSON it prints either way. It has:
 
+- `version`: the Colleague AI version.
 - `ready`: keys and name are in place.
 - `phoneReady`, `meetingsReady`: each channel can be used.
 - `firstCallReady`: the test call to the user's phone can be made.
@@ -59,7 +70,7 @@ Run it again after each change.
 docker exec colleague colleague setup secrets --json
 ```
 
-This starts a page on `127.0.0.1` and returns its address at once. The container cannot open a browser, so open the address yourself (`open <url>` on macOS, `xdg-open <url>` on Linux, `start <url>` on Windows), or give it to the user. Tell the user:
+This starts a page on `127.0.0.1`, port 8096 (another free port if that one is busy), and returns its address at once. The container cannot open a browser, so open the address yourself (`open <url>` on macOS, `xdg-open <url>` on Linux, `start <url>` on Windows), or give it to the user. Tell the user:
 
 > I opened a setup page in your browser. Enter your OpenAI API key and your name. If you want phone calls, also add your phone number and your SignalWire details (the free trial works). Press Done when you're finished, then tell me.
 
@@ -101,7 +112,7 @@ docker exec colleague colleague profile set --about "Sam Rivera runs a small des
 docker exec colleague colleague profile person --name "Alex Chen" --relationship "business partner" --phone +14155550142
 ```
 
-Tell the user in one line what you saved, and that they can say something like "Maya is my sister, +1 415 555 0199" at any time. Save only what they would expect, and never passwords, keys, or card numbers. If you know nothing about them yet, skip this step.
+Tell the user in one line what you saved, and that they can say something like "Jordan is my sister, +1 415 555 0199" at any time. Save only what they would expect, and never passwords, keys, or card numbers. If you know nothing about them yet, skip this step.
 
 ## 7. Connect the agent
 
@@ -116,10 +127,10 @@ Run the entry for the agent you are, on this computer (not in the container):
 - **Claude Code:** run the `claude mcp add ...` command it gives.
 - **Codex:** add the `[mcp_servers.colleague-ai]` block to `~/.codex/config.toml`.
 - **Cursor:** add the entry to `~/.cursor/mcp.json`.
-- **Claude Desktop:** add the `docker exec -i colleague colleague mcp` entry to `claude_desktop_config.json`.
+- **Claude Desktop:** add the `docker exec -i colleague colleague mcp` entry to `claude_desktop_config.json`. If Claude Desktop cannot start it, use the full path of `docker` (from `which docker`, such as `/usr/local/bin/docker` on macOS): apps opened from the Dock often do not see `/usr/local/bin`.
 - **Anything else:** use the URL and the `Authorization` header.
 
-The output also shows how to copy the `call-with-colleague-ai` skill out of the container (`docker cp ...`), which teaches an agent how to write a good brief. Install it where your agent keeps skills. The token is a local credential: keep it in the agent's config, not in chat or notes.
+The output also has the commands that copy the `call-with-colleague-ai` skill, which teaches an agent how to write a good brief, out of the container into `~/.claude/skills` or `~/.codex/skills`: `copy` for bash and zsh, `copyPowerShell` for PowerShell. For another agent, copy it where that agent keeps skills. The token is a local credential: keep it in the agent's config, not in chat or notes.
 
 Tell the user to restart the agent app so it loads the new tools. Cloud agents such as ChatGPT or Claude on the web use the remote connector; see [docs/agents.md](docs/agents.md).
 
@@ -138,6 +149,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 ## Updating and removing
 
 - **Update:** `docker pull ghcr.io/kaelorlabs/colleague`, then `docker rm -f colleague` and run the `docker run` command from step 2 again. The volume keeps everything.
+- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/colleague:0.1.0`, in both commands. The meeting image with the matching code is pulled for it.
 - **Remove:** `docker rm -f colleague`. Also run `docker volume rm colleague` to delete keys and records.
 
 ## Troubleshooting
@@ -145,7 +157,8 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 | Symptom | Fix |
 |---|---|
 | `docker run` says the name `colleague` is in use | It is already installed. `docker start colleague` if it is stopped |
-| The console or MCP address does not answer on Docker Desktop | Turn on host networking (Settings > Resources > Network), then `docker restart colleague` |
+| The console or MCP address does not answer on Docker Desktop | Turn on host networking (Docker Desktop 4.34 or newer, signed in: Settings > Resources > Network), then `docker restart colleague` |
+| `docker run` in Git Bash fails on the socket path | Put `MSYS_NO_PATHCONV=1 ` in front, or write `-v //var/run/docker.sock:/var/run/docker.sock` |
 | `Colleague AI is not running` | `docker restart colleague`; `docker logs colleague` shows why it stopped |
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
 | `The phone provider can reach this computer` fails | Check the network; the container opens a Cloudflare quick tunnel on the first call. On a server set `COLLEAGUE_PUBLIC_URL` |

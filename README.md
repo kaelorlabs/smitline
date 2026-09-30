@@ -51,7 +51,7 @@ flowchart LR
     Daemon --> Records[Local call records and transcripts]
 ```
 
-Colleague AI runs as one container, `colleague`, which starts a second container, `colleague-meeting`, for each meeting: the meeting browser, virtual display, virtual camera, and audio bridge. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
+Colleague AI runs as one container, `colleague`, which starts a second container for each meeting, `colleague-meeting-agent-1` from the `colleague-meeting` image: the meeting browser, virtual display, virtual camera, and audio bridge. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
 
 ## Security model
 
@@ -63,7 +63,7 @@ Colleague AI runs as one container, `colleague`, which starts a second container
 
 ## Prerequisites
 
-- Docker: Docker Desktop on macOS or Windows (with host networking turned on), or Docker Engine on Linux or inside WSL2. Nothing else needs installing.
+- Docker: Docker Desktop 4.34 or newer on macOS or Windows, signed in and with host networking turned on (Settings > Resources > Network > Enable host networking), or Docker Engine on Linux or inside WSL2. Nothing else needs installing.
 - An OpenAI project API key with access to `gpt-live-1` and the backend model (default `gpt-5.6-terra`).
 - For phone calls, a SignalWire or Twilio account (see below).
 - For meetings, a Zoom, Teams, or Google Meet meeting that lets a guest join through the web client.
@@ -76,13 +76,13 @@ Copy this prompt into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, 
 Set up Colleague AI for me from https://github.com/kaelorlabs/colleague-ai. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-The agent follows [SETUP.md](SETUP.md). It starts the `colleague` container:
+The agent follows [SETUP.md](SETUP.md). It starts the `colleague` container with one command, which works the same in bash, zsh, PowerShell, and cmd:
 
 ```bash
-docker run -d --name colleague --restart unless-stopped --network host \
-  -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/kaelorlabs/colleague
+docker run -d --name colleague --restart unless-stopped --network host -v colleague:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/colleague
 ```
+
+In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of it (or write `-v //var/run/docker.sock:/var/run/docker.sock`), because Git Bash rewrites the socket path. Once it runs, the console answers at http://127.0.0.1:8095; if it does not on Docker Desktop, turn on host networking and run `docker restart colleague`. To pin a version, use a tag such as `ghcr.io/kaelorlabs/colleague:0.1.0`.
 
 Then it opens a page in your browser where you enter your keys, your name, and (for phone calls) your SignalWire details and phone number, rings your phone so you hear Colleague AI, and connects itself over MCP. You change the voice any time by asking your agent. Keys stay in the container's data volume and never pass through the agent.
 
@@ -109,7 +109,7 @@ docker exec colleague colleague call --meeting "https://us05web.zoom.us/j/YOUR_M
 
 The first meeting downloads the meeting image, `ghcr.io/kaelorlabs/colleague-meeting` (about 1.8 GB of disk). From a checkout it is built instead.
 
-Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. It answers when someone addresses it and hands harder questions to the backend model (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. Set `COLLEAGUE_MEETING_INTRO=0` in `.env` to skip the disclosure.
+Admit **Colleague AI** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. It answers when someone addresses it and hands harder questions to the backend model (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. `docker exec colleague colleague setup set COLLEAGUE_MEETING_INTRO 0` skips the disclosure; the backend settings are set the same way.
 
 ### The local console
 
@@ -152,11 +152,11 @@ docker compose -f compose.meeting.yaml stop meeting-agent
 | **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md). |
 | **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
 | **Console** | Meetings and Calls tabs, and the local MCP endpoint `/mcp`, on `127.0.0.1:8095` (`./start-control-panel.sh` from a checkout). |
-| **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm. |
-| **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI. |
+| **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm; use it from a checkout. |
+| **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI; use it from a checkout. |
 | **CLI** | `packages/cli`: `colleague call`, `calls`, `profile`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec colleague colleague ...`. |
 | **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`colleague mcp`; Claude Desktop runs `docker exec -i colleague colleague mcp`). |
-| **Remote connector** | `./start-connector.sh`: the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
+| **Remote connector** | `./start-connector.sh`, from a checkout (the image does not run it yet): the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
 
 ## Data and privacy
 
@@ -217,9 +217,9 @@ Unit tests do not establish live admission, audio quality, or phone behavior. Te
 | --- | --- |
 | Agent is silent in a meeting | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. If `microphoneState` is `blocked` in Zoom, the host disabled self-unmute: the host can click **Ask to unmute** on its tile, and Colleague AI accepts. |
 | Agent cannot enter the meeting | Inspect the browser viewer for waiting-room, sign-in, passcode, or host-removal messages. Connect a Microsoft or Google account only when guest access is denied. |
-| The first meeting takes a while to start | The meeting image is being built. Later meetings start from the built image. |
+| The first meeting takes a while to start | The meeting image (about 1.8 GB) is being downloaded. Later meetings start at once. From a checkout it is built instead. |
 | Voice API rejects the session | Check account access to `gpt-live-1` and the configured backend model. |
-| Daemon unauthorized | The token is in `.colleague/daemon.auth`; do not put it in a URL. Restart the daemon to rotate it. |
+| Daemon unauthorized | The token is in `.colleague/daemon.auth` (`/data/.colleague/daemon.auth` in the container) and changes each time the daemon starts; do not put it in a URL. Restart the daemon (`docker restart colleague`) to rotate it. |
 | Phone call problems | See the troubleshooting table in [SETUP.md](SETUP.md#troubleshooting). |
 
 ## Limitations

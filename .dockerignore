@@ -17,5 +17,5 @@
 meeting-runtime/run
 meeting-runtime/recordings
 meeting-runtime/profiles
-meeting-runtime/jobs
-meeting-runtime/codex-workspace
+meeting-runtime/context
+**/.venv

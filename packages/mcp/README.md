@@ -1,8 +1,10 @@
-# Colleague AI MCP adapter
+# Colleague AI MCP server
 
-Local stdio MCP server (`@colleague-ai/mcp` 1.0.0) over the TypeScript SDK. It gives any MCP-capable agent phone calls and meetings: every tool calls the loopback daemon through `@colleague-ai/sdk`.
+The call tools for any MCP-capable agent (`@colleague-ai/mcp` 0.1.0): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
 
-`src/remote.mjs` is the remote connector: the same call tools over MCP Streamable HTTP with OAuth sign-in, for cloud agents such as ChatGPT and Claude. Start it with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
+- **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `colleague` container.
+- **stdio**, with `colleague mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i colleague colleague mcp`.
+- **The remote connector** (`src/remote.mjs`): the same tools over HTTPS with OAuth sign-in, for cloud agents such as ChatGPT and Claude. It runs from a checkout with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
 
 Do not publish this package and do not install it globally.
 
@@ -28,9 +30,25 @@ Both go through `start_call`:
 
 Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome.
 
-## Registering the server
+## Connecting an agent
 
-`colleague setup register` adds the server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
+With the `colleague` container running, this prints the URL, the `Authorization` header, and what to run or paste for Claude Code, Codex, Cursor, and Claude Desktop:
+
+```bash
+docker exec colleague colleague setup register --json
+```
+
+The token is kept in `/data/.colleague/mcp.token` in the `colleague` volume and stays the same across restarts. For example, Claude Code:
+
+```bash
+claude mcp add --transport http --scope user colleague-ai http://127.0.0.1:8095/mcp --header "Authorization: Bearer <token>"
+```
+
+The endpoint accepts only requests addressed to `127.0.0.1:8095` or `localhost:8095`, and refuses any request with an `Origin` header, so a web page cannot reach it. Restart the agent after changing its MCP configuration. [SETUP.md](../../SETUP.md) walks through all of this.
+
+### From a checkout
+
+Run from a clone (see [Run from a checkout](../../README.md#run-from-a-checkout)), `colleague setup register` adds a stdio server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
 
 Claude Code:
 
@@ -60,11 +78,9 @@ Cursor (`mcp.json`, see `examples/cursor.mcp.json`):
 }
 ```
 
-Restart the agent after changing its MCP configuration.
-
 ## Security
 
 - Loopback daemon only (`127.0.0.1`)
 - `.colleague/daemon.auth` is read by the SDK and never returned
-- stdout is JSON-RPC frames only; logs go to stderr and are redacted
+- stdio: stdout is JSON-RPC frames only; logs go to stderr and are redacted
 - Calls run in the daemon, so stopping the MCP server does not end a call in progress

@@ -1,4 +1,4 @@
-"""Colleague AI Python SDK 1.0.0."""
+"""Colleague AI Python SDK 0.1.0."""
 
 from .client import (
     SCHEMA_VERSION,

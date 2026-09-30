@@ -40,7 +40,7 @@ The skill in `.agents/skills/call-with-colleague-ai` teaches agents to write a c
 ```bash
 colleague call --to +14155550142 --objective "Book a table for 4 at 7pm" \
   --context "Indoor is fine" --agree "6:30pm; 7:30pm" --never-share "card number" --wait
-colleague call --to +14155550199 --objective "Ask Sam whether to launch now or wait" \
+colleague call --to +14155550199 --objective "Ask Alex whether to launch now or wait" \
   --questions "Launch now or wait?; What would make him use it?" --tone casual --context-file context.json --wait
 colleague call --meeting "https://zoom.us/j/123" --objective "Help with the Q3 numbers" --wait
 colleague call --brief-file brief.json --check
@@ -48,8 +48,8 @@ colleague calls list
 colleague calls wait --call-id call-0123456789abcdef
 colleague calls transfer --call-id call-0123456789abcdef
 colleague voices
-colleague profile set --about "Robin builds Colleague AI." --style "Warm and brief"
-colleague profile person --name Sam --relationship "close friend" --phone +14155550199
+colleague profile set --about "Sam Rivera runs a small design studio." --style "Warm and brief"
+colleague profile person --name Alex --relationship "close friend" --phone +14155550199
 colleague profile show
 ```
 
@@ -57,12 +57,14 @@ colleague profile show
 
 ## REST API and SDKs
 
-The daemon's `/v1/calls` API is described in [calls](calls.md) and `GET /v1/openapi.json`. Local clients authenticate with the per-launch token in `.colleague/daemon.auth`; the SDKs read it and start the daemon when needed.
+The daemon's `/v1/calls` API is described in [calls](calls.md) and `GET /v1/openapi.json`. Local clients authenticate with the per-launch token in `.colleague/daemon.auth`. The SDKs are not published to npm or PyPI; use them from a checkout of this repository.
+
+When the daemon runs from that checkout, the SDKs read the token and start the daemon when needed:
 
 ```js
 import { Colleague } from './packages/sdk-typescript/src/index.mjs';
 const colleague = new Colleague({ root: '/path/to/colleague-ai' });
-const call = await colleague.startCall({ channel: 'phone', to: '+14155550142', onBehalfOf: 'Robin', objective: 'Book a table for 4 at 7pm' });
+const call = await colleague.startCall({ channel: 'phone', to: '+14155550142', onBehalfOf: 'Sam Rivera', objective: 'Book a table for 4 at 7pm' });
 let done = call;
 while (!['completed', 'failed', 'canceled'].includes(done.status)) done = await colleague.waitForCall(call.id, 60);
 console.log(done.result.summary);
@@ -71,8 +73,28 @@ console.log(done.result.summary);
 ```python
 from colleague_ai import Colleague
 colleague = Colleague(root='/path/to/colleague-ai')
-call = await colleague.start_call({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Robin', 'objective': 'Book a table for 4 at 7pm'})
+call = await colleague.start_call({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Sam Rivera', 'objective': 'Book a table for 4 at 7pm'})
 done = await colleague.wait_for_call(call['id'], 120)
+```
+
+When the daemon runs in the `colleague` container, it listens on `127.0.0.1:8765` of this computer, and its token is `/data/.colleague/daemon.auth` inside the container. The token changes every time the container starts, so read it when needed rather than copying it: `docker exec -u app colleague cat /data/.colleague/daemon.auth`. Both SDKs take a function that returns the token and call it again after a `401`:
+
+```js
+import { execFileSync } from 'node:child_process';
+import { Colleague } from './packages/sdk-typescript/src/index.mjs';
+const readAuth = () => execFileSync('docker', ['exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim();
+const colleague = new Colleague({ readAuth, autostart: false });
+```
+
+```python
+import subprocess
+from colleague_ai import Colleague
+
+def read_auth():
+    return subprocess.run(['docker', 'exec', '-u', 'app', 'colleague', 'cat', '/data/.colleague/daemon.auth'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+colleague = Colleague(read_auth=read_auth, autostart=False)
 ```
 
 Remote programs that are not MCP clients can use the daemon's server mode with a long-lived API token instead; see [calls](calls.md#access).
@@ -86,6 +108,8 @@ ChatGPT / Claude ──HTTPS──► your proxy (TLS) ──► connector 127.0
 ```
 
 ### Set up server mode
+
+The connector runs from a checkout (see [Run from a checkout](../README.md#run-from-a-checkout)); the `colleague` image does not start it yet. The `colleague connector` commands below work in both.
 
 You need a machine that stays on and already places calls (see [phone calls](phone.md); meetings also need Docker), and a domain name for it, such as `colleague.example.com`.
 

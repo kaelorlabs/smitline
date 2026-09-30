@@ -225,21 +225,21 @@ class RuntimeDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.supervisor.started, [])
 
     async def test_create_accepts_on_behalf_of_and_voice(self):
-        created = await self.create(onBehalfOf='Maya Shah', voice='cinder')
+        created = await self.create(onBehalfOf='Jordan Lee', voice='cinder')
         self.assertEqual(created.status, 201)
         body = await created.json()
-        self.assertEqual(body['onBehalfOf'], 'Maya Shah')
+        self.assertEqual(body['onBehalfOf'], 'Jordan Lee')
         self.assertEqual(body['voice'], 'cinder')
-        self.assertEqual(self.supervisor.sessions[-1].on_behalf_of, 'Maya Shah')
+        self.assertEqual(self.supervisor.sessions[-1].on_behalf_of, 'Jordan Lee')
         self.assertEqual(self.supervisor.sessions[-1].voice, 'cinder')
         stored = await (await self.client.get(
             '/v1/meetings/' + body['id'], headers=self.headers())).json()
-        self.assertEqual(stored['onBehalfOf'], 'Maya Shah')
+        self.assertEqual(stored['onBehalfOf'], 'Jordan Lee')
         plain = await (await self.create()).json()
         self.assertNotIn('onBehalfOf', plain)
         self.assertNotIn('voice', plain)
         for field, value in (('voice', 'not-a-voice'), ('voice', 7),
-                             ('onBehalfOf', 'x' * 121), ('onBehalfOf', ['Maya'])):
+                             ('onBehalfOf', 'x' * 121), ('onBehalfOf', ['Jordan'])):
             with self.subTest(field=field, value=value):
                 response = await self.create(**{field: value})
                 self.assertEqual(response.status, 422)
