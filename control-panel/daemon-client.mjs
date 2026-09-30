@@ -246,8 +246,10 @@ export function createDaemonClient(options = {}) {
     runnerStatus() {
       return send('GET', '/v1/runner', undefined, { startIfNeeded: false });
     },
-    listCalls(limit = 30) {
-      return send('GET', `/v1/calls?limit=${Number(limit) || 30}`, undefined, { startIfNeeded: false });
+    listCalls(limit = 30, tzOffset = '') {
+      // tzOffset: the reader's minutes east of UTC, so spend is grouped by their local day.
+      const zone = /^-?\d{1,3}$/.test(String(tzOffset)) ? `&tzOffset=${tzOffset}` : '';
+      return send('GET', `/v1/calls?limit=${Number(limit) || 30}${zone}`, undefined, { startIfNeeded: false });
     },
     getCall(callId) {
       return send('GET', `/v1/calls/${encodeURIComponent(callId)}`, undefined, { startIfNeeded: false });

@@ -91,6 +91,22 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 .banner.bad { border-color: var(--bad-line); border-left-color: var(--bad); background: var(--bad-bg); }
 .banner.bad strong { color: var(--bad); }
 
+/* What calls have cost: four figures above the list. */
+.spend { margin-bottom: 28px; display: grid; gap: 10px; }
+.spend-figures { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.spend-figures > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 2px; align-content: start; }
+.spend-figures dt { font-size: 12px; font-weight: 600; color: var(--muted); }
+.spend-figures dd { margin: 0; }
+.spend-value { font-size: 24px; font-weight: 600; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.spend-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.split { display: flex; height: 6px; margin: 6px 0 4px; border-radius: 999px; overflow: hidden; background: var(--soft); }
+.split .phone, .swatch.phone { background: var(--warn); }
+.split .openai, .swatch.openai { background: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.legend b { color: var(--ink); font-weight: 600; }
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.spend-note { font-size: 12px; color: var(--muted); max-width: 100ch; }
+
 /* Two panes: the list of calls and the selected call. */
 .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; align-items: start; }
 .layout[data-mode="welcome"] { grid-template-columns: minmax(0, 1fr); }
@@ -107,6 +123,13 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 .call-item .goal { color: var(--muted); font-size: 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .call-item .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
 .call-item time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.call-item .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.call-item .price { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.filter { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 600; }
+.filter:hover { border-color: var(--line-strong); color: var(--ink); }
+.filter[aria-pressed="true"] { border-color: var(--accent); background: var(--select); color: var(--ink); }
+.filter .count { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
 .detail-pane { min-width: 0; }
@@ -192,6 +215,31 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 .details dd { font-weight: 600; overflow-wrap: anywhere; }
 .result-list h4 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 
+/* What the agent was asked to do. */
+.brief { display: grid; gap: 10px; }
+.brief-fields { margin: 0; display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: 10px 20px; }
+.brief-fields dt { color: var(--muted); font-size: 13px; }
+.brief-fields dd { margin: 0; overflow-wrap: anywhere; max-width: 80ch; }
+.brief-fields ul { margin: 0; padding-left: 1.2em; display: grid; gap: 3px; }
+.brief-fields dd > * + * { margin-top: 6px; }
+.brief-fields .sub { font-size: 12px; font-weight: 600; color: var(--muted); }
+.brief-fields summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.brief-fields .more { white-space: pre-wrap; margin-top: 6px; }
+
+/* What the call cost. */
+.cost { padding-top: 20px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.cost .section-head { margin-bottom: 0; }
+.cost-total { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.cost-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cost-table th, .cost-table td { padding: 9px 14px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+.cost-table thead th { border-top: 0; background: var(--soft); color: var(--muted); font-size: 12px; font-weight: 600; }
+.cost-table tbody th { font-weight: 600; }
+.cost-table .model { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+.cost-table .usage { color: var(--muted); }
+.cost-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cost-table tfoot th, .cost-table tfoot td { background: var(--soft); font-weight: 600; }
+
 .transcript-section { padding-top: 20px; border-top: 1px solid var(--line); }
 .transcript-wrap { position: relative; }
 .transcript { list-style: none; margin: 0; padding: 4px 4px 4px 0; display: grid; gap: 12px; max-height: 60vh; overflow-y: auto; border-radius: 6px; }
@@ -220,6 +268,13 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
   .details dt { border-top: 1px solid var(--line); padding-bottom: 2px; background: var(--soft); }
   .details dd { border-top: 0; }
   .details dt:first-of-type { border-top: 0; }
+  .spend-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .spend-value { font-size: 20px; }
+  .spend { margin-bottom: 20px; }
+  body[data-mode="detail"] .spend { display: none; }
+  .brief-fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .brief-fields dd { margin-bottom: 10px; }
+  .cost-table th, .cost-table td { padding: 8px 10px; }
   .actions .button { flex: 1 1 auto; }
   footer { padding: 0 16px 24px; flex-direction: column; gap: 4px; }
 }

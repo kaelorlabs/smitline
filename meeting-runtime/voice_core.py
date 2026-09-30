@@ -219,6 +219,12 @@ def backend_usage_from(event):
     inner = event.get('event') or {}
     if inner.get('type') != 'response.completed':
         return None
-    usage = (inner.get('response') or {}).get('usage') or {}
+    response = inner.get('response') or {}
+    usage = response.get('usage') or {}
+    details = usage.get('input_tokens_details') or {}
+    searches = sum(1 for item in response.get('output') or ()
+                   if isinstance(item, dict) and item.get('type') == 'web_search_call')
     return {'input': int(usage.get('input_tokens') or 0),
-            'output': int(usage.get('output_tokens') or 0)}
+            'cached': int(details.get('cached_tokens') or 0),
+            'output': int(usage.get('output_tokens') or 0),
+            'webSearches': searches}

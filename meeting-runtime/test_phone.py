@@ -50,7 +50,8 @@ class FakeTwilio:
         return {'sid': 'CA123'}
 
     async def get_call(self, call_sid):
-        return {'sid': call_sid, 'status': self.remote_status}
+        return {'sid': call_sid, 'status': self.remote_status,
+                'price': getattr(self, 'price', None), 'price_unit': 'USD'}
 
     async def update_call(self, call_sid, **kwargs):
         if self.refuse_twiml and 'twiml' in kwargs:
@@ -211,6 +212,14 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         await self.h.service.shutdown()
         self.temp.cleanup()
 
+    async def test_provider_price_reads_the_finished_call(self):
+        self.h.twilio.price = '-0.02100'
+        price = await self.h.line.provider_price(lambda kind: {}, {'line': {'providerCallSid': 'CA1'}})
+        self.assertEqual(price, {'amount': 0.021, 'currency': 'USD'})
+        self.h.twilio.price = None
+        self.assertIsNone(await self.h.line.provider_price(lambda kind: {}, {'line': {'providerCallSid': 'CA1'}}))
+        self.assertIsNone(await self.h.line.provider_price(lambda kind: {}, {'line': {}}))
+
     async def test_outbound_call_end_to_end(self):
         record, session = await self.h.dial(voice='quartz')
         created = self.h.twilio.created[0]
@@ -269,6 +278,12 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['usage']['voiceSeconds'], 33)
         self.assertEqual(done['usage']['phoneSeconds'], 40)
         self.assertEqual(done['usage']['backendTokens'], {'input': 300, 'output': 20})
+        self.assertEqual(done['usage']['backendModel'], 'gpt-5.6-terra')
+        self.assertEqual(done['usage']['phoneProvider'], 'twilio')
+        # The phone line is estimated (one started minute) until Twilio reports its price.
+        self.assertEqual(done['cost']['phone'], 0.014)
+        self.assertTrue(done['cost']['estimated'])
+        self.assertEqual(done['cost']['openai'], round(33 / 60 * 0.05 + (300 * 2 + 20 * 12) / 1e6, 6))
         self.assertEqual(set(done['usage']['audio']), {'maxUnplayedMs', 'interruptionsFollowed',
                                                        'hangupsYielded', 'replyDelayMs'})
         self.assertEqual([line['speaker'] for line in done['result']['transcript']],
