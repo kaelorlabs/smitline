@@ -1120,7 +1120,7 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         probed = []
 
         async def probe(url, timeout, problems=None):
-            probed.append(url)
+            probed.append((url, timeout))
             return True
         tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=cloudflared, probe=probe)
         self.assertIsNone(tunnel.current())
@@ -1129,7 +1129,9 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tunnel.current(), 'https://brave-fox-12.trycloudflare.com')
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0][-1], 'http://127.0.0.1:8766')
-        self.assertEqual(probed, ['https://brave-fox-12.trycloudflare.com/healthz'])
+        # Reuse checks the running tunnel again, briefly.
+        self.assertEqual(probed, [('https://brave-fox-12.trycloudflare.com/healthz', 45.0),
+                                  ('https://brave-fox-12.trycloudflare.com/healthz', 6.0)])
         await tunnel.close()
         self.assertIsNone(tunnel.current())
 
@@ -1167,6 +1169,52 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spawned[0][:3], ('docker', 'rm', '-f'))
         await docker.close()
         self.assertFalse(PublicUrl(lambda: {}, 8766, which=lambda name: None).available())
+
+    async def test_a_tunnel_that_stopped_answering_is_replaced_before_reuse(self):
+        names = iter(['brave-fox-12', 'calm-owl-34'])
+
+        class Stream:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            async def readline(self):
+                return self.lines.pop(0) if self.lines else b''
+
+        class Process:
+            def __init__(self):
+                name = next(names)
+                self.returncode = None
+                self.stderr = Stream([f'INF |  https://{name}.trycloudflare.com  |\n'.encode(),
+                                      b'INF Registered tunnel connection connIndex=0\n'])
+
+            def terminate(self):
+                self.returncode = 0
+
+            async def wait(self):
+                return 0
+        processes = []
+
+        async def spawn(*command, **kwargs):
+            processes.append(Process())
+            return processes[-1]
+        # The first tunnel answers once, then dies (the computer slept); the second answers.
+        answers = {'https://brave-fox-12.trycloudflare.com/healthz': [True, False],
+                   'https://calm-owl-34.trycloudflare.com/healthz': [True]}
+
+        async def probe(url, timeout, problems=None):
+            ok = answers[url].pop(0)
+            if not ok:
+                problems.append('HTTP 530')
+            return ok
+        logged = []
+        tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=lambda name: '/usr/bin/cloudflared',
+                           probe=probe, log=lambda line, **_: logged.append(line))
+        self.assertEqual(await tunnel.get(), 'https://brave-fox-12.trycloudflare.com')
+        self.assertEqual(await tunnel.get(), 'https://calm-owl-34.trycloudflare.com')
+        self.assertEqual(len(processes), 2)
+        self.assertEqual(processes[0].returncode, 0)  # the stale cloudflared was stopped
+        self.assertIn('stopped answering (HTTP 530); starting a fresh one', logged[1])
+        await tunnel.close()
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):

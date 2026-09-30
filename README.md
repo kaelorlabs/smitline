@@ -188,6 +188,7 @@ Contributors can run everything from a clone instead of the published images. Th
 git clone https://github.com/kaelorlabs/colleague-ai.git ~/colleague-ai
 cd ~/colleague-ai && npm install
 node packages/cli/src/colleague.mjs setup start      # the daemon, in Docker or on Python 3.10+
+node packages/cli/src/colleague.mjs setup stop       # stop it (and the phone tunnel); refuses mid-call without --force
 ./start-control-panel.sh                             # the console and MCP endpoint
 ```
 

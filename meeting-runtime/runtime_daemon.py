@@ -501,6 +501,7 @@ def create_app(
     call_service_factory=None,
     api_tokens=None,
     server_mode=False,
+    on_stop=None,
 ):
     if server_mode:
         require_server_bind(bind_host, api_tokens)
@@ -659,6 +660,22 @@ def create_app(
                 pass
         return response
 
+    def request_stop():
+        # The same graceful exit as Ctrl-C: web.run_app then runs every cleanup, which ends
+        # calls in progress with their transcript, stops meetings, and closes the tunnel.
+        def graceful_exit():
+            raise web.GracefulExit()
+        asyncio.get_running_loop().call_later(0.2, graceful_exit)
+
+    async def stop_daemon(request):
+        # Only the per-launch token on this computer may stop the daemon, not a
+        # server-mode API token held by a remote program.
+        _, _, credential = request.headers.get('Authorization', '').partition(' ')
+        if not _bearer_matches(credential, token):
+            return _json_error(403, 'forbidden', 'only the local token on this computer can stop Colleague AI')
+        (on_stop or request_stop)()
+        return web.json_response({'stopping': True}, status=202)
+
     app = web.Application(
         middlewares=(auth_middleware, error_middleware),
         client_max_size=max_body_bytes,
@@ -671,6 +688,7 @@ def create_app(
     app.router.add_post('/v1/meetings/{meetingId}/cancel', cancel_meeting)
     app.router.add_get('/v1/meetings/{meetingId}/events', get_events)
     app.router.add_get('/v1/meetings/{meetingId}/handoff', get_handoff)
+    app.router.add_post('/v1/daemon/stop', stop_daemon)
     if call_service is None and call_service_factory is not None:
         call_service = call_service_factory(daemon)
     app.call_service = call_service

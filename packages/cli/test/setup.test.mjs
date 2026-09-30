@@ -401,6 +401,57 @@ function runCli(args, env = {}) {
   });
 }
 
+test('setup stop stops the daemon, but not in the middle of a call unless forced', async (t) => {
+  const root = await tempRoot(t);
+  const token = 'fake-token';
+  await fs.mkdir(path.join(root, '.colleague'), { recursive: true });
+  await fs.writeFile(path.join(root, '.colleague', 'daemon.auth'), `${token}\n`);
+  let calls = [{ id: 'call-0123456789abcdef', status: 'in_progress' }, { id: 'call-fedcba9876543210', status: 'completed' }];
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    seen.push(`${request.method} ${request.url.split('?')[0]}`);
+    const send = (status, payload) => {
+      response.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' });
+      response.end(JSON.stringify(payload));
+    };
+    if (request.headers.authorization !== `Bearer ${token}`) return send(401, { error: { code: 'unauthorized' } });
+    if (request.url.startsWith('/v1/calls') && request.method === 'GET') return send(200, { calls });
+    if (request.url === '/v1/daemon/stop' && request.method === 'POST') {
+      send(202, { stopping: true });
+      setTimeout(() => { server.close(); server.closeAllConnections(); }, 50);
+      return undefined;
+    }
+    return send(404, { error: { code: 'not_found' } });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const port = server.address().port;
+  const env = { COLLEAGUE_DAEMON_PORT: String(port), COLLEAGUE_MANAGED: '' };
+
+  const busy = await runCli(['setup', 'stop', '--root', root], env);
+  assert.equal(busy.code, 2);
+  assert.match(busy.stderr, /A call is in progress \(call-0123456789abcdef\)/);
+  assert.match(busy.stderr, /colleague setup stop --force/);
+  assert.ok(!seen.includes('POST /v1/daemon/stop'));
+
+  const forced = await runCli(['setup', 'stop', '--force', '--root', root], env);
+  assert.equal(forced.code, 0, forced.stderr);
+  assert.deepEqual(JSON.parse(forced.stdout), { running: false, stopped: true, port });
+  assert.ok(seen.includes('POST /v1/daemon/stop'));
+  assert.match(forced.stderr, /Colleague AI stopped/);
+
+  // Nothing running: nothing to stop, and nothing is started.
+  const idle = await runCli(['setup', 'stop', '--root', root], env);
+  assert.equal(idle.code, 0, idle.stderr);
+  assert.equal(JSON.parse(idle.stdout).stopped, false);
+  assert.equal(JSON.parse(idle.stdout).running, false);
+
+  // In the container, the container is stopped from the host.
+  const managed = await runCli(['setup', 'stop'], { ...env, COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root });
+  assert.equal(managed.code, 0, managed.stderr);
+  assert.match(JSON.parse(managed.stdout).next, /docker stop colleague/);
+});
+
 test('call builds a brief, waits for the result, and shows questions for missing fields', async (t) => {
   const root = await tempRoot(t);
   await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\n');
