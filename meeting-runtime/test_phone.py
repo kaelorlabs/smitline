@@ -250,14 +250,14 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(live.audio, ['f39/'])
         live.push({'type': 'session.output_transcript.delta',
                    'delta': "Hi, I'm an AI assistant calling on behalf of Robin.", 'start_ms': 600, 'end_ms': 2000})
-        audio = base64.b64encode(b'\xff' * 800).decode()
+        audio = base64.b64encode(b'\x2a' * 800).decode()
         live.push({'type': 'session.output_audio.delta', 'delta': audio})
         await until(lambda: any(m['event'] == 'mark' for m in ws.sent))
         media = [m for m in ws.sent if m['event'] == 'media']
         self.assertEqual({m['streamSid'] for m in media}, {'MZ1'})
         # Sent as 20 ms frames: 800 bytes of mu-law is five 160-byte frames.
         self.assertEqual(len(media), 5)
-        self.assertEqual(b''.join(base64.b64decode(m['media']['payload']) for m in media), b'\xff' * 800)
+        self.assertEqual(b''.join(base64.b64decode(m['media']['payload']) for m in media), b'\x2a' * 800)
         mark = next(m for m in ws.sent if m['event'] == 'mark')
         ws.push({'event': 'mark', 'mark': mark['mark']})
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Sure, booked.', 'start_ms': 2500, 'end_ms': 3000})
@@ -286,7 +286,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['cost']['openai'], round(33 / 60 * 0.05 + (300 * 2 + 20 * 12) / 1e6, 6))
         self.assertEqual(set(done['usage']['audio']), {'maxUnplayedMs', 'interruptionsFollowed',
                                                        'hangupsYielded', 'pauses', 'backchannels',
-                                                       'gaps', 'clockRate'})
+                                                       'gaps', 'clockRate', 'stretch'})
         self.assertEqual([line['speaker'] for line in done['result']['transcript']],
                          ['other', 'agent', 'other'])
         self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
@@ -458,7 +458,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 800).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 800).decode()})
         await until(lambda: any(m['event'] == 'mark' for m in ws.sent))
         live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
             'type': 'response.output_item.done', 'item': {
@@ -491,7 +491,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
         # Two seconds of speech arrive at once; only the first 0.3 s go out right away.
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 16000).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 16000).decode()})
         await until(lambda: session.pacer.unplayed_seconds() > 1.0)
         # A short "mhm" is a backchannel, not an interruption.
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Mhm', 'start_ms': 0, 'end_ms': 250})
@@ -518,7 +518,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         live.push({'type': 'session.started', 'session': {}})
         for _ in range(25):
             ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': quiet}})
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 24000).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 24000).decode()})
         await until(lambda: session.pacer.unplayed_seconds() > 2.0)
 
         def clears():
@@ -540,7 +540,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clears(), 2)
         self.assertEqual(session.pacer.unplayed_seconds(), 0)
         # The abandoned rest of that answer, still arriving, is not played.
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 800).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 800).decode()})
         await asyncio.sleep(0.05)
         self.assertEqual(session.pacer.unplayed_seconds(), 0)
         # They stop; the reply delay runs from the end of their turn to the next speech.
@@ -548,7 +548,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
             ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': quiet}})
         await until(lambda: session._barge is None)
         session._dropped_at -= 5
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 800).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 800).decode()})
         await until(lambda: session.pacer.unplayed_seconds() > 0)
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -563,7 +563,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\xff' * 1600).decode()})
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 1600).decode()})
         ws.push({'event': 'media', 'sequenceNumber': '3', 'media': {'track': 'inbound', 'payload': 'f39/', 'timestamp': '60'}})
         await until(lambda: session.pacer.sent_marks == 1)
         ws.push({'event': 'stop'})
@@ -756,7 +756,7 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
                 ahead.append(queued[0] - now[0])
                 queued[0] += len(base64.b64decode(message['media']['payload'])) / 8000
         pacer = OutputPacer(send, clock=lambda: now[0], sleep=sleep)
-        chunk = base64.b64encode(b'\xff' * 4000).decode()  # 0.5 s of mu-law
+        chunk = base64.b64encode(b'\x2a' * 4000).decode()  # 0.5 s of mu-law
         for _ in range(3):
             pacer.offer(chunk)
         runner = asyncio.create_task(pacer.run())
@@ -793,6 +793,47 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         pacer.offer(base64.b64encode(b'' * 160).decode())
         await until(lambda: sent)
         self.assertGreaterEqual(sent[0][0] - started, 0.09)
+        runner.cancel()
+
+    async def test_pauses_stretch_to_keep_a_reserve_and_shrink_when_too_far_ahead(self):
+        now = [0.0]
+
+        async def sleep(seconds):
+            now[0] += seconds
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        voice, quiet = bytes([0x2a]), bytes([0xff])  # mu-law: loud, and silence
+        pacer = OutputPacer(send, clock=lambda: now[0], sleep=sleep, cushion=0, target=0.3, most=1.2)
+        runner = asyncio.create_task(pacer.run())
+        # A short pause below the target: its silent frame is sent again until 0.3 s is buffered.
+        pacer.offer(base64.b64encode(voice * 160 + quiet * 160).decode())
+        await until(lambda: pacer.play_until - now[0] >= 0.3)
+        media = [m for m in sent if m['event'] == 'media']
+        self.assertEqual(len(media), 15)  # 20 ms of speech and 280 ms of pause
+        self.assertEqual(pacer.stretch['addedMs'], 260)
+        # Far ahead (over 1.2 s waiting): silent frames are dropped, speech never is.
+        now[0] += 0.3
+        sent.clear()
+        pacer.offer(base64.b64encode(voice * 12000 + quiet * 4000 + voice * 4000).decode())  # speech, pause, speech
+        await until(lambda: not pacer.queue and not pacer._next)
+        self.assertGreater(pacer.stretch['trimmedMs'], 0)
+        voiced = [m for m in sent if m['event'] == 'media'
+                  and base64.b64decode(m['media']['payload'])[:1] == voice]
+        self.assertEqual(len(voiced) * 20, 2000)  # all of the speech
+        runner.cancel()
+
+    async def test_marks_go_out_only_in_silence_or_when_audio_stops(self):
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        pacer = OutputPacer(send, cushion=0, target=0)
+        runner = asyncio.create_task(pacer.run())
+        pacer.offer(base64.b64encode(bytes([0x2a]) * 160).decode())  # speech ending the stream
+        await until(lambda: sent and sent[-1]['event'] == 'mark')  # after it stops arriving
+        self.assertEqual([m['event'] for m in sent], ['media', 'mark'])
         runner.cancel()
 
     async def test_odd_tails_join_the_next_delta_or_are_padded(self):
@@ -845,7 +886,7 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         async def send(message):
             sent.append(message)
         pacer = OutputPacer(send, clock=provider, sleep=sleep, cushion=0)
-        pacer.offer(base64.b64encode(b'\xff' * 16000).decode())  # 2 s of speech
+        pacer.offer(base64.b64encode(b'\x2a' * 16000).decode())  # 2 s of speech
         runner = asyncio.create_task(pacer.run())
         await until(lambda: len([m for m in sent if m['event'] == 'media']) == 100)
         runner.cancel()
@@ -896,14 +937,14 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
             pass
         pacer = OutputPacer(send, clock=lambda: now[0], sleep=sleep)
         runner = asyncio.create_task(pacer.run())
-        pacer.offer(base64.b64encode(b'\xff' * 160).decode())
+        pacer.offer(base64.b64encode(b'\x2a' * 160).decode())
         await until(lambda: pacer.play_until > 0)
         now[0] += 0.1  # the model's next audio arrives 80 ms after the first frame played out
-        pacer.offer(base64.b64encode(b'\xff' * 160).decode())
+        pacer.offer(base64.b64encode(b'\x2a' * 160).decode())
         await until(lambda: pacer.gaps['count'] == 1)
-        self.assertEqual(pacer.gaps, {'count': 1, 'totalMs': 80, 'starved': 1})
+        self.assertEqual(pacer.gaps, {'count': 1, 'totalMs': 80, 'starved': 1, 'audible': 1})
         now[0] += 5.0  # a pause between turns is not a gap
-        pacer.offer(base64.b64encode(b'\xff' * 160).decode())
+        pacer.offer(base64.b64encode(b'\x2a' * 160).decode())
         await asyncio.sleep(0.05)
         self.assertEqual(pacer.gaps['count'], 1)
         runner.cancel()
@@ -1518,7 +1559,7 @@ def fake_live_app(record):
                                     'delta': "Hi, I'm an AI assistant calling on behalf of Robin.",
                                     'start_ms': 500, 'end_ms': 2500})
                 await ws.send_json({'type': 'session.output_audio.delta',
-                                    'delta': base64.b64encode(b'\xff' * 160).decode(),
+                                    'delta': base64.b64encode(b'\x2a' * 160).decode(),
                                     'start_ms': 500, 'end_ms': 520})
             elif kind == 'session.close':
                 await ws.send_json({'type': 'session.closed', 'reason': 'close_requested',

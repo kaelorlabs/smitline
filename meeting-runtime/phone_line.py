@@ -15,7 +15,7 @@ import secrets
 import time
 
 from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
-from barge_in import SpeechDetector
+from barge_in import SpeechDetector, frame_level_db
 from call_costs import provider_price_from
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
@@ -38,6 +38,15 @@ OUTPUT_LEAD_SECONDS = 0.6
 # waited this long), so the provider holds a reserve from the first word: recordings showed
 # 20 ms silent slots where GPT-Live's audio arrived just in time.
 OUTPUT_CUSHION_SECONDS = 0.12
+# GPT-Live streams its speech, silence included, at about real time: 0.97x of SignalWire's
+# clock on a traced call, with seconds as slow as 0.7x. So the provider's buffer is kept near
+# this target by sending silent frames twice while it is below it (a pause grows by 20 ms),
+# and silent frames are dropped once this much is waiting, so the delay cannot grow. Only
+# pauses change length; speech is never cut.
+OUTPUT_TARGET_SECONDS = 0.3
+OUTPUT_MAX_SECONDS = 1.2
+# Quieter than this, a 20 ms frame of the assistant's audio is a pause.
+SILENT_FRAME_DB = -48.0
 # Local barge-in (barge_in.py): speech that starts while this much of the assistant's is
 # still unheard pauses it; once the other person has talked this long it is an
 # interruption and the rest is dropped. Model audio arriving this soon after the drop is
@@ -162,11 +171,13 @@ class OutputPacer:
 
     Audio goes out in whole 20 ms frames, so what the provider has buffered never exceeds the
     lead plus one frame, whatever size GPT-Live's deltas are; a delta's odd tail waits for the
-    next one, or is padded with silence when speech stops. A recorded call showed SignalWire
-    playing a 20 ms silent slot for every mark, so a mark goes out only when speech stops,
-    where that slot falls in a pause. When the other person starts
-    talking, pause() clears the provider and keeps what they have not heard yet: resume()
-    carries on from there after a short "mhm", and flush() drops it after a real interruption.
+    next one, or is padded with silence when speech stops. The provider's buffer is kept near
+    OUTPUT_TARGET_SECONDS by stretching and trimming pauses (see there). A recorded call showed
+    SignalWire playing a 20 ms silent slot for every mark, so a mark goes out only after a
+    silent frame, at most once a second, or once audio stops arriving. When the other person
+    starts talking, pause() clears the provider and keeps what they have not heard yet:
+    resume() carries on from there after a short "mhm", and flush() drops it after a real
+    interruption.
     """
 
     FRAME_BYTES = 160  # 20 ms of 8 kHz mu-law
@@ -177,13 +188,19 @@ class OutputPacer:
     # is a pause between turns, not a gap.
     GAP_MIN = 0.01
     GAP_MAX = 1.0
+    # A mark goes out after a silent frame at most this often, or after audio stops this long.
+    MARK_EVERY = 1.0
+    MARK_IDLE = 0.15
 
     def __init__(self, send, *, lead=OUTPUT_LEAD_SECONDS, cushion=OUTPUT_CUSHION_SECONDS,
-                 clock=time.monotonic, sleep=asyncio.sleep, bytes_per_second=8000, trace=None):
+                 target=OUTPUT_TARGET_SECONDS, most=OUTPUT_MAX_SECONDS, clock=time.monotonic,
+                 sleep=asyncio.sleep, bytes_per_second=8000, trace=None):
         self._send = send
         self._trace = trace or (lambda kind, **data: None)
         self.lead = lead
         self.cushion = cushion
+        self.target = target
+        self.most = most
         self.clock = clock
         self.sleep = sleep
         self.bytes_per_second = bytes_per_second
@@ -194,7 +211,11 @@ class OutputPacer:
         self.sent_marks = 0
         self.played_marks = 0
         self.paused = False
-        self.gaps = {'count': 0, 'totalMs': 0, 'starved': 0}
+        # count/totalMs: the provider ran dry; audible: it ran dry just before speech.
+        self.gaps = {'count': 0, 'totalMs': 0, 'starved': 0, 'audible': 0}
+        self.stretch = {'addedMs': 0, 'trimmedMs': 0}
+        self._mark_owed = False
+        self._last_mark = None
         self._sent = collections.deque()  # (payload, last, starts playing at)
         self._next = None  # the frame run() holds while waiting to send it
         self._tail = b''  # a delta's last bytes, short of a whole frame
@@ -263,6 +284,7 @@ class OutputPacer:
         self._sent.clear()
         self._next = None
         self._tail = b''
+        self._mark_owed = False
         self.queued_bytes = 0
         self.play_until = self.clock()
         self.played_marks = self.sent_marks
@@ -277,7 +299,7 @@ class OutputPacer:
         except ValueError:
             return
         if (self.played_marks >= self.sent_marks and not self.queue and not self._tail
-                and not self.paused):
+                and not self.paused and not self._mark_owed):
             self._drained.set()
 
     async def drained(self, timeout=DRAIN_TIMEOUT):
@@ -286,6 +308,14 @@ class OutputPacer:
             return True
         except asyncio.TimeoutError:
             return False
+
+    async def _send_mark(self):
+        """Ask the provider to say when everything sent so far has played."""
+        self.sent_marks += 1
+        self._mark_owed = False
+        self._last_mark = self.clock()
+        await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
+        self._trace('mark')
 
     async def _cushioned(self, size):
         """Nothing is playing: wait until `cushion` seconds have arrived, or for that long.
@@ -313,11 +343,15 @@ class OutputPacer:
             while self.paused or not self.queue:
                 starved = starved or not self.paused
                 self._ready.clear()
-                if self._tail and not self.paused:
+                if not self.paused and (self._tail or self._mark_owed):
                     try:
-                        await asyncio.wait_for(self._ready.wait(), self.TAIL_WAIT)
+                        await asyncio.wait_for(self._ready.wait(),
+                                               self.TAIL_WAIT if self._tail else self.MARK_IDLE)
                     except asyncio.TimeoutError:
-                        self._pad_tail()
+                        if self._tail:
+                            self._pad_tail()
+                        else:  # audio stopped arriving: say when what was sent has played
+                            await self._send_mark()
                     continue
                 await self._ready.wait()
             payload, last = self._next = self.queue.popleft()
@@ -334,24 +368,36 @@ class OutputPacer:
                     continue
                 now = self.clock()
             self._next = None
+            silent = frame_level_db(base64.b64decode(payload)) < SILENT_FRAME_DB
+            waiting = max(0.0, self.play_until - now) + self.queued_bytes / self.bytes_per_second
+            if silent and waiting > self.most:
+                self.stretch['trimmedMs'] += int(seconds * 1000)  # a pause, shortened
+                self._trace('trim')
+                continue
             late = now - self.play_until
             if self._continuous and self.GAP_MIN <= late <= self.GAP_MAX:
                 self.gaps['count'] += 1
                 self.gaps['totalMs'] += int(late * 1000)
                 self.gaps['starved'] += int(starved)
+                self.gaps['audible'] += int(not silent)
             await self._send({'event': 'media', 'media': {'payload': payload}})
             starts = max(now, self.play_until)
-            self._trace('send', ahead=round(starts - now, 4), queued=len(self.queue))
+            self._trace('send', ahead=round(starts - now, 4), queued=len(self.queue),
+                        silent=silent)
             self._sent.append((payload, last, starts))
             while self._sent and self._sent[0][2] + 0.02 < now:
                 self._sent.popleft()
-            if not self.queue and not self._tail:
-                # Speech has stopped for now: one mark says when the provider finished playing it.
-                self.sent_marks += 1
-                await self._send({'event': 'mark', 'mark': {'name': f'out-{self.sent_marks}'}})
-                self._trace('mark')
             self.play_until = starts + seconds
             self._continuous = True
+            self._mark_owed = True
+            if silent and not self.paused and self.play_until - now < self.target:
+                # Below the target: this pause plays 20 ms longer, and the reserve grows.
+                self.queue.appendleft((payload, last))
+                self.queued_bytes += size
+                self.stretch['addedMs'] += int(seconds * 1000)
+            elif (silent and not self.queue and not self._tail
+                  and (self._last_mark is None or now - self._last_mark >= self.MARK_EVERY)):
+                await self._send_mark()
 
 
 def _error_code(error):
@@ -753,6 +799,7 @@ class PhoneSession:
         }
         if self.pacer is not None:
             stats['gaps'] = dict(self.pacer.gaps)
+            stats['stretch'] = dict(self.pacer.stretch)
             # The provider's clock against this computer's; far from 1 means a drifting clock.
             stats['clockRate'] = round(self.provider_clock.rate, 4)
         if self.stats['responseDelaysMs']:
