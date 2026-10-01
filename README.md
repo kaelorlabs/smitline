@@ -61,7 +61,7 @@ Paste this into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes or simi
 Set up Smitline for me from https://github.com/kaelorlabs/smitline. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-Your agent starts Smitline with one Docker command, opens a setup page on your computer for your keys, rings your phone so you can hear it, and connects itself. Your keys go into that page, never into the chat.
+Your agent starts Smitline with one Docker command, opens a setup page on your computer for your keys, rings your phone so you can hear it, and connects itself. Your keys go into that page, never into the chat. Your agent may ask you to run the Docker command yourself, because it gives Smitline access to Docker for meetings; that's expected.
 
 <p align="center">
   <img src="docs/images/setup-page.png" alt="The Smitline setup page, where keys are typed on this computer instead of into the chat with the agent" width="520">
@@ -87,7 +87,13 @@ Then just ask: *"Call +1 … and …"*, *"Practice the call on me first"*, or *"
 docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/smitline
 ```
 
-In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of it. Then run `docker exec smitline smitline setup secrets` to open the setup page.
+The Docker socket (`-v /var/run/docker.sock…`) lets Smitline start its meeting container, and it gives the container control of Docker on your computer, which is close to administrator access. If you only want phone calls, leave it out:
+
+```bash
+docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data ghcr.io/kaelorlabs/smitline
+```
+
+In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then run `docker exec smitline smitline setup secrets` to open the setup page.
 
 </details>
 
@@ -96,6 +102,7 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of it. Then run `dock
 - **Always says it's an AI.** Every call opens with "Hi, this is *your name*'s AI assistant", and Smitline checks that it was said.
 - **Stays inside the brief.** It agrees only to what you allowed and never shares what you marked private. Anything else, it brings back to you.
 - **Guardrails on every call.** It never dials emergency or premium-rate numbers, calls only between 8 AM and 9 PM in the other person's time zone, stops calling anyone who asks it to, and limits repeat calls.
+- **Docker access is your choice.** Meetings need Smitline to start its own meeting container, so the setup mounts the Docker socket. Phone calls work without it.
 - **Your keys and records stay with you.** Keys are typed into a page on your computer, and call records and transcripts are stored there too. Audio goes to OpenAI and your phone provider; nothing goes to us, because there is no Smitline server.
 
 More in [security and privacy](docs/security.md) and the [phone guardrails](docs/phone.md#guardrails).
