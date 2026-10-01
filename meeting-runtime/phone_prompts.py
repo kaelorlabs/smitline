@@ -121,7 +121,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'and continue normally.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
-         'them.'),
+         'them. If they ask not to be called again, apologize, say they will not be called again, '
+         'say goodbye, and end the call.'),
         ('Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
          f'the disclosure, why you called, and that they can reply to {who} directly. Never ask them '
          'to call this number back, and share no private details. If a person picks up while you '

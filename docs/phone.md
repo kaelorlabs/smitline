@@ -36,6 +36,21 @@ sequenceDiagram
 - **Rehearsal.** A brief with `"rehearsal": true` calls `COLLEAGUE_OWNER_PHONE` and nothing else: `to` defaults to it, and any other number is refused. You play the other party; everything else runs as in the real call.
 - **Recording.** With `COLLEAGUE_RECORD_CALLS=1`, Twilio records the call, the agent mentions the recording after the disclosure, and when Twilio finishes the recording the call gets a `recording` field with its `sid`, length, and `url`. The URL is on Twilio's API: fetching it needs your Twilio Account SID and Auth Token. Recordings stay in your Twilio account; delete them there.
 
+## Guardrails
+
+Before dialing, the daemon checks the number. A refused call never rings, and the agent gets a `403` with a code and a sentence it can pass on to the user. `POST /v1/calls/check` reports the same problems without calling.
+
+| Check | Code | What happens |
+| --- | --- | --- |
+| Emergency and crisis numbers (911, 112, 999, 988, and others) | `422` (the brief is rejected) | Never dialed, with or without a country code. If someone needs help, call yourself. |
+| Premium-rate and satellite numbers (such as +1 900, UK 09 and 087, +881, +882) | `high_cost_number` | Refused unless `COLLEAGUE_ALLOW_PREMIUM_NUMBERS=1`. |
+| Do-not-call list | `do_not_call` | When someone says "stop calling me" or "take this number off your list", the assistant apologizes and ends the call, the result has `doNotCall: true`, and the number goes on the list in `.colleague/do-not-call.json`. Later calls to it are refused until it is removed: `smitline do-not-call remove +1...`. |
+| Calling hours | `outside_calling_hours` | Calls ring only between 8 AM and 9 PM where the person is (`COLLEAGUE_CALLING_HOURS`), judged from the number's time zone. A number that spans zones, such as a mobile in Russia or Australia, rings while it is daytime in any of them. A brief with `afterHours: true` skips the check; set it only when the user confirms the person expects a call now. |
+| Repeat calls | `too_many_calls_to_number`, `too_many_calls` | At most 5 calls to one number in 24 hours (`COLLEAGUE_MAX_CALLS_PER_NUMBER`) and 20 calls an hour (`COLLEAGUE_MAX_CALLS_PER_HOUR`), so a looping agent cannot ring someone again and again. |
+| Country allow-list | `destination_not_allowed` | With `COLLEAGUE_ALLOWED_CALLING_CODES` set, only those countries. |
+
+Rehearsals ring only your own phone and skip these checks. Your own phone (`COLLEAGUE_OWNER_PHONE`) has no calling hours and no per-number limit.
+
 ## Providers
 
 The call needs live, two-way audio over a WebSocket (`<Connect><Stream>`). Two providers support it with the same REST calls, webhook signatures, and media-stream messages, so one code path serves both:
@@ -113,6 +128,10 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 | `COLLEAGUE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the call result. |
 | `COLLEAGUE_RECORD_CALLS` | off | `1` records calls in Twilio and adds a recording notice. |
 | `COLLEAGUE_ALLOWED_CALLING_CODES` | any | Comma-separated country calling codes that may be dialed. |
+| `COLLEAGUE_CALLING_HOURS` | `08:00-21:00` | Hours, in the recipient's time, when calls may ring; `off` turns the check off. |
+| `COLLEAGUE_MAX_CALLS_PER_NUMBER` | `5` | Calls to one number per 24 hours; `0` turns the limit off. |
+| `COLLEAGUE_MAX_CALLS_PER_HOUR` | `20` | Outgoing calls per hour; `0` turns the limit off. |
+| `COLLEAGUE_ALLOW_PREMIUM_NUMBERS` | off | `1` allows premium-rate and satellite numbers. |
 | `COLLEAGUE_PUBLIC_URL` | quick tunnel | HTTPS origin Twilio uses to reach the gateway. |
 | `COLLEAGUE_GATEWAY_PORT` | `8766` | Loopback port of the phone gateway. |
 | `COLLEAGUE_MAX_INBOUND` | `2` | Incoming calls handled at once; more get a busy signal. |
@@ -121,7 +140,7 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 
 ## Your responsibilities
 
-Calls leave through your provider account under your name. Automated and AI-voiced calls are regulated: in the United States, AI voices count as artificial voices under the robocall rules, so call people who expect the call or have agreed to it. Several states require everyone's consent before recording. The EU AI Act requires telling people they are talking to an AI. Keep the disclosure, start by calling your own number, and use `COLLEAGUE_ALLOWED_CALLING_CODES` to limit destinations.
+Calls leave through your provider account under your name. Automated and AI-voiced calls are regulated: in the United States, AI voices count as artificial voices under the robocall rules, so call people who expect the call or have agreed to it. Several states require everyone's consent before recording. The EU AI Act requires telling people they are talking to an AI. Keep the disclosure, start by calling your own number, and use `COLLEAGUE_ALLOWED_CALLING_CODES` to limit destinations. The [guardrails](#guardrails) keep calls to daytime, honor requests not to be called again, and stop repeat calls, but they are not legal advice and do not check national do-not-call registries; telemarketing needs more than this.
 
 ## Not yet verified
 

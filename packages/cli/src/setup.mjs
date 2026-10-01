@@ -24,6 +24,8 @@ export const SETTING_KEYS = Object.freeze([
   'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND', 'COLLEAGUE_PHONE_PROVIDER',
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
   'COLLEAGUE_PHONE_AUDIO', 'COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
+  'COLLEAGUE_CALLING_HOURS', 'COLLEAGUE_MAX_CALLS_PER_NUMBER', 'COLLEAGUE_MAX_CALLS_PER_HOUR',
+  'COLLEAGUE_ALLOW_PREMIUM_NUMBERS',
 ]);
 export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
@@ -173,11 +175,22 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   if (key === 'COLLEAGUE_PHONE_PROVIDER' && !['twilio', 'signalwire'].includes(text)) {
     throw new Error('COLLEAGUE_PHONE_PROVIDER must be twilio or signalwire');
   }
+  if (key === 'COLLEAGUE_CALLING_HOURS' && text !== 'off') {
+    const match = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(text);
+    const [startH, startM, endH, endM] = match ? match.slice(1).map(Number) : [];
+    if (!match || startH > 23 || endH > 23 || startM > 59 || endM > 59 || startH * 60 + startM >= endH * 60 + endM) {
+      throw new Error('COLLEAGUE_CALLING_HOURS must look like 08:00-21:00 (the recipient\'s time), or be off');
+    }
+  }
+  if (['COLLEAGUE_MAX_CALLS_PER_NUMBER', 'COLLEAGUE_MAX_CALLS_PER_HOUR'].includes(key) && !/^[0-9]{1,4}$/.test(text)) {
+    throw new Error(`${key} must be a whole number; 0 turns the limit off`);
+  }
   if (key === 'COLLEAGUE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
     throw new Error('COLLEAGUE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
   }
   if (['COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE',
-    'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH'].includes(key)
+    'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH',
+    'COLLEAGUE_ALLOW_PREMIUM_NUMBERS'].includes(key)
     && !['0', '1'].includes(text)) {
     throw new Error(`${key} must be 0 or 1`);
   }

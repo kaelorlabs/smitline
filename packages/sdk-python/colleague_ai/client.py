@@ -239,6 +239,12 @@ class LoopbackTransport:
     def update_profile(self, update):
         return self._http('PATCH', '/v1/profile', update)
 
+    def get_do_not_call(self):
+        return self._http('GET', '/v1/do-not-call')
+
+    def update_do_not_call(self, update):
+        return self._http('PATCH', '/v1/do-not-call', update)
+
     def end_call(self, call_id):
         return self._http('POST', f'/v1/calls/{quote(call_id)}/end', {})
 
@@ -285,6 +291,14 @@ class Colleague:
 
     async def update_profile(self, update):
         return self._transport.update_profile(update)
+
+    async def get_do_not_call(self):
+        """Numbers Smitline refuses to call because the person asked not to be called again."""
+        return self._transport.get_do_not_call()
+
+    async def update_do_not_call(self, update):
+        """Add numbers ({'add': [...]}) or remove them ({'remove': [...]})."""
+        return self._transport.update_do_not_call(update)
 
     async def end_call(self, call_id):
         return self._transport.end_call(call_id)

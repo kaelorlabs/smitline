@@ -148,6 +148,15 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         payload = await read_json(request)
         return public_json(service.update_profile(await owner(request), payload))
 
+    @handle
+    async def get_do_not_call(request):
+        return public_json(service.do_not_call(await owner(request)))
+
+    @handle
+    async def update_do_not_call(request):
+        payload = await read_json(request)
+        return public_json(service.update_do_not_call(await owner(request), payload))
+
     async def list_voices(_request):
         from call_brief import default_voice
         env = service.environ
@@ -168,4 +177,6 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_get('/v1/voices', list_voices)
     app.router.add_get('/v1/profile', get_profile)
     app.router.add_patch('/v1/profile', update_profile)
+    app.router.add_get('/v1/do-not-call', get_do_not_call)
+    app.router.add_patch('/v1/do-not-call', update_do_not_call)
     app.router.add_get('/v1/openapi.json', openapi)

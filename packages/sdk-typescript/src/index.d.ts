@@ -44,6 +44,8 @@ export interface CallBrief {
   voice?: string;
   maxMinutes?: number;
   rehearsal?: boolean;
+  /** Phone only: call outside calling hours where the person is; only when the user confirms they expect it. */
+  afterHours?: boolean;
   notify?: { webhookUrl?: string };
 }
 
@@ -54,7 +56,9 @@ export type CallStatus =
 export interface CallResult {
   outcome: 'achieved' | 'partial' | 'not_reached' | 'voicemail' | 'declined' | 'failed' | 'canceled';
   summary: string;
-  details: Array<{ label: string; value: string }>;
+  details: Array<{ label: string; value: string   /** True when the person asked not to be called again; their number is now on the do-not-call list. */
+  doNotCall?: boolean;
+}>;
   decisions: string[];
   actionItems: string[];
   openQuestions: string[];
@@ -104,6 +108,18 @@ export interface ProfileUpdate {
   removePeople?: string[];
 }
 
+export interface DoNotCallEntry {
+  number: string;
+  addedAt: string;
+  reason?: string;
+  callId?: string;
+}
+
+export interface DoNotCallUpdate {
+  add?: Array<string | { number: string; reason?: string; callId?: string }>;
+  remove?: string[];
+}
+
 export interface DaemonTransport {
   checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[] }>;
   startCall(brief: CallBrief): Promise<Call>;
@@ -113,6 +129,8 @@ export interface DaemonTransport {
   instructCall(callId: string, text: string, options?: { silent?: boolean }): Promise<{ delivered: boolean }>;
   getProfile(): Promise<Profile>;
   updateProfile(update: ProfileUpdate): Promise<Profile>;
+  getDoNotCall(): Promise<{ numbers: DoNotCallEntry[] }>;
+  updateDoNotCall(update: DoNotCallUpdate): Promise<{ numbers: DoNotCallEntry[] }>;
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   listVoices(): Promise<{ default: string; voices: string[] }>;
@@ -141,6 +159,8 @@ export class Colleague {
   instructCall(callId: string, text: string, options?: { silent?: boolean }): Promise<{ delivered: boolean }>;
   getProfile(): Promise<Profile>;
   updateProfile(update: ProfileUpdate): Promise<Profile>;
+  getDoNotCall(): Promise<{ numbers: DoNotCallEntry[] }>;
+  updateDoNotCall(update: DoNotCallUpdate): Promise<{ numbers: DoNotCallEntry[] }>;
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   listVoices(): Promise<{ default: string; voices: string[] }>;

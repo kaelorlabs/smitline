@@ -35,8 +35,8 @@ async function withDaemon(t, options, fn) {
 test('the SDK exposes calls only, for calls and meetings only', () => {
   const methods = Object.getOwnPropertyNames(Colleague.prototype).filter((name) => name !== 'constructor').sort();
   assert.deepEqual(methods, [
-    'checkCall', 'endCall', 'getCall', 'getProfile', 'instructCall', 'listCalls', 'listVoices',
-    'startCall', 'transferCall', 'updateProfile', 'waitForCall',
+    'checkCall', 'endCall', 'getCall', 'getDoNotCall', 'getProfile', 'instructCall', 'listCalls',
+    'listVoices', 'startCall', 'transferCall', 'updateDoNotCall', 'updateProfile', 'waitForCall',
   ]);
 });
 
@@ -143,11 +143,15 @@ test('profile reads and updates, and silent notes, use the daemon routes', async
   const colleague = new Colleague({ transport });
   await colleague.getProfile();
   await colleague.updateProfile({ about: 'Robin builds Smitline.' });
+  await colleague.getDoNotCall();
+  await colleague.updateDoNotCall({ remove: ['+14155550142'] });
   await colleague.instructCall('call-0123456789abcdef', 'He tried it yesterday', { silent: true });
   await colleague.instructCall('call-0123456789abcdef', 'Ask about parking');
   assert.deepEqual(seen, [
     ['GET', '/v1/profile', null],
     ['PATCH', '/v1/profile', { about: 'Robin builds Smitline.' }],
+    ['GET', '/v1/do-not-call', null],
+    ['PATCH', '/v1/do-not-call', { remove: ['+14155550142'] }],
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'He tried it yesterday', silent: true }],
     ['POST', '/v1/calls/call-0123456789abcdef/instructions', { text: 'Ask about parking' }],
   ]);

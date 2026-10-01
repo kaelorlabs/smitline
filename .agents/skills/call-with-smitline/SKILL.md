@@ -35,7 +35,7 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 
 ## 3. Start, then wait
 
-1. `start_call` with the brief. If it returns `brief_incomplete`, ask the user the listed questions, then retry.
+1. `start_call` with the brief. If it returns `brief_incomplete`, ask the user the listed questions, then retry. If the call is refused, tell the user why in plain words. `outside_calling_hours`: offer to call later; set `afterHours: true` only if the user confirms the person expects a call now. `do_not_call`: the person asked not to be called again; never remove them from the list unless the user says the person has since agreed to calls. Smitline never calls emergency numbers; if someone needs help, tell the user to call themselves.
 2. Tell the user in one line: "Calling Luigi's now. I'll tell you when it's done." (or "Joining the meeting now.")
 3. `wait_for_call` until the status is `completed`, `failed`, or `canceled`, calling again while it is still running.
 
@@ -45,4 +45,4 @@ While the call runs, `send_call_instruction` passes on new guidance from the use
 
 Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say.
 
-Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call.
+Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call. If `doNotCall` is `true`, tell the user the person asked not to be called again and Smitline will not call them again.

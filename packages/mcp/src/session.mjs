@@ -63,6 +63,7 @@ export const BRIEF_SCHEMA = {
     voice: { type: 'string', description: 'GPT-Live voice name; see list_voices' },
     maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
     rehearsal: { type: 'boolean', description: "Phone only: practice on the user's own phone first, with the user playing the other side" },
+    afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
     notify: {
       type: 'object',
       additionalProperties: false,

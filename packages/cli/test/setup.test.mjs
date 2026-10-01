@@ -397,6 +397,9 @@ async function fakeCallsDaemon(root) {
     if (request.url === '/v1/profile') {
       return send(200, request.method === 'PATCH' ? { version: 1, ...body } : { version: 1 });
     }
+    if (request.url === '/v1/do-not-call') {
+      return send(200, { numbers: [] });
+    }
     if (request.url.startsWith('/v1/calls/call-0123456789abcdef/wait')) {
       polls += 1;
       return send(200, { id: 'call-0123456789abcdef', status: polls > 1 ? 'completed' : 'ringing', result: { outcome: 'achieved', summary: 'Booked.' } });
@@ -645,6 +648,24 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   assert.deepEqual(brief.questions, ['Launch now or wait?', 'Who would use it?']);
   assert.equal(brief.tone, 'casual');
   assert.deepEqual(brief.context, { summary: 'Smitline lets agents call.', details: 'Pricing.' });
+
+  const late = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Say goodnight', '--after-hours']);
+  assert.equal(late.code, 0, late.stderr);
+  const lateBrief = daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body;
+  assert.equal(lateBrief.afterHours, true);
+  for (const args of [['do-not-call', 'add', '+14155550143', '--reason', 'Asked by text'],
+    ['do-not-call', 'remove', '+14155550143'], ['do-not-call', 'list']]) {
+    const result = await runCli([...args, ...common]);
+    assert.equal(result.code, 0, result.stderr);
+  }
+  const lists = daemon.seen.filter((item) => item.url === '/v1/do-not-call');
+  assert.deepEqual(lists.map((item) => [item.method, item.body]), [
+    ['PATCH', { add: [{ number: '+14155550143', reason: 'Asked by text' }] }],
+    ['PATCH', { remove: ['+14155550143'] }],
+    ['GET', lists[2].body],
+  ]);
+  const missing = await runCli(['do-not-call', 'add', ...common]);
+  assert.notEqual(missing.code, 0);
 });
 
 async function closedPort() {

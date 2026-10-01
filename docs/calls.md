@@ -43,11 +43,12 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
   "voice": "marin",
   "maxMinutes": 10,
   "rehearsal": false,
+  "afterHours": false,
   "notify": { "webhookUrl": "https://example.com/hooks/smitline" }
 }
 ```
 
-Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits). Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`.
+Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now.
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
@@ -103,7 +104,7 @@ Meetings get the session context and `questions` as their starting context, with
 }
 ```
 
-`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once Twilio finishes the file. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. Meeting results come from the meeting handoff. `source` records which path produced the result.
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once Twilio finishes the file. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results come from the meeting handoff. `source` records which path produced the result.
 
 ## Cost
 
@@ -157,6 +158,8 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
+| `GET /v1/do-not-call` | Numbers Smitline refuses to call because the person asked not to be called again, kept in `.colleague/do-not-call.json`. |
+| `PATCH /v1/do-not-call` | `{"add": ["+1...", {"number": "+1...", "reason": "..."}], "remove": ["+1..."]}`. CLI: `smitline do-not-call add|remove <number>`. |
 | `GET /v1/openapi.json` | The machine-readable API description. |
 
 ### Meetings API
@@ -180,7 +183,8 @@ The call service calls a small hooks object so a managed deployment can add acco
 | --- | --- |
 | `owner_for(request)` | `local` |
 | `credentials(owner, provider)` | Reads `OPENAI_API_KEY` and `TWILIO_*` from the environment. |
-| `precheck(owner, brief)` | Allows the call, applying the configured country allow-list for phone calls. |
+| `precheck(owner, brief)` | For phone calls, applies the country allow-list and the [guardrails](phone.md#guardrails). |
+| `do_not_call(owner)`, `update_do_not_call(owner, update)` | Read and change `.colleague/do-not-call.json`. Without them, `/v1/do-not-call` returns `501` and a request not to be called again is only reported in the result. |
 | `record_usage(owner, call, usage)` | Appends a line to `usage.jsonl` in the call store. |
 | `notify(owner, call)` | Sends the brief's webhook, if any. |
 | `profile(owner)`, `save_profile(owner, profile)` | Read and write `.colleague/profile.json` next to `.env`. Without them, calls get no profile and `/v1/profile` returns `501`. |

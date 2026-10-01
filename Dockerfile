@@ -24,9 +24,12 @@ COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY meeting-runtime/requirements-daemon.txt /tmp/requirements-daemon.txt
+# phonenumbers' place names (geodata, 38 MB) are never used: call_policy only needs number
+# types and time zones.
 RUN apt-get update && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r /tmp/requirements-daemon.txt && rm /tmp/requirements-daemon.txt \
+    && rm -rf /usr/local/lib/python3.12/site-packages/phonenumbers/geodata \
     && groupadd --gid 1001 app && useradd --uid 1001 --gid 1001 -m app
 
 WORKDIR /app

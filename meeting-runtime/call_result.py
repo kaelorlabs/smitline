@@ -13,7 +13,8 @@ MAX_ITEMS = 20
 RESULT_SCHEMA = {
     'type': 'object',
     'additionalProperties': False,
-    'required': ['outcome', 'summary', 'details', 'decisions', 'actionItems', 'openQuestions'],
+    'required': ['outcome', 'summary', 'details', 'decisions', 'actionItems', 'openQuestions',
+                 'doNotCall'],
     'properties': {
         'outcome': {'type': 'string', 'enum': [o for o in OUTCOMES if o != 'canceled']},
         'summary': {'type': 'string'},
@@ -29,6 +30,7 @@ RESULT_SCHEMA = {
         'decisions': {'type': 'array', 'items': {'type': 'string'}},
         'actionItems': {'type': 'array', 'items': {'type': 'string'}},
         'openQuestions': {'type': 'array', 'items': {'type': 'string'}},
+        'doNotCall': {'type': 'boolean'},
     },
 }
 
@@ -49,7 +51,10 @@ SUMMARY_INSTRUCTIONS = (
     'details: concrete facts the user needs later, such as confirmation numbers, times, prices, '
     'names, and addresses, each as a short label and value. '
     'decisions: what was agreed. actionItems: follow-ups the user must do. '
-    'openQuestions: anything left unresolved. Use empty arrays when there is nothing.'
+    'openQuestions: anything left unresolved. Use empty arrays when there is nothing. '
+    'doNotCall: true only when the other person clearly asked not to be called again, such as '
+    '"stop calling me" or "take this number off your list"; false otherwise, including when they '
+    'were only busy or declined this one request.'
 )
 
 
@@ -98,10 +103,10 @@ def _clean_details(values):
 
 
 def build_result(*, outcome, summary, transcript=(), details=(), decisions=(), action_items=(),
-                 open_questions=(), duration_seconds=0, source='transcript'):
+                 open_questions=(), duration_seconds=0, source='transcript', do_not_call=False):
     if outcome not in OUTCOMES:
         outcome = 'failed'
-    return {
+    result = {
         'outcome': outcome,
         'summary': clip_tokens(str(summary or '').strip(), 300),
         'details': _clean_details(details),
@@ -112,6 +117,9 @@ def build_result(*, outcome, summary, transcript=(), details=(), decisions=(), a
         'durationSeconds': max(0, int(duration_seconds or 0)),
         'source': source,
     }
+    if do_not_call is True:
+        result['doNotCall'] = True
+    return result
 
 
 def result_without_conversation(end_reason, *, transcript=(), duration_seconds=0):
@@ -217,7 +225,8 @@ class ResponsesSummarizer:
             outcome=data.get('outcome'), summary=data.get('summary'), transcript=transcript,
             details=data.get('details'), decisions=data.get('decisions'),
             action_items=data.get('actionItems'), open_questions=data.get('openQuestions'),
-            duration_seconds=duration_seconds, source='summary_model')
+            duration_seconds=duration_seconds, source='summary_model',
+            do_not_call=data.get('doNotCall'))
         result['summaryTokens'] = {
             'input': int(usage.get('input_tokens') or 0),
             'cached': int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0),

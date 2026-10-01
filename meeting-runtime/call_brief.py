@@ -15,7 +15,7 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'notify',
+    'rehearsal', 'afterHours', 'notify',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
@@ -24,6 +24,13 @@ LANGUAGE = re.compile(r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$')
 DEFAULT_MAX_MINUTES = {'phone': 10, 'meeting': 120}
 MAX_MINUTES = {'phone': 60, 'meeting': 240}
 MAX_CONTEXT = 6000
+# Short numbers that reach emergency services or crisis lines somewhere in the world.
+# Smitline never dials them: a person in trouble must reach help directly.
+EMERGENCY_NUMBERS = frozenset({
+    '000', '08', '061', '100', '101', '102', '108', '110', '111', '112', '113', '115', '117',
+    '118', '119', '122', '123', '125', '133', '150', '155', '190', '191', '192', '193', '197',
+    '199', '911', '988', '999', '1122', '10111', '15', '17', '18',
+})
 
 QUESTIONS = {
     'channel': 'Should I place a phone call or join a video meeting?',
@@ -44,6 +51,14 @@ class BriefIncomplete(ValueError):
         return {
             'missing': [{'field': name, 'question': QUESTIONS[name]} for name in self.missing],
         }
+
+
+def emergency_number(value):
+    """True for an emergency or crisis short number, written with or without a country code."""
+    digits = re.sub(r'\D', '', str(value or ''))
+    if not digits or len(digits) > 6:
+        return False
+    return any(digits[cut:] in EMERGENCY_NUMBERS for cut in range(0, min(4, len(digits) - 1)))
 
 
 def normalize_phone(value, name='to'):
@@ -109,6 +124,7 @@ class CallBrief:
     voice: str = None
     max_minutes: int = None
     rehearsal: bool = False
+    after_hours: bool = False
     webhook_url: str = None
 
     @property
@@ -138,6 +154,7 @@ class CallBrief:
             'voice': self.voice,
             'maxMinutes': self.max_minutes,
             'rehearsal': self.rehearsal,
+            'afterHours': True if self.after_hours else None,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
         }
         return {key: value for key, value in data.items() if value is not None}
@@ -153,6 +170,9 @@ class CallBrief:
             raise BriefIncomplete(missing)
         channel = require_enum(data['channel'], 'channel', CHANNELS)
         if channel == 'phone':
+            if emergency_number(data['to']):
+                raise ValueError('Smitline never calls emergency or crisis numbers. If someone '
+                                 'needs help, call the number yourself now.')
             to = normalize_phone(data['to'])
         else:
             to = require_string(data['to'], 'to', max_length=2048)
@@ -174,6 +194,10 @@ class CallBrief:
         rehearsal = False if rehearsal is None else require_bool(rehearsal, 'rehearsal')
         if rehearsal and channel != 'phone':
             raise ValueError('rehearsal is only supported for phone calls')
+        after_hours = optional_field(data, 'afterHours')
+        after_hours = False if after_hours is None else require_bool(after_hours, 'afterHours')
+        if after_hours and channel != 'phone':
+            raise ValueError('afterHours is only for phone calls')
         notify = optional_field(data, 'notify')
         webhook_url = None
         if notify is not None:
@@ -209,6 +233,7 @@ class CallBrief:
             voice=voice,
             max_minutes=max_minutes,
             rehearsal=rehearsal,
+            after_hours=after_hours,
             webhook_url=webhook_url,
         )
 

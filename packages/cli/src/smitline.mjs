@@ -63,7 +63,7 @@ function requestInterrupt() {
 const USAGE = `Usage:
   smitline call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
-               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--webhook <url>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--check] [--wait]
   smitline call --meeting <url> --objective <text> [...same options] [--wait]
@@ -75,6 +75,7 @@ const USAGE = `Usage:
   smitline profile show
   smitline profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
   smitline profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
+  smitline do-not-call [list] | add <+E.164> [--reason <text>] | remove <+E.164>
   smitline voices
   smitline setup status [--json] [--no-verify]
   smitline setup secrets [--no-open] [--wait]
@@ -228,6 +229,7 @@ async function briefFromArgs(args, root) {
     voice: text(args.voice),
     maxMinutes: text(args['max-minutes']) === undefined ? undefined : Number(args['max-minutes']),
     rehearsal: args.rehearsal === true ? true : undefined,
+    afterHours: args['after-hours'] === true ? true : undefined,
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
   };
   return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
@@ -727,6 +729,28 @@ async function profileCommand(args) {
 }
 
 // Remote connector grants: listed and revoked without showing any token.
+// People who asked not to be called again. Calls to them are refused until they are removed.
+async function doNotCallCommand(args) {
+  const { client } = colleagueFromArgs(args);
+  const action = args._[1] || 'list';
+  if (action === 'list') {
+    printJson(await client.getDoNotCall());
+    return EXIT.ok;
+  }
+  const number = args._[2] === undefined ? undefined : String(args._[2]);
+  if (!['add', 'remove'].includes(action)) throw new ValidationError('unknown do-not-call command');
+  if (!number) throw new ValidationError(`usage: smitline do-not-call ${action} <+E.164>`);
+  const reason = args.reason === undefined || args.reason === true ? undefined : String(args.reason);
+  const update = action === 'add' ? { add: [reason ? { number, reason } : number] } : { remove: [number] };
+  try {
+    printJson(await client.updateDoNotCall(update));
+  } catch (error) {
+    explainValidation(error);
+    throw error;
+  }
+  return EXIT.ok;
+}
+
 async function connectorCommand(args) {
   const root = dataRoot(args);
   const store = openConnectorStore(root);
@@ -768,6 +792,7 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'setup') return await setupCommand(args);
     if (command === 'connector') return await connectorCommand(args);
     if (command === 'profile') return await profileCommand(args);
+    if (command === 'do-not-call') return await doNotCallCommand(args);
     if (command === 'mcp') {
       // The stdio MCP server in this process (docker exec -i smitline smitline mcp).
       // stdout carries protocol frames only; this returns when stdin closes.

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import base64
 import hashlib
 import hmac
@@ -173,7 +174,10 @@ class PhoneHarness:
         self.env = dict(ENV if env is None else env)
         self.twilio = FakeTwilio()
         self.store = CallStore(Path(temp) / 'calls')
-        self.hooks = DefaultCallHooks(environ=self.env, store=self.store)
+        # 11 AM in San Francisco, where the test numbers ring: inside calling hours.
+        self.hooks = DefaultCallHooks(
+            environ=self.env, store=self.store,
+            clock=lambda: datetime(2026, 9, 30, 18, 0, tzinfo=timezone.utc))
 
         self.url_ready = asyncio.Event()
         self.url_ready.set()

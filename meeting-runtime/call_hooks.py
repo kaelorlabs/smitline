@@ -4,6 +4,7 @@ The defaults serve one local owner and read provider credentials from the
 environment. A managed deployment supplies its own hooks through
 COLLEAGUE_CALL_HOOKS=module:factory without changing the call service.
 """
+from datetime import datetime, timezone
 import importlib
 import inspect
 import os
@@ -146,11 +147,19 @@ def read_env_file(path):
 
 
 class DefaultCallHooks:
-    def __init__(self, *, environ=None, env_file=None, store=None, notifier=None):
+    def __init__(self, *, environ=None, env_file=None, store=None, notifier=None, clock=None):
+        from pathlib import Path
+        from call_policy import DoNotCallList
         self._environ = os.environ if environ is None else environ
         self.env_file = env_file
         self.store = store
         self.notifier = notifier
+        self.clock = clock
+        self.do_not_call_list = DoNotCallList(
+            Path(env_file).parent / '.colleague' / 'do-not-call.json' if env_file else None)
+
+    def now(self):
+        return self.clock() if self.clock else datetime.now(timezone.utc)
 
     @property
     def environ(self):
@@ -243,6 +252,31 @@ class DefaultCallHooks:
             raise CallRefused(
                 'destination_not_allowed',
                 'That country is not in COLLEAGUE_ALLOWED_CALLING_CODES for this installation.')
+        from call_policy import (
+            PolicyProblem, check_cost, check_do_not_call, check_hours, check_repeats,
+        )
+        own_number = brief.to == _usable(env.get('COLLEAGUE_OWNER_PHONE'))
+        now = self.now()
+        try:
+            check_cost(brief.to, env)
+            check_do_not_call(brief.to, self.do_not_call_list.entries())
+            if not (own_number or brief.after_hours):
+                check_hours(brief.to, now, env)
+            if self.store is not None:
+                check_repeats(brief.to, self.store.list(limit=None), now, env,
+                              own_number=own_number)
+        except PolicyProblem as problem:
+            raise CallRefused(problem.code, problem.message) from problem
+
+    def do_not_call(self, owner):
+        return {'numbers': self.do_not_call_list.entries()}
+
+    def update_do_not_call(self, owner, update):
+        from call_policy import PolicyProblem
+        try:
+            return {'numbers': self.do_not_call_list.update(update, now=self.now())}
+        except PolicyProblem as problem:
+            raise ValueError(problem.message) from problem
 
     def record_usage(self, owner, call, usage):
         if self.store is None:
