@@ -167,4 +167,4 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 | The agent does not show the call tools | Run step 7 again and restart the agent app |
 | Anything else | `docker logs smitline` |
 
-Contributors running from a checkout instead of the image: see [README.md](README.md#run-from-a-checkout).
+Contributors running from a checkout instead of the image: see [development](docs/development.md#run-from-a-checkout).

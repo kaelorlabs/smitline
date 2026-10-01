@@ -4,7 +4,11 @@ Read these before proposing product, architecture, or runtime changes:
 
 | Document | Purpose |
 | --- | --- |
-| [README.md](README.md) | What Smitline does, setup, security model, surfaces, tests, troubleshooting |
+| [README.md](README.md) | What Smitline does, how to get started, safety, limitations |
+| [docs/development.md](docs/development.md) | Surfaces, project layout, running from a checkout, tests |
+| [docs/security.md](docs/security.md) | Security model, data and privacy |
+| [docs/meetings.md](docs/meetings.md) | Joining meetings, the meetings console, local interfaces |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and fixes |
 | [docs/product-vision-and-progress.md](docs/product-vision-and-progress.md) | Canonical product brief, settled decisions, progress ledger |
 | [docs/architecture.md](docs/architecture.md) | Runtime layout, sequences, retention and deletion |
 | [docs/calls.md](docs/calls.md) | Call API: briefs, lifecycle, results, costs, delivery, hooks, server mode |
