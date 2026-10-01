@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Setup offers a phone-calls-only start without the Docker socket, says plainly what mounting the socket allows, and tells agents to let the user run the command when their safeguards block it.
+
 ## 0.1.1 — 2026-10-01
 
 ### Call guardrails

@@ -57,6 +57,7 @@ Smitline runs as one container, `smitline`, which starts a second container for 
 - **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the `smitline` data volume (the ignored `.env` in a checkout), typed into a one-time local page rather than an agent chat. Local agents reach the MCP endpoint with a local token; browsers are refused. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
 - **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
 - **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
+- **Docker access is your choice.** Meetings need the Docker socket mounted, so Smitline can start its meeting container; that gives the container control of Docker on your computer. It uses it only to download, start and stop its own meeting container. Phone calls work without it. See [Get started](#get-started).
 - **Call guardrails.** Smitline never dials emergency, premium-rate, or satellite numbers; calls people only between 8 AM and 9 PM their time; stops calling anyone who asks it to; and limits repeat calls. See [guardrails](docs/phone.md#guardrails).
 - **Operator mute is authoritative.** Smitline does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
@@ -80,6 +81,14 @@ The agent follows [SETUP.md](SETUP.md). It starts the `smitline` container with 
 ```bash
 docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/smitline
 ```
+
+The Docker socket (`-v /var/run/docker.sock…`) lets Smitline start its meeting container, and it gives the container control of Docker on your computer, which is close to administrator access. If you only want phone calls, leave it out:
+
+```bash
+docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data ghcr.io/kaelorlabs/smitline
+```
+
+Your agent may ask you to run the command yourself, because of that access. That's expected.
 
 In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of it (or write `-v //var/run/docker.sock:/var/run/docker.sock`), because Git Bash rewrites the socket path. Once it runs, the console answers at http://127.0.0.1:8095; if it does not on Docker Desktop, turn on host networking and run `docker restart smitline`. To pin a version, use a tag such as `ghcr.io/kaelorlabs/smitline:0.1.0`.
 
