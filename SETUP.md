@@ -29,9 +29,26 @@ Run the `docker` commands below wherever `docker info` works: a terminal on macO
 
 ## 2. Start Smitline
 
+Smitline runs as one container. If you don't already know whether the user wants Smitline to join video meetings, ask, because meetings need more access to Docker than phone calls do.
+
+**Phone calls and meetings:**
+
 ```bash
 docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/smitline
 ```
+
+**Phone calls only** (no access to the Docker socket):
+
+```bash
+docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data ghcr.io/kaelorlabs/smitline
+```
+
+What the two flags allow, in words you can pass on to the user:
+
+- `-v /var/run/docker.sock:/var/run/docker.sock` lets Smitline start its meeting container, a browser that joins Zoom, Teams or Google Meet. Access to the Docker socket is powerful: a container that has it can start, stop or remove any container on this computer, which is close to administrator access. Smitline uses it only to download, start and stop its own meeting container. Phone calls don't need it. To add meetings later, run `docker rm -f smitline` and then the full command: keys, settings and call history stay in the `smitline` volume.
+- `--network host` lets this computer reach Smitline's console and API, which listen only on `127.0.0.1`, and lets the meeting container reach them.
+
+If your own permission safeguards block the command, don't try to get around them. Show the user the command, say in one sentence what the Docker socket allows, and let them run it in a terminal themselves, or start with phone calls only. Continue when they say it's running.
 
 In Git Bash on Windows, which some agents use, put `MSYS_NO_PATHCONV=1 ` in front of the command, or write the socket as `-v //var/run/docker.sock:/var/run/docker.sock`: Git Bash otherwise rewrites `/var/run/docker.sock` into a Windows path.
 
@@ -60,7 +77,7 @@ The command exits with code 3 until `ready` is true. That is expected: read the 
 - `phoneReady`, `meetingsReady`: each channel can be used.
 - `firstCallReady`: the test call to the user's phone can be made.
 - `next`: steps to do now, in order. Each has a `fix` command, an `ask` question when the user must decide something, and sometimes a `suggest` to apply without asking.
-- `optional`: steps that only matter if the user wants that channel.
+- `optional`: steps that only matter if the user wants that channel. With phone calls only, the Docker check stays here; don't ask about it unless the user wants meetings.
 
 Run it again after each change.
 
