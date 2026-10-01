@@ -741,7 +741,7 @@ function renderCall(call, { focusTitle = false } = {}) {
   const recording = call.recording && typeof call.recording.url === 'string' ? call.recording : null;
   $('recording').hidden = !recording;
   $('recording-text').textContent = recording
-    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'both sides on separate channels, kept in your phone account'].filter(Boolean).join(' · ')
+    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'kept in your phone account; the WAV has each side on its own channel'].filter(Boolean).join(' · ')
     : '';
   for (const format of ['wav', 'mp3']) {
     $(`recording-${format}`).href = recording ? `/api/calls/${encodeURIComponent(call.id)}/recording?format=${format}` : '';

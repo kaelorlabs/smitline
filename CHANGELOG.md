@@ -13,7 +13,7 @@
 ### Recording on request
 
 - A brief with `record: true` (CLI `--record`) records that one call; `COLLEAGUE_RECORD_CALLS=1` still records every call.
-- Download a recording, both sides on separate channels, with `smitline calls recording --call-id <id> --out call.wav`, from the call's page in the console, or from `GET /v1/calls/{id}/recording`.
+- Download a recording (WAV keeps both sides on separate channels; MP3 mixes them) with `smitline calls recording --call-id <id> --out call.wav`, from the call's page in the console, or from `GET /v1/calls/{id}/recording`.
 
 ## 0.1.0 — 2026-09-30
 

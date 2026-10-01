@@ -108,7 +108,7 @@
     },
     "/v1/calls/{callId}/recording": {
       "get": {
-        "summary": "Download a recorded call from the phone provider: both sides on separate channels",
+        "summary": "Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one.",
         "operationId": "getCallRecording",
         "parameters": [
           { "name": "callId", "in": "path", "required": true, "schema": { "type": "string" } },
@@ -205,7 +205,7 @@
           "voice": { "type": "string", "examples": ["marin"] },
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
-          "record": { "type": "boolean", "description": "Phone only: record this call, both sides on separate channels, in the owner's phone account. The assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
+          "record": { "type": "boolean", "description": "Phone only: record this call in the owner's phone account. The assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
           "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } }
         }

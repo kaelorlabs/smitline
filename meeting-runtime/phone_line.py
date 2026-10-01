@@ -1197,7 +1197,7 @@ class PhoneLine:
     async def recording_audio(self, credentials, record, fmt):
         """The call's recording from the provider, as (bytes, content type).
 
-        Twilio and SignalWire record the two sides of the call on separate channels.
+        WAV keeps the two sides of the call on separate channels; MP3 mixes them into one.
         """
         from urllib.parse import urlsplit
         from twilio_client import API_BASE

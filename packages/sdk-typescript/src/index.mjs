@@ -365,7 +365,7 @@ export class Colleague {
     return this._transport.updateProfile(update);
   }
 
-  /** A recorded call's audio (wav or mp3), both sides on separate channels. */
+  /** A recorded call's audio: wav (each side on its own channel) or mp3 (mixed). */
   async downloadRecording(callId, options) {
     return this._transport.downloadRecording(callId, options);
   }

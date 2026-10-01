@@ -156,7 +156,7 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions; with `"silent": true` it is a background note the voice uses when relevant. Meetings do not accept live instructions yet (`delivered: false`). |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |
 | `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
-| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call from the phone provider: both sides on separate channels. `404 no_recording` when there is none, `409 not_ready` while the call runs. |
+| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one. `404 no_recording` when there is none, `409 not_ready` while the call runs. |
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
