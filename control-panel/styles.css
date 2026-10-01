@@ -82,6 +82,9 @@ legend { float:left; width:100%; margin-bottom:12px}
 .participant-avatar { width:48px; height:48px; background:#eeeff5; border:1px solid #e1e2eb; border-radius:12px; display:flex; align-items:center; justify-content:center; font-family:"Avenir Next",sans-serif; font-size:34px; font-weight:600; color:#575b73; position:relative; margin-bottom:18px}
 .participant-avatar span { position:absolute; font-size:20px; color:#a1a3ad; bottom:-6px; right:0; background:#fafafb; line-height:14px; border:3px solid #fafafb; border-radius:50%}
 .signal-stage.active .participant-avatar span { color:var(--ok)}
+.avatar-mark { display:flex; align-items:center; gap:4px}
+.avatar-mark i { display:block; width:4px; height:13px; border-radius:2px; background:#575b73}
+.avatar-mark i:nth-child(2) { height:21px}
 .signal-label { color:var(--muted); text-transform:capitalize; font-size:12px; margin:0 0 8px}
 .signal-stage h3 { font-size:15px; font-weight:500; letter-spacing:-.15px; margin:0 0 8px}
 .signal-stage>p:last-child { font-size:12px; color:var(--muted); line-height:1.6; margin:0}
