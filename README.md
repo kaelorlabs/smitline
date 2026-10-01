@@ -61,6 +61,7 @@ Smitline runs as one container, `smitline`, which starts a second container for 
 - **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the `smitline` data volume (the ignored `.env` in a checkout), typed into a one-time local page rather than an agent chat. Local agents reach the MCP endpoint with a local token; browsers are refused. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
 - **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
 - **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
+- **Call guardrails.** Smitline never dials emergency, premium-rate, or satellite numbers; calls people only between 8 AM and 9 PM their time; stops calling anyone who asks it to; and limits repeat calls. See [guardrails](docs/phone.md#guardrails).
 - **Operator mute is authoritative.** Smitline does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
 ## Prerequisites

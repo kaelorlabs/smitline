@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,13 +85,17 @@ class RecordingNotifier:
         return {'delivered': True, 'attempts': 1, 'status': 200}
 
 
+# 11 AM in San Francisco, where the test number rings: inside calling hours.
+DAYTIME = lambda: datetime(2026, 9, 30, 18, 0, tzinfo=timezone.utc)
+
+
 class ServiceHarness:
     def __init__(self, temp, environ=None, lines=None):
         self.store = CallStore(Path(temp) / 'calls')
         self.notifier = RecordingNotifier()
         self.hooks = DefaultCallHooks(environ=environ if environ is not None else
                                       {'OPENAI_API_KEY': 'sk-test'},
-                                      store=self.store, notifier=self.notifier)
+                                      store=self.store, notifier=self.notifier, clock=DAYTIME)
         self.line = FakeLine()
         self.summarizer = FakeSummarizer()
         self.service = CallService(self.store, hooks=self.hooks,
@@ -186,6 +191,35 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         blocked = await self.h.service.check(brief())
         self.assertFalse(blocked['ok'])
         self.assertIn('COLLEAGUE_ALLOWED_CALLING_CODES', blocked['problems'][0])
+
+    async def test_a_request_not_to_call_again_is_honored(self):
+        summarize = self.h.summarizer.summarize
+
+        async def asked_not_to_call(*args, **kwargs):
+            return dict(await summarize(*args, **kwargs), outcome='declined', doNotCall=True)
+        self.h.summarizer.summarize = asked_not_to_call
+        record = await self.h.service.create(brief())
+        self.h.line.proceed.set()
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertTrue(done['result']['doNotCall'])
+        self.assertIn('call.do_not_call', [e['type'] for e in self.h.service.events(record['id'])])
+        listed = self.h.service.do_not_call('local')['numbers']
+        self.assertEqual([(e['number'], e['callId']) for e in listed], [('+14155550142', record['id'])])
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.create(brief())
+        self.assertEqual((caught.exception.status, caught.exception.code), (403, 'do_not_call'))
+        self.assertIn('smitline do-not-call remove +14155550142', caught.exception.message)
+        # A rehearsal is the owner playing the other side; it never fills the list.
+        self.h.service.update_do_not_call('local', {'remove': ['+14155550142']})
+        self.h.hooks._environ['COLLEAGUE_OWNER_PHONE'] = '+14155550142'
+        self.h.line.proceed = asyncio.Event()
+        rehearsal = await self.h.service.create(brief(rehearsal=True))
+        self.h.line.proceed.set()
+        await self.h.service.wait(rehearsal['id'], timeout=5)
+        self.assertEqual(self.h.service.do_not_call('local')['numbers'], [])
+        with self.assertRaises(CallError) as caught:
+            self.h.service.update_do_not_call('local', {'add': ['555']})
+        self.assertEqual(caught.exception.code, 'invalid_request')
 
     async def test_statuses_never_move_backwards(self):
         record = await self.h.service.create(brief())

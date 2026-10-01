@@ -132,6 +132,26 @@
           "501": { "$ref": "#/components/responses/Error" }
         }
       }
+    },
+    "/v1/do-not-call": {
+      "get": {
+        "summary": "List the numbers Smitline refuses to call because the person asked not to be called again",
+        "operationId": "getDoNotCall",
+        "responses": {
+          "200": { "description": "The list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "summary": "Add numbers to the do-not-call list, or remove them",
+        "operationId": "updateDoNotCall",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallUpdate" } } } },
+        "responses": {
+          "200": { "description": "The saved list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
+          "422": { "$ref": "#/components/responses/Error" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
     }
   },
   "components": {
@@ -169,6 +189,7 @@
           "voice": { "type": "string", "examples": ["marin"] },
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
+          "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } }
         }
       },
@@ -226,6 +247,42 @@
           "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
           "removePeople": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "DoNotCallList": {
+        "type": "object",
+        "required": ["numbers"],
+        "properties": {
+          "numbers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["number", "addedAt"],
+              "properties": {
+                "number": { "type": "string", "description": "E.164" },
+                "addedAt": { "type": "string", "format": "date-time" },
+                "reason": { "type": "string" },
+                "callId": { "type": "string", "description": "The call on which the person asked, when added automatically" }
+              }
+            }
+          }
+        }
+      },
+      "DoNotCallUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "add": {
+            "type": "array", "maxItems": 100,
+            "items": {
+              "oneOf": [
+                { "type": "string", "description": "E.164" },
+                { "type": "object", "additionalProperties": false, "required": ["number"], "properties": { "number": { "type": "string" }, "reason": { "type": "string", "maxLength": 300 }, "callId": { "type": "string" } } }
+              ]
+            }
+          },
+          "remove": { "type": "array", "maxItems": 100, "items": { "type": "string", "description": "E.164" } }
         }
       },
       "CheckResult": {
@@ -316,7 +373,8 @@
           "transcript": { "type": "array", "items": { "type": "object", "required": ["speaker", "text"], "properties": { "speaker": { "type": "string" }, "text": { "type": "string" } } } },
           "durationSeconds": { "type": "integer" },
           "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
-          "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the opening was heard saying it is an AI calling for onBehalfOf; false when it was not, even after a reminder; null when the agent never spoke." }
+          "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the opening was heard saying it is an AI calling for onBehalfOf; false when it was not, even after a reminder; null when the agent never spoke." },
+          "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." }
         }
       },
       "Error": {

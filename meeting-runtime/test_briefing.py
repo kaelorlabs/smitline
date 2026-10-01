@@ -152,3 +152,20 @@ class ProfileApiTests(unittest.IsolatedAsyncioTestCase):
                                            headers=self.auth)
         self.assertEqual(response.status, 422)
         self.assertEqual((await self.client.get('/v1/profile')).status, 401)
+
+    async def test_read_and_update_the_do_not_call_list(self):
+        response = await self.client.get('/v1/do-not-call', headers=self.auth)
+        self.assertEqual(await response.json(), {'numbers': []})
+        response = await self.client.patch('/v1/do-not-call', headers=self.auth, json={
+            'add': [{'number': '+1 415 555 0142', 'reason': 'Asked by text'}]})
+        self.assertEqual(response.status, 200)
+        listed = (await response.json())['numbers']
+        self.assertEqual((listed[0]['number'], listed[0]['reason']), ('+14155550142', 'Asked by text'))
+        saved = json.loads((self.path.parent / 'do-not-call.json').read_text())
+        self.assertEqual(saved['numbers'][0]['number'], '+14155550142')
+        response = await self.client.patch('/v1/do-not-call', headers=self.auth, json={'add': ['12']})
+        self.assertEqual(response.status, 422)
+        response = await self.client.patch('/v1/do-not-call', headers=self.auth,
+                                           json={'remove': ['+14155550142']})
+        self.assertEqual(await response.json(), {'numbers': []})
+        self.assertEqual((await self.client.get('/v1/do-not-call')).status, 401)

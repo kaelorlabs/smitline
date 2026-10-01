@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod 0755 /home/app
 
 COPY joinly/joinly /opt/joinly/joinly
+# The runtime test suite runs in this image; call guardrails need phonenumbers.
+RUN /app/.venv/bin/pip install --no-cache-dir phonenumbers==9.0.40
 COPY meeting-runtime /meeting-runtime
 RUN mkdir -p /data/meetings \
     && for name in run recordings profiles; do ln -s /data/meetings/$name /meeting-runtime/$name; done

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import tempfile
@@ -241,12 +242,14 @@ class HookTests(unittest.TestCase):
             self.assertEqual(override.credentials('local', 'openai')['apiKey'], 'from-env')
 
     def test_calling_code_allow_list(self):
-        hooks = DefaultCallHooks(environ={'COLLEAGUE_ALLOWED_CALLING_CODES': '1, +44'})
+        hooks = DefaultCallHooks(environ={'COLLEAGUE_ALLOWED_CALLING_CODES': '1, +44',
+                                          'COLLEAGUE_CALLING_HOURS': 'off'})
         hooks.precheck('local', CallBrief.from_dict(phone_brief()))
         hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+442079460123')))
         with self.assertRaises(CallRefused):
             hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))
-        DefaultCallHooks(environ={}).precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))
+        DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off'}).precheck(
+            'local', CallBrief.from_dict(phone_brief(to='+919876543210')))
 
     def test_load_hooks(self):
         self.assertIsInstance(load_hooks(None, environ={}), DefaultCallHooks)
@@ -289,7 +292,7 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
             return {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({
                 'outcome': 'achieved', 'summary': 'Booked for 7pm.',
                 'details': [{'label': 'Confirmation', 'value': 'LG-2291'}, {'label': '', 'value': 'x'}],
-                'decisions': ['7pm'], 'actionItems': [], 'openQuestions': [],
+                'decisions': ['7pm'], 'actionItems': [], 'openQuestions': [], 'doNotCall': False,
             })}]}], 'usage': {'input_tokens': 900, 'output_tokens': 80}}
         summarizer = ResponsesSummarizer('sk-test', post=post)
         result = await summarizer.summarize({'objective': 'Book', 'onBehalfOf': 'Robin'},
@@ -302,6 +305,8 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['summaryTokens'], {'input': 900, 'cached': 0, 'output': 80})
         self.assertEqual(result['summaryModel'], summarizer.model)
         self.assertEqual(result['transcript'][1]['speaker'], 'other')
+        self.assertNotIn('doNotCall', result)
+        self.assertIn('doNotCall', RESULT_SCHEMA['required'])
 
     async def test_summarizer_failures(self):
         async def bad(payload):
@@ -317,6 +322,149 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
     def test_transcript_text_is_bounded(self):
         long = [{'speaker': 'other', 'text': 'x' * 1000}] * 100
         self.assertLessEqual(len(transcript_text(long, limit=2000)), 2100)
+
+
+def at(hour, minute=0, day=30):
+    """A clock fixed at the given UTC time on 2026-09-<day>."""
+    return lambda: datetime(2026, 9, day, hour, minute, tzinfo=timezone.utc)
+
+
+class FakeCalls:
+    def __init__(self, records=()):
+        self.records = list(records)
+
+    def list(self, *, owner=None, limit=20):
+        return self.records[:limit]
+
+
+def placed(to, minutes_ago, *, now, rehearsal=False, channel='phone', direction='outbound'):
+    created = now - timedelta(minutes=minutes_ago)
+    return {'channel': channel, 'direction': direction,
+            'createdAt': created.isoformat().replace('+00:00', 'Z'),
+            'brief': {'to': to, 'rehearsal': rehearsal}}
+
+
+class GuardrailTests(unittest.TestCase):
+    def refused(self, hooks, **brief):
+        with self.assertRaises(CallRefused) as caught:
+            hooks.precheck('local', CallBrief.from_dict(phone_brief(**brief)))
+        return caught.exception
+
+    def test_emergency_numbers_are_never_dialed(self):
+        for number in ('911', '112', '999', '988', '000', '+1 911', '+44 999', '+91 112', '+33 15'):
+            with self.subTest(number=number), self.assertRaises(ValueError) as caught:
+                CallBrief.from_dict(phone_brief(to=number))
+            self.assertIn('never calls emergency', str(caught.exception))
+        # Ordinary numbers that merely contain those digits are fine.
+        CallBrief.from_dict(phone_brief(to='+1 415 911 0142'))
+        with self.assertRaises(ValueError) as caught:
+            CallBrief.from_dict(phone_brief(to='5550'))
+        self.assertIn('E.164', str(caught.exception))
+
+    def test_premium_and_satellite_numbers_are_refused(self):
+        hooks = DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off'})
+        self.assertEqual(self.refused(hooks, to='+1 900 555 0100').code, 'high_cost_number')
+        self.assertIn('premium-rate', self.refused(hooks, to='+44 871 234 5678').message)
+        self.assertIn('satellite', self.refused(hooks, to='+882 123 456 789').message)
+        hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+1 800 555 0100')))
+        allowed = DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off',
+                                            'COLLEAGUE_ALLOW_PREMIUM_NUMBERS': '1'})
+        allowed.precheck('local', CallBrief.from_dict(phone_brief(to='+1 900 555 0100')))
+
+    def test_calls_happen_in_the_recipients_daytime(self):
+        # 06:00 UTC is 11 PM the evening before in San Francisco.
+        night = DefaultCallHooks(environ={}, clock=at(6))
+        refused = self.refused(night)
+        self.assertEqual(refused.code, 'outside_calling_hours')
+        self.assertIn('11:00 PM for +14155550142 (America/Los_Angeles)', refused.message)
+        self.assertIn('afterHours', refused.message)
+        # The same moment is 7 AM in London (still too early) and 11:30 AM in India.
+        self.assertIn('7:00 AM', self.refused(night, to='+442079460123').message)
+        night.precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))
+        # The user confirmed the person expects the call.
+        night.precheck('local', CallBrief.from_dict(phone_brief(afterHours=True)))
+        # The owner's own phone may ring at any hour.
+        own = DefaultCallHooks(environ={'COLLEAGUE_OWNER_PHONE': '+14155550142'}, clock=at(6))
+        own.precheck('local', CallBrief.from_dict(phone_brief()))
+        for hours in ('off', '07:00-23:30'):
+            DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': hours}, clock=at(6)).precheck(
+                'local', CallBrief.from_dict(phone_brief()))
+        for hours in ('late', '21:00-08:00', '08:00-25:00'):
+            self.assertEqual(self.refused(DefaultCallHooks(
+                environ={'COLLEAGUE_CALLING_HOURS': hours}, clock=at(18))).code, 'invalid_calling_hours')
+        with self.assertRaises(ValueError):
+            CallBrief.from_dict(phone_brief(channel='meeting', to=ZOOM, afterHours=True))
+        self.assertTrue(CallBrief.from_dict(phone_brief(afterHours=True)).to_dict()['afterHours'])
+        self.assertNotIn('afterHours', CallBrief.from_dict(phone_brief()).to_dict())
+
+    def test_numbers_spanning_time_zones_ring_while_any_is_in_daytime(self):
+        # A Russian mobile may ring from Kaliningrad to Kamchatka. At 22:00 UTC it is 1 AM in
+        # Moscow but 8 AM in Vladivostok; at 19:00 UTC it is night in every one of its zones.
+        DefaultCallHooks(environ={}, clock=at(22)).precheck(
+            'local', CallBrief.from_dict(phone_brief(to='+79161234567')))
+        late = self.refused(DefaultCallHooks(environ={}, clock=at(19)), to='+79161234567')
+        self.assertIn('every time zone', late.message)
+
+    def test_repeat_calls_are_limited(self):
+        now = at(18)()
+        number = '+14155550142'
+        calls = FakeCalls([placed_at(number, 60 * hours, now) for hours in (1, 3, 5, 7, 9)])
+        hooks = DefaultCallHooks(environ={}, store=calls, clock=at(18))
+        refused = self.refused(hooks)
+        self.assertEqual(refused.code, 'too_many_calls_to_number')
+        self.assertIn('called +14155550142 5 times', refused.message)
+        self.assertIn('again in about 15 hours', refused.message)
+        hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+14155550199')))
+        # Rehearsals, incoming calls, and older calls do not count; the owner has no limit.
+        calls.records[0]['brief']['rehearsal'] = True
+        calls.records[1]['direction'] = 'inbound'
+        calls.records.append(placed_at(number, 60 * 25, now))
+        hooks.precheck('local', CallBrief.from_dict(phone_brief()))
+        calls.records[0]['brief']['rehearsal'] = False
+        calls.records[1]['direction'] = 'outbound'
+        DefaultCallHooks(environ={'COLLEAGUE_OWNER_PHONE': number}, store=calls,
+                         clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
+        DefaultCallHooks(environ={'COLLEAGUE_MAX_CALLS_PER_NUMBER': '0'}, store=calls,
+                         clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
+        self.assertEqual(self.refused(DefaultCallHooks(
+            environ={'COLLEAGUE_MAX_CALLS_PER_NUMBER': 'many'}, store=calls,
+            clock=at(18))).code, 'invalid_call_limit')
+
+        busy = FakeCalls([placed_at(f'+1415555{index:04d}', index + 1, now) for index in range(20)])
+        refused = self.refused(DefaultCallHooks(environ={}, store=busy, clock=at(18)))
+        self.assertEqual(refused.code, 'too_many_calls')
+        self.assertIn('placed 20 calls in the last hour', refused.message)
+        DefaultCallHooks(environ={'COLLEAGUE_MAX_CALLS_PER_HOUR': '25'}, store=busy,
+                         clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
+
+    def test_do_not_call_list(self):
+        with tempfile.TemporaryDirectory() as temp:
+            hooks = DefaultCallHooks(environ={}, env_file=Path(temp) / '.env', clock=at(18))
+            listed = hooks.update_do_not_call('local', {'add': [
+                '+1 (415) 555-0142', {'number': '+14155550199', 'reason': 'Asked by email'}]})
+            self.assertEqual([e['number'] for e in listed['numbers']], ['+14155550142', '+14155550199'])
+            self.assertEqual(listed['numbers'][0]['addedAt'], '2026-09-30T18:00:00Z')
+            path = Path(temp) / '.colleague' / 'do-not-call.json'
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            refused = self.refused(hooks)
+            self.assertEqual(refused.code, 'do_not_call')
+            self.assertIn('since 2026-09-30', refused.message)
+            # Adding twice keeps one entry; removing lets calls through again.
+            hooks.update_do_not_call('local', {'add': ['+14155550142']})
+            self.assertEqual(len(hooks.do_not_call('local')['numbers']), 2)
+            hooks.update_do_not_call('local', {'remove': ['+14155550142']})
+            hooks.precheck('local', CallBrief.from_dict(phone_brief()))
+            for bad in ({}, {'add': '+14155550142'}, {'drop': []}, {'add': [{'number': '1'}]},
+                        {'add': [{'number': '+14155550142', 'note': 'x'}]}):
+                with self.subTest(update=bad), self.assertRaises(ValueError):
+                    hooks.update_do_not_call('local', bad)
+            # A damaged list refuses calls instead of forgetting who asked.
+            path.write_text('{not json')
+            self.assertEqual(self.refused(hooks).code, 'do_not_call_unreadable')
+
+
+def placed_at(to, minutes_ago, now):
+    return placed(to, minutes_ago, now=now)
 
 
 class FakeMessage:

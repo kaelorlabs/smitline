@@ -82,8 +82,9 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('MeetingHandle', colleague_ai.__all__)
         methods = sorted(name for name in vars(Colleague) if not name.startswith('_'))
         self.assertEqual(methods, [
-            'check_call', 'end_call', 'get_call', 'get_profile', 'instruct_call', 'list_calls',
-            'list_voices', 'start_call', 'transfer_call', 'update_profile', 'wait_for_call',
+            'check_call', 'end_call', 'get_call', 'get_do_not_call', 'get_profile', 'instruct_call',
+            'list_calls', 'list_voices', 'start_call', 'transfer_call', 'update_do_not_call',
+            'update_profile', 'wait_for_call',
         ])
 
     async def test_call_methods_use_the_calls_api(self):
@@ -118,6 +119,10 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[4][2], {'text': 'He tried it yesterday', 'silent': True})
         self.assertEqual(seen[5][:2], ('GET', '/v1/profile'))
         self.assertEqual(seen[6], ('PATCH', '/v1/profile', {'about': 'Robin builds Smitline.'}))
+        await client.get_do_not_call()
+        await client.update_do_not_call({'remove': ['+14155550142']})
+        self.assertEqual(seen[7][:2], ('GET', '/v1/do-not-call'))
+        self.assertEqual(seen[8], ('PATCH', '/v1/do-not-call', {'remove': ['+14155550142']}))
 
     async def test_a_meeting_is_joined_with_start_call(self):
         seen = []

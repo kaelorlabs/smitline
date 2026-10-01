@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Call guardrails
+
+- Emergency and crisis numbers (911, 112, 999, 988, and others) are never dialed.
+- Premium-rate and satellite numbers are refused unless `COLLEAGUE_ALLOW_PREMIUM_NUMBERS=1`.
+- Calls ring only between 8 AM and 9 PM in the recipient's time zone (`COLLEAGUE_CALLING_HOURS`); a brief's `afterHours: true` overrides this when the user confirms.
+- When someone asks not to be called again, the assistant ends the call politely, the result has `doNotCall: true`, and the number goes on a do-not-call list (`/v1/do-not-call`, `smitline do-not-call`).
+- At most 5 calls to one number per 24 hours and 20 calls an hour (`COLLEAGUE_MAX_CALLS_PER_NUMBER`, `COLLEAGUE_MAX_CALLS_PER_HOUR`).
+
 ## 0.1.0 — 2026-09-30
 
 First public release.

@@ -288,6 +288,12 @@ export function createLoopbackTransport(options = {}) {
     updateProfile(update) {
       return json('PATCH', '/v1/profile', update);
     },
+    getDoNotCall() {
+      return json('GET', '/v1/do-not-call');
+    },
+    updateDoNotCall(update) {
+      return json('PATCH', '/v1/do-not-call', update);
+    },
     endCall(callId) {
       return json('POST', `/v1/calls/${encodeURIComponent(callId)}/end`, {});
     },
@@ -348,6 +354,16 @@ export class Colleague {
   /** Merge into the profile: fields replace, people upsert by name, removePeople drops names. */
   async updateProfile(update) {
     return this._transport.updateProfile(update);
+  }
+
+  /** Numbers Smitline refuses to call because the person asked not to be called again. */
+  async getDoNotCall() {
+    return this._transport.getDoNotCall();
+  }
+
+  /** Add numbers ({ add: [...] }) or remove them ({ remove: [...] }). */
+  async updateDoNotCall(update) {
+    return this._transport.updateDoNotCall(update);
   }
 
   async endCall(callId) {

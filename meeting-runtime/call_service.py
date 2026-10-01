@@ -288,6 +288,40 @@ class CallService:
             raise CallError(422, 'invalid_request', str(error)) from error
         return saver(owner, merged)
 
+    def do_not_call(self, owner):
+        getter = getattr(self.hooks, 'do_not_call', None)
+        if getter is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no do-not-call list')
+        return getter(owner)
+
+    def update_do_not_call(self, owner, update):
+        updater = getattr(self.hooks, 'update_do_not_call', None)
+        if updater is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no do-not-call list')
+        try:
+            return updater(owner, update)
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
+
+    def _honor_do_not_call(self, record, result):
+        """The person asked not to be called again: put their number on the do-not-call list."""
+        brief = record.get('brief') or {}
+        if not result.get('doNotCall') or record['channel'] != 'phone' or \
+                record.get('direction') != 'outbound' or brief.get('rehearsal'):
+            return
+        updater = getattr(self.hooks, 'update_do_not_call', None)
+        if updater is None:
+            return
+        try:
+            updater(record['owner'], {'add': [{
+                'number': brief['to'], 'callId': record['id'],
+                'reason': 'Asked on a call not to be called again.',
+            }]})
+        except Exception as error:
+            self._event(record['id'], 'call.do_not_call_failed', error=type(error).__name__)
+            return
+        self._event(record['id'], 'call.do_not_call', number=brief['to'])
+
     def get(self, call_id, *, owner=None):
         record = self.store.get(call_id)
         if owner is not None and record.get('owner') != owner:
@@ -477,6 +511,7 @@ class CallService:
                                        cost=call_cost(dict(record, usage=usage), self.environ),
                                        **({'error': error} if error else {}))
             self._event(call_id, 'call.result', outcome=result['outcome'])
+            self._honor_do_not_call(record, result)
             self._set_status(call_id, status, endReason=end_reason)
         self._contexts.pop(call_id, None)
         record = self.store.get(call_id)
