@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 
 export const SCHEMA_VERSION = 1;
-export const SDK_VERSION = '0.1.0';
+export const SDK_VERSION = '0.1.1';
 
 export const EXIT = Object.freeze({
   ok: 0,

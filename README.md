@@ -18,13 +18,9 @@ Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting
 
 OpenAI GPT-Live (`gpt-live-1`) is the only voice. It does all the listening and speaking, and hands harder questions to a backend model that knows the brief.
 
-Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Contributors, human or agent, should start from [AGENTS.md](AGENTS.md) for the doc index and invariants.
-
 The supported path is a **loopback daemon on this computer** (`127.0.0.1`). There is no hosted service.
 
-Phone calls were first placed live on 2026-09-29 through SignalWire: a setup call to the owner and a call that scheduled a meeting with a colleague both came back with the right result. Phone conversation is not yet as natural as ChatGPT voice, because call audio currently passes through this computer; connecting the phone provider straight to OpenAI over SIP is in progress. Meetings have been exercised in live Zoom calls; Teams and Google Meet share the same browser and audio runtime but still need live acceptance. See [Limitations](#limitations).
-
-*Smitline is named in honor of Captain Smit Machchhar, who saved the 174 people aboard flydubai flight FZ1073 on September 30, 2026.*
+**Status:** the team makes real phone calls with Smitline through SignalWire every day; Twilio uses the same path with a funded account. Meetings have been tested live in Zoom; Teams and Google Meet run on the same browser and audio runtime but have had less live testing. See [Limitations](#limitations).
 
 ## What you can do
 
@@ -94,7 +90,7 @@ Then ask your agent: "Call +1 … and …", "Practice the call on me first", or 
 **What phone calls need.** You need Docker, plus an OpenAI key with GPT-Live access for calls and meetings. For phone calls, you also need a phone provider account:
 
 - **SignalWire, free trial.** No card needed. The trial calls only numbers you verify in SignalWire (up to 10, US and Canada): your own phone, and friends who read back a code.
-- **SignalWire, paid.** Adding $5 of credit lets Smitline call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05.
+- **SignalWire, paid.** Adding $5 of credit lets Smitline call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05 a minute.
 - **Twilio.** Works only with an upgraded (funded) account. Twilio's free trial blocks the live audio Smitline needs.
 
 To follow a call live, read its transcript as it happens, see what it cost, or take it over on your phone, open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
@@ -151,15 +147,17 @@ docker compose -f compose.meeting.yaml stop meeting-agent
 
 | Surface | Role |
 | --- | --- |
-| **Daemon** | In the `smitline` container (`./start-runtime-daemon.sh` from a checkout): loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
+| **Daemon** | In the `smitline` container (`./start-runtime-daemon.sh` from a checkout): loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/do-not-call`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
 | **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md). |
 | **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
 | **Console** | Meetings and Calls tabs, and the local MCP endpoint `/mcp`, on `127.0.0.1:8095` (`./start-control-panel.sh` from a checkout). |
 | **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm; use it from a checkout. |
 | **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI; use it from a checkout. |
-| **CLI** | `packages/cli`: `smitline call`, `calls`, `profile`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec smitline smitline ...`. |
+| **CLI** | `packages/cli`: `smitline call`, `calls`, `profile`, `do-not-call`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec smitline smitline ...`. |
 | **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`smitline mcp`; Claude Desktop runs `docker exec -i smitline smitline mcp`). |
 | **Remote connector** | `./start-connector.sh`, from a checkout (the image does not run it yet): the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
+
+Smitline was first developed as Colleague AI. The SDK package names, the `COLLEAGUE_*` settings, and the `.colleague/` folder keep that name for now; they work the same.
 
 ## Data and privacy
 
@@ -170,6 +168,8 @@ docker compose -f compose.meeting.yaml stop meeting-agent
 Transcripts contain conversation content and are kept until you remove them. Generated agent text may represent speech that was muted or interrupted. Raw audio is not saved. Restarting a meeting participant starts a fresh voice session.
 
 ## Development
+
+Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Contributors, human or agent, should start from [AGENTS.md](AGENTS.md) for the doc index and invariants.
 
 | Path | Responsibility |
 | --- | --- |
@@ -233,8 +233,7 @@ Unit tests do not establish live admission, audio quality, or phone behavior. Te
 - Government Teams is not enabled. Meet URLs must be official `meet.google.com` 3-4-3 codes.
 - Smitline does not share a screen or read shared screens.
 - Browser fixture tests are not production compatibility proof.
-- Phone call audio currently travels phone provider → Cloudflare tunnel → this computer → OpenAI and back. The detour adds delay to every turn, so conversation feels less natural than ChatGPT voice. Talking over Smitline does not cut it off straight away, and a call can go quiet for a few seconds while it hangs up. Direct SIP, with audio straight between the provider and OpenAI, is being built.
-- An automated call screener (on iPhone or Android) can be mistaken for voicemail, which makes the call end early and be reported as `voicemail`. A fix is in progress.
+- By default, phone call audio travels phone provider → Cloudflare tunnel → this computer → OpenAI and back, which adds a little delay to every turn. Direct SIP, with audio straight between the provider and OpenAI, is optional and still experimental; see [direct audio over SIP](docs/phone.md#direct-audio-over-sip-optional).
 - Trial phone accounts call only verified numbers, and Twilio's free trial cannot carry a call at all. See [What phone calls need](#get-started).
 
 ## Roadmap

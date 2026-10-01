@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-01
 
 ### Call guardrails
 
@@ -9,6 +9,11 @@
 - Calls ring only between 8 AM and 9 PM in the recipient's time zone (`COLLEAGUE_CALLING_HOURS`); a brief's `afterHours: true` overrides this when the user confirms.
 - When someone asks not to be called again, the assistant ends the call politely, the result has `doNotCall: true`, and the number goes on a do-not-call list (`/v1/do-not-call`, `smitline do-not-call`).
 - At most 5 calls to one number per 24 hours and 20 calls an hour (`COLLEAGUE_MAX_CALLS_PER_NUMBER`, `COLLEAGUE_MAX_CALLS_PER_HOUR`).
+
+### Fixes
+
+- `smitline` CLI output larger than 64 KB is no longer cut off when piped (it waits for output to drain before exiting).
+- The console shows the Smitline mark as the participant avatar and the tab icon.
 
 ### Recording on request
 
