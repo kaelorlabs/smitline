@@ -1,6 +1,6 @@
 {
   "name": "@colleague-ai/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Local Smitline SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon.",

@@ -35,7 +35,7 @@ docker run -d --name smitline --restart unless-stopped --network host -v smitlin
 
 In Git Bash on Windows, which some agents use, put `MSYS_NO_PATHCONV=1 ` in front of the command, or write the socket as `-v //var/run/docker.sock:/var/run/docker.sock`: Git Bash otherwise rewrites `/var/run/docker.sock` into a Windows path.
 
-This downloads the image (about 600 MB) and starts it. It keeps running and starts again with Docker. Settings, keys, call records, and meeting recordings live in the `smitline` volume, never in the image. The Docker socket lets it start the meeting container.
+This downloads the image (about 600 MB) and starts it. It keeps running and starts again with Docker. Settings, keys, call records, and meeting transcripts live in the `smitline` volume, never in the image. The Docker socket lets it start the meeting container.
 
 Check that this computer reaches it. The console must answer at http://127.0.0.1:8095 (give it a few seconds after the first start):
 
