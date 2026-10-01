@@ -1,82 +1,90 @@
-<div align="center">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
+    <img src="docs/images/logo-light.png" alt="Smitline" width="260">
+  </picture>
+</p>
 
-# Smitline
+<h3 align="center">Your agent can make the call.</h3>
 
-### Your agent can make the call.
+<p align="center">
+  Phone calls and meetings for any AI agent. Smitline gives your agent a phone line and a seat in Zoom, Microsoft Teams and Google Meet, talks with people in real time, and reports back to the chat that sent it.
+</p>
 
-Phone calls and meetings for any AI agent. Smitline gives your agent a phone line and a seat in Zoom, Microsoft Teams, and Google Meet, talks with people in real time using GPT-Live, then reports back to the chat that sent it.
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b2e38"></a>
+  <a href="https://github.com/kaelorlabs/smitline/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/kaelorlabs/smitline?label=version&color=555bc0"></a>
+  <a href="https://github.com/kaelorlabs/smitline/pkgs/container/smitline"><img alt="Docker image on GHCR" src="https://img.shields.io/badge/docker-ghcr.io%2Fkaelorlabs%2Fsmitline-555bc0"></a>
+</p>
 
-[Get started](#get-started) · [Calls](docs/calls.md) · [Phone](docs/phone.md) · [Agents](docs/agents.md) · [Architecture](#architecture) · [Troubleshooting](#troubleshooting)
+<p align="center">
+  <a href="#get-started"><b>Get started</b></a> · <a href="#how-it-works">How it works</a> · <a href="#safe-by-default">Safety</a> · <a href="#documentation">Docs</a>
+</p>
 
-**Self-hosted · Your own keys · Apache-2.0**
+<p align="center">
+  <img src="docs/images/hero.png" alt="The Smitline Calls page: spend totals, a list of recent calls, and a finished call to a plumber with its goal, brief and result" width="100%">
+</p>
 
-</div>
+## What it does
 
----
+Ask your agent the way you'd ask a good assistant:
 
-Tell your agent "call Luigi's and book a table for 4 at 7" or "join this meeting and help with the Q3 numbers". The agent writes a brief, Smitline holds the conversation, and a structured result comes back: the outcome, a summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. Phone calls go through your SignalWire or Twilio account; meetings are joined by a browser participant that runs in Docker on your computer.
+> "Call Luigi's and book a table for 4 at 7."<br>
+> "Call the plumber and see if they can come today. Don't agree to more than $150."<br>
+> "Join my 3 PM Zoom and take notes for me."
 
-OpenAI GPT-Live (`gpt-live-1`) is the only voice. It does all the listening and speaking, and hands harder questions to a backend model that knows the brief.
+Smitline makes the call, talks with whoever answers in a natural voice, and sends the result back to your chat: what happened, the details you need (times, prices, confirmation numbers), decisions, action items, the full transcript, and what the call cost.
 
-The supported path is a **loopback daemon on this computer** (`127.0.0.1`). There is no hosted service.
+- **Calls anyone.** Restaurants, offices, plumbers, friends, using your own number through your SignalWire or Twilio account.
+- **Joins meetings.** Zoom, Microsoft Teams and Google Meet, as a participant that listens and answers when it's spoken to.
+- **Works with your agent.** Claude Code, Codex, Cursor, Claude Desktop, OpenClaw, Hermes, and anything that can use MCP, a CLI or a REST API.
+- **Runs on your computer.** One Docker container, your own OpenAI and phone keys, open source under Apache-2.0.
 
-**Status:** the team makes real phone calls with Smitline through SignalWire every day; Twilio uses the same path with a funded account. Meetings have been tested live in Zoom; Teams and Google Meet run on the same browser and audio runtime but have had less live testing. See [Limitations](#limitations).
+## How it works
 
-## What you can do
+1. **You ask your agent.** It writes a short brief: the goal, what to find out, what it may agree to, and what to keep private.
+2. **Smitline makes the call.** It opens by saying it's your AI assistant, then talks in real time using OpenAI's GPT-Live, staying inside the brief.
+3. **You can follow along.** The dashboard on your computer shows the live transcript, and you can take the call over on your own phone at any moment.
+4. **The result comes back** to the chat that asked: the outcome, the details, action items, the transcript, and the cost.
 
-| Capability | Experience |
-| --- | --- |
-| **Make phone calls** | Your agent sends a brief; Smitline calls through SignalWire (free trial works) or Twilio, opens with an AI disclosure, and returns the outcome, details, and transcript. Rehearse on your own phone first, follow the live transcript, or take the call over on your own phone. |
-| **Join Zoom, Teams, or Meet** | The same brief with channel `meeting` and the invite link. Meeting audio streams to GPT-Live; replies play through the participant's virtual microphone after a short AI disclosure. The result carries the summary, decisions, action items, and transcript. |
-| **Work with any agent** | Local agents use MCP tools or the CLI; cloud agents use the remote connector; anything else uses the REST API or the SDKs. |
-| **See what calls cost** | Every finished call carries its phone and OpenAI cost. The console's Calls page shows each call's brief, result, cost, and transcript, with spend totals. |
-| **Give a meeting private context** | Paste text or add files in the console. The voice and its backend get it as background. |
-| **Appear in the meeting** | A virtual camera shows listening, working, or speaking presence and never displays task text. Turn it off to join audio-only. |
-
-## Architecture
-
-See [architecture](docs/architecture.md) for the runtime pieces, sequence diagrams (joining a meeting, selective speech, guest-then-signed-in fallback), and [retention paths](docs/architecture.md#retention-and-deletion). See [capabilities](docs/capabilities.md) for the Zoom / Teams / Meet matrix.
-
-```mermaid
-flowchart LR
-    Agent[Your agent] -->|MCP, CLI, SDK, REST| Daemon[smitline container: daemon, console, MCP]
-    Daemon -->|Calls API| Phone[Phone gateway]
-    Phone <--> Provider[SignalWire or Twilio]
-    Daemon -->|Meetings| Bot[Meeting container in Docker]
-    Bot <--> Meet[Zoom, Teams, or Meet]
-    Phone <--> Voice[OpenAI GPT-Live]
-    Bot <--> Voice
-    Daemon --> Records[Local call records and transcripts]
-```
-
-Smitline runs as one container, `smitline`, which starts a second container for each meeting, `smitline-meeting-agent-1` from the `smitline-meeting` image: the meeting browser, virtual display, virtual camera, and audio bridge. GPT-Live keeps **one continuous `gpt-live-1` session** per call or meeting (`store: false`).
-
-## Security model
-
-- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](docs/calls.md#access)). Only the phone gateway's routes, which check the provider's signatures, are exposed through a tunnel.
-- **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the `smitline` data volume (the ignored `.env` in a checkout), typed into a one-time local page rather than an agent chat. Local agents reach the MCP endpoint with a local token; browsers are refused. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
-- **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
-- **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
-- **Docker access is your choice.** Meetings need the Docker socket mounted, so Smitline can start its meeting container; that gives the container control of Docker on your computer. It uses it only to download, start and stop its own meeting container. Phone calls work without it. See [Get started](#get-started).
-- **Call guardrails.** Smitline never dials emergency, premium-rate, or satellite numbers; calls people only between 8 AM and 9 PM their time; stops calling anyone who asks it to; and limits repeat calls. See [guardrails](docs/phone.md#guardrails).
-- **Operator mute is authoritative.** Smitline does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
-
-## Prerequisites
-
-- Docker: Docker Desktop 4.34 or newer on macOS or Windows, signed in and with host networking turned on (Settings > Resources > Network > Enable host networking), or Docker Engine on Linux or inside WSL2. Nothing else needs installing.
-- An OpenAI project API key with access to `gpt-live-1` and the backend model (default `gpt-5.6-terra`).
-- For phone calls, a SignalWire or Twilio account (see below).
-- For meetings, a Zoom, Teams, or Google Meet meeting that lets a guest join through the web client.
+<p align="center">
+  <img src="docs/images/live-call.png" alt="A call in progress: Smitline asks a garage when the car will be ready and declines to approve an extra repair the brief didn't allow" width="49%">
+  <img src="docs/images/meeting.png" alt="A meeting's result: a summary, attendees, open questions, action items and decisions from a Zoom call" width="49%">
+</p>
+<p align="center"><sub>Left: a call in progress. The garage suggests an extra $160 repair, and Smitline brings it back to you instead of approving it. Right: what comes back after a meeting.</sub></p>
 
 ## Get started
 
-Copy this prompt into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes, or similar):
+Paste this into your agent (Claude Code, Codex, Cursor, OpenClaw, Hermes or similar):
 
 ```text
 Set up Smitline for me from https://github.com/kaelorlabs/smitline. Follow SETUP.md in that repository. Ask me only what you need, and never ask me to paste keys into this chat.
 ```
 
-The agent follows [SETUP.md](SETUP.md). It starts the `smitline` container with one command, which works the same in bash, zsh, PowerShell, and cmd:
+Your agent starts Smitline with one Docker command, opens a setup page on your computer for your keys, rings your phone so you can hear it, and connects itself. Your keys go into that page, never into the chat. Your agent may ask you to run the Docker command yourself, because it gives Smitline access to Docker for meetings; that's expected.
+
+<p align="center">
+  <img src="docs/images/setup-page.png" alt="The Smitline setup page, where keys are typed on this computer instead of into the chat with the agent" width="520">
+</p>
+
+**What you need**
+
+- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux. On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
+- **OpenAI:** an API key with access to GPT-Live (billing turned on).
+- **For phone calls:** a SignalWire account (the free trial calls numbers you verify) or a funded Twilio account.
+- **For meetings:** nothing more. Smitline joins through the browser, like a guest.
+- **Disk space:** about 600 MB to download, plus 1.8 GB the first time it joins a meeting.
+
+With these ready, setup takes about 10 minutes.
+
+A call costs about 6 cents a minute with SignalWire: roughly $0.008 for the phone line and $0.05 for GPT-Live. A two-minute test call to a plumber cost us 14 cents.
+
+Then just ask: *"Call +1 … and …"*, *"Practice the call on me first"*, or *"Join this meeting: &lt;link&gt;"*. The dashboard is at http://127.0.0.1:8095.
+
+<details>
+<summary>Prefer to set it up yourself?</summary>
+
+[SETUP.md](SETUP.md) has every step. Smitline itself is one command:
 
 ```bash
 docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/kaelorlabs/smitline
@@ -88,173 +96,48 @@ The Docker socket (`-v /var/run/docker.sock…`) lets Smitline start its meeting
 docker run -d --name smitline --restart unless-stopped --network host -v smitline:/data ghcr.io/kaelorlabs/smitline
 ```
 
-Your agent may ask you to run the command yourself, because of that access. That's expected.
+In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then run `docker exec smitline smitline setup secrets` to open the setup page.
 
-In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of it (or write `-v //var/run/docker.sock:/var/run/docker.sock`), because Git Bash rewrites the socket path. Once it runs, the console answers at http://127.0.0.1:8095; if it does not on Docker Desktop, turn on host networking and run `docker restart smitline`. To pin a version, use a tag such as `ghcr.io/kaelorlabs/smitline:0.1.0`.
+</details>
 
-Then it opens a page in your browser where you enter your keys, your name, and (for phone calls) your SignalWire details and phone number, rings your phone so you hear Smitline, and connects itself over MCP. You change the voice any time by asking your agent. Keys stay in the container's data volume and never pass through the agent.
+## Safe by default
 
-Then ask your agent: "Call +1 … and …", "Practice the call on me first", or "Join this meeting: <link>".
+- **Always says it's an AI.** Every call opens with "Hi, this is *your name*'s AI assistant", and Smitline checks that it was said.
+- **Stays inside the brief.** It agrees only to what you allowed and never shares what you marked private. Anything else, it brings back to you.
+- **Guardrails on every call.** It never dials emergency or premium-rate numbers, calls only between 8 AM and 9 PM in the other person's time zone, stops calling anyone who asks it to, and limits repeat calls.
+- **Docker access is your choice.** Meetings need Smitline to start its own meeting container, so the setup mounts the Docker socket. Phone calls work without it.
+- **Your keys and records stay with you.** Keys are typed into a page on your computer, and call records and transcripts are stored there too. Audio goes to OpenAI and your phone provider; nothing goes to us, because there is no Smitline server.
 
-**What phone calls need.** You need Docker, plus an OpenAI key with GPT-Live access for calls and meetings. For phone calls, you also need a phone provider account:
-
-- **SignalWire, free trial.** No card needed. The trial calls only numbers you verify in SignalWire (up to 10, US and Canada): your own phone, and friends who read back a code.
-- **SignalWire, paid.** Adding $5 of credit lets Smitline call any number, such as a restaurant. Calls cost about $0.008 a minute plus GPT-Live's $0.05 a minute.
-- **Twilio.** Works only with an upgraded (funded) account. Twilio's free trial blocks the live audio Smitline needs.
-
-To follow a call live, read its transcript as it happens, see what it cost, or take it over on your phone, open [http://127.0.0.1:8095/calls](http://127.0.0.1:8095/calls).
-
-## Meetings
-
-An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, or Google Meet link. From the CLI:
-
-```bash
-docker exec smitline smitline call --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
-  --objective "Help with the Q3 numbers" --wait
-```
-
-`--channel meeting --to <url>` does the same, and so does a `--to` that starts with `http://` or `https://`. The result comes back like a phone call's. See [calls](docs/calls.md).
-
-The first meeting downloads the meeting image, `ghcr.io/kaelorlabs/smitline-meeting` (about 1.8 GB of disk). From a checkout it is built instead.
-
-Admit **Smitline** if it enters the waiting room. It unmutes its meeting microphone once, says a short AI disclosure naming who it acts for, then listens continuously. It answers when someone addresses it and hands harder questions to the backend model (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. `docker exec smitline smitline setup set COLLEAGUE_MEETING_INTRO 0` skips the disclosure; the backend settings are set the same way.
-
-### The local console
-
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095); the `smitline` container serves it. The **Meetings** tab starts a meeting by hand: paste the meeting link, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop Smitline and follow its live status. Past meetings keep their transcript and handoff. The **Calls** tab lists phone calls and meetings started through the calls API. See the [control panel guide](docs/control-panel.md) and [meeting adapters](docs/meeting-adapters.md).
-
-The console talks to the **loopback daemon** in the same container. API keys are never returned to the browser.
-
-| Local interface | Address |
-| --- | --- |
-| Meetings console | http://127.0.0.1:8095 |
-| MCP for local agents (bearer token from `smitline setup register`) | http://127.0.0.1:8095/mcp |
-| Calls (live transcript, results, costs, take over) | http://127.0.0.1:8095/calls |
-| Meeting browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
-| Meeting status and transcript | http://127.0.0.1:8094/health |
-| Runtime daemon (loopback) | http://127.0.0.1:8765 |
-
-A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
-
-### Manual meeting launch
-
-For debugging from a checkout, without the daemon:
-
-```bash
-cp meeting-runtime/meeting.env.example .env.meeting
-chmod 600 .env.meeting
-bash start-meeting-agent.sh
-```
-
-It reads `.env.meeting` (`MEETING_URL`, `MEETING_PASSCODE`, the participant name, and the backend settings), checks it with `python3`, and starts the container. Stop it with:
-
-```bash
-docker compose -f compose.meeting.yaml stop meeting-agent
-```
-
-## Daemon, console, SDK, CLI, and MCP
-
-| Surface | Role |
-| --- | --- |
-| **Daemon** | In the `smitline` container (`./start-runtime-daemon.sh` from a checkout): loopback HTTP and SSE with bearer auth. Serves `/v1/calls`, `/v1/voices`, `/v1/profile`, `/v1/do-not-call`, `/v1/openapi.json`, and a small `/v1/meetings` API used by the console. |
-| **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](docs/calls.md). |
-| **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](docs/phone.md). |
-| **Console** | Meetings and Calls tabs, and the local MCP endpoint `/mcp`, on `127.0.0.1:8095` (`./start-control-panel.sh` from a checkout). |
-| **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm; use it from a checkout. |
-| **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI; use it from a checkout. |
-| **CLI** | `packages/cli`: `smitline call`, `calls`, `profile`, `do-not-call`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec smitline smitline ...`. |
-| **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`smitline mcp`; Claude Desktop runs `docker exec -i smitline smitline mcp`). |
-| **Remote connector** | `./start-connector.sh`, from a checkout (the image does not run it yet): the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](docs/agents.md). |
-
-Smitline was first developed as Colleague AI. The SDK package names, the `COLLEAGUE_*` settings, and the `.colleague/` folder keep that name for now; they work the same.
-
-## Data and privacy
-
-- **OpenAI:** call and meeting audio goes to GPT-Live. The backend model receives the brief, the context, and the questions GPT-Live hands it; with web search on, it can search the web. After a phone call, a summary model reads the transcript. These use your account's billing.
-- **Phone provider:** calls go through your SignalWire or Twilio account. Recordings, if turned on, stay there.
-- **Local storage:** see [retention and deletion](docs/architecture.md#retention-and-deletion). Transcripts, call records, profiles, and context are gitignored.
-
-Transcripts contain conversation content and are kept until you remove them. Generated agent text may represent speech that was muted or interrupted. Raw audio is not saved. Restarting a meeting participant starts a fresh voice session.
-
-## Development
-
-Read the [product vision, decisions, and progress ledger](docs/product-vision-and-progress.md) before making substantial product or architecture changes. Contributors, human or agent, should start from [AGENTS.md](AGENTS.md) for the doc index and invariants.
-
-| Path | Responsibility |
-| --- | --- |
-| [`meeting-runtime/`](meeting-runtime/) | Daemon, calls, phone line and gateway, meeting adapters and bridge, transcripts, tests |
-| [`control-panel/`](control-panel/) | Local console |
-| [`packages/sdk-typescript/`](packages/sdk-typescript/) · [`packages/sdk-python/`](packages/sdk-python/) | SDKs |
-| [`packages/cli/`](packages/cli/) · [`packages/mcp/`](packages/mcp/) | CLI, MCP server, and remote connector |
-| [`joinly/`](joinly/) | Vendored subset of Joinly: browser session, virtual devices, camera feed, Teams and Meet controllers |
-| `Dockerfile`, `docker/` | The `smitline` image: daemon, console, CLI, and MCP, with Node and Python inside |
-| `Dockerfile.meeting`, `compose.meeting.image.yaml` | The meeting image, and how the `smitline` container starts it |
-| `compose.meeting.yaml`, `Dockerfile.daemon`, `start-*.sh` | Running from a checkout |
-| `.github/workflows/images.yml` | Tests every pull request and push to `main`; a version tag (`git tag v0.1.0 && git push origin v0.1.0`) publishes both images to GHCR |
-
-### Run from a checkout
-
-Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.colleague/` in the checkout:
-
-```bash
-git clone https://github.com/kaelorlabs/smitline.git ~/smitline
-cd ~/smitline && npm install
-node packages/cli/src/smitline.mjs setup start      # the daemon, in Docker or on Python 3.10+
-node packages/cli/src/smitline.mjs setup stop       # stop it (and the phone tunnel); refuses mid-call without --force
-./start-control-panel.sh                             # the console and MCP endpoint
-```
-
-`smitline setup register` then writes the MCP server into Claude Code, Codex, and Cursor directly. To try the images locally, build them with `docker build -f Dockerfile.meeting -t smitline-meeting:local .` and `docker build --build-arg MEETING_IMAGE=smitline-meeting:local -t smitline:local .`.
-
-The runtime tests run in the meeting image:
-
-```bash
-docker compose -f compose.meeting.yaml build meeting-agent
-docker run --rm \
-  --entrypoint /app/.venv/bin/python \
-  -v "$PWD/meeting-runtime:/meeting-runtime:ro" \
-  -v "$PWD/joinly:/opt/joinly:ro" \
-  smitline-meeting:local \
-  -m unittest discover -s /meeting-runtime -p 'test_*.py'
-
-npm test
-cd packages/sdk-python && python3 -m unittest discover -s tests
-```
-
-Unit tests do not establish live admission, audio quality, or phone behavior. Test those with a real call or meeting after changing browser, audio, or phone code.
-
-## Troubleshooting
-
-| Symptom | Check |
-| --- | --- |
-| Agent is silent in a meeting | Address it directly, then inspect `floorState`, `microphoneState`, `stage`, and `/health`. Unmute in the meeting UI if a host muted it. If `microphoneState` is `blocked` in Zoom, the host disabled self-unmute: the host can click **Ask to unmute** on its tile, and Smitline accepts. |
-| Agent cannot enter the meeting | Inspect the browser viewer for waiting-room, sign-in, passcode, or host-removal messages. Connect a Microsoft or Google account only when guest access is denied. |
-| The first meeting takes a while to start | The meeting image (about 1.8 GB) is being downloaded. Later meetings start at once. From a checkout it is built instead. |
-| Voice API rejects the session | Check account access to `gpt-live-1` and the configured backend model. |
-| Daemon unauthorized | The token is in `.colleague/daemon.auth` (`/data/.colleague/daemon.auth` in the container) and changes each time the daemon starts; do not put it in a URL. Restart the daemon (`docker restart smitline`) to rotate it. |
-| Phone call problems | See the troubleshooting table in [SETUP.md](SETUP.md#troubleshooting). |
+More in [security and privacy](docs/security.md) and the [phone guardrails](docs/phone.md#guardrails).
 
 ## Limitations
 
-- Not a multi-tenant hosted product. Loopback is the supported path.
-- Quiet participation still uses the Live API; there is no `create_response: false`.
-- Meetings do not take live instructions from the agent yet; guidance goes in the brief or the console before the meeting starts.
-- Government Teams is not enabled. Meet URLs must be official `meet.google.com` 3-4-3 codes.
-- Smitline does not share a screen or read shared screens.
-- Browser fixture tests are not production compatibility proof.
-- By default, phone call audio travels phone provider → Cloudflare tunnel → this computer → OpenAI and back, which adds a little delay to every turn. Direct SIP, with audio straight between the provider and OpenAI, is optional and still experimental; see [direct audio over SIP](docs/phone.md#direct-audio-over-sip-optional).
-- Trial phone accounts call only verified numbers, and Twilio's free trial cannot carry a call at all. See [What phone calls need](#get-started).
+- Phone calls are in daily use through SignalWire. Meetings are tested live in Zoom; Teams and Google Meet use the same runtime but have had less live testing.
+- Replies come after a short pause, so a call feels a little slower than talking to a person. Call audio passes through your computer on its way to OpenAI.
+- Trial phone accounts call only numbers you verify, and Twilio's free trial can't carry a live call.
+- Smitline works while your computer is on; there is no hosted version yet.
+- In meetings, guidance goes in the brief before it joins, and it doesn't share or read screens.
 
-## Roadmap
+## Documentation
 
-See the [product roadmap](docs/product-roadmap.md). Near-term work is direct SIP for phone calls (provider to OpenAI, with Smitline steering over a text side channel), latency, conversational timing, meeting summaries, and live acceptance tests for Teams and Meet.
+| Guide | What's in it |
+| --- | --- |
+| [Calls](docs/calls.md) | Briefs, results, costs and the REST API |
+| [Phone calls](docs/phone.md) | SignalWire and Twilio, guardrails, recording, settings |
+| [Meetings](docs/meetings.md) | Joining Zoom, Teams and Meet, and the meetings console |
+| [Agents](docs/agents.md) | MCP, the CLI, SDKs, and the remote connector for cloud agents |
+| [Security and privacy](docs/security.md) | What stays local, what goes where, and how it's protected |
+| [Architecture](docs/architecture.md) | How the pieces fit together |
+| [Development](docs/development.md) | Running from a checkout, tests, project layout |
+| [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
+| [Roadmap](docs/product-roadmap.md) | What's next |
 
-## Credits and upstream work
+## Contributing
 
-Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo.
+Contributions are welcome. Start with [AGENTS.md](AGENTS.md), written for both people and coding agents, and the [development guide](docs/development.md). To report a security issue, see [SECURITY.md](SECURITY.md).
 
-Smitline uses portions of Joinly's browser and audio infrastructure. See [THIRD_PARTY.md](THIRD_PARTY.md) for the pinned upstream revision and retained license.
+## Credits and license
 
-## License
+Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo. Smitline uses portions of Joinly's browser and audio infrastructure; see [THIRD_PARTY.md](THIRD_PARTY.md).
 
-Smitline is licensed under the [Apache License 2.0](LICENSE). The vendored Joinly source in `joinly/` keeps its MIT license; see [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md).
+Smitline is licensed under the [Apache License 2.0](LICENSE). The vendored Joinly source in `joinly/` keeps its MIT license; see [NOTICE](NOTICE).

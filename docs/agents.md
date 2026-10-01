@@ -109,7 +109,7 @@ ChatGPT / Claude ──HTTPS──► your proxy (TLS) ──► connector 127.0
 
 ### Set up server mode
 
-The connector runs from a checkout (see [Run from a checkout](../README.md#run-from-a-checkout)); the `smitline` image does not start it yet. The `smitline connector` commands below work in both.
+The connector runs from a checkout (see [Run from a checkout](development.md#run-from-a-checkout)); the `smitline` image does not start it yet. The `smitline connector` commands below work in both.
 
 You need a machine that stays on and already places calls (see [phone calls](phone.md); meetings also need Docker), and a domain name for it, such as `smitline.example.com`.
 

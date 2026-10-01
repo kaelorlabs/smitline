@@ -20,4 +20,4 @@ Smitline holds your OpenAI and SignalWire or Twilio API keys, and it places phon
 - The runtime daemon and the console with its MCP endpoint (`127.0.0.1:8095/mcp`) listen on loopback only and require a bearer token. Public binds are refused unless server mode is turned on with a long-lived API token.
 - Only the phone gateway's provider routes, which check the provider's signatures, are reachable through the tunnel.
 
-See the security model in [README.md](README.md#security-model).
+See the [security model](docs/security.md).

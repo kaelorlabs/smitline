@@ -48,7 +48,7 @@ The endpoint accepts only requests addressed to `127.0.0.1:8095` or `localhost:8
 
 ### From a checkout
 
-Run from a clone (see [Run from a checkout](../../README.md#run-from-a-checkout)), `smitline setup register` adds a stdio server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
+Run from a clone (see [Run from a checkout](../../docs/development.md#run-from-a-checkout)), `smitline setup register` adds a stdio server to Claude Code, Codex, Cursor, and Claude Desktop when they are installed. To do it by hand:
 
 Claude Code:
 
