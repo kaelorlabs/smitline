@@ -69,10 +69,13 @@ Your agent starts Smitline with one Docker command, opens a setup page on your c
 
 **What you need**
 
-- **Docker:** Docker Desktop on Mac or Windows with host networking turned on, or Docker Engine on Linux.
+- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux. On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
 - **OpenAI:** an API key with access to GPT-Live (billing turned on).
 - **For phone calls:** a SignalWire account (the free trial calls numbers you verify) or a funded Twilio account.
 - **For meetings:** nothing more. Smitline joins through the browser, like a guest.
+- **Disk space:** about 600 MB to download, plus 1.8 GB the first time it joins a meeting.
+
+With these ready, setup takes about 10 minutes.
 
 A call costs about 6 cents a minute with SignalWire: roughly $0.008 for the phone line and $0.05 for GPT-Live. A two-minute test call to a plumber cost us 14 cents.
 
