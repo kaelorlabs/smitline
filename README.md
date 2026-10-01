@@ -138,6 +138,6 @@ Contributions are welcome. Start with [AGENTS.md](AGENTS.md), written for both p
 
 ## Credits and license
 
-Created by Ankit Luthra, Jiayi Shen, Lourd Arun Raj, Nomanina Ravaloson, and Vinny Palumbo. Smitline uses portions of Joinly's browser and audio infrastructure; see [THIRD_PARTY.md](THIRD_PARTY.md).
+Created by Lourd Arun Raj and Ankit Luthra at Kaelor Labs. Licensed under the [Apache License 2.0](LICENSE).
 
-Smitline is licensed under the [Apache License 2.0](LICENSE). The vendored Joinly source in `joinly/` keeps its MIT license; see [NOTICE](NOTICE).
+The meeting browser builds on [Joinly](https://github.com/joinly-ai/joinly) (MIT); see [THIRD_PARTY.md](THIRD_PARTY.md).
