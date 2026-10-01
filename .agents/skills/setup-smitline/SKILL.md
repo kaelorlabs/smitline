@@ -7,7 +7,7 @@ description: Set up Smitline for the user so their agent can place phone calls a
 
 Follow [SETUP.md](../../../SETUP.md) in the repository root (https://github.com/kaelorlabs/smitline/blob/main/SETUP.md). It is the canonical, step-by-step setup for agents, and it needs only Docker. In short:
 
-1. Check Docker with `docker info`, then start the container with the one-line `docker run` command from SETUP.md step 2. Confirm the console answers at http://127.0.0.1:8095; on Docker Desktop that needs host networking turned on.
+1. Check Docker with `docker info`, then start the container with the one-line `docker run` command from SETUP.md step 2: with the Docker socket for phone calls and meetings, without it for phone calls only (ask if you don't know which the user wants). If your permission safeguards block it, show the user the command, say what the socket allows, and let them run it. Confirm the console answers at http://127.0.0.1:8095; on Docker Desktop that needs host networking turned on.
 2. Every `smitline` command runs in the container: `docker exec smitline smitline ...`.
 3. Run `docker exec smitline smitline setup status --json` (it exits with code 3 until `ready` is true; read the JSON anyway) and work through `next` in order: apply each `suggest` without asking, ask each `ask` question, run each `fix`.
 4. Run `docker exec smitline smitline setup secrets --json`. It returns the address of a local page at once; open it for the user. The user enters keys, their name, and phone details there, presses Done, and tells you.
