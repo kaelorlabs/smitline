@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, async_playwright
 from adapters import create_adapter
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url, normalize_url
@@ -35,11 +35,31 @@ class UrlTests(unittest.TestCase):
         ):
             with self.subTest(url=url), self.assertRaises(ValueError): platform_for_url(url)
 
+# Headless Chromium sometimes crashes while starting on CI runners (SIGSEGV before the first
+# page opens, in about one run of twenty). That has nothing to do with the code under test,
+# so the fixture starts it again instead of failing the run.
+LAUNCH_ATTEMPTS = 3
+
 class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.pw = await async_playwright().start()
-        self.browser = await self.pw.chromium.launch(headless=True, executable_path=self.pw.chromium.executable_path, args=['--no-sandbox'])
-        self.page = await self.browser.new_page()
+        for attempt in range(LAUNCH_ATTEMPTS):
+            browser = None
+            try:
+                browser = await self.pw.chromium.launch(headless=True, executable_path=self.pw.chromium.executable_path, args=['--no-sandbox'])
+                page = await browser.new_page()
+            except PlaywrightError:
+                if browser is not None:
+                    try:
+                        await browser.close()
+                    except PlaywrightError:
+                        pass
+                if attempt == LAUNCH_ATTEMPTS - 1:
+                    await self.pw.stop()
+                    raise
+                continue
+            self.browser, self.page = browser, page
+            break
         self.stop = asyncio.Event()
         self.stages = []
     async def asyncTearDown(self):
