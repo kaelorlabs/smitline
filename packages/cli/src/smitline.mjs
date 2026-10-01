@@ -132,16 +132,34 @@ function fail(error, code) {
   const hint = hintFor(error);
   const prefix = error instanceof InterruptError ? '' : 'Error: ';
   process.stderr.write(`${prefix}${message}\n${hint ? `Hint: ${hint}\n` : ''}`);
-  process.exit(code);
+  exitWhenFlushed(code);
+}
+
+// Node writes to a pipe asynchronously once it is full, so process.exit() right after a large
+// write drops everything past the first 64 KB. Exit only once stdout and stderr have drained.
+let exiting = false;
+function exitWhenFlushed(code) {
+  // main() reports its own errors and then returns; the first exit code wins.
+  if (exiting) return;
+  exiting = true;
+  process.exitCode = code;
+  let pending = 2;
+  const done = () => {
+    pending -= 1;
+    if (pending === 0) process.exit(code);
+  };
+  for (const stream of [process.stdout, process.stderr]) {
+    if (stream.writableLength === 0) done();
+    else stream.write('', done);
+  }
 }
 
 function exitForError(error) {
-  if (error instanceof ValidationError) fail(error, EXIT.validation);
-  if (error instanceof StartupError) fail(error, EXIT.startup);
-  if (error instanceof InterruptError) fail(error, EXIT.interrupt);
-  if (error instanceof FinalizationError) fail(error, EXIT.finalization);
-  if (error instanceof RuntimeError) fail(error, EXIT.runtime);
-  fail(error, EXIT.runtime);
+  if (error instanceof ValidationError) return fail(error, EXIT.validation);
+  if (error instanceof StartupError) return fail(error, EXIT.startup);
+  if (error instanceof InterruptError) return fail(error, EXIT.interrupt);
+  if (error instanceof FinalizationError) return fail(error, EXIT.finalization);
+  return fail(error, EXIT.runtime);
 }
 
 function progress(line) {
@@ -781,7 +799,7 @@ if (process.argv[1]) {
 if (invoked) {
   process.on('SIGINT', requestInterrupt);
   process.on('SIGTERM', requestInterrupt);
-  main().then((code) => process.exit(code ?? 0), (error) => exitForError(error));
+  main().then((code) => exitWhenFlushed(code ?? 0), (error) => exitForError(error));
 }
 
 export { main, parseArgs, dataRoot, DEFAULT_COLLEAGUE_ROOT };

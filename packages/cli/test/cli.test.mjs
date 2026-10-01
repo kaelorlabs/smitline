@@ -37,9 +37,13 @@ test('CLI executes when invoked through an installed symlink', async (t) => {
   assert.match(result.stdout, /smitline call --meeting <url>/);
 });
 
-function runColleague(args, { env = {}, cwd } = {}) {
+function runColleague(args, { env = {}, cwd, pipeThroughCat = false } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], {
+    // spawn() hands the child a socket; `| cat` gives it a real pipe, as a shell user would.
+    const [command, argv] = pipeThroughCat
+      ? ['sh', ['-c', '"$0" "$@" | cat', process.execPath, cli, ...args]]
+      : [process.execPath, [cli, ...args]];
+    const child = spawn(command, argv, {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -128,6 +132,19 @@ test('calls list, get, instruct, and end reach the daemon', async (t) => {
   assert.deepEqual(daemon.state.instructions, [{ callId, text: 'Ask about the launch date', silent: true }]);
   const ended = await runColleague(['calls', 'end', '--call-id', callId, ...common], { cwd: root });
   assert.equal(JSON.parse(ended.stdout).status, 'canceled');
+});
+
+test('output larger than a pipe buffer arrives whole', async (t) => {
+  const { root, daemon, common } = await withDaemon(t);
+  const line = 'The caller asked about the launch date and the budget. '.repeat(40);
+  for (let i = 0; i < 60; i += 1) {
+    const id = `call-${String(i).padStart(16, '0')}`;
+    daemon.state.calls.set(id, { id, channel: 'phone', status: 'completed', transcript: [{ speaker: 'contact', text: line }] });
+  }
+  const listed = await runColleague(['calls', 'list', '--limit', '100', ...common], { cwd: root, pipeThroughCat: true });
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.ok(listed.stdout.length > 128 * 1024, `only ${listed.stdout.length} bytes`);
+  assert.equal(JSON.parse(listed.stdout).calls.length, 60);
 });
 
 test('startup failure is exit 3', async (t) => {
