@@ -192,7 +192,7 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 
 .recording { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
 .recording-label { font-weight: 600; }
-.recording code { font-size: 11px; overflow-wrap: anywhere; user-select: all; }
+.recording-links a { color: inherit; font-weight: 600; }
 .pending { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); flex-shrink: 0; }
 

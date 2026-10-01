@@ -10,6 +10,11 @@
 - When someone asks not to be called again, the assistant ends the call politely, the result has `doNotCall: true`, and the number goes on a do-not-call list (`/v1/do-not-call`, `smitline do-not-call`).
 - At most 5 calls to one number per 24 hours and 20 calls an hour (`COLLEAGUE_MAX_CALLS_PER_NUMBER`, `COLLEAGUE_MAX_CALLS_PER_HOUR`).
 
+### Recording on request
+
+- A brief with `record: true` (CLI `--record`) records that one call; `COLLEAGUE_RECORD_CALLS=1` still records every call.
+- Download a recording, both sides on separate channels, with `smitline calls recording --call-id <id> --out call.wav`, from the call's page in the console, or from `GET /v1/calls/{id}/recording`.
+
 ## 0.1.0 — 2026-09-30
 
 First public release.

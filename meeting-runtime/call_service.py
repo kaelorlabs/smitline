@@ -271,6 +271,33 @@ class CallService:
         self.store.update(call_id, recording=recording)
         self._event(call_id, 'call.recording', **recording)
 
+    async def recording(self, call_id, *, owner=None, fmt='wav'):
+        """A recorded call's audio from the phone provider, as (bytes, content type)."""
+        if fmt not in ('wav', 'mp3'):
+            raise CallError(422, 'invalid_request', 'format must be wav or mp3')
+        record = self.get(call_id, owner=owner)
+        fetch = getattr(self.lines.get(record['channel']), 'recording_audio', None)
+        if not record.get('recording') or fetch is None:
+            if record['status'] not in TERMINAL:
+                raise CallError(409, 'not_ready', 'The recording is ready a minute or so after '
+                                'the call ends.')
+            raise CallError(404, 'no_recording', 'This call has no recording. Recorded calls get '
+                            'one a minute or so after they end; to record a call, start it with '
+                            'record: true.')
+        from twilio_client import TwilioError
+        try:
+            body, content_type = await fetch(
+                lambda provider: self.hooks.credentials(record['owner'], provider), record, fmt)
+        except LineNotReady as error:
+            raise CallError(409, 'not_ready', str(error)) from error
+        except MissingCredentials as error:
+            raise CallError(503, 'not_configured', str(error)) from error
+        except TwilioError as error:
+            raise CallError(502, 'provider_error', 'The phone provider did not return the '
+                            f'recording ({error.status}).') from error
+        default = 'audio/wav' if fmt == 'wav' else 'audio/mpeg'
+        return body, (content_type.split(';')[0].strip() or default)
+
     def profile(self, owner):
         getter = getattr(self.hooks, 'profile', None)
         if getter is None:

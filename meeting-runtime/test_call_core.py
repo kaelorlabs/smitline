@@ -437,6 +437,13 @@ class GuardrailTests(unittest.TestCase):
         DefaultCallHooks(environ={'COLLEAGUE_MAX_CALLS_PER_HOUR': '25'}, store=busy,
                          clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
 
+    def test_record_is_a_phone_only_flag(self):
+        self.assertTrue(CallBrief.from_dict(phone_brief(record=True)).to_dict()['record'])
+        self.assertNotIn('record', CallBrief.from_dict(phone_brief()).to_dict())
+        for bad in ({'record': 'yes'}, {'channel': 'meeting', 'to': ZOOM, 'record': True}):
+            with self.subTest(brief=bad), self.assertRaises(ValueError):
+                CallBrief.from_dict(phone_brief(**bad))
+
     def test_do_not_call_list(self):
         with tempfile.TemporaryDirectory() as temp:
             hooks = DefaultCallHooks(environ={}, env_file=Path(temp) / '.env', clock=at(18))

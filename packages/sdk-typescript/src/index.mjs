@@ -291,6 +291,15 @@ export function createLoopbackTransport(options = {}) {
     getDoNotCall() {
       return json('GET', '/v1/do-not-call');
     },
+    async downloadRecording(callId, { format = 'wav' } = {}) {
+      const target = `/v1/calls/${encodeURIComponent(callId)}/recording?format=${encodeURIComponent(format)}`;
+      const response = await request('GET', target);
+      if (!response.ok) throw mapHttpError(response.status, await readJson(response), `GET ${target} failed`);
+      return {
+        contentType: response.headers.get('content-type') || '',
+        data: new Uint8Array(await response.arrayBuffer()),
+      };
+    },
     updateDoNotCall(update) {
       return json('PATCH', '/v1/do-not-call', update);
     },
@@ -354,6 +363,11 @@ export class Colleague {
   /** Merge into the profile: fields replace, people upsert by name, removePeople drops names. */
   async updateProfile(update) {
     return this._transport.updateProfile(update);
+  }
+
+  /** A recorded call's audio (wav or mp3), both sides on separate channels. */
+  async downloadRecording(callId, options) {
+    return this._transport.downloadRecording(callId, options);
   }
 
   /** Numbers Smitline refuses to call because the person asked not to be called again. */

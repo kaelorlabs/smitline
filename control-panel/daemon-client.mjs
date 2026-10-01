@@ -185,10 +185,35 @@ export function createDaemonClient(options = {}) {
     }
   }
 
+  // A recorded call's audio, passed through as bytes rather than JSON.
+  async function downloadRecording(callId, format) {
+    const token = readTokenFile(tokenPath);
+    if (!token) throw daemonError(managed ? MANAGED_NOT_RUNNING : 'Runtime daemon is not running.', { code: 'daemon_offline' });
+    let response;
+    try {
+      response = await fetchImpl(`${baseUrl()}/v1/calls/${encodeURIComponent(callId)}/recording?format=${format}`, {
+        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(120_000),
+      });
+    } catch {
+      throw daemonError('Runtime daemon is unavailable. Start it or retry from the console.');
+    }
+    if (!response.ok) {
+      const payload = parseDaemonBody(await response.text());
+      throw daemonError(payload?.error?.message || 'The recording could not be downloaded.', {
+        status: response.status, code: payload?.error?.code || 'daemon_error',
+      });
+    }
+    return {
+      contentType: response.headers.get('content-type') || 'application/octet-stream',
+      body: Buffer.from(await response.arrayBuffer()),
+    };
+  }
+
   return {
     host,
     port,
     tokenPath,
+    downloadRecording,
     managed,
     get child() { return owned.child; },
     ensure,

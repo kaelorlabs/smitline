@@ -400,6 +400,10 @@ async function fakeCallsDaemon(root) {
     if (request.url === '/v1/do-not-call') {
       return send(200, { numbers: [] });
     }
+    if (request.url === '/v1/calls/call-0123456789abcdef/recording?format=mp3') {
+      response.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+      return response.end(Buffer.from('ID3audio'));
+    }
     if (request.url.startsWith('/v1/calls/call-0123456789abcdef/wait')) {
       polls += 1;
       return send(200, { id: 'call-0123456789abcdef', status: polls > 1 ? 'completed' : 'ringing', result: { outcome: 'achieved', summary: 'Booked.' } });
@@ -666,6 +670,19 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   ]);
   const missing = await runCli(['do-not-call', 'add', ...common]);
   assert.notEqual(missing.code, 0);
+
+  const recorded = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Book a table', '--record']);
+  assert.equal(recorded.code, 0, recorded.stderr);
+  assert.equal(daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body.record, true);
+  const file = path.join(root, 'call.mp3');
+  const saved = await runCli(['calls', 'recording', ...common, '--call-id', 'call-0123456789abcdef', '--format', 'mp3', '--out', file]);
+  assert.equal(saved.code, 0, saved.stderr);
+  assert.equal(await fs.readFile(file, 'utf8'), 'ID3audio');
+  assert.equal(JSON.parse(saved.stdout).bytes, 8);
+  const piped = await runCli(['calls', 'recording', ...common, '--call-id', 'call-0123456789abcdef', '--format', 'mp3']);
+  assert.equal(piped.stdout, 'ID3audio');
+  const wrong = await runCli(['calls', 'recording', ...common, '--call-id', 'call-0123456789abcdef', '--format', 'ogg']);
+  assert.notEqual(wrong.code, 0);
 });
 
 async function closedPort() {

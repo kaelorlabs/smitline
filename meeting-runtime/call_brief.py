@@ -15,7 +15,7 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'notify',
+    'rehearsal', 'afterHours', 'record', 'notify',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
@@ -125,6 +125,7 @@ class CallBrief:
     max_minutes: int = None
     rehearsal: bool = False
     after_hours: bool = False
+    record: bool = False
     webhook_url: str = None
 
     @property
@@ -155,6 +156,7 @@ class CallBrief:
             'maxMinutes': self.max_minutes,
             'rehearsal': self.rehearsal,
             'afterHours': True if self.after_hours else None,
+            'record': True if self.record else None,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
         }
         return {key: value for key, value in data.items() if value is not None}
@@ -198,6 +200,10 @@ class CallBrief:
         after_hours = False if after_hours is None else require_bool(after_hours, 'afterHours')
         if after_hours and channel != 'phone':
             raise ValueError('afterHours is only for phone calls')
+        record = optional_field(data, 'record')
+        record = False if record is None else require_bool(record, 'record')
+        if record and channel != 'phone':
+            raise ValueError('record is only for phone calls')
         notify = optional_field(data, 'notify')
         webhook_url = None
         if notify is not None:
@@ -234,6 +240,7 @@ class CallBrief:
             max_minutes=max_minutes,
             rehearsal=rehearsal,
             after_hours=after_hours,
+            record=record,
             webhook_url=webhook_url,
         )
 

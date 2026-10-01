@@ -1175,7 +1175,12 @@ class PhoneLine:
     def ready(self, hooks, owner, brief):
         hooks.credentials(owner, 'openai')
         hooks.credentials(owner, 'twilio')
-        if hooks.credentials(owner, 'sip')['mode'] == 'sip':
+        mode = hooks.credentials(owner, 'sip')['mode']
+        if brief.record and mode != 'relay':
+            raise CallRefused('recording_unavailable', 'Recording a call needs '
+                              'COLLEAGUE_PHONE_AUDIO=relay; calls over direct SIP cannot be '
+                              'recorded yet.')
+        if mode == 'sip':
             return  # OpenAI dials out: nothing on this computer has to be reachable
         if not self.gateway_ready:
             raise CallRefused('gateway_unavailable', 'The phone gateway could not start; see the '
@@ -1185,8 +1190,26 @@ class PhoneLine:
                               'COLLEAGUE_PUBLIC_URL, or install cloudflared or Docker for a '
                               'quick tunnel.')
 
-    def _recording(self):
-        return self.environ().get('COLLEAGUE_RECORD_CALLS') == '1'
+    def _recording(self, brief):
+        """Record this call: the brief asked for it, or COLLEAGUE_RECORD_CALLS=1 records every call."""
+        return bool(brief.record) or self.environ().get('COLLEAGUE_RECORD_CALLS') == '1'
+
+    async def recording_audio(self, credentials, record, fmt):
+        """The call's recording from the provider, as (bytes, content type).
+
+        Twilio and SignalWire record the two sides of the call on separate channels.
+        """
+        from urllib.parse import urlsplit
+        from twilio_client import API_BASE
+        creds = credentials('twilio')
+        url = str((record.get('recording') or {}).get('url') or '')
+        target = urlsplit(url)
+        # The account credentials only ever go to the provider's own API host.
+        if target.scheme != 'https' or target.hostname != urlsplit(creds.get('apiBase') or API_BASE).hostname \
+                or '/Recordings/' not in target.path:
+            raise NotReady("this call's recording is not on your phone provider's API")
+        base = url[:-4] if url.endswith(('.mp3', '.wav')) else url
+        return await self.twilio_factory(creds).download(f'{base}.{fmt}')
 
     def session(self, call_id):
         return self.sessions.get(call_id)
@@ -1309,7 +1332,7 @@ class PhoneLine:
         session = PhoneSession(
             self, ctx, api_key=openai['apiKey'], twilio=twilio,
             from_number=env.get('COLLEAGUE_CALLER_ID') or twilio_creds['fromNumber'],
-            token=secrets.token_urlsafe(24), recording=self._recording(),
+            token=secrets.token_urlsafe(24), recording=self._recording(ctx.brief),
             owner_phone=env.get('COLLEAGUE_OWNER_PHONE'))
         self.sessions[ctx.call_id] = session
         try:

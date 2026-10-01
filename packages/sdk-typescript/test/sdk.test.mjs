@@ -35,7 +35,7 @@ async function withDaemon(t, options, fn) {
 test('the SDK exposes calls only, for calls and meetings only', () => {
   const methods = Object.getOwnPropertyNames(Colleague.prototype).filter((name) => name !== 'constructor').sort();
   assert.deepEqual(methods, [
-    'checkCall', 'endCall', 'getCall', 'getDoNotCall', 'getProfile', 'instructCall', 'listCalls',
+    'checkCall', 'downloadRecording', 'endCall', 'getCall', 'getDoNotCall', 'getProfile', 'instructCall', 'listCalls',
     'listVoices', 'startCall', 'transferCall', 'updateDoNotCall', 'updateProfile', 'waitForCall',
   ]);
 });
