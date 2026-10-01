@@ -136,6 +136,8 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 
 Contributions are welcome. Start with [AGENTS.md](AGENTS.md), written for both people and coding agents, and the [development guide](docs/development.md). To report a security issue, see [SECURITY.md](SECURITY.md).
 
+If Smitline is useful to you, a star on GitHub helps other people find it.
+
 ## Credits and license
 
 Created by Lourd Arun Raj and Ankit Luthra at Kaelor Labs. Licensed under the [Apache License 2.0](LICENSE).
