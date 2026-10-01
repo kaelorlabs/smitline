@@ -90,7 +90,8 @@ def signing_keys(creds):
 
 
 class TwilioClient:
-    def __init__(self, account_sid, auth_token, *, request=None, base=API_BASE, flavor='twilio'):
+    def __init__(self, account_sid, auth_token, *, request=None, base=API_BASE, flavor='twilio',
+                 download=None):
         if not account_sid or not auth_token:
             raise ValueError('Twilio account SID and auth token are required')
         self.account_sid = account_sid
@@ -100,6 +101,7 @@ class TwilioClient:
         # enforces the time limit itself, and AMD callbacks default to POST.
         self.flavor = flavor
         self._request = request or self._aiohttp_request
+        self._download = download or self._aiohttp_download
 
     async def _aiohttp_request(self, method, url, form=None):
         from aiohttp import BasicAuth, ClientSession, ClientTimeout
@@ -109,6 +111,21 @@ class TwilioClient:
             async with session.request(method, url, data=form, headers=headers) as response:
                 body = await response.json(content_type=None)
                 return response.status, body
+
+    async def _aiohttp_download(self, url):
+        from aiohttp import BasicAuth, ClientSession, ClientTimeout
+        auth = BasicAuth(self.account_sid, self.auth_token)
+        async with ClientSession(timeout=ClientTimeout(total=120), auth=auth) as session:
+            async with session.get(url) as response:
+                body = await response.read()
+                return response.status, body, response.headers.get('Content-Type') or ''
+
+    async def download(self, url):
+        """GET a media file, such as a recording, with the account credentials: (bytes, type)."""
+        status, body, content_type = await self._download(url)
+        if status >= 400:
+            raise TwilioError(status, status, 'the recording could not be downloaded')
+        return body, content_type
 
     def _url(self, path):
         return f'{self.base}/Accounts/{self.account_sid}/{path}'

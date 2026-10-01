@@ -34,7 +34,7 @@ sequenceDiagram
 - **Voicemail.** Twilio's asynchronous answering-machine detection reports voicemail after the beep. The agent then leaves a short message without private details, and the outcome is `voicemail`.
 - **Taking over.** `POST /v1/calls/{id}/transfer` has the agent say it is connecting them, waits for that to finish playing, then dials `COLLEAGUE_OWNER_PHONE` for 30 seconds. If you do not pick up, the caller hears "Sorry, I could not reach NAME right now. They will get back to you. Goodbye." The call's `endReason` is `transferred`.
 - **Rehearsal.** A brief with `"rehearsal": true` calls `COLLEAGUE_OWNER_PHONE` and nothing else: `to` defaults to it, and any other number is refused. You play the other party; everything else runs as in the real call.
-- **Recording.** With `COLLEAGUE_RECORD_CALLS=1`, Twilio records the call, the agent mentions the recording after the disclosure, and when Twilio finishes the recording the call gets a `recording` field with its `sid`, length, and `url`. The URL is on Twilio's API: fetching it needs your Twilio Account SID and Auth Token. Recordings stay in your Twilio account; delete them there.
+- **Recording.** A brief with `"record": true` (CLI `--record`) records that call; `COLLEAGUE_RECORD_CALLS=1` records every call. The provider records both sides, the agent says the call is recorded right after the disclosure, and when the file is ready (a minute or so after the call) the call gets a `recording` field with its `sid` and length. Download it with `smitline calls recording --call-id <id> --out call.wav`, which keeps the two sides on separate channels for editing (`--format mp3` gives a smaller file with both mixed into one), from the call's page in the console, or from `GET /v1/calls/{id}/recording`; the daemon fetches it from your provider with your account's keys. Recordings stay in your Twilio or SignalWire account; delete them there. Calls over direct SIP cannot be recorded yet. Get everyone's agreement before recording: several places require it.
 
 ## Guardrails
 
@@ -126,7 +126,7 @@ Set `COLLEAGUE_ACCEPT_INBOUND=1`, `COLLEAGUE_OWNER_NAME`, and optionally `COLLEA
 | `COLLEAGUE_PHONE_BACKEND_MODEL` | `gpt-5.6-terra` | Responses model behind the voice. |
 | `COLLEAGUE_PHONE_WEB_SEARCH` | off | `1` adds web search to the backend. |
 | `COLLEAGUE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the call result. |
-| `COLLEAGUE_RECORD_CALLS` | off | `1` records calls in Twilio and adds a recording notice. |
+| `COLLEAGUE_RECORD_CALLS` | off | `1` records every call and adds a recording notice; without it, only briefs with `record: true` are recorded. |
 | `COLLEAGUE_ALLOWED_CALLING_CODES` | any | Comma-separated country calling codes that may be dialed. |
 | `COLLEAGUE_CALLING_HOURS` | `08:00-21:00` | Hours, in the recipient's time, when calls may ring; `off` turns the check off. |
 | `COLLEAGUE_MAX_CALLS_PER_NUMBER` | `5` | Calls to one number per 24 hours; `0` turns the limit off. |

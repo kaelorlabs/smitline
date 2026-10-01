@@ -383,6 +383,26 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         self.temp.cleanup()
 
+    async def test_download_a_recording(self):
+        response = await self.client.post('/v1/calls', json=brief(record=True), headers=self.auth)
+        call = await response.json()
+        self.h.line.proceed.set()
+        await self.client.get(f'/v1/calls/{call["id"]}/wait?timeout=5', headers=self.auth)
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording', headers=self.auth)
+        self.assertEqual((response.status, (await response.json())['error']['code']), (404, 'no_recording'))
+        self.h.store.update(call['id'], recording={'sid': 'RE1', 'url': 'https://api.twilio.com/x/Recordings/RE1.mp3'})
+
+        async def recording_audio(credentials, record, fmt):
+            return b'ID3audio', 'audio/mpeg'
+        self.h.line.recording_audio = recording_audio
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording?format=mp3', headers=self.auth)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), b'ID3audio')
+        self.assertEqual(response.headers['Content-Type'], 'audio/mpeg')
+        self.assertIn(f'filename="{call["id"]}.mp3"', response.headers['Content-Disposition'])
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording')
+        self.assertEqual(response.status, 401)
+
     async def test_create_get_wait_list(self):
         response = await self.client.post('/v1/calls', json=brief(), headers=self.auth)
         self.assertEqual(response.status, 201)

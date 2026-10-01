@@ -1036,6 +1036,7 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('RecordingStatusCallback', dict(form))
         await client.create_call(to='+1', from_='+2', twiml='<Response/>', record=True,
                                  recording_callback='https://x/twilio/recording/call-1')
+        self.assertIn(('RecordingChannels', 'dual'), parse_qsl(captured['form']))
         form = dict(parse_qsl(captured['form']))
         self.assertEqual(form['RecordingStatusCallback'], 'https://x/twilio/recording/call-1')
         self.assertEqual(form['RecordingStatusCallbackEvent'], 'completed')
@@ -1314,6 +1315,47 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             'url': 'https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1.mp3'})
         response = await self.post_signed('/twilio/recording/call-missing', params)
         self.assertEqual(response.status, 204)
+
+    async def test_a_call_is_recorded_on_request_and_downloaded(self):
+        record, _session = await self.h.dial(record=True)
+        created = self.h.twilio.created[-1]
+        self.assertTrue(created['record'])
+        self.assertEqual(created['recording_callback'], f'{PUBLIC}/twilio/recording/{record["id"]}')
+        # Not asked for and not turned on for every call: no recording.
+        other, _ = await self.h.dial(to='+14155550199')
+        self.assertFalse(self.h.twilio.created[-1]['record'])
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.recording(record['id'])
+        self.assertEqual(caught.exception.code, 'not_ready')
+        await self.post_signed(f'/twilio/recording/{record["id"]}', {
+            'RecordingSid': 'RE1', 'RecordingStatus': 'completed', 'RecordingDuration': '42',
+            'RecordingUrl': 'https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1'})
+        fetched = []
+
+        async def download(url):
+            fetched.append(url)
+            return b'RIFF....WAVE', 'audio/x-wav'
+        self.h.twilio.download = download
+        body, content_type = await self.h.service.recording(record['id'])
+        self.assertEqual((body, content_type), (b'RIFF....WAVE', 'audio/x-wav'))
+        await self.h.service.recording(record['id'], fmt='mp3')
+        self.assertEqual(fetched, ['https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1.wav',
+                                   'https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1.mp3'])
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.recording(record['id'], fmt='flac')
+        self.assertEqual(caught.exception.status, 422)
+        # Credentials never go to a host other than the provider's API.
+        self.h.store.update(record['id'], recording={'sid': 'RE1', 'url': 'https://evil.example/Recordings/RE1.mp3'})
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.recording(record['id'])
+        self.assertEqual(caught.exception.code, 'not_ready')
+        self.assertEqual(len(fetched), 2)
+        # Direct SIP calls cannot be recorded yet, so asking is refused before dialing.
+        self.h.env.update(COLLEAGUE_PHONE_AUDIO='sip', COLLEAGUE_SIP_TRUNK_URL='sips:t.example',
+                          COLLEAGUE_SIP_USERNAME='u', COLLEAGUE_SIP_PASSWORD='p')
+        with self.assertRaises(CallError) as caught:
+            await self.h.service.create(brief(record=True, to='+14155550123'))
+        self.assertEqual(caught.exception.code, 'recording_unavailable')
 
     async def test_inbound_calls_are_capped(self):
         self.h.env.update(COLLEAGUE_ACCEPT_INBOUND='1', COLLEAGUE_MAX_INBOUND='1')

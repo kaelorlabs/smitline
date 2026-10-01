@@ -44,11 +44,12 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
   "maxMinutes": 10,
   "rehearsal": false,
   "afterHours": false,
+  "record": false,
   "notify": { "webhookUrl": "https://example.com/hooks/smitline" }
 }
 ```
 
-Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now.
+Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now. `record: true` (phone only) records the call in the owner's phone account; see [recording](phone.md#how-a-call-runs).
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
@@ -104,7 +105,7 @@ Meetings get the session context and `questions` as their starting context, with
 }
 ```
 
-`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once Twilio finishes the file. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results come from the meeting handoff. `source` records which path produced the result.
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once the provider finishes the file; `GET /v1/calls/{id}/recording` downloads it. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results come from the meeting handoff. `source` records which path produced the result.
 
 ## Cost
 
@@ -155,6 +156,7 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions; with `"silent": true` it is a background note the voice uses when relevant. Meetings do not accept live instructions yet (`delivered: false`). |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |
 | `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
+| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one. `404 no_recording` when there is none, `409 not_ready` while the call runs. |
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |

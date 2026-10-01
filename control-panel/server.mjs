@@ -373,7 +373,7 @@ export function createServer(options = {}) {
       });
     }
     // Call reads follow the transcript routes above: same-origin GETs carry no Origin header.
-    const callMatch = pathname.match(/^\/api\/calls(?:\/(call-[0-9a-f]{16})(?:\/(end|transfer|events))?)?$/);
+    const callMatch = pathname.match(/^\/api\/calls(?:\/(call-[0-9a-f]{16})(?:\/(end|transfer|events|recording))?)?$/);
     if (callMatch && request.method === 'GET') {
       const [, callId, action] = callMatch;
       try {
@@ -385,6 +385,16 @@ export function createServer(options = {}) {
         if (action === 'events') {
           const after = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('after') || '';
           return json(response, 200, await daemonClient.callEvents(callId, after));
+        }
+        if (action === 'recording') {
+          const format = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('format') === 'mp3' ? 'mp3' : 'wav';
+          const audio = await daemonClient.downloadRecording(callId, format);
+          response.writeHead(200, {
+            ...headers(audio.contentType),
+            'Content-Disposition': `attachment; filename="${callId}.${format}"`,
+            'Content-Length': audio.body.length,
+          });
+          return response.end(audio.body);
         }
       } catch (error) {
         return json(response, error.status || 503, { error: error.message, code: error.code });

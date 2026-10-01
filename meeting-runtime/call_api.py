@@ -149,6 +149,16 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         return public_json(service.update_profile(await owner(request), payload))
 
     @handle
+    async def call_recording(request):
+        call_id = request.match_info['callId']
+        fmt = request.query.get('format', 'wav')
+        body, content_type = await service.recording(call_id, owner=await owner(request), fmt=fmt)
+        return web.Response(body=body, content_type=content_type, headers={
+            'Content-Disposition': f'attachment; filename="{call_id}.{fmt}"',
+            'Cache-Control': 'no-store',
+        })
+
+    @handle
     async def get_do_not_call(request):
         return public_json(service.do_not_call(await owner(request)))
 
@@ -174,6 +184,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_post('/v1/calls/{callId}/instructions', instruct_call)
     app.router.add_post('/v1/calls/{callId}/end', end_call)
     app.router.add_post('/v1/calls/{callId}/transfer', transfer_call)
+    app.router.add_get('/v1/calls/{callId}/recording', call_recording)
     app.router.add_get('/v1/voices', list_voices)
     app.router.add_get('/v1/profile', get_profile)
     app.router.add_patch('/v1/profile', update_profile)

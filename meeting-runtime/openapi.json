@@ -106,6 +106,22 @@
         }
       }
     },
+    "/v1/calls/{callId}/recording": {
+      "get": {
+        "summary": "Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one.",
+        "operationId": "getCallRecording",
+        "parameters": [
+          { "name": "callId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["wav", "mp3"], "default": "wav" } }
+        ],
+        "responses": {
+          "200": { "description": "The audio file", "content": { "audio/wav": {}, "audio/mpeg": {} } },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "502": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/v1/voices": {
       "get": {
         "summary": "List GPT-Live voices",
@@ -189,6 +205,7 @@
           "voice": { "type": "string", "examples": ["marin"] },
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
+          "record": { "type": "boolean", "description": "Phone only: record this call in the owner's phone account. The assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
           "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } }
         }

@@ -46,6 +46,8 @@ export interface CallBrief {
   rehearsal?: boolean;
   /** Phone only: call outside calling hours where the person is; only when the user confirms they expect it. */
   afterHours?: boolean;
+  /** Phone only: record this call in the owner's phone account; the assistant says it is recorded. */
+  record?: boolean;
   notify?: { webhookUrl?: string };
 }
 
@@ -133,6 +135,7 @@ export interface DaemonTransport {
   updateDoNotCall(update: DoNotCallUpdate): Promise<{ numbers: DoNotCallEntry[] }>;
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
+  downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
   listVoices(): Promise<{ default: string; voices: string[] }>;
 }
 
@@ -163,6 +166,7 @@ export class Colleague {
   updateDoNotCall(update: DoNotCallUpdate): Promise<{ numbers: DoNotCallEntry[] }>;
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
+  downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
   listVoices(): Promise<{ default: string; voices: string[] }>;
 }
 

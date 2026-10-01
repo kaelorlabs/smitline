@@ -63,7 +63,7 @@ function requestInterrupt() {
 const USAGE = `Usage:
   smitline call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
-               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--webhook <url>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--check] [--wait]
   smitline call --meeting <url> --objective <text> [...same options] [--wait]
@@ -72,6 +72,7 @@ const USAGE = `Usage:
   smitline calls list [--limit <n>]
   smitline calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
   smitline calls instruct --call-id <id> --text <guidance> [--silent]
+  smitline calls recording --call-id <id> [--format wav|mp3] [--out <file>]   (no --out: to stdout)
   smitline profile show
   smitline profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
   smitline profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
@@ -230,6 +231,7 @@ async function briefFromArgs(args, root) {
     maxMinutes: text(args['max-minutes']) === undefined ? undefined : Number(args['max-minutes']),
     rehearsal: args.rehearsal === true ? true : undefined,
     afterHours: args['after-hours'] === true ? true : undefined,
+    record: args.record === true ? true : undefined,
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
   };
   return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
@@ -358,6 +360,20 @@ async function callsCommand(args) {
   else if (action === 'instruct') {
     if (!args.text || args.text === true) throw new ValidationError('--text is required');
     printJson(await client.instructCall(callId, String(args.text), { silent: args.silent === true }));
+  } else if (action === 'recording') {
+    const format = args.format === undefined ? 'wav' : String(args.format);
+    if (!['wav', 'mp3'].includes(format)) throw new ValidationError('--format must be wav or mp3');
+    const out = args.out === undefined || args.out === true ? null : String(args.out);
+    if (!out && process.stdout.isTTY) {
+      throw new ValidationError(`the recording is audio: add --out ${callId}.${format}, or redirect it to a file`);
+    }
+    const { data } = await client.downloadRecording(callId, { format });
+    if (!out) {
+      process.stdout.write(Buffer.from(data));
+      return EXIT.ok;
+    }
+    await fs.writeFile(out, data);
+    printJson({ saved: path.resolve(out), bytes: data.length, format });
   } else throw new ValidationError('unknown calls command');
   return EXIT.ok;
 }

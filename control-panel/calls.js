@@ -737,13 +737,15 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('problem-title').textContent = call.answeredAt ? 'This call ended because of a problem' : 'This call did not go through';
   $('problem-text').textContent = failed ? sentence(call.error || 'Something went wrong before the call could start.') : '';
   $('handed-over').hidden = !(state.transferred || call.endReason === 'transferred');
-  // The recording stays in Twilio; its API address opens with the Twilio account credentials.
+  // The recording stays in the phone account; the console fetches it with the account's keys.
   const recording = call.recording && typeof call.recording.url === 'string' ? call.recording : null;
   $('recording').hidden = !recording;
   $('recording-text').textContent = recording
-    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'open it in the Twilio console under Call Recordings, or with your Account SID and Auth Token at:'].filter(Boolean).join(' · ')
+    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'kept in your phone account; the WAV has each side on its own channel'].filter(Boolean).join(' · ')
     : '';
-  $('recording-url').textContent = recording ? recording.url : '';
+  for (const format of ['wav', 'mp3']) {
+    $(`recording-${format}`).href = recording ? `/api/calls/${encodeURIComponent(call.id)}/recording?format=${format}` : '';
+  }
   $('result-pending').hidden = call.status !== 'summarizing';
   renderBrief(call);
   renderResult(call);

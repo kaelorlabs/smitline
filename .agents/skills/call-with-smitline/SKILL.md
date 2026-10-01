@@ -24,6 +24,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `mayAgreeTo` | What may be accepted without checking back, such as times or a price ceiling |
 | `mustNotShare` | What must never be said, such as payment details |
 | `successCriteria` | How to tell the call worked |
+| `record` | `true` only when the user asks to record the call. The assistant tells the other person the call is recorded; make sure the user has their agreement. |
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
 
