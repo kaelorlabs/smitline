@@ -426,7 +426,7 @@ export async function setupStatus({
   if (accountSaved && verify) account = await verifyPhoneAccount(env, fetchImpl, provider);
   checks.push(check('phone_account', accountSaved ? `${providerName} account` : 'Phone provider account', account.ok, {
     group: 'phone', required: false, detail: account.detail || (accountSaved ? 'saved' : 'not set up'),
-    ask: 'Do you want phone calls too? SignalWire has a free trial that works with Smitline: sign up at https://signalwire.com, then enter its details on the setup page.',
+    ask: 'Do you want phone calls too? SignalWire works with Smitline: sign up at https://signalwire.com (free, no card), then enter its details on the setup page. Its free trial calls only numbers you verify in SignalWire, up to 10; adding a card and $5 of credit lets it call anyone (SETUP.md has the steps).',
     fix: account.fix || 'smitline setup secrets',
   }));
   // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else the provider number.
@@ -734,7 +734,7 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   const groupTitles = { Required: 'The basics' };
   const groupHints = {
     Required: 'Required for every call and meeting.',
-    'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline.',
+    'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline; it calls only numbers you verify in SignalWire (up to 10) until you add a card and $5 of credit.',
     'SignalWire (free trial)': 'Sign up free at https://signalwire.com (no card needed). A trial calls only numbers you verify in SignalWire (Phone Numbers > Verified Caller IDs), up to 10, in the US and Canada. Adding $5 lifts that.',
     'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Smitline needs, so use Twilio only with an upgraded account.",
     'Remote connector (server mode)': 'Only for running Smitline on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',

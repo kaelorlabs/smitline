@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Calls open with who and why.** A call now starts "Hi, I'm calling on behalf of NAME about…", and the assistant says it is NAME's AI assistant at a natural moment during the call. Openings that led with "AI assistant" sounded like scams and were mostly hung up on. If the disclosure has not been said by the time the call wraps up, the assistant is told to say it before the goodbye. Anyone who asks still gets a straight answer, recorded calls still say so in the first sentence, and `disclosureVerified` now covers the whole call (AI as a topic no longer counts).
+- Setup walks agents through SignalWire step by step: signing up, the credentials, a number, verifying the numbers a free trial may call (up to 10), and adding $5 of credit to call anyone, with a warning that Auto Top-Up then stays on.
 - Setup offers a phone-calls-only start without the Docker socket, says plainly what mounting the socket allows, and tells agents to let the user run the command when their safeguards block it.
 
 ## 0.1.1 — 2026-10-01
