@@ -39,7 +39,7 @@ Smitline should then:
 1. Receive a brief from the agent: who to call or which meeting to join, on whose behalf, the goal, the context, what it may agree to, and what it must not share.
 2. Ask, through the agent, for anything missing instead of guessing.
 3. Place the phone call through the user's SignalWire or Twilio account, or join Zoom, Microsoft Teams, or Google Meet as one visible participant.
-4. Open with who the call is for and why, then say it is an AI in the next turn, before asking for anything.
+4. Open with who the call is for and why, and say during the call that it is an AI, before the goodbye at the latest.
 5. Keep one continuous `gpt-live-1` session for the conversation, listen continuously, and speak selectively.
 6. Hand questions that need careful reasoning or precise facts to a backend model that knows the brief.
 7. Show a safe, non-sensitive visual presence in meetings.

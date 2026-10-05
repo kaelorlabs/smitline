@@ -116,7 +116,7 @@ When `firstCallReady` is true:
 docker exec smitline smitline setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says it is their AI assistant in its next sentence, and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
 
 Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Smitline join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
 

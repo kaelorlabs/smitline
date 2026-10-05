@@ -28,7 +28,7 @@ Agent skills for setup and for placing calls live under [`.agents/skills/`](.age
 - **Brief in, result out.** Phone calls and meetings start through the calls API and return the same result shape.
 - **Fail closed** on unknown fields, unsupported meeting links, incomplete briefs, and missing configuration.
 - **Local-first:** loopback daemon, gitignored secrets, transcripts, call records, profiles, and context.
-- **Disclose.** Phone calls say they are an AI acting for the named person by the agent's second turn: the opening names the person and the reason, and the next turn says it is an AI, before asking for anything. Meetings open with a disclosure unless the owner sets `COLLEAGUE_MEETING_INTRO=0`.
+- **Disclose.** Phone calls say they are an AI acting for the named person during the call: the opening names the person and the reason, and the disclosure follows at a natural moment, before the goodbye at the latest. Meetings open with a disclosure unless the owner sets `COLLEAGUE_MEETING_INTRO=0`.
 - **Preserve** existing Zoom/Teams/Meet admission, audio, mute, transcript, handoff, and console behavior unless a change explicitly replaces it.
 
 ## Tests

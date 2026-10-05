@@ -10,7 +10,7 @@ Smitline runs on your computer with your own keys. There is no Smitline server: 
 - **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.
 - **Docker access is your choice.** Meetings need the Docker socket mounted, so Smitline can start its meeting container; that gives the container control of Docker on your computer. It uses it only to download, start and stop its own meeting container. Phone calls work without it. See [Get started](../README.md#get-started).
 - **Call guardrails.** Smitline never dials emergency, premium-rate, or satellite numbers; calls people only between 8 AM and 9 PM their time; stops calling anyone who asks it to; and limits repeat calls. See [guardrails](phone.md#guardrails).
-- **AI disclosure.** Every phone call says it's an AI calling for the person named in the brief by its second turn: the opening names that person and the reason, and the next turn says it's an AI, before asking for anything. The result records whether that was heard (`disclosureVerified`). Meetings open with a short disclosure too, unless the owner turns it off.
+- **AI disclosure.** Every phone call says it's an AI calling for the person named in the brief during the call: the opening names that person and the reason, the disclosure follows, and Smitline has it said before hanging up if it was missed. The result records whether that was heard (`disclosureVerified`). Meetings open with a short disclosure too, unless the owner turns it off.
 - **Operator mute is authoritative.** Smitline does not unmute itself after a host or participant mute. It accepts only an explicit host request, such as Zoom's "Ask to unmute".
 
 ## Data and privacy

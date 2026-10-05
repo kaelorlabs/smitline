@@ -43,7 +43,7 @@ Smitline makes the call, talks with whoever answers in a natural voice, and send
 ## How it works
 
 1. **You ask your agent.** It writes a short brief: the goal, what to find out, what it may agree to, and what to keep private.
-2. **Smitline makes the call.** It opens with your name and why it's calling, says it's your AI assistant in its next sentence, then talks in real time using OpenAI's GPT-Live, staying inside the brief.
+2. **Smitline makes the call.** It opens with your name and why it's calling, says during the call that it's your AI assistant, and talks in real time using OpenAI's GPT-Live, staying inside the brief.
 3. **You can follow along.** The dashboard on your computer shows the live transcript, and you can take the call over on your own phone at any moment.
 4. **The result comes back** to the chat that asked: the outcome, the details, action items, the transcript, and the cost.
 
@@ -102,7 +102,7 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then 
 
 ## Safe by default
 
-- **Always says it's an AI.** Every call opens with who it's for and why ("Hi, I'm calling on behalf of *your name* about…"), says it's your AI assistant before asking for anything, and answers honestly whenever someone asks. Smitline checks that it was said.
+- **Always says it's an AI.** Every call opens with who it's for and why ("Hi, I'm calling on behalf of *your name* about…"), says during the call that it's your AI assistant, and answers honestly whenever someone asks. Smitline checks the whole call and has it said before hanging up.
 - **Stays inside the brief.** It agrees only to what you allowed and never shares what you marked private. Anything else, it brings back to you.
 - **Guardrails on every call.** It never dials emergency or premium-rate numbers, calls only between 8 AM and 9 PM in the other person's time zone, stops calling anyone who asks it to, and limits repeat calls.
 - **Docker access is your choice.** Meetings need Smitline to start its own meeting container, so the setup mounts the Docker socket. Phone calls work without it.
