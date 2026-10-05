@@ -19,7 +19,7 @@ from call_store import CallStore
 from phone_gateway import create_gateway_app
 from phone_line import OutputPacer, PhoneLine, ProviderClock, UtteranceJoiner, inbound_brief
 from phone_prompts import (
-    backend_instructions, delegation_config, discloses, mentions_ai, voice_instructions,
+    backend_instructions, delegation_config, discloses, mentions_ai, opening_cue, voice_instructions,
 )
 from tunnel import PublicUrl, TunnelError, configured_url
 from twilio_client import (
@@ -244,7 +244,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config['audio']['output'], {'voice': 'quartz'})
         self.assertEqual(config['delegation']['type'], 'responses')
         self.assertEqual(config['delegation']['responses']['tools'][0]['name'], 'end_call')
-        self.assertIn("Hi, this is Robin's AI assistant.", config['instructions'])
+        self.assertIn("Hi, I'm calling on behalf of Robin about ...", config['instructions'])
         self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
 
         live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
@@ -343,17 +343,25 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
         live.push({'type': 'session.output_transcript.delta',
-                   'delta': 'Hello there, I would like to book a table for four people tonight.',
+                   'delta': "Hello there, I'm calling on behalf of Robin about a table for tonight.",
                    'start_ms': 0, 'end_ms': 900})
-        live.push({'type': 'session.input_transcript.delta', 'delta': 'Who is this?', 'start_ms': 1000,
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay?', 'start_ms': 1000,
                    'end_ms': 1400})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': 'I would like to book a table for four people tonight at seven.',
+                   'start_ms': 1600, 'end_ms': 2500})
+        await asyncio.sleep(0.2)
+        # Who and why first is the opening, not a miss: the disclosure is due by the second turn.
+        self.assertFalse(any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Who is this?', 'start_ms': 2700,
+                   'end_ms': 3100})
         await until(lambda: any(kind == 'session.instructions.append' for kind, _ in live.appends))
         # The next utterance is checked again; a second miss is final.
         live.push({'type': 'session.output_transcript.delta',
                    'delta': 'Sorry about that, I would just like a table for four people tonight.',
-                   'start_ms': 3000, 'end_ms': 3900})
-        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay.', 'start_ms': 5000,
-                   'end_ms': 5400})
+                   'start_ms': 3300, 'end_ms': 4200})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay.', 'start_ms': 4400,
+                   'end_ms': 4800})
         await until(lambda: sum(e['type'] == 'call.disclosure'
                                 for e in self.h.service.events(record['id'])) == 2)
         ws.push({'event': 'stop'})
@@ -362,6 +370,41 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['endReason'], 'remote_hangup')
         self.assertTrue(live.close_requested)
         self.assertIs(done['result']['disclosureVerified'], False)
+
+    async def test_the_disclosure_in_the_second_turn_needs_no_reminder(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                   'start_ms': 0, 'end_ms': 2000})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Sure, go ahead.', 'start_ms': 2200,
+                   'end_ms': 2800})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "I'm Robin's AI assistant. Do you have a table for four at seven?",
+                   'start_ms': 3000, 'end_ms': 5000})
+        await until(lambda: any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        disclosure = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
+        self.assertEqual(disclosure, [{'verified': True, 'attempt': 1}])
+        self.assertFalse(any(kind == 'session.instructions.append' for kind, _ in live.appends))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertIs(done['result']['disclosureVerified'], True)
+
+    async def test_a_call_ended_after_the_opening_has_no_disclosure_verdict(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                   'start_ms': 0, 'end_ms': 2000})
+        await asyncio.sleep(0.2)
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertFalse(any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        self.assertIsNone(done['result'].get('disclosureVerified'))
 
     async def test_the_session_gets_the_three_levels_of_context(self):
         from briefing import save_profile
@@ -382,7 +425,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
-        self.assertIn('"Hey Sam, this is Robin\'s AI assistant." Then stop and let them answer.', instructions)
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..." with the reason in place of '
+                      'the dots. Then stop and let them answer.', instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
         self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
@@ -738,8 +782,12 @@ class PromptTests(unittest.TestCase):
         parsed = CallBrief.from_dict(brief(mayAgreeTo=['6:30 to 7:30pm'], mustNotShare=['card number'],
                                            language='es'))
         text = voice_instructions(parsed)
-        self.assertIn("Hi, this is Robin's AI assistant.", text)
-        self.assertNotIn('on behalf of', text)
+        self.assertIn("Hi, I'm calling on behalf of Robin about ...", text)
+        self.assertIn("In your next turn, before you ask for anything, say plainly that you are "
+                      "Robin's AI assistant", text)
+        self.assertNotIn('call is recorded', text)
+        self.assertIn('Also say in your first sentence that the call is recorded.',
+                      voice_instructions(parsed, recording=True))
         self.assertIn('- 6:30 to 7:30pm', text)
         self.assertIn('- card number', text)
         self.assertIn('language with tag es', text)
@@ -749,6 +797,17 @@ class PromptTests(unittest.TestCase):
         self.assertEqual([tool.get('name', tool['type']) for tool in config['responses']['tools']],
                          ['end_call', 'web_search'])
         self.assertEqual(config['responses']['model'], 'gpt-5.6-luna')
+
+    def test_the_opening_cue_says_who_and_why_and_the_ai_part_follows(self):
+        parsed = CallBrief.from_dict(brief())
+        cue = opening_cue(parsed, name='Sam')
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..."', cue)
+        self.assertIn("In your next turn, say that you are Robin's AI assistant", cue)
+        self.assertNotIn('recorded', cue)
+        self.assertIn('what about, and that the call is recorded,', opening_cue(parsed, recording=True))
+        self.assertEqual(opening_cue(parsed, inbound=True, recording=True),
+                         "Greet the caller: say they have reached Robin's AI assistant. "
+                         'Say that the call is recorded.')
 
     def test_mentions_ai(self):
         self.assertTrue(mentions_ai("Hi, I'm an AI assistant calling"))

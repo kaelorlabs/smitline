@@ -2,7 +2,7 @@
 import re
 import unicodedata
 
-from call_brief import disclosure_line
+from call_brief import disclosure_line, opening_line
 from startup_input import clip_tokens
 
 
@@ -67,7 +67,14 @@ def _who_line(brief, contact, *, inbound):
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
                        boundaries=()):
     who = brief.on_behalf_of
-    disclosure = disclosure_line(brief, greeting_name(contact))
+    # Who and why come first, so the call sounds genuine before it says it is an AI.
+    steps = ('Open the way a person does on the phone, in two steps. First a short hello that '
+             'says who you are calling for and, in a few words, what it is about, for example: '
+             f'"{opening_line(brief, greeting_name(contact))} ..." with the reason in place of the '
+             'dots. Then stop and let them answer. In your next turn, before you ask for anything, '
+             f"say plainly that you are {who}'s AI assistant, as part of what you say, for example: "
+             f'"{disclosure_line(brief)}, and {who} asked me to ..." Never leave out the AI part. '
+             'Keep it relaxed rather than formal.')
     if inbound:
         opening = (f'You are answering a phone call as the AI assistant of {who}. '
                    f'Start by saying: "Hi, you have reached {who}\'s AI assistant." '
@@ -75,17 +82,11 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
                    'if they want one. Do not promise anything on the owner\'s behalf.')
     elif brief.rehearsal:
         opening = (f'This is a rehearsal. The person on the phone is {who} practicing the other '
-                   'side of the call. Run the call exactly as you would for real, opening the same '
-                   f'way: "{disclosure}"')
+                   f'side of the call. Run the call exactly as you would for real. {steps}')
     else:
-        opening = (f"You are {who}'s AI assistant, making a phone call for them. Open the way a "
-                   'person does on the phone, in two steps. First only a short hello that says who '
-                   f'you are, for example: "{disclosure}" Then stop and let them answer. Once they '
-                   'reply ("hi", "yes?", "what is it about?"), say why you are calling. '
-                   f"Always say that you are {who}'s AI assistant in that first sentence, in plain "
-                   'words, and keep it relaxed rather than formal.')
+        opening = f"You are {who}'s AI assistant, making a phone call for them. {steps}"
     if recording:
-        opening += ' Also say that the call is recorded.'
+        opening += ' Also say in your first sentence that the call is recorded.'
     tone = (f'Tone: {brief.tone}' if brief.tone else
             'Tone: match the relationship: warm and relaxed with friends and family, polite and '
             'efficient with businesses.')
@@ -108,24 +109,27 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'Hand a question to your backend only for a fact you do not have or for careful '
          'reasoning; never for a greeting, a clarification, or repeating yourself. Do not say '
          '"hmm" or "let me check" unless you are really checking.'),
-        ('Boundaries: if anyone asks, say plainly that you are an AI assistant. Never claim to be '
-         f'{who} or a human. Only agree to what is listed above. If asked for something you do '
+        ('Boundaries: if anyone asks whether you are a person, a recording, or an AI, say right away '
+         f'and plainly that you are an AI assistant. Never claim to be {who} or a human. Only agree '
+         'to what is listed above. If asked for something you do '
          f'not know or may not agree to, say you will check with {who} and note it. Never make '
          'up facts, reasons, or plans that the brief does not give; say you do not know and that '
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
         ('Call screening: if an automated assistant answers ("the person you are calling is using '
          'a screening service", "I\'ll see if this person is available"), let it finish. When it asks '
-         f"who is calling and why, say in one sentence that you are {who}'s AI assistant and why "
-         'you are calling, then wait quietly for the person to pick up. When they do, greet them '
-         'and continue normally.'),
+         f'who is calling and why, say in one sentence that you are calling on behalf of {who} and '
+         'why, then wait quietly for the person to pick up. When they do, greet them, say in a few '
+         f"words why you are calling, and say that you are {who}'s AI assistant before you ask for "
+         'anything.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them. If they ask not to be called again, apologize, say they will not be called again, '
          'say goodbye, and end the call.'),
         ('Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
-         f'the disclosure, why you called, and that they can reply to {who} directly. Never ask them '
-         'to call this number back, and share no private details. If a person picks up while you '
+         f"who you are calling for and why, that you are {who}'s AI assistant, and that they can "
+         f'reply to {who} directly. Never ask them to call this number back, and share no private '
+         'details. If a person picks up while you '
          'are leaving the message, stop and talk with them. End the call with the reason '
          'voicemail_left only after leaving a message on a recording. If a recording says the '
          'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
@@ -176,21 +180,26 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
     }
 
 
-def opening_cue(brief, *, inbound=False, name=None):
+def opening_cue(brief, *, inbound=False, name=None, recording=False):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
+    who = brief.on_behalf_of
     if inbound:
-        return f"Greet the caller: say they have reached {brief.on_behalf_of}'s AI assistant."
-    return (f"The call just connected. Say only a short, relaxed hello that says you are "
-            f'{brief.on_behalf_of}\'s AI assistant, like "{disclosure_line(brief, name)}", then stop '
-            'and wait for them to answer before you say why you are calling. If an automated '
-            'assistant or voicemail greeting is still talking, let it finish first.')
+        recorded = ' Say that the call is recorded.' if recording else ''
+        return f"Greet the caller: say they have reached {who}'s AI assistant.{recorded}"
+    # Several US states require consent before recording, so that notice cannot wait.
+    recorded = ', and that the call is recorded' if recording else ''
+    return ('The call just connected. Say only a short, relaxed hello that says you are calling on '
+            f'behalf of {who} and, in a few words, what about{recorded}, like '
+            f'"{opening_line(brief, name)} ...", then stop and wait for them to answer. In your next '
+            f"turn, say that you are {who}'s AI assistant before you ask for anything. If an "
+            'automated assistant or voicemail greeting is still talking, let it finish first.')
 
 
 def machine_hint(brief):
     """Sent when the phone network guesses that a machine answered; it is often wrong."""
     return ('The phone network guesses that a machine may have answered: a voicemail system or an '
             'automated call screener. If a person is talking with you, ignore this and carry on. If '
-            'it is a call screener, say who you are and why you are calling, then wait for the '
+            'it is a call screener, say who you are calling for and why, then wait for the '
             'person. If it is a voicemail recording, wait for the beep and leave a short message as '
             'your instructions describe. Do not mention this note.')
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Calls open with who and why.** A call now starts "Hi, I'm calling on behalf of NAME about…", and the assistant says it is NAME's AI assistant in its next turn, before asking for anything. Openings that led with "AI assistant" sounded like scams and were mostly hung up on. Anyone who asks still gets a straight answer, recorded calls still say so in the first sentence, and `disclosureVerified` now checks the first two turns.
 - Setup offers a phone-calls-only start without the Docker socket, says plainly what mounting the socket allows, and tells agents to let the user run the command when their safeguards block it.
 
 ## 0.1.1 — 2026-10-01

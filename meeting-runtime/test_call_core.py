@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from call_brief import BriefIncomplete, CallBrief, available_voices, disclosure_line
+from call_brief import BriefIncomplete, CallBrief, available_voices, disclosure_line, opening_line
 from call_hooks import CallRefused, DefaultCallHooks, MissingCredentials, load_hooks, read_env_file
 from call_notify import WebhookNotifier, load_or_create_secret, signature
 from call_result import (
@@ -40,8 +40,9 @@ class BriefTests(unittest.TestCase):
         self.assertEqual(brief.to, '+14155550142')
         self.assertEqual(brief.max_minutes, 10)
         self.assertEqual(brief.to_dict()['mayAgreeTo'], ['6:30 to 7:30pm'])
-        self.assertEqual(disclosure_line(brief), "Hi, this is Robin's AI assistant.")
-        self.assertEqual(disclosure_line(brief, 'Sam'), "Hey Sam, this is Robin's AI assistant.")
+        self.assertEqual(opening_line(brief), "Hi, I'm calling on behalf of Robin about")
+        self.assertEqual(opening_line(brief, 'Sam'), "Hey Sam, I'm calling on behalf of Robin about")
+        self.assertEqual(disclosure_line(brief), "I'm Robin's AI assistant")
 
     def test_missing_fields_come_with_questions(self):
         with self.assertRaises(BriefIncomplete) as caught:

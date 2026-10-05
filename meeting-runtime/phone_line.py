@@ -74,10 +74,15 @@ CONNECT_TIMEOUT = RING_SECONDS + 45.0
 LIVE_CONNECT_TIMEOUT = 20.0
 # Extra time past maxMinutes before a connected call is ended regardless.
 OVERRUN_SECONDS = 180.0
-# Characters of the agent's first utterance to hear before judging the disclosure.
+# The opening says who the call is for and why; the AI disclosure is due in the
+# agent's next turn. Without it, a miss is called at the end of the agent's second
+# turn, or once this many characters of its speech have gone by.
+DISCLOSURE_TURNS = 2
+DISCLOSURE_SECOND_TURN_WINDOW = 320
+# After a reminder: characters of the agent's speech to hear before judging again.
 DISCLOSURE_WINDOW = 120
 # A finished utterance this short (for example "Hi," cut off by a call screener) is
-# not judged on its own; the next words are added to it.
+# not judged on its own and is not a turn; the next words are added to it.
 DISCLOSURE_MIN_FINAL = 40
 # GPT-Live stops talking when interrupted but sends no event for it. If the other person
 # talks for this long while speech is still queued, and no new audio arrives for
@@ -440,7 +445,8 @@ class PhoneSession:
         self.disclosure_checked = False
         self.disclosure_attempts = 0
         self.greet_name = None  # the person's name for the hello, when the profile or brief knows it
-        self._agent_opening = ''
+        self._agent_speech = ''  # what the agent said since the last disclosure check
+        self._agent_turns = 0
         self.heard_other = asyncio.Event()
         self.last_output_at = None
         self._other_spoke_at = None
@@ -557,7 +563,7 @@ class PhoneSession:
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
                 if speaker == 'agent':
-                    self._check_disclosure(final=True)
+                    self._agent_turn_done(text)
             for task in list(self._tasks):
                 task.cancel()
             if self._hangups:
@@ -768,11 +774,11 @@ class PhoneSession:
                 self._other_span[1] = end
             self._maybe_follow_interruption(now)
         if source == 'agent' and not self.disclosure_checked:
-            self._agent_opening += delta
+            self._agent_speech += delta
         for speaker, text in self.joiner.add(source, delta, event.get('start_ms'), event.get('end_ms')):
             self.ctx.add_transcript(speaker, text)
             if speaker == 'agent':
-                self._check_disclosure(final=True)
+                self._agent_turn_done(text)
         if source == 'agent' and self.joiner.speaker == 'agent':
             self._check_disclosure()
 
@@ -829,20 +835,32 @@ class PhoneSession:
             stats['stopDelayMs'] = spread(self.stats['stopDelaysMs'])
         return stats
 
-    def _check_disclosure(self, *, final=False):
-        """Check, early in the agent's speech, that it said it is an AI acting for NAME.
+    def _agent_turn_done(self, text):
+        """Count a finished agent turn for the disclosure check; a short fragment is not a turn."""
+        if len(' '.join(text.split())) >= DISCLOSURE_MIN_FINAL:
+            self._agent_turns += 1
+        self._check_disclosure(final=True)
 
-        GPT-Live cannot be forced to say a fixed sentence, so the opening is checked
-        as it is spoken, over everything the agent has said so far: a call screener or
-        a quick "hello" can split the opening, and a fragment is not a miss. A miss
-        triggers an instruction to disclose at once, and what the agent says next is
-        checked again. The verdict goes into the result.
+    def _check_disclosure(self, *, final=False):
+        """Check that the agent said it is an AI acting for NAME by the end of its second turn.
+
+        The opening says who the call is for and why; the next turn says it is an AI,
+        before asking for anything. GPT-Live cannot be forced to say a fixed sentence, so
+        everything the agent says is checked as it is spoken: a call screener or a quick
+        "hello" can split the opening, and a fragment is not a turn. A miss triggers an
+        instruction to disclose at once, and what the agent says next is checked again.
+        The verdict goes into the result; a call that ends before the second turn has none.
         """
         if self.disclosure_checked or self.inbound:
             return
-        text = ' '.join(self._agent_opening.split())
+        text = ' '.join(self._agent_speech.split())
         verified = discloses(text, self.brief.on_behalf_of, self.brief.language)
-        if not verified and len(text) < (DISCLOSURE_MIN_FINAL if final else DISCLOSURE_WINDOW):
+        if self.disclosure_attempts == 0:
+            due = ((final and self._agent_turns >= DISCLOSURE_TURNS)
+                   or len(text) >= DISCLOSURE_SECOND_TURN_WINDOW)
+        else:
+            due = len(text) >= (DISCLOSURE_MIN_FINAL if final else DISCLOSURE_WINDOW)
+        if not verified and not due:
             return
         self.disclosure_attempts += 1
         self.ctx.disclosure = verified
@@ -850,7 +868,7 @@ class PhoneSession:
         if verified or self.disclosure_attempts >= 2:
             self.disclosure_checked = True
             return
-        self._agent_opening = ''  # judge what is said after the reminder
+        self._agent_speech = ''  # judge what is said after the reminder
         if self.live is not None:
             self._spawn(self.live.append(
                 'session.instructions.append', disclosure_reminder(self.brief)))
@@ -865,7 +883,8 @@ class PhoneSession:
         await self._let_long_greeting_finish()
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
-                               opening_cue(self.brief, inbound=self.inbound, name=self.greet_name))
+                               opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
+                                           recording=self.recording))
         self._note('opening_cue')
         await asyncio.Event().wait()
 
@@ -1054,7 +1073,7 @@ class SipPhoneSession(PhoneSession):
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
                 if speaker == 'agent':
-                    self._check_disclosure(final=True)
+                    self._agent_turn_done(text)
             for task in list(self._tasks):
                 task.cancel()
             if self._hangups:

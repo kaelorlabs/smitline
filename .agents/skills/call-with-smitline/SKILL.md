@@ -15,7 +15,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | --- | --- |
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link |
 | `to` | E.164 number such as `+14155550142`, or the invite URL |
-| `onBehalfOf` | The user's name. The call opens with "Hi, this is NAME's AI assistant." Leave it out to use the name from setup. |
+| `onBehalfOf` | The user's name. The call opens with "Hi, I'm calling on behalf of NAME about…" and says it is NAME's AI assistant in its next turn. Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
 | `context` | What you and the user have been working on that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |
 | `questions` | What to find out. The result answers each one. |

@@ -100,12 +100,16 @@ Meetings get the session context and `questions` as their starting context, with
   "decisions": [],
   "actionItems": [],
   "openQuestions": [],
-  "transcript": [{ "speaker": "agent", "text": "Hi, this is Sam Rivera's AI assistant. I'm calling to book a table for four tonight." }],
+  "transcript": [
+    { "speaker": "agent", "text": "Hi, I'm calling on behalf of Sam Rivera about a table for four tonight." },
+    { "speaker": "other", "text": "Sure, go ahead." },
+    { "speaker": "agent", "text": "I'm Sam's AI assistant. Do you have anything around seven?" }
+  ],
   "durationSeconds": 252
 }
 ```
 
-`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once the provider finishes the file; `GET /v1/calls/{id}/recording` downloads it. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results come from the meeting handoff. `source` records which path produced the result.
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` by its second turn (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once the provider finishes the file; `GET /v1/calls/{id}/recording` downloads it. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results come from the meeting handoff. `source` records which path produced the result.
 
 ## Cost
 
