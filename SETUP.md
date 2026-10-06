@@ -95,11 +95,35 @@ The page works only on this computer and stays available for an hour; run the co
 
 When the user says they are done, run the status again. GPT-Live needs an OpenAI account with billing on a paid API tier; if the status says the key cannot use `gpt-live-1`, tell the user to add billing at platform.openai.com.
 
-### Phone calls: SignalWire (free) or Twilio (paid)
+### Phone calls: SignalWire (free trial or paid) or Twilio (paid)
 
-Smitline streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. Offer the user one of these:
+Smitline streams the call's audio to GPT-Live, so the phone provider must allow live audio streaming. SignalWire works on its free trial; Twilio's free trial does not. Start with SignalWire unless the user already has a funded Twilio account.
 
-- **SignalWire, free trial (recommended to start).** Sign up at https://signalwire.com; no card is needed. In the Dashboard, the **API Credentials** page shows the **Space URL** and **Project ID**; create an **API token** there with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). You can set the Space URL and Project ID yourself with `docker exec smitline smitline setup set`; the token and signing key go on the setup page. Under **Phone Numbers**, get a number, or verify the user's mobile under **Verified Caller IDs** and use it as "Show my own number". A trial calls only numbers verified in SignalWire (up to 10, US and Canada), so verify the user's own number, and verify a friend's number before calling them: SignalWire rings it and the friend reads back a code. Adding $5 of credit lifts these limits.
+#### SignalWire, step by step
+
+Walk the user through these in their browser; they take about five minutes.
+
+1. **Sign up** at https://signalwire.com. No card is needed. The new account (a "Space") starts in trial mode.
+2. **Copy the credentials.** In the Dashboard, open **API Credentials**. It shows the **Space URL** and the **Project ID**; the user can read those out and you set them with `docker exec smitline smitline setup set SIGNALWIRE_SPACE <space>` and `docker exec smitline smitline setup set SIGNALWIRE_PROJECT_ID <id>`, or they enter them on the setup page. Then they create an **API token** with the Voice and Numbers permissions (it starts with `SWAPI`), after which the page also shows the **Signing Key** (select Show). The token and the signing key go on the setup page only, never in the chat.
+3. **Get a number to call from.** Under **Phone Numbers**, buy a number (a trial can hold one), or verify the user's mobile under **Phone Numbers > Verified Caller IDs** and use it as "Show my own number" on the setup page.
+4. **On a trial, verify every number Smitline will call.** A trial calls only numbers verified in SignalWire: at most 10, in the US and Canada, with no international calls. Verify the user's own number first, because the first test call rings it. To call a friend on a trial, verify the friend's number too: SignalWire rings it and the friend reads back a code. A business, such as a restaurant or a plumber, cannot be verified this way, so calling businesses needs the next step.
+5. **To call anyone, leave the trial.** The user adds a card and at least $5 of credit in SignalWire's billing settings. After that Smitline can call any number (its own guardrails still apply). Tell the user before they do it: adding a card turns on Auto Top-Up, and SignalWire does not let them turn it off.
+
+Tell the user, for example:
+
+> For phone calls, Smitline uses your own SignalWire account. Sign up at signalwire.com; it's free and needs no card. The free trial can only call numbers you verify in SignalWire, up to 10, so we'll verify your own number first. To call businesses or anyone else, add a card and $5 of credit. Note that SignalWire then tops up your balance automatically, and that can't be switched off.
+
+| | Free trial | After adding $5 of credit |
+|---|---|---|
+| Who Smitline can call | Only numbers verified in SignalWire (up to 10, US and Canada) | Any number |
+| Phone numbers | One | As many as you buy |
+| Card | Not needed | Needed; Auto Top-Up turns on and stays on |
+| Direct audio (`setup sip-trunk`) | No | Yes |
+
+If a call on a trial fails right away, the number is probably not verified: verify it in SignalWire or add credit, then try again.
+
+#### Twilio
+
 - **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Smitline call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
 
 If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
@@ -116,7 +140,7 @@ When `firstCallReady` is true:
 docker exec smitline smitline setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says whose AI assistant is calling ("Hi, this is <name>'s AI assistant."), and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
 
 Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Smitline join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
 
@@ -182,7 +206,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
 | `The phone provider can reach this computer` fails | Check the network; the container opens a Cloudflare quick tunnel on the first call. On a server set `COLLEAGUE_PUBLIC_URL` |
 | A call fails with "trial accounts have limited parameter access" | That is a Twilio trial; use SignalWire's free trial, or upgrade the Twilio account |
-| A SignalWire trial call is refused | Verify the number you are calling in SignalWire (Phone Numbers > Verified Caller IDs) |
+| A SignalWire call is refused or fails at once | A trial calls only verified numbers: verify the number in SignalWire (Phone Numbers > Verified Caller IDs), or add $5 of credit to call anyone |
 | The agent does not show the call tools | Run step 7 again and restart the agent app |
 | Anything else | `docker logs smitline` |
 

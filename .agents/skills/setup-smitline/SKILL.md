@@ -11,13 +11,17 @@ Follow [SETUP.md](../../../SETUP.md) in the repository root (https://github.com/
 2. Every `smitline` command runs in the container: `docker exec smitline smitline ...`.
 3. Run `docker exec smitline smitline setup status --json` (it exits with code 3 until `ready` is true; read the JSON anyway) and work through `next` in order: apply each `suggest` without asking, ask each `ask` question, run each `fix`.
 4. Run `docker exec smitline smitline setup secrets --json`. It returns the address of a local page at once; open it for the user. The user enters keys, their name, and phone details there, presses Done, and tells you.
-5. When `firstCallReady` is true, run `docker exec smitline smitline setup call-me --wait`. Offer `setup voice --preview <name>` to try another voice.
-6. Run `docker exec smitline smitline setup register --json` last, apply the entry for your agent on this computer, then tell the user to restart the agent app.
+5. For phone calls, walk the user through SignalWire with SETUP.md, "SignalWire, step by step":
+   - Sign up at https://signalwire.com (free, no card), copy the Space URL and Project ID, create an API token, and get a number.
+   - Tell them the free trial calls only numbers verified in SignalWire (up to 10, US and Canada). Verify their own number first, and a friend's number before calling that friend.
+   - To call businesses or anyone else, they add a card and $5 of credit. Warn them that Auto Top-Up then turns on and cannot be turned off.
+6. When `firstCallReady` is true, run `docker exec smitline smitline setup call-me --wait`. Offer `setup voice --preview <name>` to try another voice.
+7. Run `docker exec smitline smitline setup register --json` last, apply the entry for your agent on this computer, then tell the user to restart the agent app.
 
 ## Rules
 
 - Never ask for keys in the chat. Keys go on the local setup page, which saves them in the container's private data volume. If the user pastes a key anyway, do not repeat it or write it anywhere; point them to the page.
-- Every phone call opens with the AI disclosure naming the user. Do not suggest removing it.
+- Every phone call says during the call that it is the user's AI assistant; the opening names the user and the reason. Do not suggest removing it.
 - Meetings: GPT-Live owns pauses, backchannels, and interruptions, and a host or participant mute is authoritative. An agent joins a meeting with `start_call` on the `meeting` channel, the invite URL as `to`.
 - The console at http://127.0.0.1:8095 is optional; the agent path does not need it.
 - Fixture tests do not prove live call or meeting compatibility. Say so when reporting results.

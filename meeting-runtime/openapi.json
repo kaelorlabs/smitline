@@ -190,7 +190,7 @@
         "properties": {
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
           "to": { "type": "string", "description": "E.164 phone number for phone calls, or a Zoom, Teams, or Google Meet invite URL." },
-          "onBehalfOf": { "type": "string", "maxLength": 120, "description": "Name spoken in the AI disclosure at the start of the call." },
+          "onBehalfOf": { "type": "string", "maxLength": 120, "description": "Name spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
             "description": "What the calling agent and the owner have been working on. The voice starts with a short version and the backend model gets it all. See docs/calls.md#context.",
@@ -401,7 +401,7 @@
           "transcript": { "type": "array", "items": { "type": "object", "required": ["speaker", "text"], "properties": { "speaker": { "type": "string" }, "text": { "type": "string" } } } },
           "durationSeconds": { "type": "integer" },
           "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
-          "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the opening was heard saying it is an AI calling for onBehalfOf; false when it was not, even after a reminder; null when the agent never spoke." },
+          "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the agent was heard during the call saying it is an AI calling for onBehalfOf; false when the call ended without it; null when the agent never spoke." },
           "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." }
         }
       },

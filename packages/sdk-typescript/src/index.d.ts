@@ -30,7 +30,7 @@ export interface CallBrief {
   channel: 'phone' | 'meeting';
   /** E.164 phone number, or the meeting invite URL. Omit only for a rehearsal. */
   to?: string;
-  /** Name spoken in the opening: "Hi, this is NAME's AI assistant". Defaults to the name given at setup. */
+  /** Name spoken in the opening: "Hi, I'm calling on behalf of NAME about…", and in the AI disclosure that follows. Defaults to the name given at setup. */
   onBehalfOf?: string;
   objective: string;
   context?: string | CallContext;
