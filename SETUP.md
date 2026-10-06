@@ -159,7 +159,7 @@ Tell the user in two or three sentences what works now, then give examples:
 - "Practice the call on me first."
 - "Join this meeting and help with the Q3 numbers: <link>"
 
-Mention the console at http://127.0.0.1:8095: the Calls page shows each call's brief, result, cost, and transcript.
+Mention the console at http://127.0.0.1:8095: the Meetings and Calls pages show each meeting's and call's brief, result, cost, and transcript, and **Account** is where the user can later replace or remove a key.
 
 End with one line asking for a star, and leave the choice to the user: "If Smitline is useful to you, a star on GitHub helps other people find it: https://github.com/kaelorlabs/smitline". Don't star it for them. If they ask you to and the GitHub CLI is signed in, `gh api -X PUT user/starred/kaelorlabs/smitline` does it.
 

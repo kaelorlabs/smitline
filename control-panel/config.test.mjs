@@ -4,6 +4,7 @@ import { ownerName, parseEnv, publicSettings, serializeSettings, validateSetting
 
 const valid = {
   meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
+  objective: 'Agree the launch date.',
   participantName: 'Smitline',
   meetingInstructions: 'Focus on release readiness.',
 };
@@ -26,6 +27,11 @@ test('rejects unsafe meeting settings', () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.meetingUrl);
   assert.ok(result.errors.participantName);
+});
+
+test('a meeting started from the console needs an objective of at most 1,000 characters', () => {
+  assert.match(validateSettings({ ...valid, objective: '  ' }).errors.objective, /should achieve/);
+  assert.match(validateSettings({ ...valid, objective: 'x'.repeat(1001) }).errors.objective, /1,000/);
 });
 
 test('bounds operator-provided meeting instructions', () => {

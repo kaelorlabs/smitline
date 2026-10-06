@@ -209,3 +209,22 @@ test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the conta
   assert.equal((await running.createMeeting({ meetingUrl: 'https://us05web.zoom.us/j/1' })).id, 'mtg-2');
   assert.equal(spawns, 0);
 });
+
+test('lists calls of one channel, and drops a channel or time zone it does not know', async () => {
+  const root = tempRoot();
+  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
+  fs.writeFileSync(tokenPath, 'daemon-secret-token\n', { mode: 0o600 });
+  const urls = [];
+  const client = createDaemonClient({
+    root,
+    tokenPath,
+    isPortOpen: async () => true,
+    fetchImpl: async (url) => {
+      urls.push(new URL(url).pathname + new URL(url).search);
+      return new Response(JSON.stringify({ calls: [], spend: { days: [] } }), { status: 200 });
+    },
+  });
+  await client.listCalls(50, '-240', 'meeting');
+  await client.listCalls(50, 'east', 'fax');
+  assert.deepEqual(urls, ['/v1/calls?limit=50&tzOffset=-240&channel=meeting', '/v1/calls?limit=50']);
+});

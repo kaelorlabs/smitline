@@ -238,10 +238,15 @@ export function createDaemonClient(options = {}) {
     getHandoff(meetingId, { startIfNeeded = false } = {}) {
       return send('GET', `/v1/meetings/${meetingId}/handoff`, undefined, { startIfNeeded });
     },
-    listCalls(limit = 30, tzOffset = '') {
+    listCalls(limit = 30, tzOffset = '', channel = '') {
       // tzOffset: the reader's minutes east of UTC, so spend is grouped by their local day.
       const zone = /^-?\d{1,3}$/.test(String(tzOffset)) ? `&tzOffset=${tzOffset}` : '';
-      return send('GET', `/v1/calls?limit=${Number(limit) || 30}${zone}`, undefined, { startIfNeeded: false });
+      // channel: phone or meeting, for a page that shows only one kind and its own totals.
+      const only = ['phone', 'meeting'].includes(channel) ? `&channel=${channel}` : '';
+      return send('GET', `/v1/calls?limit=${Number(limit) || 30}${zone}${only}`, undefined, { startIfNeeded: false });
+    },
+    createCall(brief) {
+      return send('POST', '/v1/calls', brief, { startIfNeeded: true });
     },
     getCall(callId) {
       return send('GET', `/v1/calls/${encodeURIComponent(callId)}`, undefined, { startIfNeeded: false });

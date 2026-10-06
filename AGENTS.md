@@ -17,7 +17,7 @@ Read these before proposing product, architecture, or runtime changes:
 | [SETUP.md](SETUP.md) | Agent-driven setup that users start by pasting one prompt |
 | [docs/capabilities.md](docs/capabilities.md) | Meeting platform capability matrix |
 | [docs/meeting-adapters.md](docs/meeting-adapters.md) | Zoom, Teams, and Meet adapter behavior |
-| [docs/control-panel.md](docs/control-panel.md) | Local console: Meetings and Calls |
+| [docs/control-panel.md](docs/control-panel.md) | Local console: Meetings, Calls, and Account |
 | [docs/product-roadmap.md](docs/product-roadmap.md) | Near-term milestones |
 
 Agent skills for setup and for placing calls live under [`.agents/skills/`](.agents/skills/).

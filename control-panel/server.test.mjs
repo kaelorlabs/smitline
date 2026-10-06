@@ -23,11 +23,25 @@ async function withServer(run) {
 
 test('serves the console with local security headers', async () => {
   await withServer(async base => {
-    const response = await fetch(`${base}/`);
+    // Meetings opens on the dashboard; starting one by hand is a page of its own.
+    const dashboard = await fetch(`${base}/`);
+    assert.equal(dashboard.status, 200);
+    assert.match(dashboard.headers.get('content-security-policy'), /default-src 'self'/);
+    const board = await dashboard.text();
+    assert.match(board, /data-channel="meeting"/);
+    assert.match(board, /href="\/meetings\/new"/);
+    assert.match(board, /href="\/setup"/);
+    assert.match(await (await fetch(`${base}/calls`)).text(), /data-channel="phone"/);
+    const setup = await fetch(`${base}/setup`);
+    assert.match(setup.headers.get('content-security-policy'), /default-src 'self'/);
+    assert.match(await setup.text(), /src="\/setup\.js"/);
+    assert.match((await fetch(`${base}/setup.js`)).headers.get('content-type'), /javascript/);
+    const response = await fetch(`${base}/meetings/new`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
     const html = await response.text();
     assert.match(html, /Meeting details/);
+    assert.match(html, /id="objective-error"/);
     assert.match(html, /<span class="req">Required<\/span>/);
     assert.match(html, /aria-required="true"/);
     assert.match(html, /id="meetingUrl-error"/);
@@ -130,14 +144,50 @@ test('meeting controls reject unauthenticated requests', async () => {
 });
 
 const MEETING_FIELDS = new Set(['meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice']);
+const BRIEF_FIELDS = new Set(['channel', 'to', 'objective', 'onBehalfOf', 'context', 'camera']);
 
 function createFakeDaemon() {
   const meetings = new Map();
+  const records = new Map();
   const calls = [];
   let unavailable = false;
+  const notFound = (what) => Object.assign(new Error(`${what} not found`), { status: 404, code: 'not_found' });
   return {
     calls,
     meetings,
+    records,
+    // Mirrors the calls API: a meeting brief starts an ordinary meeting a moment later.
+    async createCall(brief) {
+      calls.push({ method: 'POST', path: '/v1/calls', body: brief });
+      await this.ensure();
+      const unknown = Object.keys(brief).filter(key => !BRIEF_FIELDS.has(key));
+      if (unknown.length || brief.channel !== 'meeting' || !brief.objective) {
+        throw Object.assign(new Error(`invalid brief: ${unknown.join(', ')}`), { status: 422, code: 'invalid_request' });
+      }
+      const session = await this.createMeeting({
+        meetingUrl: brief.to,
+        context: { objective: brief.objective },
+        ...(brief.camera ? { camera: brief.camera } : {}),
+        ...(brief.onBehalfOf ? { onBehalfOf: brief.onBehalfOf } : {}),
+      });
+      const record = { id: `call-${String(records.size + 1).padStart(16, '0')}`, channel: 'meeting', status: 'connecting', brief, line: { meetingId: session.id } };
+      records.set(record.id, record);
+      return { ...record, status: 'queued', line: {} };
+    },
+    async getCall(id) {
+      calls.push({ method: 'GET', path: `/v1/calls/${id}` });
+      if (!records.has(id)) throw notFound('call');
+      return records.get(id);
+    },
+    async endCall(id) {
+      calls.push({ method: 'POST', path: `/v1/calls/${id}/end`, body: {} });
+      const record = records.get(id);
+      if (!record) throw notFound('call');
+      if (record.status === 'completed') throw Object.assign(new Error('call already ended'), { status: 409, code: 'conflict' });
+      meetings.get(record.line.meetingId).state = 'ended';
+      record.status = 'completed';
+      return record;
+    },
     setUnavailable(value = true) { unavailable = value; },
     async ensure() {
       if (unavailable) {
@@ -267,6 +317,7 @@ async function withPanel(run, extra = {}) {
       },
       settings: {
         meetingUrl: 'https://us05web.zoom.us/j/123456789?pwd=opaque',
+        objective: 'Agree the launch date.',
         participantName: 'Smitline',
         meetingInstructions: 'Stay brief.',
         camera: { enabled: true, defaultOn: false },
@@ -289,14 +340,19 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(started.status, 202);
     const body = await started.json();
     assert.equal(body.started, true);
-    const created = panel.daemon.calls.find((item) => item.path === '/v1/meetings');
+    // Through the calls API, so the meeting is listed with its objective and result.
+    const created = panel.daemon.calls.find((item) => item.path === '/v1/calls');
     assert.ok(created);
-    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'context', 'meetingUrl']);
-    assert.equal(created.body.meetingUrl, panel.settings.meetingUrl);
-    assert.equal(created.body.context.objective, 'Stay brief.');
+    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'channel', 'context', 'objective', 'to']);
+    assert.equal(created.body.to, panel.settings.meetingUrl);
+    assert.equal(created.body.objective, 'Agree the launch date.');
+    assert.deepEqual(created.body.context, { summary: 'Stay brief.' });
     assert.deepEqual(created.body.camera, { enabled: true, defaultOn: false });
+    assert.equal(body.callId, 'call-0000000000000001');
+    assert.equal(body.meetingId, [...panel.daemon.meetings.keys()][0]);
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
-    assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(panel.root, '.colleague', 'portal-active.json'), 'utf8')),
+      { meetingId: body.meetingId, callId: body.callId, objective: 'Agree the launch date.', guidance: 'Stay brief.' });
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'daemon.auth')), false);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'daemon-data')), false);
@@ -319,16 +375,16 @@ test('start sends the owner name from .env as onBehalfOf', async () => {
       body: JSON.stringify({ ...panel.settings, model: 'gpt-5.5', workspace: '/tmp', tools: { codex: true }, screenShare: { enabled: true } }),
     });
     assert.equal(started.status, 202);
-    const created = panel.daemon.calls.find((item) => item.path === '/v1/meetings');
+    const created = panel.daemon.calls.find((item) => item.path === '/v1/calls');
     assert.equal(created.body.onBehalfOf, 'Sam Rivera');
-    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'context', 'meetingUrl', 'onBehalfOf']);
+    assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'channel', 'context', 'objective', 'onBehalfOf', 'to']);
     assert.equal(JSON.stringify(await (await fetch(`${panel.base}/api/status`)).json()).includes('sk-test'), false);
   }, { env: 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME="Sam Rivera"\n' });
 });
 
 test('the meetings console has no coding-agent controls or routes', async () => {
   await withPanel(async panel => {
-    const html = await (await fetch(`${panel.base}/`)).text();
+    const html = (await (await fetch(`${panel.base}/`)).text()) + (await (await fetch(`${panel.base}/meetings/new`)).text());
     for (const text of ['Codex', 'Cursor', 'Claude', 'workspace"', 'runner', 'approval', 'Screen-share', 'Retry']) {
       assert.equal(html.includes(text), false, text);
     }
@@ -757,5 +813,143 @@ test('/mcp is the local agents endpoint, behind its own token rather than the co
     server.closeAllConnections();
     await once(server, 'close');
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a manual meeting gets the saved reference context, and Stop ends its call', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    await fetch(`${panel.base}/api/context/add`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ text: 'Launch target is October 20.', files: [] }),
+    });
+    const started = await (await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify(panel.settings),
+    })).json();
+    const pushed = panel.daemon.calls.find((item) => item.path === `/v1/meetings/${started.meetingId}/context`);
+    assert.equal(pushed.body.objective, 'Agree the launch date.');
+    assert.match(pushed.body.summary, /^Guidance: Stay brief\.\n\n.*October 20/s);
+    const stopped = await fetch(`${panel.base}/api/stop`, { method: 'POST', headers: panel.headers(bootstrap.token), body: '{}' });
+    assert.equal(stopped.status, 200);
+    assert.ok(panel.daemon.calls.some((item) => item.path === `/v1/calls/${started.callId}/end`));
+    assert.equal(panel.daemon.calls.some((item) => item.path.endsWith('/cancel')), false);
+    assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), false);
+  });
+});
+
+test('a manual start without an objective is refused before anything starts', async () => {
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const refused = await fetch(`${panel.base}/api/start`, {
+      method: 'POST',
+      headers: panel.headers(bootstrap.token),
+      body: JSON.stringify({ ...panel.settings, objective: ' ' }),
+    });
+    assert.equal(refused.status, 422);
+    assert.match((await refused.json()).errors.objective, /should achieve/);
+    assert.equal(panel.daemon.calls.length, 0);
+  });
+});
+
+function setupReport({ root, verify, runner, find }) {
+  return {
+    ready: false,
+    phoneReady: false,
+    meetingsReady: true,
+    checks: [
+      { id: 'openai_key', label: 'OpenAI API key with GPT-Live access', ok: verify ? true : null, required: true, group: 'core', detail: verify ? 'key works and has GPT-Live access' : 'saved', ask: 'agent question', fix: 'smitline setup secrets' },
+      { id: 'docker', label: 'Docker is running', ok: runner('docker', ['info']).status === 0, required: false, group: 'meetings', detail: root ? 'needed to join meetings' : '' },
+      { id: 'agents', label: 'Registered with a local agent', ok: Boolean(find('claude')), required: false, group: 'agents', detail: '' },
+    ],
+    next: [{ id: 'openai_key', ask: 'agent question' }],
+  };
+}
+
+test('the Account page shows saved fields and the checklist, never a key, and only to this console', async () => {
+  const key = `sk-proj-${'S'.repeat(120)}`;
+  await withPanel(async panel => {
+    assert.equal((await fetch(`${panel.base}/api/setup`)).status, 403);
+    const bootstrap = await panel.bootstrap();
+    const response = await fetch(`${panel.base}/api/setup`, { headers: { 'X-Colleague-Token': bootstrap.token } });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.equal(text.includes(key), false);
+    const view = JSON.parse(text);
+    const openai = view.fields.find((field) => field.key === 'OPENAI_API_KEY');
+    assert.deepEqual([openai.saved, openai.shown], [true, 'sk-proj-']);
+    assert.equal(view.fields.find((field) => field.key === 'COLLEAGUE_OWNER_NAME').shown, 'Robin');
+    // The checklist as setup status reports it, without agent questions or the agents check.
+    assert.deepEqual(view.status.checks.map((check) => check.id), ['openai_key', 'docker']);
+    assert.equal(view.status.checks[0].detail, 'key works and has GPT-Live access');
+    assert.equal('ask' in view.status.checks[0], false);
+    assert.equal(view.status.checks[1].ok, true);
+    assert.equal(JSON.parse(await (await fetch(`${panel.base}/api/setup?verify=0`, { headers: { 'X-Colleague-Token': bootstrap.token } })).text()).status.checks[0].ok, null);
+  }, { env: `OPENAI_API_KEY=${key}\nCOLLEAGUE_OWNER_NAME=Robin\n`, checkSetup: setupReport, environment: {} });
+});
+
+test('saving and removing keys needs this console, checks what is saved, and never echoes a key', async () => {
+  const key = `sk-proj-${'N'.repeat(120)}`;
+  await withPanel(async panel => {
+    const bootstrap = await panel.bootstrap();
+    const post = (route, body, headers = panel.headers(bootstrap.token)) => fetch(`${panel.base}${route}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const envText = () => fs.readFileSync(path.join(panel.root, '.env'), 'utf8');
+    // Another website the user visits: no token, or the wrong Origin, changes nothing.
+    assert.equal((await post('/api/setup/save', { values: { OPENAI_API_KEY: key } }, { 'Content-Type': 'application/json' })).status, 403);
+    assert.equal((await post('/api/setup/save', { values: { OPENAI_API_KEY: key } }, { ...panel.headers(bootstrap.token), Origin: 'https://evil.example' })).status, 403);
+    assert.equal((await post('/api/setup/remove', { key: 'OPENAI_API_KEY' }, { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:8095' })).status, 403);
+    assert.equal(envText().includes(key), false);
+
+    const saved = await post('/api/setup/save', { values: { OPENAI_API_KEY: ` ${key}\n`, COLLEAGUE_OWNER_PHONE: '+1 (415) 555-0142' } });
+    assert.equal(saved.status, 200);
+    const savedText = await saved.text();
+    assert.equal(savedText.includes(key), false);
+    const result = JSON.parse(savedText);
+    assert.deepEqual(result.saved.sort(), ['COLLEAGUE_OWNER_PHONE', 'OPENAI_API_KEY']);
+    assert.equal(result.status.checks[0].detail, 'key works and has GPT-Live access');
+    assert.match(envText(), new RegExp(`^OPENAI_API_KEY=${key}$`, 'm'));
+    assert.match(envText(), /^COLLEAGUE_OWNER_PHONE=\+14155550142$/m);
+
+    // A bad value is named by its label; the good one beside it is still saved.
+    const mixed = await post('/api/setup/save', { values: { COLLEAGUE_OWNER_PHONE: '555', COLLEAGUE_OWNER_NAME: 'Robin' } });
+    assert.equal(mixed.status, 422);
+    const fixes = await mixed.json();
+    assert.deepEqual(fixes.saved, ['COLLEAGUE_OWNER_NAME']);
+    assert.equal(fixes.errors[0].key, 'COLLEAGUE_OWNER_PHONE');
+    assert.match(fixes.errors[0].message, /^Your phone number must be/);
+    assert.equal((await post('/api/setup/save', { values: { PATH: '/tmp' } })).status, 422);
+    assert.equal((await post('/api/setup/save', { values: { OPENAI_API_KEY: 42 } })).status, 422);
+    // A key set in the container's environment wins over .env, so it is changed there.
+    const locked = await post('/api/setup/save', { values: { SIGNALWIRE_PROJECT_ID: 'abcd-1234-efgh' } });
+    assert.match((await locked.json()).errors[0].message, /set in Smitline's environment/);
+    assert.equal((await post('/api/setup/remove', { key: 'SIGNALWIRE_PROJECT_ID' })).status, 409);
+
+    const removed = await post('/api/setup/remove', { key: 'OPENAI_API_KEY' });
+    assert.equal(removed.status, 200);
+    const after = await removed.json();
+    assert.equal(after.fields.find((field) => field.key === 'OPENAI_API_KEY').saved, false);
+    assert.equal(envText().includes('OPENAI_API_KEY'), false);
+    assert.equal((await post('/api/setup/remove', { key: 'PATH' })).status, 422);
+  }, { env: 'PORT=1\n', checkSetup: setupReport, environment: { SIGNALWIRE_PROJECT_ID: 'from-docker' } });
+});
+
+test('the calls list passes the page channel on to the daemon', async () => {
+  const asked = [];
+  const server = createServer({
+    root: fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-channel-')),
+    daemon: { async listCalls(...args) { asked.push(args); return { calls: [], spend: { days: [] } }; } },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    await fetch(`${base}/api/calls?tzOffset=60&channel=meeting`);
+    await fetch(`${base}/api/calls`);
+    assert.deepEqual(asked, [[50, '60', 'meeting'], [50, '', '']]);
+  } finally {
+    server.close();
+    await once(server, 'close');
   }
 });

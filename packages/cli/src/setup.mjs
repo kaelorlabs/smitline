@@ -88,7 +88,10 @@ function present(value) {
   return typeof value === 'string' && value.trim() !== '' && !value.startsWith('replace_with');
 }
 
-/** Merge values into .env, replacing existing assignments and keeping everything else. */
+/**
+ * Merge values into .env, replacing existing assignments and keeping everything else.
+ * A null value removes every assignment of that key.
+ */
 export function writeEnv(root, updates) {
   const file = path.join(root, '.env');
   let lines = [];
@@ -103,13 +106,13 @@ export function writeEnv(root, updates) {
   lines = lines.flatMap((line) => {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
     if (!match || !Object.hasOwn(updates, match[1])) return [line];
-    if (written.has(match[1])) return [];
-    written.add(match[1]);
     remaining.delete(match[1]);
+    if (updates[match[1]] === null || written.has(match[1])) return [];
+    written.add(match[1]);
     return [`${match[1]}=${updates[match[1]]}`];
   });
   while (lines.length && lines.at(-1) === '') lines.pop();
-  for (const [key, value] of remaining) lines.push(`${key}=${value}`);
+  for (const [key, value] of remaining) if (value !== null) lines.push(`${key}=${value}`);
   const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmp, `${lines.join('\n')}\n`, { mode: 0o600 });
   fs.renameSync(tmp, file);
@@ -624,21 +627,30 @@ export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch,
 
 // Secrets page -------------------------------------------------------------
 
-const FIELDS = [
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
+// Where a saved secret is revoked. Removing it from Smitline only deletes Smitline's copy.
+const REVOKE = {
+  openai: { url: 'https://platform.openai.com/api-keys', where: 'platform.openai.com/api-keys' },
+  signalwire: { url: 'https://signalwire.com/signin', where: 'your SignalWire Space, under API Credentials' },
+  twilio: { url: 'https://console.twilio.com/', where: 'the Twilio console, under Account > API keys & tokens' },
+  webhook: { url: 'https://platform.openai.com/settings', where: 'Settings > Project > Webhooks on platform.openai.com' },
+};
+
+// Also the field list of the console's Account page.
+export const FIELDS = [
+  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, revoke: REVOKE.openai, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
   { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, this is [your name]’s AI assistant.”' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
   { key: 'SIGNALWIRE_PROJECT_ID', label: 'Project ID', group: 'SignalWire (free trial)', hint: 'On the API Credentials page of your SignalWire Dashboard.' },
-  { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
-  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Smitline check that call updates really come from SignalWire.' },
+  { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, revoke: REVOKE.signalwire, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
+  { key: 'SIGNALWIRE_SIGNING_KEY', label: 'Signing key', group: 'SignalWire (free trial)', secret: true, revoke: REVOKE.signalwire, hint: 'On the API Credentials page, under Signing Key, select Show (it appears once you have a token). It lets Smitline check that call updates really come from SignalWire.' },
   { key: 'SIGNALWIRE_FROM_NUMBER', label: 'SignalWire phone number', group: 'SignalWire (free trial)', hint: 'A number from Phone Numbers in SignalWire. You can leave it empty and show a verified number instead ("Show my own number" above).' },
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
-  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
+  { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, revoke: REVOKE.twilio, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
   { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (COLLEAGUE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
-  { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
+  { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, revoke: REVOKE.webhook, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
   { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
   { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
@@ -909,6 +921,49 @@ export function missingForDone(env) {
     }
   }
   return errors;
+}
+
+// Account page (control panel) ---------------------------------------------
+
+// The fixed starts of key formats, which say what kind of key is saved and nothing secret.
+const KEY_PREFIXES = ['sk-proj-', 'sk-svcacct-', 'sk-admin-', 'sk-', 'whsec_', 'SWAPI', 'PSK_', 'PT', 'AC'];
+
+/** A saved secret's known prefix, such as "sk-proj-", or '' for a key with none. Never a random character. */
+export function secretPreview(field, value) {
+  const text = String(value || '');
+  if (field.spaces) return '';
+  return KEY_PREFIXES.find((prefix) => text.startsWith(prefix) && text.length > prefix.length * 4) || '';
+}
+
+/**
+ * What the console's Account page shows for each field: whether it is saved, and for a
+ * secret only its preview, never its value. A value from the process environment wins
+ * over .env, as in the daemon, and can only be changed where it is set.
+ */
+export function accountFields(env, environment = process.env) {
+  return FIELDS.map((field) => {
+    const fromEnvironment = present(environment[field.key]);
+    const value = fromEnvironment ? environment[field.key] : env[field.key];
+    const saved = present(value);
+    const entry = {
+      key: field.key,
+      label: field.label,
+      group: field.group,
+      hint: field.hint,
+      secret: Boolean(field.secret),
+      saved,
+      fromEnvironment,
+    };
+    if (saved) entry.shown = field.secret ? secretPreview(field, value) : value;
+    if (field.revoke) entry.revoke = field.revoke;
+    return entry;
+  });
+}
+
+/** Delete one field from .env. It is only Smitline's copy: a key stays valid where it was issued. */
+export function removeSetting(root, key) {
+  if (!FIELDS.some((field) => field.key === key)) throw new Error(`unknown setting ${key}`);
+  return writeEnv(root, { [key]: null });
 }
 
 /**

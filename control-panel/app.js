@@ -4,7 +4,7 @@ const $ = (sel) => document.querySelector(sel);
 const startLock = createStartLock();
 const form = $('#meeting-form');
 const views = {
-  meeting: ['New meeting', 'Set up Smitline, then invite it into the conversation.'],
+  meeting: ['Start a meeting manually', 'Usually your agent does this. Use this page for a one-off meeting.'],
   context: ['Reference context', 'Give Smitline the documents and details behind the discussion.'],
   history: ['Transcripts and handoffs', 'Return to the conversations, decisions, and structured handoffs from your meetings.'],
 };
@@ -42,6 +42,7 @@ function payload() {
   const data = new FormData(form);
   return {
     meetingUrl: data.get('meetingUrl')?.trim(),
+    objective: data.get('objective')?.trim(),
     passcode: data.get('passcode') || '',
     keepPasscode: savedPasscode && !data.get('passcode'),
     participantName: data.get('participantName')?.trim(),
@@ -316,7 +317,7 @@ async function startColleague(event) {
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
-    announce('Smitline is starting. Admit it when it reaches the meeting lobby.');
+    announce('Smitline is starting. Admit it when it reaches the meeting lobby. It is listed on the Meetings page with its result.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
   finally {
@@ -328,9 +329,10 @@ async function startColleague(event) {
 form.addEventListener('submit', startColleague);
 $('#start-button').addEventListener('click', startColleague);
 $('#check-button').addEventListener('click', runChecks);
-['meeting-url', 'participant-name'].forEach((id) => {
+const FIELD_KEYS = { 'meeting-url': 'meetingUrl', 'meeting-objective': 'objective', 'participant-name': 'participantName' };
+Object.keys(FIELD_KEYS).forEach((id) => {
   $(`#${id}`)?.addEventListener('input', () => {
-    const key = id === 'meeting-url' ? 'meetingUrl' : 'participantName';
+    const key = FIELD_KEYS[id];
     const node = document.querySelector(`[data-error="${key}"]`);
     if (node?.textContent) {
       const next = clientErrors();

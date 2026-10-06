@@ -15,9 +15,12 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'record', 'notify',
+    'rehearsal', 'afterHours', 'record', 'notify', 'camera',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
+# A meeting's virtual camera, as the console's manual start sets it. No avatarPath: a brief
+# never names a file on the computer running Smitline.
+CAMERA_FIELDS = ('enabled', 'defaultOn', 'avatarDataUri')
 E164 = re.compile(r'^\+[1-9][0-9]{7,14}$')
 VOICE = re.compile(r'^[a-z][a-z0-9_-]{1,31}$')
 LANGUAGE = re.compile(r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$')
@@ -127,6 +130,8 @@ class CallBrief:
     after_hours: bool = False
     record: bool = False
     webhook_url: str = None
+    # Meetings only: {'enabled', 'defaultOn', 'avatarDataUri'}, as the meeting daemon takes it.
+    camera: dict = field(default=None, compare=False)
 
     @property
     def session_context(self):
@@ -158,6 +163,9 @@ class CallBrief:
             'afterHours': True if self.after_hours else None,
             'record': True if self.record else None,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
+            # The avatar image stays out of the stored brief, which every call listing returns.
+            'camera': ({'enabled': self.camera['enabled'], 'defaultOn': self.camera['defaultOn']}
+                       if self.camera else None),
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -221,6 +229,14 @@ class CallBrief:
         if contact is not None:
             from briefing import _person
             contact = _person(require_mapping(contact, 'contact'))
+        camera = optional_field(data, 'camera')
+        if camera is not None:
+            if channel != 'meeting':
+                raise ValueError('camera is only for meetings')
+            camera = require_mapping(camera, 'camera')
+            reject_unknown_fields(camera, CAMERA_FIELDS, 'camera')
+            from visual_presence import parse_camera_settings
+            camera = parse_camera_settings(camera)
         tone = _optional_text(data, 'tone', 200)
         return cls(
             channel=channel,
@@ -242,6 +258,7 @@ class CallBrief:
             after_hours=after_hours,
             record=record,
             webhook_url=webhook_url,
+            camera=camera,
         )
 
 

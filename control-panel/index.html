@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Smitline · Meeting console</title>
+  <title>Start a meeting manually · Smitline</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -14,12 +14,12 @@
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>Smitline</span>
       </a>
-      <nav class="topnav" aria-label="Console"><a href="/" aria-current="page">Meetings</a><a href="/calls">Calls</a></nav>
+      <nav class="topnav" aria-label="Console"><a href="/" aria-current="page">Meetings</a><a href="/calls">Calls</a><a href="/setup">Account</a></nav>
       <div class="connection"><span id="connection-dot"></span><span id="connection-label">Checking system</span></div>
     </header>
 
     <main>
-      <section class="hero"><div><p class="eyebrow">Workspace / Meetings</p><h1 id="page-title">New meeting</h1><p class="hero-copy" id="page-description">Set up Smitline, then invite it into the conversation.</p></div><span class="local-badge">Local workspace</span></section>
+      <section class="hero"><div><p class="eyebrow"><a class="back-link" href="/">← Meetings</a></p><h1 id="page-title">Start a meeting manually</h1><p class="hero-copy" id="page-description">Usually your agent does this. Use this page for a one-off meeting.</p></div><span class="local-badge">Local workspace</span></section>
       <nav class="view-nav" aria-label="Workspace views"><button type="button" data-view="meeting" aria-current="page">Meeting setup</button><button type="button" data-view="context">Reference context</button><button type="button" data-view="history">Transcripts</button></nav>
 
       <div id="notice" class="notice" role="status" hidden></div>
@@ -37,6 +37,13 @@
               <input id="meeting-url" name="meetingUrl" type="url" required aria-required="true" autocomplete="off" placeholder="Paste a Zoom, Teams, or Google Meet invitation">
               <small class="hint">Paste the invitation link shared by your host.</small>
               <small class="error" id="meetingUrl-error" data-error="meetingUrl"></small>
+            </div>
+
+            <div class="field full">
+              <label for="meeting-objective">Objective <span class="req">Required</span></label>
+              <input id="meeting-objective" name="objective" required aria-required="true" maxlength="1000" autocomplete="off" placeholder="Agree the launch date with design and QA">
+              <small class="hint">What the meeting should achieve. The Meetings page shows whether it got there.</small>
+              <small class="error" id="objective-error" data-error="objective"></small>
             </div>
 
             <div class="field full" id="teams-account" hidden>

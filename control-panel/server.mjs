@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -8,15 +8,19 @@ import { fileURLToPath } from 'node:url';
 import { ownerName, parseEnv, publicSettings, validateSettings } from './config.mjs';
 import { addContext, clearContext, publicContext, readContext } from './context-store.mjs';
 import { createDaemonClient } from './daemon-client.mjs';
+import {
+  FIELDS, accountFields, readEnv, removeSetting, sanitizeSubmission, setupStatus, writeEnv,
+} from '../packages/cli/src/setup.mjs';
 import { LOCAL_MCP_PATH, createLocalMcpHandler } from '../packages/mcp/src/local-http.mjs';
 import { redact } from '../packages/sdk-typescript/src/index.mjs';
 import { launcherActive } from './lifecycle.mjs';
 import {
-  buildMeetingCreatePayload,
+  buildMeetingBrief,
   clearActiveMeetingId,
   contextHandoffFromSources,
   meetingIsActive,
   phaseFromDaemon,
+  readActiveMeeting,
   readActiveMeetingId,
   writeActiveMeetingId,
 } from './meeting-contract.mjs';
@@ -137,6 +141,12 @@ export function createServer(options = {}) {
     dockerTimeoutMs = DOCKER_INFO_TIMEOUT_MS,
     mcpHandler = null,
     mcpLog = (line) => process.stderr.write(`${new Date().toISOString()} mcp ${redact(line)}\n`),
+    // The Account page: the same checks as `smitline setup status`, and the environment
+    // that overrides .env (a key set there cannot be changed from the console).
+    checkSetup = setupStatus,
+    environment = process.env,
+    // How long a manual start waits for its call to create the meeting.
+    meetingStartWaitMs = 15_000,
   } = options;
   const token = crypto.randomBytes(24).toString('base64url');
   const logs = [];
@@ -258,7 +268,53 @@ export function createServer(options = {}) {
     return directory;
   }
 
+  // The guidance typed for this meeting, else the saved one.
+  function meetingGuidance() {
+    const active = readActiveMeeting(root);
+    return typeof active?.guidance === 'string' ? active.guidance : publicSettings(currentEnv()).meetingInstructions;
+  }
+
+  // The saved reference sources are too large for a brief; the meeting gets them once it exists.
+  async function adoptMeeting(meetingId, { callId, objective, guidance = '' }) {
+    writeActiveMeetingId(root, meetingId, { callId, objective, guidance });
+    const sources = readContext(contextIndex).sources;
+    if (!sources.length) return;
+    try {
+      await daemonClient.updateContext(meetingId, contextHandoffFromSources(sources, { meetingInstructions: guidance, objective }));
+    } catch (error) {
+      addLog('system', `Reference context was not sent: ${error.message}`);
+    }
+  }
+
+  // A started call creates its meeting a moment later.
+  async function meetingOfCall(callId) {
+    const deadline = Date.now() + meetingStartWaitMs;
+    for (;;) {
+      const call = await daemonClient.getCall(callId);
+      if (call.line?.meetingId) return call.line.meetingId;
+      if (['completed', 'failed', 'canceled'].includes(call.status)) {
+        throw Object.assign(new Error(call.error || 'The meeting could not start.'), { status: 409, code: 'call_ended' });
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  // After a slow start or a console restart: find the meeting of the call this console started.
+  async function resolveStartedCall() {
+    const active = readActiveMeeting(root);
+    if (!active?.callId || active.meetingId) return;
+    try {
+      const call = await daemonClient.getCall(active.callId);
+      if (call.line?.meetingId) await adoptMeeting(call.line.meetingId, active);
+      else if (['completed', 'failed', 'canceled'].includes(call.status)) clearActiveMeetingId(root);
+    } catch (error) {
+      if (error.code === 'not_found' || error.status === 404) clearActiveMeetingId(root);
+    }
+  }
+
   async function loadMeeting() {
+    await resolveStartedCall();
     const meetingId = readActiveMeetingId(root);
     if (!meetingId) return { meetingId: null, session: null, daemonError: null };
     try {
@@ -315,9 +371,80 @@ export function createServer(options = {}) {
     return allowedOrigins.includes(origin) && request.headers['x-colleague-token'] === token;
   }
 
+  // Account page --------------------------------------------------------------
+
+  const FIELD_KEYS = new Set(FIELDS.map((field) => field.key));
+  const fieldLabel = (key) => FIELDS.find((field) => field.key === key)?.label || key;
+
+  // The checklist as `smitline setup status` prints it, without the questions meant for agents.
+  // Its probes run synchronously, so Docker is probed here first without blocking the console;
+  // the agent CLIs (`claude mcp get`, which can take seconds) are not probed, and that check,
+  // about agents on another computer in the container, is left out.
+  async function setupView({ verify = true } = {}) {
+    const docker = await withTimeout(
+      runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], { cwd: root, timeoutMs: dockerTimeoutMs }),
+      dockerTimeoutMs,
+      { code: -1 },
+    );
+    const runner = (binary, args) => (binary === 'docker'
+      ? { status: docker.code === 0 ? 0 : 1 }
+      : spawnSync(binary, args, { encoding: 'utf8', timeout: 5000 }));
+    const report = await checkSetup({ root, codeRoot, verify, runner, find: () => null });
+    return {
+      fields: accountFields(readEnv(root), environment),
+      status: {
+        ready: report.ready,
+        phoneReady: report.phoneReady,
+        meetingsReady: report.meetingsReady,
+        checks: report.checks.filter((check) => check.id !== 'agents')
+          .map(({ id, label, ok, required, group, detail, fix }) => (
+            { id, label, ok, required, group, detail, ...(fix ? { fix } : {}) })),
+      },
+    };
+  }
+
+  // Validation messages name a setting by its key or label; say which field each one is about.
+  function fieldErrors(errors) {
+    return errors.map((message) => {
+      const field = FIELDS.find((item) => message.startsWith(`${item.key} `) || message.startsWith(item.label));
+      return { key: field?.key || null, message: field ? message.replace(`${field.key} `, `${field.label} `) : message };
+    });
+  }
+
+  async function saveSettings(body) {
+    const values = body?.values;
+    if (!values || typeof values !== 'object' || Array.isArray(values)
+      || Object.entries(values).some(([key, value]) => !FIELD_KEYS.has(key) || typeof value !== 'string')) {
+      return [422, { error: 'Only the fields on this page can be saved.' }];
+    }
+    const errors = [];
+    const allowed = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (String(environment[key] || '').trim()) errors.push(`${fieldLabel(key)} is set in Smitline's environment, so change it there`);
+      else allowed[key] = value;
+    }
+    const checked = sanitizeSubmission({ get: (key) => allowed[key] });
+    errors.push(...checked.errors);
+    // Valid fields are saved even when another needs a fix, as on the setup page.
+    const saved = Object.keys(checked.updates).length ? writeEnv(root, checked.updates) : [];
+    return [errors.length ? 422 : 200, { saved, errors: fieldErrors(errors), ...(await setupView()) }];
+  }
+
+  async function removeSaved(body) {
+    const key = body?.key;
+    if (typeof key !== 'string' || !FIELD_KEYS.has(key)) return [422, { error: 'Only the fields on this page can be removed.' }];
+    if (String(environment[key] || '').trim()) {
+      return [409, { error: `${fieldLabel(key)} is set in Smitline's environment, so remove it there.` }];
+    }
+    removeSetting(root, key);
+    return [200, { removed: key, ...(await setupView()) }];
+  }
+
   async function meetingActive() {
     const { session, daemonError } = await loadMeeting();
     if (daemonError && readActiveMeetingId(root)) return true;
+    // A started call whose meeting does not exist yet.
+    if (readActiveMeeting(root)?.callId && !readActiveMeetingId(root)) return true;
     return meetingIsActive(session);
   }
 
@@ -378,8 +505,8 @@ export function createServer(options = {}) {
       const [, callId, action] = callMatch;
       try {
         if (!callId) {
-          const tzOffset = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('tzOffset') || '';
-          return json(response, 200, await daemonClient.listCalls(50, tzOffset));
+          const query = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams;
+          return json(response, 200, await daemonClient.listCalls(50, query.get('tzOffset') || '', query.get('channel') || ''));
         }
         if (!action) return json(response, 200, await daemonClient.getCall(callId));
         if (action === 'events') {
@@ -401,7 +528,20 @@ export function createServer(options = {}) {
       }
       return json(response, 405, { error: 'Method not allowed.' });
     }
+    // Setup status names the owner's numbers, so even reading it takes the session token.
+    // A same-origin GET carries no Origin header; a cross-site page cannot send this header.
+    if (request.method === 'GET' && pathname === '/api/setup') {
+      if (request.headers['x-colleague-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+      const verify = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('verify') !== '0';
+      return json(response, 200, await setupView({ verify }));
+    }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+    // Writing keys: the session token and an Origin of this console, like every other change.
+    if (request.method === 'POST' && (pathname === '/api/setup/save' || pathname === '/api/setup/remove')) {
+      const body = await readBody(request);
+      const [status, payload] = pathname.endsWith('/save') ? await saveSettings(body) : await removeSaved(body);
+      return json(response, status, payload);
+    }
     if (callMatch && request.method === 'POST' && ['end', 'transfer'].includes(callMatch[2])) {
       try {
         const callId = callMatch[1];
@@ -421,10 +561,10 @@ export function createServer(options = {}) {
       }
       const result = await addContext(contextIndex, body);
       if (meetingIsActive(session)) {
-        const settings = publicSettings(currentEnv());
         const sources = readContext(contextIndex).sources;
         await daemonClient.updateContext(session.id, contextHandoffFromSources(sources, {
-          meetingInstructions: settings.meetingInstructions,
+          meetingInstructions: meetingGuidance(),
+          objective: readActiveMeeting(root)?.objective,
         }));
       }
       return json(response, 200, result);
@@ -437,9 +577,9 @@ export function createServer(options = {}) {
       }
       const result = clearContext(contextIndex);
       if (meetingIsActive(session)) {
-        const settings = publicSettings(currentEnv());
         await daemonClient.updateContext(session.id, contextHandoffFromSources([], {
-          meetingInstructions: settings.meetingInstructions,
+          meetingInstructions: meetingGuidance(),
+          objective: readActiveMeeting(root)?.objective,
         }));
       }
       return json(response, 200, result);
@@ -497,16 +637,23 @@ export function createServer(options = {}) {
         }
         const check = await preflight(body);
         if (!check.ready) return json(response, 422, check);
-        const payload = buildMeetingCreatePayload(body, {
-          sources: readContext(contextIndex).sources,
-          onBehalfOf: meetingOwner(),
-        });
+        // Through the calls API, so the meeting is listed and judged like one an agent started.
+        const objective = String(body.objective).trim();
+        const guidance = String(body.meetingInstructions || '').trim();
         logs.length = 0;
         lastExit = null;
-        addLog('system', 'Starting meeting through the local runtime daemon.');
-        const session = await daemonClient.createMeeting(payload);
-        writeActiveMeetingId(root, session.id);
-        return json(response, 202, { started: true, meetingId: session.id });
+        addLog('system', 'Starting the meeting through the calls API.');
+        const call = await daemonClient.createCall(buildMeetingBrief(body, { onBehalfOf: meetingOwner() }));
+        writeActiveMeetingId(root, null, { callId: call.id, objective, guidance });
+        let meetingId;
+        try {
+          meetingId = await meetingOfCall(call.id);
+        } catch (error) {
+          clearActiveMeetingId(root);
+          throw error;
+        }
+        if (meetingId) await adoptMeeting(meetingId, { callId: call.id, objective, guidance });
+        return json(response, 202, { started: true, callId: call.id, meetingId: meetingId || undefined });
       } catch (error) {
         addLog('system', error.message);
         return json(response, error.status || 503, {
@@ -518,15 +665,19 @@ export function createServer(options = {}) {
       }
     }
     if (request.method === 'POST' && pathname === '/api/stop') {
+      const active = readActiveMeeting(root);
       const meetingId = readActiveMeetingId(root);
-      if (!meetingId) return json(response, 200, { stopped: true });
+      if (!meetingId && !active?.callId) return json(response, 200, { stopped: true });
       try {
-        await daemonClient.cancelMeeting(meetingId);
+        // Ending the call lets it finish with a result; a meeting started otherwise is cancelled.
+        if (active?.callId) await daemonClient.endCall(active.callId);
+        else await daemonClient.cancelMeeting(meetingId);
         clearActiveMeetingId(root);
-        addLog('system', 'Meeting cancelled through the runtime daemon.');
-        return json(response, 200, { stopped: true, meetingId });
+        addLog('system', 'Meeting stopped through the runtime daemon.');
+        return json(response, 200, { stopped: true, meetingId: meetingId || undefined });
       } catch (error) {
-        if (error.code === 'not_found' || error.status === 404) {
+        // Already gone, or the call already ended.
+        if (error.code === 'not_found' || error.status === 404 || (active?.callId && error.status === 409)) {
           clearActiveMeetingId(root);
           return json(response, 200, { stopped: true });
         }
@@ -552,7 +703,10 @@ export function createServer(options = {}) {
       const pathname = new URL(request.url, `http://127.0.0.1:${PORT}`).pathname;
       if (pathname.startsWith('/api/')) return await api(request, response, pathname);
       const assets = {
-        '/': ['index.html', 'text/html; charset=utf-8'],
+        '/': ['meetings.html', 'text/html; charset=utf-8'],
+        '/meetings/new': ['index.html', 'text/html; charset=utf-8'],
+        '/setup': ['setup.html', 'text/html; charset=utf-8'],
+        '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'],
         '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
         '/client-validation.mjs': ['client-validation.mjs', 'text/javascript; charset=utf-8'],
         '/visual-preview.mjs': ['visual-preview.mjs', 'text/javascript; charset=utf-8'],
