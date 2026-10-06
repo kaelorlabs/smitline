@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from call_brief import CHANNELS, BriefIncomplete, available_voices
+from call_brief import CHANNELS, TASK_ID, BriefIncomplete, available_voices, normalize_phone
 from call_service import CallError
 from call_store import TERMINAL, CallNotFound
 
@@ -62,10 +62,25 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         channel = request.query.get('channel')
         if channel is not None and channel not in CHANNELS:
             return _error(422, 'invalid_request', f'channel must be one of: {", ".join(CHANNELS)}')
+        contact = request.query.get('contact')
+        if contact is not None:
+            try:
+                contact = normalize_phone(contact, 'contact')
+            except ValueError as error:
+                return _error(422, 'invalid_request', str(error))
+        task = request.query.get('task')
+        if task is not None and not TASK_ID.fullmatch(task):
+            return _error(422, 'invalid_request', 'task must be a task id such as roof-quotes-oct')
         records = service.list(owner=await owner(request), limit=None)
         if channel:
             # The console lists phone calls and meetings on separate pages, each with its own totals.
             records = [record for record in records if record.get('channel') == channel]
+        if contact:
+            records = [record for record in records if record.get('channel') == 'phone'
+                       and (record.get('brief') or {}).get('to') == contact]
+        if task:
+            records = [record for record in records
+                       if ((record.get('brief') or {}).get('task') or {}).get('id') == task]
         service.backfill_prices(records)
         return public_json({'calls': records[:limit],
                             'spend': service.spend(records, tz_offset_minutes=tz_offset)})
@@ -165,6 +180,32 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         })
 
     @handle
+    async def save_note(request):
+        payload = await read_json(request)
+        if not isinstance(payload, dict) or set(payload) - {'text'}:
+            return _error(422, 'invalid_request', 'a note is {"text": "..."}')
+        record = service.save_note(request.match_info['callId'], payload.get('text'),
+                                   owner=await owner(request))
+        return public_json(record)
+
+    @handle
+    async def list_contacts(request):
+        return public_json(service.contacts(await owner(request)))
+
+    @handle
+    async def get_contact(request):
+        return public_json(service.contact(await owner(request), request.match_info['number']))
+
+    @handle
+    async def update_contact(request):
+        payload = await read_json(request)
+        return public_json(service.update_contact(await owner(request), request.match_info['number'], payload))
+
+    @handle
+    async def forget_contact(request):
+        return public_json(service.forget_contact(await owner(request), request.match_info['number']))
+
+    @handle
     async def get_do_not_call(request):
         return public_json(service.do_not_call(await owner(request)))
 
@@ -191,6 +232,11 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_post('/v1/calls/{callId}/end', end_call)
     app.router.add_post('/v1/calls/{callId}/transfer', transfer_call)
     app.router.add_get('/v1/calls/{callId}/recording', call_recording)
+    app.router.add_post('/v1/calls/{callId}/note', save_note)
+    app.router.add_get('/v1/contacts', list_contacts)
+    app.router.add_get('/v1/contacts/{number}', get_contact)
+    app.router.add_patch('/v1/contacts/{number}', update_contact)
+    app.router.add_delete('/v1/contacts/{number}', forget_contact)
     app.router.add_get('/v1/voices', list_voices)
     app.router.add_get('/v1/profile', get_profile)
     app.router.add_patch('/v1/profile', update_profile)

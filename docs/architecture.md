@@ -153,6 +153,8 @@ In the image, the `.colleague/` and `.env` paths below are under `/data`, and th
 | Daemon auth token | `.colleague/daemon.auth` | Stop the daemon; deleting the file forces a new token on next start |
 | Daemon meetings, events, call records, webhook secret, API token digests | `.colleague/daemon-data/` | Stop the daemon, then delete the directory |
 | Owner profile | `.colleague/profile.json` | `smitline profile`, or delete the file |
+| Do-not-call list | `.colleague/do-not-call.json` | `smitline do-not-call remove <number>`, or delete the file |
+| Contacts: names, notes, automatic context | `.colleague/contacts.json` | Console **Forget**, `smitline contacts forget <number>`, or delete the file |
 | Remote connector grants (digests) | `.colleague/connector/` | `smitline connector revoke --all`, or delete the directory |
 | Local MCP token | `.colleague/mcp.token` | Delete it; the next `smitline setup register` makes a new one, and agents need the new header |
 | Console active meeting | `.colleague/portal-active.json` | Stop Smitline from the console |

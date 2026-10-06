@@ -87,7 +87,25 @@ The person called comes from `contact`, or else from the profile entry with the 
 
 During a call, `POST /v1/calls/{id}/instructions` with `"silent": true` adds a background note, such as something the owner just remembered. The voice uses it when it becomes relevant instead of acting on it at once.
 
-Meetings get the session context and `questions` as their starting context, with the summary, facts, and details cut to 8,000 characters together; the profile is used on phone calls. In a meeting, the backend model GPT-Live hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`) gets that context too, up to about 4,000 tokens. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
+Meetings get the session context and `questions` as their starting context, with the summary, facts, notes from earlier calls, and details cut to 8,000 characters together; the profile is used on phone calls. In a meeting, the backend model GPT-Live hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`) gets that context too, up to about 4,000 tokens. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
+
+## Earlier calls
+
+Calls can build on each other. A call can start with short notes from earlier calls, such as the quotes the first two roofers gave before the third is called.
+
+- **Tasks.** A brief's optional `task` ties calls toward one goal together: `{"id": "roof-quotes-oct", "title": "Roof repair quotes"}`. The `id` is 1 to 64 lowercase letters, digits, and dashes, chosen by the agent; the first call that names a task creates it. `GET /v1/calls?task=roof-quotes-oct` lists its calls.
+- **Notes.** After a call ends, the agent can save a note for later calls with `POST /v1/calls/{id}/note` and `{"text": "Apex: $14,200, 20-yr warranty, earliest start Nov 20."}` (at most 1,200 characters; MCP `save_call_note`, CLI `smitline calls note`). It is stored on the call as `carryNote`. A call without a note offers its result's summary and details instead.
+- **Starting with them.** A brief's optional `carryFrom` chooses which notes an outbound call starts with: `{"task": true}` for earlier calls in its task, `{"contact": true}` for earlier calls to or from the same number (phone only), and `{"calls": ["call-..."]}` for named calls (at most 10). Notes are taken newest first, at most 10 and 4,000 characters in all, from finished calls only.
+
+The notes are added to the voice's starting notes and the backend's background under **Earlier calls**, after the brief's own context, with an instruction not to repeat what another person or business said unless the objective needs it, and never anything in `mustNotShare`. The brief's `context` is never rewritten. The call record keeps exactly what it started with as `carried` (`callId`, `contact`, `at`, `text`, and `by`: `agent` or `result`). `POST /v1/calls/check` reports the number as `carried`.
+
+Nothing carries over unless the agent asks or the user switched it on: each [contact](#contacts) has an **automatic context** setting, off by default, that makes calls to its number behave as if `carryFrom.contact` were `true`; a brief's `"contact": false` still overrides it for one call. **Incoming calls never start with earlier calls**, because caller ID can be faked.
+
+Carrying context between different businesses is the point of a quotes task and a leak elsewhere, so the agent decides what is carried for each call.
+
+## Contacts
+
+A contact is a phone number Smitline has called or been called from. `GET /v1/contacts` lists them, latest call first, with the number of calls and the name: the one the user saved, else a profile person with that number, else the latest brief's `contact.name`. `GET /v1/contacts/{number}` (with `+` written as `%2B`) adds the call history and `nextCall`, the notes a new call to the number would start with. `PATCH /v1/contacts/{number}` sets `name` (80 characters), `notes` (600, for the user only; calls do not read them), and `autoContext`; an empty value or `false` clears one. `DELETE /v1/contacts/{number}` forgets what was saved; the number's call records and their notes stay. What the user saves is kept in `.colleague/contacts.json` (owner-only); a file that cannot be read stops contact changes rather than being replaced. Profile people stay what they are: people the user knows, added to every call to their number.
 
 ## Result
 
@@ -157,7 +175,9 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /v1/calls` | Start a call from a brief. |
-| `GET /v1/calls` | List recent calls, newest first. |
+| `GET /v1/calls` | List recent calls, newest first. `channel`, `contact` (an E.164 number), and `task` narrow the list. |
+| `POST /v1/calls/{id}/note` | Save a note on a finished call for [later calls](#earlier-calls). |
+| `GET /v1/contacts`, `GET`, `PATCH`, `DELETE /v1/contacts/{number}` | [Contacts](#contacts): list, read, edit, or forget what was saved. |
 | `POST /v1/calls/check` | Validate a brief and report missing configuration without starting a call. |
 | `POST /v1/calls/{id}/instructions` | Add guidance mid-call. GPT-Live receives it as trusted instructions; with `"silent": true` it is a background note the voice uses when relevant. Meetings do not accept live instructions yet (`delivered: false`). |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |

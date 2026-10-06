@@ -276,8 +276,25 @@ export function createLoopbackTransport(options = {}) {
       const timeout = Math.max(0, Math.min(Number(timeoutSeconds) || 0, 280));
       return json('GET', `/v1/calls/${encodeURIComponent(callId)}/wait?timeout=${timeout}`);
     },
-    listCalls(limit = 20) {
-      return json('GET', `/v1/calls?limit=${Math.max(1, Math.min(Number(limit) || 20, 100))}`);
+    listCalls(limit = 20, filters = {}) {
+      const query = new URLSearchParams({ limit: String(Math.max(1, Math.min(Number(limit) || 20, 100))) });
+      for (const key of ['channel', 'contact', 'task']) if (filters[key]) query.set(key, filters[key]);
+      return json('GET', `/v1/calls?${query}`);
+    },
+    saveCallNote(callId, text) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/note`, { text });
+    },
+    listContacts() {
+      return json('GET', '/v1/contacts');
+    },
+    getContact(number) {
+      return json('GET', `/v1/contacts/${encodeURIComponent(number)}`);
+    },
+    updateContact(number, changes) {
+      return json('PATCH', `/v1/contacts/${encodeURIComponent(number)}`, changes);
+    },
+    forgetContact(number) {
+      return json('DELETE', `/v1/contacts/${encodeURIComponent(number)}`);
     },
     instructCall(callId, text, { silent = false } = {}) {
       return json('POST', `/v1/calls/${encodeURIComponent(callId)}/instructions`, silent ? { text, silent: true } : { text });
@@ -346,8 +363,34 @@ export class Colleague {
     return this._transport.waitForCall(callId, timeoutSeconds);
   }
 
-  async listCalls(limit = 20) {
-    return (await this._transport.listCalls(limit)).calls;
+  /** Newest first; filters: { channel: 'phone' | 'meeting', contact: E.164, task: task id }. */
+  async listCalls(limit = 20, filters = {}) {
+    return (await this._transport.listCalls(limit, filters)).calls;
+  }
+
+  /** Save a note on a finished call for later calls to start with (brief.carryFrom). */
+  async saveCallNote(callId, text) {
+    return this._transport.saveCallNote(callId, text);
+  }
+
+  /** Every number called or calling, with its saved name, notes, and automatic context. */
+  async listContacts() {
+    return (await this._transport.listContacts()).contacts;
+  }
+
+  /** One contact, its calls, and the notes a new call to it would start with. */
+  async getContact(number) {
+    return this._transport.getContact(number);
+  }
+
+  /** Set name, notes, or autoContext; '' or false clears. */
+  async updateContact(number, changes) {
+    return this._transport.updateContact(number, changes);
+  }
+
+  /** Forget what was saved for a number; its call records stay. */
+  async forgetContact(number) {
+    return this._transport.forgetContact(number);
   }
 
   /** Guidance for a call in progress; `{ silent: true }` sends a note it uses when relevant. */

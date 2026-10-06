@@ -426,6 +426,13 @@ async function fakeCallsDaemon(root) {
     if (request.url === '/v1/profile') {
       return send(200, request.method === 'PATCH' ? { version: 1, ...body } : { version: 1 });
     }
+    if (request.url.startsWith('/v1/contacts')) {
+      return send(200, request.url === '/v1/contacts' ? { contacts: [] } : { number: '+14155550143', ...(body || {}) });
+    }
+    if (request.url === '/v1/calls/call-0123456789abcdef/note') {
+      return send(200, { id: 'call-0123456789abcdef', carryNote: { ...body, by: 'agent' } });
+    }
+    if (request.url.startsWith('/v1/calls?')) return send(200, { calls: [], spend: { days: [] } });
     if (request.url === '/v1/do-not-call') {
       return send(200, { numbers: [] });
     }
@@ -700,6 +707,37 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   const missing = await runCli(['do-not-call', 'add', ...common]);
   assert.notEqual(missing.code, 0);
 
+  // Tasks, notes for later calls, and contacts.
+  const quoted = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Get a roof quote',
+    '--task', 'roof-quotes', '--task-title', 'Roof quotes', '--carry-task', '--no-carry-contact',
+    '--carry-call', 'call-0123456789abcdef, call-00000000000000aa']);
+  assert.equal(quoted.code, 0, quoted.stderr);
+  const quoteBrief = daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body;
+  assert.deepEqual(quoteBrief.task, { id: 'roof-quotes', title: 'Roof quotes' });
+  assert.deepEqual(quoteBrief.carryFrom, { task: true, contact: false, calls: ['call-0123456789abcdef', 'call-00000000000000aa'] });
+  for (const args of [
+    ['calls', 'note', '--call-id', 'call-0123456789abcdef', '--text', 'Apex: $14,200.'],
+    ['calls', 'list', '--task', 'roof-quotes', '--contact', '+14155550143'],
+    ['contacts'], ['contacts', 'show', '+14155550143'],
+    ['contacts', 'set', '+14155550143', '--name', 'Apex Roofing', '--auto-context', 'on'],
+    ['contacts', 'forget', '+14155550143'],
+  ]) {
+    const result = await runCli([...args, ...common]);
+    assert.equal(result.code, 0, `${args.join(' ')}: ${result.stderr}`);
+  }
+  const contactCalls = daemon.seen.filter((item) => item.url.startsWith('/v1/contacts') || item.url.endsWith('/note') || item.url.includes('task='));
+  assert.deepEqual(contactCalls.map((item) => [item.method, item.url, item.body]), [
+    ['POST', '/v1/calls/call-0123456789abcdef/note', { text: 'Apex: $14,200.' }],
+    ['GET', '/v1/calls?limit=20&contact=%2B14155550143&task=roof-quotes', null],
+    ['GET', '/v1/contacts', null],
+    ['GET', '/v1/contacts/%2B14155550143', null],
+    ['PATCH', '/v1/contacts/%2B14155550143', { name: 'Apex Roofing', autoContext: true }],
+    ['DELETE', '/v1/contacts/%2B14155550143', null],
+  ]);
+  for (const args of [['contacts', 'set', '+14155550143'], ['contacts', 'set', '+14155550143', '--auto-context', 'maybe'], ['calls', 'note', '--call-id', 'call-0123456789abcdef']]) {
+    assert.notEqual((await runCli([...args, ...common])).code, 0, args.join(' '));
+  }
+
   const recorded = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Book a table', '--record']);
   assert.equal(recorded.code, 0, recorded.stderr);
   assert.equal(daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body.record, true);
@@ -909,7 +947,7 @@ test('smitline mcp serves MCP on stdin and stdout', async (t) => {
   const replies = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
   assert.equal(replies[0].result.serverInfo.name, 'smitline');
-  assert.equal(replies[1].result.tools.length, 11);
+  assert.equal(replies[1].result.tools.length, 13);
 });
 
 test('setup set accepts the meeting and backend settings, and checks their values', async () => {

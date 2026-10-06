@@ -70,6 +70,26 @@ export const BRIEF_SCHEMA = {
       additionalProperties: false,
       properties: { webhookUrl: { type: 'string', description: 'https URL that receives the finished call' } },
     },
+    task: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id'],
+      description: 'The job several calls serve, such as getting quotes from ten roofers. Use the same id for each call in it.',
+      properties: {
+        id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: 'Lowercase letters, digits, and dashes, such as roof-quotes-oct' },
+        title: { type: 'string', maxLength: 120 },
+      },
+    },
+    carryFrom: {
+      type: 'object',
+      additionalProperties: false,
+      description: "Start with short notes from earlier calls (at most 10). task: earlier calls in this brief's task; contact: earlier calls to the same number (phone only), or false to skip what the user switched on for that contact; calls: these call ids. Only carry what this call needs: the assistant may mention it to the other party, so do not carry one business's details to another unless the objective calls for it.",
+      properties: {
+        task: { type: 'boolean' },
+        contact: { type: 'boolean' },
+        calls: { type: 'array', maxItems: 10, items: CALL_ID_SCHEMA },
+      },
+    },
   },
 };
 
@@ -104,12 +124,32 @@ export const CALL_TOOL_DEFINITIONS = [
   },
   {
     name: 'list_calls',
-    description: 'List recent calls, newest first.',
+    description: 'List recent calls, newest first: all of them, or only phone calls or meetings, calls to or from one number, or the calls in one task.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } },
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        channel: { enum: ['phone', 'meeting'] },
+        contact: { type: 'string', description: 'E.164 number, such as +14155550142' },
+        task: { type: 'string', description: 'Task id from a brief' },
+      },
     },
+  },
+  {
+    name: 'save_call_note',
+    description: "After a call ends, save a short note for later calls, such as the quote, terms, and dates a business gave. Later calls start with it when their brief's carryFrom names this call, its task, or its number. Without a note, later calls use the call's summary instead.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['callId', 'text'],
+      properties: { callId: CALL_ID_SCHEMA, text: { type: 'string', maxLength: 1200 } },
+    },
+  },
+  {
+    name: 'list_contacts',
+    description: 'List the people and businesses Smitline has called or been called by, with how many calls, the latest one, and the name and notes the user saved.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'send_call_instruction',
@@ -195,7 +235,15 @@ export async function callToolFor(colleague, name, args) {
     return colleague.waitForCall(requireCallId(args), timeout);
   }
   if (name === 'get_call') return colleague.getCall(requireCallId(args));
-  if (name === 'list_calls') return { calls: await colleague.listCalls(args.limit || 20) };
+  if (name === 'list_calls') {
+    const filters = Object.fromEntries(['channel', 'contact', 'task'].filter((key) => args[key]).map((key) => [key, args[key]]));
+    return { calls: await colleague.listCalls(args.limit || 20, filters) };
+  }
+  if (name === 'save_call_note') {
+    if (typeof args.text !== 'string' || !args.text.trim()) throw new ValidationError('text is required');
+    return colleague.saveCallNote(requireCallId(args), args.text);
+  }
+  if (name === 'list_contacts') return { contacts: await colleague.listContacts() };
   if (name === 'get_profile') return colleague.getProfile();
   if (name === 'update_profile') return colleague.updateProfile(args);
   if (name === 'send_call_instruction') {

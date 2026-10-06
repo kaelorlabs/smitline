@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 SCHEMA_VERSION = 1
 SDK_VERSION = '0.1.1'
@@ -225,9 +225,26 @@ class LoopbackTransport:
         return self._http('GET', f'/v1/calls/{quote(call_id)}/wait?timeout={timeout:g}',
                           timeout=timeout + 15)
 
-    def list_calls(self, limit=20):
-        limit = max(1, min(int(limit or 20), 100))
-        return self._http('GET', f'/v1/calls?limit={limit}')
+    def list_calls(self, limit=20, *, channel=None, contact=None, task=None):
+        query = {'limit': max(1, min(int(limit or 20), 100))}
+        query.update({key: value for key, value in (('channel', channel), ('contact', contact),
+                                                    ('task', task)) if value})
+        return self._http('GET', f'/v1/calls?{urlencode(query)}')
+
+    def save_call_note(self, call_id, text):
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/note', {'text': text})
+
+    def list_contacts(self):
+        return self._http('GET', '/v1/contacts')
+
+    def get_contact(self, number):
+        return self._http('GET', f'/v1/contacts/{quote(number, safe="")}')
+
+    def update_contact(self, number, changes):
+        return self._http('PATCH', f'/v1/contacts/{quote(number, safe="")}', changes)
+
+    def forget_contact(self, number):
+        return self._http('DELETE', f'/v1/contacts/{quote(number, safe="")}')
 
     def instruct_call(self, call_id, text, silent=False):
         body = {'text': text, 'silent': True} if silent else {'text': text}
@@ -280,8 +297,29 @@ class Colleague:
         import asyncio
         return await asyncio.to_thread(self._transport.wait_for_call, call_id, timeout_seconds)
 
-    async def list_calls(self, limit=20):
-        return self._transport.list_calls(limit)['calls']
+    async def list_calls(self, limit=20, *, channel=None, contact=None, task=None):
+        """Newest first; only phone calls or meetings, one number's calls, or one task's."""
+        return self._transport.list_calls(limit, channel=channel, contact=contact, task=task)['calls']
+
+    async def save_call_note(self, call_id, text):
+        """Save a note on a finished call for later calls to start with (brief carryFrom)."""
+        return self._transport.save_call_note(call_id, text)
+
+    async def list_contacts(self):
+        """Every number called or calling, with its saved name, notes, and automatic context."""
+        return self._transport.list_contacts()['contacts']
+
+    async def get_contact(self, number):
+        """One contact, its calls, and the notes a new call to it would start with."""
+        return self._transport.get_contact(number)
+
+    async def update_contact(self, number, changes):
+        """Set name, notes, or autoContext; '' or False clears."""
+        return self._transport.update_contact(number, changes)
+
+    async def forget_contact(self, number):
+        """Forget what was saved for a number; its call records stay."""
+        return self._transport.forget_contact(number)
 
     async def instruct_call(self, call_id, text, silent=False):
         return self._transport.instruct_call(call_id, text, silent)

@@ -82,10 +82,39 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('MeetingHandle', colleague_ai.__all__)
         methods = sorted(name for name in vars(Colleague) if not name.startswith('_'))
         self.assertEqual(methods, [
-            'check_call', 'end_call', 'get_call', 'get_do_not_call', 'get_profile', 'instruct_call',
-            'list_calls', 'list_voices', 'start_call', 'transfer_call', 'update_do_not_call',
+            'check_call', 'end_call', 'forget_contact', 'get_call', 'get_contact', 'get_do_not_call',
+            'get_profile', 'instruct_call', 'list_calls', 'list_contacts', 'list_voices',
+            'save_call_note', 'start_call', 'transfer_call', 'update_contact', 'update_do_not_call',
             'update_profile', 'wait_for_call',
         ])
+
+    async def test_contacts_notes_and_list_filters(self):
+        seen = []
+
+        def request(method, path, body=None, token=None):
+            seen.append((method, path, body))
+            if path.startswith('/v1/calls?'):
+                return {'calls': []}
+            if path == '/v1/contacts':
+                return {'contacts': [{'number': '+14155550142'}]}
+            return {}
+
+        transport = LoopbackTransport(request=request, read_auth=lambda: 't',
+                                      is_port_open=lambda: True, autostart=False)
+        client = Colleague(transport=transport)
+        await client.list_calls(5, task='roof-quotes', contact='+14155550142')
+        await client.save_call_note('call-0123456789abcdef', 'Apex: $14,200.')
+        self.assertEqual(len(await client.list_contacts()), 1)
+        await client.update_contact('+14155550142', {'autoContext': True})
+        await client.forget_contact('+14155550142')
+        self.assertEqual([(method, path) for method, path, _ in seen], [
+            ('GET', '/v1/calls?limit=5&contact=%2B14155550142&task=roof-quotes'),
+            ('POST', '/v1/calls/call-0123456789abcdef/note'),
+            ('GET', '/v1/contacts'),
+            ('PATCH', '/v1/contacts/%2B14155550142'),
+            ('DELETE', '/v1/contacts/%2B14155550142'),
+        ])
+        self.assertEqual(seen[1][2], {'text': 'Apex: $14,200.'})
 
     async def test_call_methods_use_the_calls_api(self):
         seen = []

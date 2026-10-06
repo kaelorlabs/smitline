@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contacts · Smitline</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/calls.css">
+</head>
+<body data-page="contacts">
+  <a class="skip-link" href="#detail">Skip to contact details</a>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Smitline home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-name">Smitline</span>
+      </a>
+      <nav class="topnav" aria-label="Console">
+        <a href="/">Meetings</a>
+        <a href="/calls">Calls</a>
+        <a href="/contacts" aria-current="page">Contacts</a>
+      </nav>
+      <div class="connection" id="connection">
+        <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
+      </div>
+      <a class="account-link" href="/setup"><span class="account-mark" aria-hidden="true"></span>Account</a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Workspace / Contacts</p>
+        <h1>Contacts</h1>
+        <p class="hero-copy">The people and businesses your agent has called or been called by. Add a name and notes, and choose whether new calls to someone start with what earlier calls learned.</p>
+      </section>
+
+      <div id="banner" class="banner" role="alert" hidden></div>
+
+      <div class="layout" id="layout" data-mode="list">
+        <nav class="list-pane" aria-labelledby="list-title">
+          <h2 id="list-title" class="label">Contacts</h2>
+          <label for="search" class="visually-hidden">Search contacts</label>
+          <input id="search" class="search" type="search" placeholder="Search by name or number" autocomplete="off">
+          <p id="list-loading" class="muted loading">Loading contacts…</p>
+          <ol id="contact-list" class="call-list"></ol>
+          <p id="list-empty" class="muted" hidden>No contacts yet. Everyone your agent calls appears here.</p>
+          <p id="list-filtered" class="muted" hidden>No contact matches.</p>
+        </nav>
+
+        <section id="detail" class="detail-pane" tabindex="-1" aria-label="Contact details">
+          <p id="pick" class="card pick muted" hidden>Choose a contact to see its calls and what the next call would know.</p>
+
+          <article id="contact" class="card call" hidden aria-labelledby="contact-title">
+            <button type="button" id="back-button" class="back">← All contacts</button>
+            <header class="call-head">
+              <div class="call-heading">
+                <h2 id="contact-title" tabindex="-1"></h2>
+                <p id="contact-meta" class="meta"></p>
+              </div>
+            </header>
+
+            <form id="contact-form" class="contact-form" novalidate>
+              <div class="form-field">
+                <label for="contact-name">Name</label>
+                <input id="contact-name" name="name" maxlength="80" autocomplete="off">
+              </div>
+              <div class="form-field">
+                <label for="contact-notes">Notes</label>
+                <textarea id="contact-notes" name="notes" maxlength="600" rows="3"></textarea>
+                <p class="muted small">Only for you. Calls do not read them.</p>
+              </div>
+              <label class="switch-row" for="contact-auto">
+                <input id="contact-auto" name="autoContext" type="checkbox">
+                <span><b>Add to new calls automatically</b><span class="muted small">New calls to this number start with the notes below. Your agent can still leave them out of a call. Incoming calls never get them.</span></span>
+              </label>
+              <div class="actions">
+                <button type="submit" class="button primary" id="save-button">Save</button>
+              </div>
+              <p id="form-note" class="action-note" role="status"></p>
+            </form>
+
+            <section class="carried" aria-labelledby="next-title">
+              <h3 id="next-title" class="section-title">What the next call would know</h3>
+              <ul id="next-call" class="carried-list"></ul>
+              <p id="next-empty" class="muted small" hidden>Nothing yet: earlier calls left no notes or results.</p>
+            </section>
+
+            <section aria-labelledby="history-title">
+              <h3 id="history-title" class="section-title">Calls</h3>
+              <ol id="history" class="history-list"></ol>
+            </section>
+
+            <div class="forget">
+              <button type="button" id="forget-button" class="button danger">Forget name and notes</button>
+              <p class="muted small">Forgetting removes the name, notes, and setting you saved. The calls stay in Calls.</p>
+            </div>
+          </article>
+        </section>
+      </div>
+      <p id="announcer" class="visually-hidden" role="status"></p>
+    </main>
+    <footer><span>Smitline runs locally on this computer.</span><span>Contacts stay on this computer.</span></footer>
+  </div>
+  <script type="module" src="/contacts.js"></script>
+</body>
+</html>

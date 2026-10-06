@@ -18,6 +18,7 @@
       <nav class="topnav" aria-label="Console">
         <a href="/">Meetings</a>
         <a href="/calls" aria-current="page">Calls</a>
+        <a href="/contacts">Contacts</a>
       </nav>
       <div class="connection" id="connection">
         <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
@@ -53,6 +54,11 @@
       <div class="layout" id="layout" data-mode="list">
         <nav class="list-pane" aria-labelledby="list-title">
           <h2 id="list-title" class="label">Recent calls</h2>
+          <div id="grouping" class="filters" role="group" aria-label="Group calls">
+            <button type="button" class="filter" data-group="newest" aria-pressed="true">Newest</button>
+            <button type="button" class="filter" data-group="contact" aria-pressed="false">By contact</button>
+            <button type="button" class="filter" data-group="task" aria-pressed="false">By task</button>
+          </div>
           <div id="filters" class="filters" role="group" aria-label="Show calls by result" hidden></div>
           <p id="list-loading" class="muted loading">Loading calls…</p>
           <ol id="call-list" class="call-list"></ol>
@@ -84,6 +90,13 @@
               <span id="call-status" class="chip"></span>
             </header>
             <p class="objective"><span class="objective-label">Goal</span> <span id="call-objective"></span></p>
+
+            <p id="call-tags" class="call-tags" hidden></p>
+
+            <section id="carried" class="carried" aria-labelledby="carried-title" hidden>
+              <h3 id="carried-title" class="section-title">Context Smitline started with</h3>
+              <ul id="carried-list" class="carried-list"></ul>
+            </section>
 
             <section id="brief" class="brief" aria-labelledby="brief-title" hidden>
               <h3 id="brief-title" class="section-title">Brief</h3>
@@ -128,6 +141,11 @@
                 <h4>Agreed</h4>
                 <ul></ul>
               </div>
+            </section>
+
+            <section id="carry-note" class="carry-note" aria-labelledby="carry-note-title" hidden>
+              <h3 id="carry-note-title" class="section-title">Saved for later calls</h3>
+              <p id="carry-note-text"></p>
             </section>
 
             <section id="cost" class="cost" aria-labelledby="cost-title" hidden>

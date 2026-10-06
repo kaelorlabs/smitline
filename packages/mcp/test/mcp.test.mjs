@@ -35,6 +35,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
   const names = listed.result.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
     'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
+    'save_call_note', 'list_contacts',
     'send_call_instruction', 'end_call', 'transfer_call_to_me', 'list_voices',
     'get_profile', 'update_profile',
   ]);
@@ -60,6 +61,29 @@ test('a meeting is joined through start_call', async () => {
   const brief = { channel: 'meeting', to: 'https://zoom.us/j/555', objective: 'Take notes on the roadmap review' };
   const started = await call(session, 'tools/call', { name: 'start_call', arguments: brief });
   assert.deepEqual(started.result.structuredContent.brief, brief);
+});
+
+test('notes for later calls, contacts, and list filters reach the SDK', async () => {
+  const seen = [];
+  const colleague = {
+    async listCalls(limit, filters) { seen.push(['listCalls', limit, filters]); return []; },
+    async saveCallNote(callId, text) { seen.push(['saveCallNote', callId, text]); return { id: callId }; },
+    async listContacts() { seen.push(['listContacts']); return [{ number: '+14155550142' }]; },
+  };
+  const session = createMcpSession({ colleague, log() {} });
+  await call(session, 'tools/call', { name: 'list_calls', arguments: { task: 'roof-quotes', channel: 'phone' } });
+  await call(session, 'tools/call', { name: 'save_call_note', arguments: { callId: 'call-0123456789abcdef', text: 'Apex: $14,200.' } });
+  const contacts = await call(session, 'tools/call', { name: 'list_contacts', arguments: {} });
+  assert.deepEqual(contacts.result.structuredContent, { contacts: [{ number: '+14155550142' }] });
+  assert.deepEqual(seen, [
+    ['listCalls', 20, { channel: 'phone', task: 'roof-quotes' }],
+    ['saveCallNote', 'call-0123456789abcdef', 'Apex: $14,200.'],
+    ['listContacts'],
+  ]);
+  const empty = await call(session, 'tools/call', { name: 'save_call_note', arguments: { callId: 'call-0123456789abcdef', text: ' ' } });
+  assert.equal(empty.result.isError, true);
+  const start = TOOL_DEFINITIONS.find((tool) => tool.name === 'start_call');
+  assert.deepEqual(Object.keys(start.inputSchema.properties.carryFrom.properties), ['task', 'contact', 'calls']);
 });
 
 test('startup errors are mapped without leaking tokens', async () => {

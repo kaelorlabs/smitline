@@ -1,6 +1,6 @@
 # Design: contacts, tasks, and carried-over context
 
-Status: proposal, for review before implementation. Builds on the console redesign (branch `console-ui-redesign`).
+Status: accepted and built (2026-10-06). The open questions at the end were answered: the name is **task**; automatic context is off for everyone, profile people included; a call without an agent's note offers its result's summary and details. The API reference is [calls](calls.md#earlier-calls).
 
 ## Problem
 

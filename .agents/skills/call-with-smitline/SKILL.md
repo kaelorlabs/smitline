@@ -25,6 +25,8 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `mustNotShare` | What must never be said, such as payment details |
 | `successCriteria` | How to tell the call worked |
 | `record` | `true` only when the user asks to record the call. The assistant tells the other person the call is recorded; make sure the user has their agreement. |
+| `task` | For several calls toward one goal, such as quotes from five roofers: the same `{"id": "roof-quotes", "title": "Roof repair quotes"}` on each |
+| `carryFrom` | Start with notes from earlier calls: `{"task": true}`, `{"contact": true}` (same number), or `{"calls": [...]}`. Only what this call needs: the assistant may mention it, so do not carry one business's details to another unless the objective calls for it. |
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
 
@@ -45,5 +47,7 @@ While the call runs, `send_call_instruction` passes on new guidance from the use
 ## 4. Report the result
 
 Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say.
+
+When later calls may need what this one learned, such as the next quote in a task, save a short note with `save_call_note`: the facts, not the conversation.
 
 Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call. If `doNotCall` is `true`, tell the user the person asked not to be called again and Smitline will not call them again.

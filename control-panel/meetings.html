@@ -18,6 +18,7 @@
       <nav class="topnav" aria-label="Console">
         <a href="/" aria-current="page">Meetings</a>
         <a href="/calls">Calls</a>
+        <a href="/contacts">Contacts</a>
       </nav>
       <div class="connection" id="connection">
         <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
@@ -84,6 +85,13 @@
             </header>
             <p class="objective"><span class="objective-label">Objective</span> <span id="call-objective"></span></p>
 
+            <p id="call-tags" class="call-tags" hidden></p>
+
+            <section id="carried" class="carried" aria-labelledby="carried-title" hidden>
+              <h3 id="carried-title" class="section-title">Context Smitline started with</h3>
+              <ul id="carried-list" class="carried-list"></ul>
+            </section>
+
             <section id="brief" class="brief" aria-labelledby="brief-title" hidden>
               <h3 id="brief-title" class="section-title">Brief</h3>
               <dl id="brief-fields" class="brief-fields"></dl>
@@ -127,6 +135,11 @@
                 <h4 class="callout-title">Open questions</h4>
                 <ul></ul>
               </div>
+            </section>
+
+            <section id="carry-note" class="carry-note" aria-labelledby="carry-note-title" hidden>
+              <h3 id="carry-note-title" class="section-title">Saved for later calls</h3>
+              <p id="carry-note-text"></p>
             </section>
 
             <section id="cost" class="cost" aria-labelledby="cost-title" hidden>

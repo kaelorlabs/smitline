@@ -1,6 +1,7 @@
 """Meetings as calls: start an ordinary daemon meeting from a brief and follow it to its handoff."""
 import asyncio
 
+from briefing import EARLIER_CALLS_HEADING
 
 MEETING_STATUS = {
     'joining': 'connecting',
@@ -18,6 +19,9 @@ def context_from_brief(brief):
     summary = '\n\n'.join(part for part in (
         session.get('summary'),
         '\n'.join(f'- {fact}' for fact in session.get('facts') or ()),
+        # Before details, so the notes of earlier calls survive the 8,000-character limit.
+        (EARLIER_CALLS_HEADING + ':\n' + '\n'.join(f'- {note}' for note in session['earlierCalls'])
+         if session.get('earlierCalls') else ''),
         session.get('details'),
     ) if part)
     return {
