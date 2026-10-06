@@ -1,4 +1,4 @@
-export function clientMeetingErrors({ meetingUrl = '', participantName = '' } = {}) {
+export function clientMeetingErrors({ meetingUrl = '', participantName = '', objective = '' } = {}) {
   const errors = {};
   const url = String(meetingUrl || '').trim();
   const name = String(participantName || '').trim();
@@ -12,6 +12,7 @@ export function clientMeetingErrors({ meetingUrl = '', participantName = '' } = 
       errors.meetingUrl = 'Paste a full https:// invitation URL.';
     }
   }
+  if (!String(objective || '').trim()) errors.objective = 'Say what this meeting should achieve.';
   if (!name) errors.participantName = 'Enter the name that should appear in the meeting.';
   return errors;
 }

@@ -34,6 +34,10 @@ export function ownerName(values = {}) {
 export function validateSettings(input) {
   const errors = {};
   if (!detectPlatform(input.meetingUrl)) errors.meetingUrl = 'Use a supported HTTPS Zoom, Teams, or Google Meet meeting invite.';
+  // The calls API brief needs a goal; the result says whether the meeting reached it.
+  const objective = String(input.objective || '').trim();
+  if (!objective) errors.objective = 'Say what this meeting should achieve.';
+  else if (objective.length > 1000) errors.objective = 'Use at most 1,000 characters.';
   const participantName = String(input.participantName || '').trim();
   if (!participantName || participantName.length > 80 || /[\u0000-\u001f]/.test(participantName)) {
     errors.participantName = 'Use 1–80 printable characters.';

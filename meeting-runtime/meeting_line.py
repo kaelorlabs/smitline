@@ -42,6 +42,8 @@ def meeting_payload(brief):
     }
     if brief.voice:
         payload['voice'] = brief.voice
+    if brief.camera:
+        payload['camera'] = {key: value for key, value in brief.camera.items() if value is not None}
     return payload
 
 

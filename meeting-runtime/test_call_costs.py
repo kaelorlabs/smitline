@@ -110,10 +110,21 @@ class SpendTests(unittest.TestCase):
         live = dict(phone_record(), status='in_progress', cost=None)
         eastern = spend([late, early, live], tz_offset_minutes=-240)
         self.assertEqual(eastern['days'], [{'day': '2026-09-29', 'calls': 2, 'total': 0.3,
-                                            'phone': 0.05, 'openai': 0.25, 'estimated': True}])
+                                            'phone': 0.05, 'openai': 0.25, 'estimated': True,
+                                            'seconds': 0}])
         utc = spend([late, early])
         self.assertEqual([day['day'] for day in utc['days']], ['2026-09-29', '2026-09-30'])
         self.assertEqual(utc['currency'], 'USD')
+
+
+    def test_days_add_up_connected_time(self):
+        cost = {'total': 0.1, 'phone': 0, 'openai': 0.1, 'estimated': False}
+        from_result = dict(phone_record(), cost=cost, result={'durationSeconds': 268.4})
+        from_times = dict(phone_record(), cost=cost, result=None,
+                          answeredAt='2026-09-29T15:00:00Z', endedAt='2026-09-29T15:01:30Z')
+        unanswered = dict(phone_record(), cost=cost, result=None, answeredAt=None)
+        day = spend([from_result, from_times, unanswered])['days'][0]
+        self.assertEqual((day['calls'], day['seconds']), (3, 268 + 90))
 
 
 class PricingLine:

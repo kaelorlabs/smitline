@@ -16,21 +16,24 @@ function clip(value, max = 8000) {
   return text.length <= max ? text : text.slice(0, max);
 }
 
-export function contextHandoffFromSources(sources = [], { meetingInstructions = '' } = {}) {
+// objective: the meeting's goal from its brief; the guidance then leads the summary.
+export function contextHandoffFromSources(sources = [], { meetingInstructions = '', objective = '' } = {}) {
   const names = sources.map(source => source.name).filter(Boolean);
+  const guidance = String(meetingInstructions || '').trim();
+  const goal = String(objective || '').trim();
   const summaryParts = sources.map(source => {
     const name = source.name || 'source';
     const text = String(source.text || '').trim();
     return text ? `${name}: ${text}` : name;
   });
+  if (goal && guidance) summaryParts.unshift(`Guidance: ${guidance}`);
   const recentConversation = sources.slice(0, 128).map(source => ({
     role: 'user',
     text: clip(`${source.name || 'source'}\n${String(source.text || '').trim()}`.trim() || 'source'),
   }));
-  const objective = clip(meetingInstructions.trim() || 'Support this live meeting from the local portal.');
   return {
     version: 1,
-    objective,
+    objective: clip(goal || guidance || 'Support this live meeting from the local portal.'),
     currentTask: 'Join the meeting and help when asked.',
     summary: clip(summaryParts.join('\n\n')),
     decisions: [],
@@ -41,20 +44,26 @@ export function contextHandoffFromSources(sources = [], { meetingInstructions = 
   };
 }
 
-// The daemon's POST /v1/meetings body: meetingUrl, context, camera, and onBehalfOf when the owner is known.
-export function buildMeetingCreatePayload(settings, { sources = [], onBehalfOf = '' } = {}) {
+/**
+ * The calls API brief (POST /v1/calls) for a meeting started from the console, so it is
+ * listed and judged like any other. The guidance goes in as context; the saved reference
+ * sources are larger than a brief allows, so the console sends them to the meeting once
+ * it exists. Without onBehalfOf the daemon uses the owner's name from setup.
+ */
+export function buildMeetingBrief(settings, { onBehalfOf = '' } = {}) {
   const owner = String(onBehalfOf || '').trim();
+  const guidance = String(settings.meetingInstructions || '').trim();
   return {
-    meetingUrl: settings.meetingUrl,
-    context: contextHandoffFromSources(sources, {
-      meetingInstructions: settings.meetingInstructions,
-    }),
+    channel: 'meeting',
+    to: settings.meetingUrl,
+    objective: String(settings.objective || '').trim(),
+    ...(owner ? { onBehalfOf: owner } : {}),
+    ...(guidance ? { context: { summary: clip(guidance, 2000) } } : {}),
     camera: {
       enabled: settings.camera?.enabled !== false,
       defaultOn: settings.camera?.defaultOn !== false,
       ...(settings.camera?.avatarDataUri ? { avatarDataUri: settings.camera.avatarDataUri } : {}),
     },
-    ...(owner ? { onBehalfOf: owner } : {}),
   };
 }
 
@@ -116,11 +125,18 @@ export function readActiveMeetingId(projectRoot) {
   return supervisor?.meetingId || null;
 }
 
-export function writeActiveMeetingId(projectRoot, meetingId) {
+// The meeting this console started: { callId, meetingId, objective }, any of which may be missing.
+export function readActiveMeeting(projectRoot) {
+  const portal = readJsonFile(portalActivePath(projectRoot));
+  return portal && typeof portal === 'object' ? portal : null;
+}
+
+export function writeActiveMeetingId(projectRoot, meetingId, details = {}) {
   const file = portalActivePath(projectRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ meetingId })}\n`, { mode: 0o600 });
+  const active = { ...(meetingId ? { meetingId } : {}), ...details };
+  fs.writeFileSync(temporary, `${JSON.stringify(active)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
   fs.chmodSync(file, 0o600);
   try { fs.chmodSync(path.dirname(file), 0o700); } catch {}

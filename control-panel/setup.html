@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account · Smitline</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/calls.css">
+</head>
+<body data-page="setup">
+  <a class="skip-link" href="#checklist">Skip to the setup checklist</a>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Smitline home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-name">Smitline</span>
+      </a>
+      <nav class="topnav" aria-label="Console">
+        <a href="/">Meetings</a>
+        <a href="/calls">Calls</a>
+      </nav>
+      <div class="connection" id="connection">
+        <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
+      </div>
+      <a class="account-link" href="/setup" aria-current="page"><span class="account-mark" aria-hidden="true"></span>Account</a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Workspace / Account</p>
+        <h1>Account and setup</h1>
+        <p class="hero-copy">The keys and settings Smitline uses on this computer, and whether each one works. Keys are saved only here, in Smitline’s private settings file, and this page never shows them.</p>
+      </section>
+
+      <div id="banner" class="banner" role="alert" hidden></div>
+
+      <section id="checklist" class="card setup-card" aria-labelledby="checklist-title" tabindex="-1">
+        <div class="section-head">
+          <div>
+            <h2 id="checklist-title" class="setup-title">Setup checklist</h2>
+            <p id="checklist-summary" class="muted small" role="status">Checking your keys and settings…</p>
+          </div>
+          <button type="button" id="recheck-button" class="button">Check again</button>
+        </div>
+        <ul id="checks" class="checks"></ul>
+        <p class="muted small">The same checks as <code>smitline setup status</code>. To connect your AI agents, run <code>smitline setup register</code>.</p>
+      </section>
+
+      <section class="setup-fields" aria-labelledby="fields-title">
+        <h2 id="fields-title" class="setup-title">Keys and settings</h2>
+        <p class="muted small">Remove deletes Smitline’s saved copy only. A key keeps working where it was issued until you revoke it there. You can also change these with <code>smitline setup secrets</code>.</p>
+        <div id="field-groups" class="field-groups"><p class="muted">Loading…</p></div>
+      </section>
+      <p id="announcer" class="visually-hidden" role="status"></p>
+    </main>
+    <footer><span>Smitline runs locally on this computer.</span><span>Only this computer can open this page.</span></footer>
+  </div>
+  <script type="module" src="/setup.js"></script>
+</body>
+</html>

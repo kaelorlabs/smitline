@@ -49,6 +49,8 @@ export interface CallBrief {
   /** Phone only: record this call in the owner's phone account; the assistant says it is recorded. */
   record?: boolean;
   notify?: { webhookUrl?: string };
+  /** Meetings only: Smitline's virtual camera tile; the avatar is a PNG, JPEG, WebP, or SVG data: URI of up to 80 KB. */
+  camera?: { enabled?: boolean; defaultOn?: boolean; avatarDataUri?: string };
 }
 
 export type CallStatus =

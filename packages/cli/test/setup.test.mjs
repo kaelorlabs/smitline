@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, missingForDone, parseEnv, readEnv, registerAgents, renderSecretsPage, sanitizeSubmission,
+  accountFields, availableVoices, containerRegistration, createSignalWireTrunk, localMcpConnection, missingForDone, parseEnv, readEnv, registerAgents, removeSetting, renderSecretsPage, sanitizeSubmission,
   serveSecretsPage, setupStatus, validateSetting, windowsProfile, writeEnv, SETUP_PAGE_PORT, setupPagePort, colleagueVersion,
 } from '../src/setup.mjs';
 
@@ -35,6 +35,35 @@ test('.env merge keeps other lines and writes 0600', async (t) => {
   writeEnv(root, { COLLEAGUE_VOICE: 'cinder' });
   assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'COLLEAGUE_VOICE=cinder\nPORT=1\n');
   assert.equal(readEnv(root).COLLEAGUE_VOICE, 'cinder');
+
+  // null removes every assignment of a key, and adds nothing for a key that was not there.
+  await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-a\nPORT=1\nexport OPENAI_API_KEY=sk-b\n');
+  writeEnv(root, { OPENAI_API_KEY: null, TWILIO_AUTH_TOKEN: null });
+  assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'PORT=1\n');
+});
+
+test('the Account page sees whether each field is saved, never a secret', async (t) => {
+  const root = await tempRoot(t);
+  const key = `sk-proj-${'A'.repeat(150)}`;
+  writeEnv(root, { OPENAI_API_KEY: key, COLLEAGUE_OWNER_NAME: 'Robin', COLLEAGUE_CONNECTOR_PASSPHRASE: 'correct horse battery staple', TWILIO_AUTH_TOKEN: 'abcdef0123456789abcdef0123456789', TWILIO_ACCOUNT_SID: `AC${'0'.repeat(32)}` });
+  const fields = Object.fromEntries(accountFields(readEnv(root), { SIGNALWIRE_PROJECT_ID: 'from-the-environment' }).map((field) => [field.key, field]));
+  assert.equal(fields.OPENAI_API_KEY.shown, 'sk-proj-');
+  assert.equal(fields.OPENAI_API_KEY.revoke.url, 'https://platform.openai.com/api-keys');
+  // Only a key format's fixed start is shown; a key without one shows nothing.
+  assert.equal(fields.TWILIO_ACCOUNT_SID.shown, 'AC');
+  assert.equal(fields.TWILIO_AUTH_TOKEN.shown, '');
+  assert.equal(fields.COLLEAGUE_CONNECTOR_PASSPHRASE.shown, '');
+  assert.equal(fields.COLLEAGUE_OWNER_NAME.shown, 'Robin');
+  assert.equal(fields.SIGNALWIRE_API_TOKEN.saved, false);
+  assert.equal('shown' in fields.SIGNALWIRE_API_TOKEN, false);
+  assert.deepEqual([fields.SIGNALWIRE_PROJECT_ID.saved, fields.SIGNALWIRE_PROJECT_ID.fromEnvironment], [true, true]);
+  const text = JSON.stringify(fields);
+  for (const secret of [key, 'horse', '0123456789abcdef']) assert.equal(text.includes(secret), false, secret);
+
+  removeSetting(root, 'OPENAI_API_KEY');
+  assert.equal('OPENAI_API_KEY' in readEnv(root), false);
+  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.throws(() => removeSetting(root, 'PATH'), /unknown setting PATH/);
 });
 
 test('settings are validated and secrets are refused', () => {

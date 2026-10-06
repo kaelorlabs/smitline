@@ -1,4 +1,10 @@
 // Follow calls live from the local console: brief, status, transcript, result, cost, join, and end.
+// The Calls page (/calls) shows phone calls and the Meetings page (/) meetings: <body data-channel>.
+const CHANNEL = document.body.dataset.channel === 'meeting' ? 'meeting' : 'phone';
+const MEETINGS = CHANNEL === 'meeting';
+const WORDS = MEETINGS
+  ? { one: 'meeting', many: 'meetings', page: 'Meetings' }
+  : { one: 'call', many: 'calls', page: 'Calls' };
 const TERMINAL = new Set(['completed', 'failed', 'canceled']);
 const BEFORE_ANSWER = new Set(['queued', 'connecting', 'ringing', 'waiting']);
 const LIVE_POLL_MS = 1500;
@@ -15,6 +21,18 @@ const OUTCOMES = {
   failed: { text: 'Failed', tone: 'bad', icon: '!' },
   canceled: { text: 'Canceled', tone: 'neutral', icon: '–' },
 };
+// A meeting is judged by its goal: achieved is a yes, partial a partly, anything else a no.
+const GOALS = {
+  achieved: { text: 'Goal met', tone: 'good', icon: '✓' },
+  partial: { text: 'Goal partly met', tone: 'warn', icon: '½' },
+  canceled: { text: 'Canceled', tone: 'neutral', icon: '–' },
+};
+const GOAL_NOT_MET = { text: 'Goal not met', tone: 'bad', icon: '✕' };
+
+function outcomeInfo(outcome) {
+  if (MEETINGS) return GOALS[outcome] || GOAL_NOT_MET;
+  return OUTCOMES[outcome] || { text: capitalize(outcome || 'Unknown'), tone: 'neutral', icon: '•' };
+}
 const END_REASONS = {
   hangup: 'Ended normally', remote_hangup: 'They hung up', no_answer: 'No answer', busy: 'Line was busy',
   voicemail: 'Left a voicemail', max_duration: 'Time limit reached', canceled: 'Canceled',
@@ -24,7 +42,7 @@ const JOIN_TEXT = 'Take over the call';
 const PROVIDERS = { twilio: 'Twilio', signalwire: 'SignalWire' };
 const COST_ITEMS = { phone: 'Phone line', voice: 'Voice', backend: 'Background model', summary: 'Summary' };
 // Result filters, in the order they are offered.
-const FILTER_ORDER = ['all', 'live', 'achieved', 'partial', 'not_reached', 'voicemail', 'declined', 'failed', 'canceled'];
+const FILTER_ORDER = ['all', 'live', 'achieved', 'partial', 'not_met', 'not_reached', 'voicemail', 'declined', 'failed', 'canceled'];
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -50,6 +68,8 @@ const state = {
   endRequested: new Set(),
   timer: null,
   inFlight: false,
+  // A finished meeting's transcript and handoff from its local archive (meetings only).
+  archive: null,
 };
 
 // Data --------------------------------------------------------------------------
@@ -164,17 +184,19 @@ function pricesDate(iso) {
 }
 
 function callCount(count) {
-  return count === 1 ? '1 call' : `${counter.format(count)} calls`;
+  return count === 1 ? `1 ${WORDS.one}` : `${counter.format(count)} ${WORDS.many}`;
 }
 
 function resultKey(call) {
   if (!TERMINAL.has(call.status)) return 'live';
-  return call.result?.outcome || call.status;
+  const key = call.result?.outcome || call.status;
+  return MEETINGS && !GOALS[key] ? 'not_met' : key;
 }
 
 function resultLabel(key) {
   if (key === 'all') return 'All';
   if (key === 'live') return 'In progress';
+  if (MEETINGS) return outcomeInfo(key).text;
   return OUTCOMES[key]?.text || capitalize(key.replace(/_/g, ' '));
 }
 
@@ -196,8 +218,8 @@ function statusInfo(call) {
 
 // The list shows how a finished call turned out, and the live status otherwise.
 function listBadge(call) {
-  if (call.status === 'completed' && call.result?.outcome && OUTCOMES[call.result.outcome]) {
-    const outcome = OUTCOMES[call.result.outcome];
+  if (call.status === 'completed' && call.result?.outcome && (MEETINGS || OUTCOMES[call.result.outcome])) {
+    const outcome = outcomeInfo(call.result.outcome);
     return { text: outcome.text, tone: outcome.tone, live: false };
   }
   return statusInfo(call);
@@ -261,11 +283,11 @@ function handleLoadError(error) {
     showBanner('The console stopped responding.', 'Start it again (./start-control-panel.sh), then reload this page.', 'bad');
   } else if (['daemon_offline', 'daemon_unavailable'].includes(error.code) || error.status === 503) {
     setConnection('down');
-    showBanner('Smitline isn’t running right now, so calls can’t be shown.',
-      'It starts by itself when your agent places a call. This page keeps checking.', 'info');
+    showBanner(`Smitline isn’t running right now, so ${WORDS.many} can’t be shown.`,
+      `It starts by itself when your agent ${MEETINGS ? 'joins a meeting' : 'places a call'}. This page keeps checking.`, 'info');
   } else {
     setConnection('down');
-    showBanner('Couldn’t load calls.', `${sentence(error.message)} This page keeps trying.`, 'bad');
+    showBanner(`Couldn’t load ${WORDS.many}.`, `${sentence(error.message)} This page keeps trying.`, 'bad');
   }
 }
 
@@ -284,7 +306,9 @@ function addUp(days) {
     phone: sum.phone + day.phone,
     openai: sum.openai + day.openai,
     estimated: sum.estimated || day.estimated,
-  }), { calls: 0, total: 0, phone: 0, openai: 0, estimated: false });
+    // An older daemon reports no connected time.
+    seconds: sum.seconds === null || typeof day.seconds !== 'number' ? null : sum.seconds + day.seconds,
+  }), { calls: 0, total: 0, phone: 0, openai: 0, estimated: false, seconds: 0 });
 }
 
 function renderSpend(spend) {
@@ -303,6 +327,14 @@ function renderSpend(spend) {
     $(`spend-${name}-calls`).textContent = callCount(sum.calls);
   }
   $('spend-average').textContent = money(all.calls ? all.total / all.calls : 0);
+  const averageTime = $('spend-average-time');
+  averageTime.hidden = !all.seconds || !all.calls;
+  averageTime.textContent = all.seconds && all.calls ? `${duration(all.seconds / all.calls)} on average` : '';
+  if (MEETINGS) {
+    // Meetings have no phone line: everything is OpenAI usage.
+    $('spend-note').textContent = `Costs are calculated from each meeting’s usage at OpenAI’s list prices as of ${pricesDate(spend.pricesAsOf)}; OpenAI does not bill per meeting.`;
+    return;
+  }
   $('spend-phone').textContent = money(all.phone);
   $('spend-openai').textContent = money(all.openai);
   const share = all.total ? Math.round((all.phone / all.total) * 100) : 0;
@@ -341,16 +373,18 @@ function listItem(call) {
   }
   const badge = listBadge(call);
   const cost = call.cost ? `${call.cost.estimated ? '≈ ' : ''}${money(call.cost.total)}` : '';
-  const signature = JSON.stringify([shortName(call), brief(call).objective, badge, call.createdAt, when(call.createdAt), cost]);
+  const seconds = TERMINAL.has(call.status) ? callSeconds(call) : null;
+  const time = [when(call.createdAt), seconds ? duration(seconds) : ''].filter(Boolean).join(' · ');
+  const signature = JSON.stringify([shortName(call), brief(call).objective, badge, call.createdAt, time, cost]);
   if (signature !== entry.signature) {
     entry.signature = signature;
     entry.who.textContent = shortName(call);
     entry.price.textContent = cost;
-    entry.price.title = cost ? 'What this call cost' : '';
+    entry.price.title = cost ? `What this ${WORDS.one} cost` : '';
     entry.goal.textContent = brief(call).objective || '';
     setChip(entry.chip, badge);
     entry.time.dateTime = call.createdAt || '';
-    entry.time.textContent = when(call.createdAt);
+    entry.time.textContent = time;
   }
   entry.button.setAttribute('aria-current', String(call.id === state.selected));
   return entry.item;
@@ -407,7 +441,7 @@ function renderList() {
   $('list-filtered').hidden = !state.calls.length || shown.length > 0;
   if (state.loaded) {
     for (const call of state.calls) {
-      if (!state.known.has(call.id)) announce(`New call: ${callTitle(call)}.`);
+      if (!state.known.has(call.id)) announce(`New ${WORDS.one}: ${callTitle(call)}.`);
     }
   }
   state.known = new Set(state.calls.map((call) => call.id));
@@ -424,6 +458,7 @@ function resetDetail() {
   state.renderedFor = null;
   state.rendered = [];
   state.lastStatus = null;
+  state.archive = null;
   $('action-note').textContent = '';
   $('jump-button').hidden = true;
 }
@@ -475,7 +510,7 @@ function renderEmptyDetail() {
   $('welcome').hidden = !empty;
   $('pick').hidden = empty || !state.loaded;
   $('call').hidden = true;
-  document.title = 'Calls · Smitline';
+  document.title = `${WORDS.page} · Smitline`;
 }
 
 function renderMeta(call) {
@@ -508,7 +543,8 @@ function renderActions(call) {
   const end = $('end-button');
   const ending = state.endRequested.has(call.id);
   end.disabled = ending;
-  end.textContent = ending ? 'Ending…' : (BEFORE_ANSWER.has(call.status) ? 'Cancel call' : 'End call');
+  if (MEETINGS) end.textContent = ending ? 'Leaving…' : (BEFORE_ANSWER.has(call.status) ? 'Stop joining' : 'Leave meeting');
+  else end.textContent = ending ? 'Ending…' : (BEFORE_ANSWER.has(call.status) ? 'Cancel call' : 'End call');
 }
 
 function fillList(containerId, items) {
@@ -521,7 +557,7 @@ function renderResult(call) {
   const result = call.result;
   $('result').hidden = !result;
   if (!result) return;
-  const outcome = OUTCOMES[result.outcome] || { text: capitalize(result.outcome || 'Unknown'), tone: 'neutral', icon: '•' };
+  const outcome = outcomeInfo(result.outcome);
   $('result-outcome-box').className = `outcome callout ${outcome.tone}`;
   $('result-icon').textContent = outcome.icon;
   $('result-outcome').textContent = outcome.text;
@@ -672,15 +708,54 @@ function sameLine(a, b) {
 }
 
 function emptyTranscriptText(call) {
+  if (MEETINGS) {
+    if (BEFORE_ANSWER.has(call.status)) return 'The transcript starts once Smitline is in the meeting.';
+    if (!TERMINAL.has(call.status)) return 'Smitline is in the meeting. The full transcript appears here when it ends.';
+    return 'Nothing was said in this meeting.';
+  }
   if (BEFORE_ANSWER.has(call.status)) return 'The transcript starts when someone answers.';
   if (!TERMINAL.has(call.status)) return 'Listening. Lines appear here as people talk.';
   if (['no_answer', 'busy'].includes(call.endReason)) return 'Nobody answered, so nothing was said.';
   return 'Nothing was said on this call.';
 }
 
+// A meeting's transcript.txt: blocks such as "Meeting [muted]:  text" or
+// "Agent (generated, playback not guaranteed):  text". Pieces in a row from one side join up.
+function archiveLines(text) {
+  const lines = [];
+  for (const block of String(text || '').split(/\n\s*\n/)) {
+    const match = /^(Agent|Meeting)\b[^:\n]*:\s*([\s\S]*)$/.exec(block.trim());
+    const words = match ? match[2].replace(/\s+/g, ' ').trim() : '';
+    if (!words) continue;
+    const speaker = match[1] === 'Agent' ? 'agent' : 'meeting';
+    const last = lines.at(-1);
+    if (last?.speaker === speaker) last.text = `${last.text} ${words}`;
+    else lines.push({ speaker, text: words });
+  }
+  return lines;
+}
+
+// A finished meeting keeps its transcript and handoff in the local meeting archive.
+async function loadArchive(call) {
+  const archive = { for: call.id, lines: [], handoff: null, handoffId: '' };
+  try {
+    const session = await api(`/api/sessions/${encodeURIComponent(call.line.meetingId)}`);
+    archive.lines = archiveLines(session.transcript);
+    archive.handoff = session.handoff || null;
+    archive.handoffId = session.handoffId || call.line.meetingId;
+  } catch { /* no local archive: show what the result has */ }
+  return archive;
+}
+
+function renderHandoff(call) {
+  const button = $('handoff-button');
+  if (button) button.hidden = !(state.archive?.for === call.id && state.archive.handoff);
+}
+
 function renderTranscript(call) {
   const list = $('transcript');
-  const lines = call.result?.transcript?.length ? call.result.transcript : state.lines;
+  const archived = state.archive?.for === call.id ? state.archive.lines : [];
+  const lines = call.result?.transcript?.length ? call.result.transcript : (state.lines.length ? state.lines : archived);
   const live = !TERMINAL.has(call.status);
   const fresh = state.renderedFor !== call.id;
   // Announce only lines added while you follow a live call, never the whole transcript.
@@ -724,7 +799,7 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('call').hidden = false;
   const title = callTitle(call);
   $('call-title').textContent = title;
-  document.title = `${title} · Calls · Smitline`;
+  document.title = `${title} · ${WORDS.page} · Smitline`;
   renderMeta(call);
   const status = statusInfo(call);
   setChip($('call-status'), status);
@@ -734,7 +809,8 @@ function renderCall(call, { focusTitle = false } = {}) {
   // A failed call with a result explains itself there; without one, say what went wrong here.
   const failed = call.status === 'failed' && !call.result;
   $('problem').hidden = !failed;
-  $('problem-title').textContent = call.answeredAt ? 'This call ended because of a problem' : 'This call did not go through';
+  $('problem-title').textContent = call.answeredAt ? `This ${WORDS.one} ended because of a problem`
+    : (MEETINGS ? 'This meeting did not start' : 'This call did not go through');
   $('problem-text').textContent = failed ? sentence(call.error || 'Something went wrong before the call could start.') : '';
   $('handed-over').hidden = !(state.transferred || call.endReason === 'transferred');
   // The recording stays in the phone account; the console fetches it with the account's keys.
@@ -751,15 +827,29 @@ function renderCall(call, { focusTitle = false } = {}) {
   renderResult(call);
   renderCost(call);
   renderTranscript(call);
+  renderHandoff(call);
 
   if (!fresh && state.lastStatus && state.lastStatus !== call.status) {
-    const outcome = call.result && OUTCOMES[call.result.outcome];
+    const outcome = call.result && outcomeInfo(call.result.outcome);
     announce(outcome && TERMINAL.has(call.status)
-      ? `Call ended. Result: ${outcome.text}. ${call.result.summary || ''}`
+      ? `${capitalize(WORDS.one)} ended. Result: ${outcome.text}. ${call.result.summary || ''}`
       : `${status.text}.`);
   }
   state.lastStatus = call.status;
   if (focusTitle) $('call-title').focus();
+}
+
+// A meeting started on the manual page is followed there: its live panel has the mic,
+// the meeting view, and Stop. Say so while one runs.
+async function renderManualMeeting() {
+  const note = $('manual-live');
+  if (!note) return;
+  try {
+    const status = await api('/api/status');
+    note.hidden = !(status.running || ['starting', 'joining', 'waiting_for_admission', 'admitted', 'connecting_audio', 'live'].includes(status.phase));
+  } catch {
+    note.hidden = true;
+  }
 }
 
 // Refresh loop ---------------------------------------------------------------------
@@ -783,7 +873,7 @@ async function refreshDetail(options) {
   } catch (error) {
     if (error.status === 404 && target === state.selected) {
       showList();
-      $('pick').textContent = 'That call is no longer available. Choose another one.';
+      $('pick').textContent = `That ${WORDS.one} is no longer available. Choose another one.`;
       return;
     }
     throw error;
@@ -795,6 +885,11 @@ async function refreshDetail(options) {
     if (event.type === 'call.transcript' && event.data?.text) state.lines.push({ speaker: event.data.speaker, text: event.data.text });
     if (event.type === 'call.transferred') state.transferred = true;
   }
+  if (MEETINGS && TERMINAL.has(call.status) && call.line?.meetingId && state.archive?.for !== call.id) {
+    const archive = await loadArchive(call);
+    if (target !== state.selected) return;
+    state.archive = archive;
+  }
   if (!TERMINAL.has(call.status) && call.status !== 'in_progress') state.transferRequested.delete(call.id);
   state.call = call;
   renderCall(call, options);
@@ -804,15 +899,17 @@ async function refresh(options = {}) {
   if (state.inFlight) return;
   state.inFlight = true;
   try {
-    // Spend is grouped by the reader's local day.
-    const { calls = [], spend = null } = await api(`/api/calls?tzOffset=${-new Date().getTimezoneOffset()}`);
-    state.calls = calls;
-    state.spend = spend;
-    renderSpend(spend);
+    // Spend is grouped by the reader's local day, and covers this page's channel only.
+    const { calls = [], spend = null } = await api(`/api/calls?tzOffset=${-new Date().getTimezoneOffset()}&channel=${CHANNEL}`);
+    state.calls = calls.filter((call) => (call.channel || 'phone') === CHANNEL);
+    // A daemon from before the channel filter returns every call, and totals that mix both kinds.
+    state.spend = state.calls.length === calls.length ? spend : null;
+    if (MEETINGS) renderManualMeeting();
+    renderSpend(state.spend);
     if (!state.autoPicked) {
       state.autoPicked = true;
       // On a wide screen, open the call most worth watching: a live one, else the latest.
-      const pick = calls.find((call) => !TERMINAL.has(call.status)) || calls[0];
+      const pick = state.calls.find((call) => !TERMINAL.has(call.status)) || state.calls[0];
       if (pick && !NARROW.matches) {
         history.replaceState(null, '', `#${pick.id}`);
         select(pick.id);
@@ -912,7 +1009,8 @@ $('end-button').addEventListener('click', async () => {
   state.endRequested.add(callId);
   renderActions(state.call);
   $('action-note').dataset.kind = '';
-  note(beforeAnswer ? 'Canceling the call.' : 'Asked Smitline to wrap up and hang up.');
+  if (MEETINGS) note(beforeAnswer ? 'Stopping. Smitline will not join.' : 'Asked Smitline to leave the meeting.');
+  else note(beforeAnswer ? 'Canceling the call.' : 'Asked Smitline to wrap up and hang up.');
   try {
     await withToken();
     await api(`/api/calls/${callId}/end`, { method: 'POST', body: '{}' });
@@ -920,7 +1018,7 @@ $('end-button').addEventListener('click', async () => {
     setTimeout(() => {
       if (!state.endRequested.delete(callId) || state.call?.id !== callId) return;
       if (TERMINAL.has(state.call.status) || state.call.status === 'summarizing') return;
-      note('The call is still going. Press End call again to retry.');
+      note(MEETINGS ? 'Smitline is still in the meeting. Press Leave meeting again to retry.' : 'The call is still going. Press End call again to retry.');
       renderActions(state.call);
     }, 20_000);
   } catch (error) {
@@ -928,6 +1026,16 @@ $('end-button').addEventListener('click', async () => {
     note(actionError(error), true);
   }
   if (state.call?.id === callId) renderActions(state.call);
+});
+
+$('handoff-button')?.addEventListener('click', () => {
+  const archive = state.archive;
+  if (!archive?.handoff) return;
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(archive.handoff, null, 2)], { type: 'application/json' }));
+  link.download = `${archive.handoffId}-handoff.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 });
 
 $('back-button').addEventListener('click', () => {

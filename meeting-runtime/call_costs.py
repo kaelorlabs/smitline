@@ -169,8 +169,21 @@ def _created(record):
         return None
 
 
+def _talk_seconds(record):
+    """How long the call or meeting was connected, in whole seconds; 0 when it never connected."""
+    seconds = (record.get('result') or {}).get('durationSeconds')
+    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0:
+        return round(seconds)
+    try:
+        answered = datetime.fromisoformat(str(record.get('answeredAt')).replace('Z', '+00:00'))
+        ended = datetime.fromisoformat(str(record.get('endedAt')).replace('Z', '+00:00'))
+    except ValueError:
+        return 0
+    return max(0, round((ended - answered).total_seconds()))
+
+
 def spend(records, *, tz_offset_minutes=0):
-    """Finished calls' costs per local day, oldest first, for totals and a chart."""
+    """Finished calls' costs and connected time per local day, oldest first, for totals and a chart."""
     offset = timedelta(minutes=tz_offset_minutes)
     days = {}
     for record in records:
@@ -180,8 +193,9 @@ def spend(records, *, tz_offset_minutes=0):
             continue
         day = (created + offset).date().isoformat()
         bucket = days.setdefault(day, {'day': day, 'calls': 0, 'total': 0.0, 'phone': 0.0,
-                                       'openai': 0.0, 'estimated': False})
+                                       'openai': 0.0, 'estimated': False, 'seconds': 0})
         bucket['calls'] += 1
+        bucket['seconds'] += _talk_seconds(record)
         for key in ('total', 'phone', 'openai'):
             bucket[key] = _money(bucket[key] + (cost.get(key) or 0))
         bucket['estimated'] = bucket['estimated'] or bool(cost.get('estimated'))

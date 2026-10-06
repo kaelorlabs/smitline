@@ -1,30 +1,48 @@
 # Smitline local console
 
-The local console is an optional operator interface for Smitline. Agents do not need it: they place calls and join meetings through the calls API. The console has two tabs: **Meetings**, to start a meeting by hand and follow it, and **Calls**, to follow calls that agents started.
+The local console is an optional operator interface for Smitline. Agents do not need it: they place calls and join meetings through the calls API. The console has three sections: **Meetings** and **Calls**, to follow what your agents did, and **Account**, for keys and settings. On a wide screen they sit in a sidebar with Account at the bottom; on a narrow one, in the top bar.
 
 ## Open the console
 
-The `smitline` container serves it: open [http://127.0.0.1:8095](http://127.0.0.1:8095). Add your keys first with `docker exec smitline smitline setup secrets` (see [SETUP.md](../SETUP.md)).
+The `smitline` container serves it: open [http://127.0.0.1:8095](http://127.0.0.1:8095). Add your keys under **Account**, or with `docker exec smitline smitline setup secrets` (see [SETUP.md](../SETUP.md)).
 
 The console never returns API keys to the browser. Keys, uploaded context, meeting transcripts, and browser profiles stay in the container's data volume.
 
 From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep the terminal open; it starts the runtime daemon when it is not running, and the files above stay in the checkout, ignored by Git.
 
+## Meetings
+
+`http://127.0.0.1:8095` opens on the meetings Smitline joined through the calls API: totals for today, this month, and all time, the average length and cost per meeting, and a list showing each meeting's platform, time, length, and whether it met its goal (**Goal met** for an `achieved` result, **Goal partly met** for `partial`, **Goal not met** otherwise). Choosing one shows its objective and brief, the outcome and summary, decisions, action items, open questions, the cost, and the full transcript, read from the meeting's local archive when the result does not carry it, with **Download handoff**. While a meeting runs, **Leave meeting** asks Smitline to leave. Totals need a daemon that knows `GET /v1/calls?channel=`; with an older one the list still works and the totals are hidden.
+
+**Start a meeting manually** (`/meetings/new`) is for a one-off meeting; usually your agent starts them. It starts the meeting through the calls API with the objective you give, so it is listed and judged like any other.
+
 ## Calls
 
-`http://127.0.0.1:8095/calls` (**Calls** in the console's top bar) lists recent phone calls and meetings started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
+`http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
-## Meetings
+## Account
+
+`http://127.0.0.1:8095/setup` (**Account**) shows the checklist `smitline setup status` prints, with each item OK, needing a fix, or not checked, and every key and setting from the setup page. It verifies the keys online when it opens and on **Check again**.
+
+- **Replace** (or **Add**) saves a new value, checks it again, and says what the check found, such as "key works and has GPT-Live access" or "OpenAI rejected the key". Values are validated as on the setup page.
+- **Remove** deletes Smitline's saved copy from `.env`. It does not revoke the key at OpenAI or the phone provider; the page links to where to revoke it, such as platform.openai.com/api-keys.
+- A saved key shows as **Saved**, with at most its known prefix (`sk-proj-`, `AC`, `PT`); keys are never returned to the browser. A value set in the container's environment overrides `.env` and can only be changed there.
+- Reading the page takes the console's session token; saving and removing take the token and a request from the console's own address, so other websites cannot change keys.
+
+`smitline setup secrets` still works and saves to the same place.
+
+## Starting a meeting manually
 
 ### Configure a meeting
 
 1. Paste the complete Zoom, Teams, or Google Meet invite URL. A URL containing Zoom's `pwd` parameter is supported. Google Meet codes must be the official `xxx-yyyy-zzz` form on `meet.google.com`.
-2. Enter a passcode when Zoom requires one separately.
-3. Choose the name shown in the meeting.
-4. Choose the camera. **Show in the meeting** (default on) publishes a virtual camera tile, and **Turn camera on after joining** starts it on. Add an avatar or logo if you like (PNG, JPEG, WebP, or SVG up to 80 KB). Task text is never shown.
-5. Optionally add short meeting guidance: the agent's role, terminology, response style, or meeting-specific boundaries. Do not use it for credentials.
-6. For a Teams or Google Meet meeting that needs an account, connect one first; see [meeting adapters](meeting-adapters.md).
-7. Run the checks, resolve any reported issue, and start Smitline.
+2. Say what the meeting should achieve (**Objective**). The Meetings page shows whether it got there.
+3. Enter a passcode when Zoom requires one separately.
+4. Choose the name shown in the meeting.
+5. Choose the camera. **Show in the meeting** (default on) publishes a virtual camera tile, and **Turn camera on after joining** starts it on. Add an avatar or logo if you like (PNG, JPEG, WebP, or SVG up to 80 KB). Task text is never shown.
+6. Optionally add short meeting guidance: the agent's role, terminology, response style, or meeting-specific boundaries. Do not use it for credentials.
+7. For a Teams or Google Meet meeting that needs an account, connect one first; see [meeting adapters](meeting-adapters.md).
+8. Run the checks, resolve any reported issue, and start Smitline. The meeting starts through the calls API with your objective and guidance as its brief; the saved reference context follows once the meeting exists. **Stop Smitline** ends the call, which then writes its result.
 
 The checks validate the meeting settings, the OpenAI key, and Docker availability. The first meeting downloads the meeting image (about 1.8 GB), which takes a few minutes; from a checkout it is built instead.
 
@@ -46,7 +64,7 @@ The platform may display Smitline as unmuted because the runtime keeps the brows
 
 ### Review local records
 
-Each meeting creates a directory under `recordings/` in the meeting data (`/data/meetings` in the volume, `meeting-runtime/` in a checkout) containing the incremental transcript and event trace. **Transcripts** lists recent meetings, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
+Each meeting creates a directory under `recordings/` in the meeting data (`/data/meetings` in the volume, `meeting-runtime/` in a checkout) containing the incremental transcript and event trace. The Meetings page shows each meeting's transcript and handoff. The **Transcripts** tab of the manual page still lists every recording there, including meetings started by hand before they went through the calls API, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
 
 The transcript records recognized and generated text. It is not a raw-audio archive and may include a generated response that was muted or interrupted before participants heard it.
 

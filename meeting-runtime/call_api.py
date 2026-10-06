@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from call_brief import BriefIncomplete, available_voices
+from call_brief import CHANNELS, BriefIncomplete, available_voices
 from call_service import CallError
 from call_store import TERMINAL, CallNotFound
 
@@ -59,7 +59,13 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             tz_offset = max(-840, min(int(request.query.get('tzOffset', '0')), 840))
         except ValueError:
             return _error(422, 'invalid_request', 'tzOffset must be minutes east of UTC')
+        channel = request.query.get('channel')
+        if channel is not None and channel not in CHANNELS:
+            return _error(422, 'invalid_request', f'channel must be one of: {", ".join(CHANNELS)}')
         records = service.list(owner=await owner(request), limit=None)
+        if channel:
+            # The console lists phone calls and meetings on separate pages, each with its own totals.
+            records = [record for record in records if record.get('channel') == channel]
         service.backfill_prices(records)
         return public_json({'calls': records[:limit],
                             'spend': service.spend(records, tz_offset_minutes=tz_offset)})

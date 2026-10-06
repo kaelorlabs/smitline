@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The console's **Meetings** page is now a dashboard like Calls: totals, recent meetings with whether each met its goal, and each meeting's summary, decisions, action items, and full transcript. Starting a meeting by hand moved to **Start a meeting manually**, which now goes through the calls API with an objective, so those meetings are listed too. **Calls** shows phone calls only.
+- New **Account** page in the console: the setup checklist, and replacing or removing each key and setting, with the check run again after each save. Keys are never shown; removing one says where to revoke it.
+- Calls API: `GET /v1/calls?channel=phone|meeting`, connected `seconds` in the daily spend, and an optional meeting-only `camera` in the brief.
 - Setup offers a phone-calls-only start without the Docker socket, says plainly what mounting the socket allows, and tells agents to let the user run the command when their safeguards block it.
 
 ## 0.1.1 — 2026-10-01

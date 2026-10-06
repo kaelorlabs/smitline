@@ -24,6 +24,8 @@ button:disabled { cursor:not-allowed; opacity:.45}
 main { max-width:1280px; margin:auto; padding:32px 40px 64px}
 .hero { display:flex; justify-content:space-between; align-items:center; margin-bottom:28px}
 .eyebrow { font-size:12px; color:var(--muted); margin:0 0 18px}
+.back-link { color:var(--accent); text-decoration:none; font-weight:500}
+.back-link:hover { text-decoration:underline}
 h1 { font-size:28px; line-height:1.25; letter-spacing:-.8px; font-weight:600; margin:0 0 8px}
 .hero-copy { font-size:14px; color:var(--muted); margin:0; line-height:1.6}
 .local-badge,.section-tag { font-size:12px; color:var(--muted); padding:5px 9px; background:var(--soft); border:1px solid var(--line); border-radius:5px}

@@ -596,6 +596,23 @@ class MeetingPayloadTests(unittest.TestCase):
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
             "objective": "Take notes"}))
         self.assertEqual(set(plain), {"meetingUrl", "context", "onBehalfOf"})
+        avatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4='
+        shown = CallBrief.from_dict({
+            "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
+            "objective": "Take notes", "camera": {"enabled": True, "defaultOn": False, "avatarDataUri": avatar}})
+        camera = meeting_payload(shown)["camera"]
+        self.assertEqual((camera["enabled"], camera["defaultOn"]), (True, False))
+        # The meeting daemon checks the camera again; the checked avatar must still pass.
+        from visual_presence import parse_camera_settings
+        self.assertEqual(parse_camera_settings(camera), camera)
+        # The stored brief keeps the camera choice but not the image.
+        self.assertEqual(shown.to_dict()["camera"], {"enabled": True, "defaultOn": False})
+        for camera, channel in (({"avatarPath": "/etc/passwd"}, "meeting"), ({"enabled": "yes"}, "meeting"),
+                                ({"enabled": False}, "phone")):
+            with self.subTest(camera=camera, channel=channel), self.assertRaises(ValueError):
+                CallBrief.from_dict({
+                    "channel": channel, "to": "https://zoom.us/j/1234567890" if channel == "meeting" else "+14155550142",
+                    "onBehalfOf": "Sam", "objective": "Take notes", "camera": camera})
         with self.assertRaises(ValueError):
             CallBrief.from_dict({
                 "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",

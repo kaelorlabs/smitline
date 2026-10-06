@@ -37,7 +37,8 @@
         "operationId": "listCalls",
         "parameters": [
           { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
-          { "name": "tzOffset", "in": "query", "description": "The reader's minutes east of UTC; spend is grouped by their local day.", "schema": { "type": "integer", "minimum": -840, "maximum": 840, "default": 0 } }
+          { "name": "tzOffset", "in": "query", "description": "The reader's minutes east of UTC; spend is grouped by their local day.", "schema": { "type": "integer", "minimum": -840, "maximum": 840, "default": 0 } },
+          { "name": "channel", "in": "query", "description": "Only phone calls or only meetings: the calls and the spend then cover that channel alone.", "schema": { "type": "string", "enum": ["phone", "meeting"] } }
         ],
         "responses": {
           "200": { "description": "Calls", "content": { "application/json": { "schema": { "type": "object", "properties": { "calls": { "type": "array", "items": { "$ref": "#/components/schemas/Call" } }, "spend": { "$ref": "#/components/schemas/Spend" } }, "required": ["calls", "spend"] } } } }
@@ -207,7 +208,16 @@
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
           "record": { "type": "boolean", "description": "Phone only: record this call in the owner's phone account. The assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
           "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
-          "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } }
+          "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
+          "camera": {
+            "type": "object", "additionalProperties": false,
+            "description": "Meetings only: Smitline's virtual camera tile. Defaults to shown and on. The avatar image is not kept in the stored brief.",
+            "properties": {
+              "enabled": { "type": "boolean", "description": "Show the camera tile in the meeting." },
+              "defaultOn": { "type": "boolean", "description": "Turn the camera on after joining." },
+              "avatarDataUri": { "type": "string", "description": "A PNG, JPEG, WebP, or SVG data: URI of up to 80 KB shown in the tile." }
+            }
+          }
         }
       },
       "SessionContext": {
@@ -373,7 +383,8 @@
             "total": { "type": "number" },
             "phone": { "type": "number" },
             "openai": { "type": "number" },
-            "estimated": { "type": "boolean" }
+            "estimated": { "type": "boolean" },
+            "seconds": { "type": "integer", "description": "Connected time of those calls, in seconds." }
           } } }
         }
       },

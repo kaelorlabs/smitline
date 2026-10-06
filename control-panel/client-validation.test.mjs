@@ -6,6 +6,7 @@ import { clientMeetingErrors, createStartLock } from './client-validation.mjs';
 test('client validation blocks empty or non-HTTPS required fields', () => {
   assert.deepEqual(clientMeetingErrors({ meetingUrl: '', participantName: '' }), {
     meetingUrl: 'Paste a Zoom, Teams, or Google Meet invitation.',
+    objective: 'Say what this meeting should achieve.',
     participantName: 'Enter the name that should appear in the meeting.',
   });
   assert.equal(
@@ -20,6 +21,7 @@ test('client validation blocks empty or non-HTTPS required fields', () => {
     clientMeetingErrors({
       meetingUrl: 'https://us05web.zoom.us/j/123456789',
       participantName: 'Smitline',
+      objective: 'Take notes on the launch plan.',
     }),
     {},
   );

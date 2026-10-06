@@ -49,6 +49,8 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 }
 ```
 
+A meeting brief may also set `camera` (meetings only): `{ "enabled": true, "defaultOn": true, "avatarDataUri": "data:image/png;base64,..." }`. `enabled` shows Smitline's virtual camera tile, `defaultOn` turns it on after joining (both default to `true`), and the avatar is a PNG, JPEG, WebP, or SVG of up to 80 KB. The stored brief keeps `enabled` and `defaultOn` but not the image.
+
 Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now. `record: true` (phone only) records the call in the owner's phone account; see [recording](phone.md#how-a-call-runs).
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
@@ -126,7 +128,7 @@ Every finished call carries `cost`, in US dollars:
 - **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`); `COLLEAGUE_PHONE_PRICE_PER_MINUTE` sets the estimate's rate. A handed-over call's second leg, to your phone, is not included.
 - **OpenAI:** GPT-Live seconds, and the background and summary models' tokens (cached input and web searches included), priced from the table in `call_costs.py`. OpenAI does not bill per call, so these amounts are calculated, not billed. A model with no known price is listed in `unpriced` and left out of the total. A call keeps the cost it was given when it ended; update the table when prices change.
 
-`GET /v1/calls` also returns `spend`: finished calls' totals per day, in the reader's time zone when `tzOffset` (minutes east of UTC) is given. The console's Calls page shows today, this month, all time, and the average per call, and for each call its brief, result, cost, and transcript.
+`GET /v1/calls` also returns `spend`: finished calls' totals and connected `seconds` per day, in the reader's time zone when `tzOffset` (minutes east of UTC) is given. `channel=phone` or `channel=meeting` limits both the calls and the spend to one kind. The console's Calls and Meetings pages show today, this month, all time, and the average per call or meeting, and for each one its brief, result, cost, and transcript.
 
 ## Delivery
 

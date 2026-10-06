@@ -78,9 +78,30 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .connection .dot { width: 7px; height: 7px; border-radius: 50%; background: #92949e; flex-shrink: 0; }
 .connection.live .dot { background: #2f9e62; }
 .connection.down .dot { background: #d04a57; }
+.account-link { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.account-link:hover { color: var(--ink); background: var(--soft); }
+.account-link[aria-current="page"] { color: var(--ink); background: var(--select); }
+.account-mark { width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); position: relative; flex-shrink: 0; }
+.account-mark::before { content: ""; position: absolute; left: 7px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.account-mark::after { content: ""; position: absolute; left: 4px; top: 13px; width: 14px; height: 6px; border-radius: 7px 7px 2px 2px; background: var(--accent); }
+
+/* Wide screens: the bar becomes a sidebar, with Account at its foot. */
+@media (min-width: 1000px) {
+  .shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); grid-template-rows: 1fr auto; }
+  .topbar { grid-row: 1 / 3; position: sticky; top: 0; height: 100vh; flex-direction: column; align-items: stretch; gap: 2px; padding: 20px 12px; border-bottom: 0; border-right: 1px solid var(--line); }
+  .brand { padding: 0 10px 22px; }
+  .topnav { flex-direction: column; gap: 2px; margin: 0; }
+  .topnav a, .account-link { min-height: 40px; padding: 0 10px; font-size: 14px; }
+  .connection { margin-top: auto; padding: 0 10px 10px; }
+  main, footer { grid-column: 2; }
+}
 
 main { flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; padding: 32px 40px 64px; }
 .hero { margin-bottom: 28px; }
+.hero-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+a.button { text-decoration: none; }
+.section-tools { display: inline-flex; align-items: center; gap: 12px; }
+.small-button { min-height: 32px; padding: 4px 12px; font-size: 12px; }
 .eyebrow { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
 h1 { font-size: 28px; letter-spacing: -0.8px; font-weight: 600; margin-bottom: 8px; }
 .hero-copy { color: var(--muted); max-width: 640px; line-height: 1.6; }
@@ -90,6 +111,7 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 .banner.info { border-color: var(--line); border-left-color: var(--accent); background: var(--accent-soft); }
 .banner.bad { border-color: var(--bad-line); border-left-color: var(--bad); background: var(--bad-bg); }
 .banner.bad strong { color: var(--bad); }
+p.banner { display: block; }
 
 /* What calls have cost: four figures above the list. */
 .spend { margin-bottom: 28px; display: grid; gap: 10px; }
@@ -250,6 +272,47 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 .transcript .text { overflow-wrap: anywhere; }
 .jump { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600; box-shadow: 0 2px 8px rgb(0 0 0 / 0.18); }
 
+/* Account: the setup checklist, then each key and setting. */
+.setup-card { display: grid; gap: 14px; margin-bottom: 32px; }
+.setup-card:focus { outline: none; }
+.setup-title { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+.setup-fields { display: grid; gap: 12px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; }
+.check-group h3 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 0 4px; }
+.check-group:first-child h3 { padding-top: 0; }
+.check { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.check-mark { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; background: var(--neutral-bg); color: var(--neutral); }
+.check-mark.good { background: var(--good-bg); color: var(--good); }
+.check-mark.warn { background: var(--warn-bg); color: var(--warn); }
+.check-mark.bad { background: var(--bad-bg); color: var(--bad); }
+.check-body { display: grid; gap: 2px; min-width: 0; }
+.check-label { font-weight: 600; }
+.check-detail { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.check.warn .check-detail { color: var(--warn); }
+.check.bad .check-detail { color: var(--bad); }
+.check-fix { font-size: 12px; color: var(--muted); }
+.field-groups { display: grid; gap: 16px; }
+.field-group { padding: 8px 20px; }
+.field-group h3, .field-group summary { font-size: 14px; font-weight: 600; padding: 10px 0; }
+.field-group summary { cursor: pointer; min-height: 40px; }
+.field-list { list-style: none; margin: 0; padding: 0; }
+.field-row { display: grid; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.field-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.field-name { display: grid; gap: 2px; min-width: 0; }
+.field-label { font-weight: 600; }
+.field-state { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.field-state.saved { color: var(--ink); }
+.field-buttons { display: flex; gap: 8px; }
+.field-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field-form input { flex: 1 1 280px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.field-form input:focus-visible { outline-offset: 0; border-color: var(--accent); }
+.field-hint { flex-basis: 100%; }
+.field-note { font-size: 13px; padding: 8px 12px; border-radius: 6px; background: var(--neutral-bg); color: var(--neutral); overflow-wrap: anywhere; }
+.field-note.good { background: var(--good-bg); color: var(--good); }
+.field-note.bad { background: var(--bad-bg); color: var(--bad); }
+.field-note a { color: inherit; font-weight: 600; }
+.remove-box .actions { margin-top: 4px; }
+
 /* Narrow screens: one pane at a time. */
 @media (max-width: 760px) {
   .topbar { padding: 0 16px; height: 60px; gap: 12px; }
@@ -281,4 +344,6 @@ footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; d
 @media (max-width: 480px) {
   .brand-name { display: none; }
   .connection { font-size: 11px; }
+  .connection #connection-label { display: none; }
+  .account-link { padding: 0 6px; }
 }

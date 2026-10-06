@@ -19,15 +19,16 @@ Admit **Smitline** if it enters the waiting room. It unmutes its meeting microph
 
 ## The meetings console
 
-Open [http://127.0.0.1:8095](http://127.0.0.1:8095); the `smitline` container serves it. The **Meetings** tab starts a meeting by hand: paste the meeting link, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop Smitline and follow its live status. Past meetings keep their transcript and handoff. The **Calls** tab lists phone calls and meetings started through the calls API. See the [control panel guide](control-panel.md) and [meeting adapters](meeting-adapters.md).
+Open [http://127.0.0.1:8095](http://127.0.0.1:8095); the `smitline` container serves it. **Meetings** lists the meetings Smitline joined, with whether each met its goal, its summary, decisions, action items, and full transcript. **Start a meeting manually** starts one by hand: paste the meeting link and say what it should achieve, add private reference context from text or files (TXT, Markdown, CSV, JSON, YAML, PDF, DOCX), choose the camera, connect a Microsoft or Google account when a Teams or Meet meeting needs one, then start and stop Smitline and follow its live status. **Calls** lists phone calls, and **Account** holds your keys and the setup checklist. See the [control panel guide](control-panel.md) and [meeting adapters](meeting-adapters.md).
 
 The console talks to the **loopback daemon** in the same container. API keys are never returned to the browser.
 
 | Local interface | Address |
 | --- | --- |
-| Meetings console | http://127.0.0.1:8095 |
+| Meetings console | http://127.0.0.1:8095 (start one by hand: /meetings/new) |
 | MCP for local agents (bearer token from `smitline setup register`) | http://127.0.0.1:8095/mcp |
 | Calls (live transcript, results, costs, take over) | http://127.0.0.1:8095/calls |
+| Account (keys and setup checklist) | http://127.0.0.1:8095/setup |
 | Meeting browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
 | Meeting status and transcript | http://127.0.0.1:8094/health |
 | Runtime daemon (loopback) | http://127.0.0.1:8765 |

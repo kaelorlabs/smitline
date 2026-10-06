@@ -23,7 +23,7 @@ Loopback daemon 127.0.0.1:8765
                                           ◄──► Zoom / Teams / Meet web client
                                           ◄──► GPT-Live (one gpt-live-1 session)
         ▲
-Local console 127.0.0.1:8095 (Meetings and Calls tabs, local MCP endpoint)
+Local console 127.0.0.1:8095 (Meetings, Calls, and Account, local MCP endpoint)
 ```
 
 A phone call and a meeting are both **calls**: an agent sends a brief to `/v1/calls` with channel `phone` or `meeting`, and reads the same kind of result. A meeting call starts an ordinary daemon meeting underneath. The console uses the small `/v1/meetings` API directly when you start a meeting by hand.
