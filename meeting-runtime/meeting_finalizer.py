@@ -19,6 +19,35 @@ def archive_dir(runtime_root, meeting_id):
     return recordings_root(runtime_root) / require_meeting_id(meeting_id)
 
 
+def meeting_transcript(runtime_root, meeting_id):
+    """A meeting's transcript from its archive, as call transcript entries.
+
+    The bridge logs GPT-Live's transcript in pieces (a word, a comma); pieces in a row from one
+    side join into one line. The assistant is 'agent'; everyone in the meeting is 'meeting'.
+    """
+    try:
+        raw = (archive_dir(runtime_root, meeting_id) / 'events.jsonl').read_text(encoding='utf-8')
+    except (OSError, ValueError):
+        return []
+    lines = []
+    for row in raw.splitlines():
+        try:
+            event = json.loads(row)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get('type') != 'transcript':
+            continue
+        text = str(event.get('text') or '')
+        if not text.strip():
+            continue
+        speaker = 'agent' if event.get('speaker') == 'agent' else 'meeting'
+        if lines and lines[-1]['speaker'] == speaker:
+            lines[-1]['text'] += text
+        else:
+            lines.append({'speaker': speaker, 'text': text})
+    return [{'speaker': line['speaker'], 'text': ' '.join(line['text'].split())} for line in lines]
+
+
 def _write_json(path, payload):
     reject_secrets(payload, path.name)
     path.parent.mkdir(parents=True, exist_ok=True)

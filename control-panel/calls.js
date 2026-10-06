@@ -755,7 +755,9 @@ function renderHandoff(call) {
 function renderTranscript(call) {
   const list = $('transcript');
   const archived = state.archive?.for === call.id ? state.archive.lines : [];
-  const lines = call.result?.transcript?.length ? call.result.transcript : (state.lines.length ? state.lines : archived);
+  const recorded = call.result?.transcript?.length ? call.result.transcript : state.lines;
+  // A call keeps the start and end of a long meeting; its archive keeps every line.
+  const lines = archived.length > recorded.length ? archived : recorded;
   const live = !TERMINAL.has(call.status);
   const fresh = state.renderedFor !== call.id;
   // Announce only lines added while you follow a live call, never the whole transcript.

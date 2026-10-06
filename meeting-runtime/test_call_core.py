@@ -283,6 +283,10 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['actionItems'], ['Casey: Send the deck'])
         self.assertEqual(result['openQuestions'], ['Who presents?'])
         self.assertEqual(result['durationSeconds'], 600)
+        # Nothing judged the objective, so a handoff alone is never "achieved".
+        self.assertEqual(result_from_handoff({'summary': 'Agreed.', 'decisions': ['Ship Friday']})['outcome'], 'partial')
+        self.assertEqual(result_from_handoff({'summary': 'Meeting ended (finished) with 0 transcript entries.'})['outcome'],
+                         'not_reached')
 
     async def test_summarizer_request_and_parse(self):
         captured = {}
@@ -307,6 +311,31 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['transcript'][1]['speaker'], 'other')
         self.assertNotIn('doNotCall', result)
         self.assertIn('doNotCall', RESULT_SCHEMA['required'])
+
+    async def test_a_meeting_is_summarized_against_its_objective(self):
+        captured = {}
+
+        async def post(payload):
+            captured.update(payload)
+            return {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({
+                'outcome': 'achieved', 'summary': 'The team agreed to two PRs.', 'details': [],
+                'decisions': ['Split the work into two PRs'], 'actionItems': ['Note the decision in the PR'],
+                'openQuestions': [], 'doNotCall': True,
+            })}]}], 'usage': {}}
+        transcript = [{'speaker': 'meeting', 'text': 'Two PRs works for me.'},
+                      {'speaker': 'agent', 'text': 'I will note that in the PR.'}]
+        result = await ResponsesSummarizer('sk-test', post=post).summarize(
+            {'channel': 'meeting', 'objective': 'Agree how to split the work', 'onBehalfOf': 'Robin'},
+            transcript, duration_seconds=268)
+        self.assertIn('video meeting', captured['instructions'])
+        self.assertIn('never list a question that was answered', captured['instructions'])
+        self.assertIn('Participants: Two PRs works for me.', captured['input'])
+        self.assertIn('Attending on behalf of: Robin', captured['input'])
+        self.assertEqual(result['decisions'], ['Split the work into two PRs'])
+        self.assertEqual(result['source'], 'summary_model')
+        self.assertEqual(len(result['transcript']), 2)
+        # Nobody can ask a meeting not to call again.
+        self.assertNotIn('doNotCall', result)
 
     async def test_summarizer_failures(self):
         async def bad(payload):

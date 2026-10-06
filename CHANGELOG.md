@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Meeting results are now summarized from what was said, as phone calls are: the summary model judges the objective against the meeting's transcript and writes the summary, decisions, action items, and the questions still open. Before, every meeting with a handoff came back `achieved`, with the objective as its summary and the brief's questions as open questions, and without its transcript. A meeting where nothing was said is never `achieved`.
 - The console's **Meetings** page is now a dashboard like Calls: totals, recent meetings with whether each met its goal, and each meeting's summary, decisions, action items, and full transcript. Starting a meeting by hand moved to **Start a meeting manually**, which now goes through the calls API with an objective, so those meetings are listed too. **Calls** shows phone calls only.
 - New **Account** page in the console: the setup checklist, and replacing or removing each key and setting, with the check run again after each save. Keys are never shown; removing one says where to revoke it.
 - Calls API: `GET /v1/calls?channel=phone|meeting`, connected `seconds` in the daily spend, and an optional meeting-only `camera` in the brief.
