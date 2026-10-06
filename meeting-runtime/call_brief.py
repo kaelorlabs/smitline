@@ -280,7 +280,12 @@ def default_voice(environ=None):
     return voice if voice in available_voices(env) else DEFAULT_VOICE
 
 
-def disclosure_line(brief, name=None):
-    """How a phone call opens: a normal hello that says whose AI assistant is calling."""
+def opening_line(brief, name=None):
+    """How a phone call opens: a normal hello naming who the call is for. The reason follows."""
     hello = f'Hey {name}' if name else 'Hi'
-    return f"{hello}, this is {brief.on_behalf_of}'s AI assistant."
+    return f"{hello}, I'm calling on behalf of {brief.on_behalf_of} about"
+
+
+def disclosure_line(brief):
+    """The AI disclosure, said in the agent's second turn, before it asks for anything."""
+    return f"I'm {brief.on_behalf_of}'s AI assistant"

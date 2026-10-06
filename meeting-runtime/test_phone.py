@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import parse_qsl
 
 from aiohttp import WSMsgType
@@ -19,7 +20,8 @@ from call_store import CallStore
 from phone_gateway import create_gateway_app
 from phone_line import OutputPacer, PhoneLine, ProviderClock, UtteranceJoiner, inbound_brief
 from phone_prompts import (
-    backend_instructions, delegation_config, discloses, mentions_ai, voice_instructions,
+    backend_instructions, delegation_config, discloses, goodbye_cue, mentions_ai, opening_cue,
+    voice_instructions,
 )
 from tunnel import PublicUrl, TunnelError, configured_url
 from twilio_client import (
@@ -244,7 +246,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config['audio']['output'], {'voice': 'quartz'})
         self.assertEqual(config['delegation']['type'], 'responses')
         self.assertEqual(config['delegation']['responses']['tools'][0]['name'], 'end_call')
-        self.assertIn("Hi, this is Robin's AI assistant.", config['instructions'])
+        self.assertIn("Hi, I'm calling on behalf of Robin about ...", config['instructions'])
         self.assertEqual(self.h.store.get(record['id'])['status'], 'in_progress')
 
         live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
@@ -296,7 +298,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
         events = self.h.service.events(record['id'])
         disclosure = [e for e in events if e['type'] == 'call.disclosure']
-        self.assertEqual(disclosure[0]['data'], {'verified': True, 'attempt': 1})
+        self.assertEqual(disclosure[0]['data'], {'verified': True})
         self.assertIs(done['result']['disclosureVerified'], True)
 
     async def test_unanswered_call_needs_no_summary(self):
@@ -327,6 +329,10 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
             ('Hi, this is an assistant calling for Robin.', 'Robin', False),
             ("Hi, I'm an AI calling about a table.", 'Robin', False),
             ("Hi, I'm an AI calling about the same thing.", 'Sam', False),
+            ("Great. I'm Robin's AI assistant, by the way.", 'Robin', True),
+            ('Robin is building an AI app that makes phone calls.', 'Robin', False),
+            ("I'm calling about Robin's AI project.", 'Robin', False),
+            ('Robin thinks AI is the future.', 'Robin', False),
         ]
         for text, name, expected in said:
             with self.subTest(text=text):
@@ -338,29 +344,99 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('rehearsal', backend)
         self.assertNotIn('rehearsal', backend_instructions(CallBrief.from_dict(brief())))
 
-    async def test_missing_disclosure_is_corrected(self):
+    async def test_the_disclosure_can_come_later_in_the_call(self):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
         live.push({'type': 'session.output_transcript.delta',
-                   'delta': 'Hello there, I would like to book a table for four people tonight.',
-                   'start_ms': 0, 'end_ms': 900})
-        live.push({'type': 'session.input_transcript.delta', 'delta': 'Who is this?', 'start_ms': 1000,
-                   'end_ms': 1400})
-        await until(lambda: any(kind == 'session.instructions.append' for kind, _ in live.appends))
-        # The next utterance is checked again; a second miss is final.
+                   'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                   'start_ms': 0, 'end_ms': 2000})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Sure, go ahead.', 'start_ms': 2200,
+                   'end_ms': 2800})
         live.push({'type': 'session.output_transcript.delta',
-                   'delta': 'Sorry about that, I would just like a table for four people tonight.',
-                   'start_ms': 3000, 'end_ms': 3900})
-        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay.', 'start_ms': 5000,
-                   'end_ms': 5400})
-        await until(lambda: sum(e['type'] == 'call.disclosure'
-                                for e in self.h.service.events(record['id'])) == 2)
+                   'delta': 'Would you have anything around seven?', 'start_ms': 3000, 'end_ms': 4000})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Yes, we do.', 'start_ms': 4200,
+                   'end_ms': 4600})
+        await asyncio.sleep(0.2)
+        self.assertFalse(any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Great. I'm Robin's AI assistant, by the way. Can you hold it until eight?",
+                   'start_ms': 4800, 'end_ms': 7000})
+        await until(lambda: any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
+        disclosure = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
+        self.assertEqual(disclosure, [{'verified': True}])
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        await until(lambda: ws.closed)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertFalse(any(kind == 'session.instructions.append' for kind, _ in live.appends))
+        self.assertIs(done['result']['disclosureVerified'], True)
+
+    async def test_a_missing_disclosure_is_said_before_hanging_up(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                   'start_ms': 0, 'end_ms': 2000})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Sure, go ahead.', 'start_ms': 2200,
+                   'end_ms': 2800})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': 'Perfect, a table for four at seven. Thanks so much!', 'start_ms': 3000,
+                   'end_ms': 4500})
+        live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                'arguments': '{"reason": "completed"}'}}})
+        await until(lambda: any('you have not yet told them' in text for _kind, text in live.appends))
+        self.assertFalse(ws.closed)
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Oh, and just so you know, I'm Robin's AI assistant. Bye!", 'start_ms': 5000,
+                   'end_ms': 6500})
+        await until(lambda: ws.closed)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        self.assertEqual(done['endReason'], 'hangup')
+        self.assertIs(done['result']['disclosureVerified'], True)
+
+    async def test_a_call_that_ends_without_the_disclosure_reports_it(self):
+        with mock.patch('phone_line.DISCLOSE_BEFORE_END_SECONDS', 0.2):
+            record, session = await self.h.dial()
+            ws, live, task = await self.h.connect(record, session)
+            live.push({'type': 'session.started', 'session': {}})
+            live.push({'type': 'session.output_transcript.delta',
+                       'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                       'start_ms': 0, 'end_ms': 2000})
+            live.push({'type': 'session.input_transcript.delta', 'delta': 'Sure, go ahead.', 'start_ms': 2200,
+                       'end_ms': 2800})
+            live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
+                'type': 'response.output_item.done', 'item': {
+                    'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
+                    'arguments': '{"reason": "completed"}'}}})
+            await until(lambda: ws.closed)
+            await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5)
+        disclosure = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
+        self.assertEqual(disclosure, [{'verified': False}])
+        self.assertIs(done['result']['disclosureVerified'], False)
+        # It was asked to say it before the goodbye; the hang-up went ahead without it.
+        self.assertTrue(any('you have not yet told them' in text for _kind, text in live.appends))
+
+    async def test_hanging_up_on_the_opening_means_no_disclosure(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Hi, I'm calling on behalf of Robin about a table for four tonight.",
+                   'start_ms': 0, 'end_ms': 2000})
+        await asyncio.sleep(0.2)
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
         done = await self.h.service.wait(record['id'], timeout=5)
         self.assertEqual(done['endReason'], 'remote_hangup')
-        self.assertTrue(live.close_requested)
         self.assertIs(done['result']['disclosureVerified'], False)
 
     async def test_the_session_gets_the_three_levels_of_context(self):
@@ -382,7 +458,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
-        self.assertIn('"Hey Sam, this is Robin\'s AI assistant." Then stop and let them answer.', instructions)
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..." with the reason in place of '
+                      'the dots. Do not say that you are an AI in that hello.', instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
         self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
@@ -420,7 +497,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
                    'delta': "I'm an AI assistant calling on behalf of Robin.", 'start_ms': 1600, 'end_ms': 3500})
         await until(lambda: any(e['type'] == 'call.disclosure' for e in self.h.service.events(record['id'])))
         disclosure = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
-        self.assertEqual(disclosure, [{'verified': True, 'attempt': 1}])
+        self.assertEqual(disclosure, [{'verified': True}])
         self.assertFalse(any(kind == 'session.instructions.append' for kind, _ in live.appends))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -738,8 +815,14 @@ class PromptTests(unittest.TestCase):
         parsed = CallBrief.from_dict(brief(mayAgreeTo=['6:30 to 7:30pm'], mustNotShare=['card number'],
                                            language='es'))
         text = voice_instructions(parsed)
-        self.assertIn("Hi, this is Robin's AI assistant.", text)
-        self.assertNotIn('on behalf of', text)
+        self.assertIn("Hi, I'm calling on behalf of Robin about ...", text)
+        self.assertIn('Do not say that you are an AI in that hello.', text)
+        self.assertIn("At a natural moment during the call, say plainly that you are Robin's AI "
+                      'assistant', text)
+        self.assertIn('never let the call end without it', text)
+        self.assertNotIn('call is recorded', text)
+        self.assertIn('Also say in your first sentence that the call is recorded.',
+                      voice_instructions(parsed, recording=True))
         self.assertIn('- 6:30 to 7:30pm', text)
         self.assertIn('- card number', text)
         self.assertIn('language with tag es', text)
@@ -749,6 +832,23 @@ class PromptTests(unittest.TestCase):
         self.assertEqual([tool.get('name', tool['type']) for tool in config['responses']['tools']],
                          ['end_call', 'web_search'])
         self.assertEqual(config['responses']['model'], 'gpt-5.6-luna')
+
+    def test_the_opening_cue_says_who_and_why_and_the_ai_part_follows(self):
+        parsed = CallBrief.from_dict(brief())
+        cue = opening_cue(parsed, name='Sam')
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..."', cue)
+        self.assertIn('Do not say that you are an AI in this hello; say it later in the call.', cue)
+        self.assertNotIn('recorded', cue)
+        self.assertIn('what about, and that the call is recorded,', opening_cue(parsed, recording=True))
+        self.assertEqual(opening_cue(parsed, inbound=True, recording=True),
+                         "Greet the caller: say they have reached Robin's AI assistant. "
+                         'Say that the call is recorded.')
+
+    def test_the_goodbye_asks_for_a_missing_disclosure(self):
+        parsed = CallBrief.from_dict(brief())
+        self.assertEqual(goodbye_cue(parsed, 'Say goodbye.', disclosed=True), 'Say goodbye.')
+        self.assertEqual(goodbye_cue(parsed, 'Say goodbye.', disclosed=False),
+                         "Say goodbye. Before you say goodbye, tell them that you are Robin's AI assistant.")
 
     def test_mentions_ai(self):
         self.assertTrue(mentions_ai("Hi, I'm an AI assistant calling"))
@@ -1742,7 +1842,7 @@ class RealSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done['usage']['voiceSeconds'], 7)
         self.assertEqual([line['speaker'] for line in done['result']['transcript']], ['other', 'agent'])
         disclosure = [e for e in self.h.service.events(record['id']) if e['type'] == 'call.disclosure']
-        self.assertEqual(disclosure[0]['data'], {'verified': True, 'attempt': 1})
+        self.assertEqual(disclosure[0]['data'], {'verified': True})
 
 
 if __name__ == '__main__':

@@ -413,7 +413,7 @@ export async function setupStatus({
   }));
   checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
     detail: present(env.COLLEAGUE_OWNER_NAME) ? env.COLLEAGUE_OWNER_NAME : 'missing',
-    ask: "Please add your name on the setup page; every call opens with \"this is [your name]'s AI assistant\".",
+    ask: "Please add your name on the setup page; every call opens with \"I'm calling on behalf of [your name]\".",
     fix: 'smitline setup secrets (or: smitline setup set COLLEAGUE_OWNER_NAME "<name>")',
   }));
 
@@ -429,7 +429,7 @@ export async function setupStatus({
   if (accountSaved && verify) account = await verifyPhoneAccount(env, fetchImpl, provider);
   checks.push(check('phone_account', accountSaved ? `${providerName} account` : 'Phone provider account', account.ok, {
     group: 'phone', required: false, detail: account.detail || (accountSaved ? 'saved' : 'not set up'),
-    ask: 'Do you want phone calls too? SignalWire has a free trial that works with Smitline: sign up at https://signalwire.com, then enter its details on the setup page.',
+    ask: 'Do you want phone calls too? SignalWire works with Smitline: sign up at https://signalwire.com (free, no card), then enter its details on the setup page. Its free trial calls only numbers you verify in SignalWire, up to 10; adding a card and $5 of credit lets it call anyone (SETUP.md has the steps).',
     fix: account.fix || 'smitline setup secrets',
   }));
   // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else the provider number.
@@ -638,7 +638,7 @@ const REVOKE = {
 // Also the field list of the console's Account page.
 export const FIELDS = [
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, revoke: REVOKE.openai, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
-  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, this is [your name]’s AI assistant.”' },
+  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m calling on behalf of [your name] about…”' },
   { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
   { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
@@ -746,7 +746,7 @@ export function renderSecretsPage(saved, action, message = '', options = {}) {
   const groupTitles = { Required: 'The basics' };
   const groupHints = {
     Required: 'Required for every call and meeting.',
-    'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline.',
+    'Phone calls (optional)': 'Skip the phone sections if you only want Smitline in video meetings. For phone calls, add your number here and one provider below. SignalWire has a free trial that works with Smitline; it calls only numbers you verify in SignalWire (up to 10) until you add a card and $5 of credit.',
     'SignalWire (free trial)': 'Sign up free at https://signalwire.com (no card needed). A trial calls only numbers you verify in SignalWire (Phone Numbers > Verified Caller IDs), up to 10, in the US and Canada. Adding $5 lifts that.',
     'Twilio (upgraded account)': "Twilio's free trial blocks the live call audio Smitline needs, so use Twilio only with an upgraded account.",
     'Remote connector (server mode)': 'Only for running Smitline on a server so cloud agents, such as ChatGPT or Claude on the web, can use it. Most people skip this.',

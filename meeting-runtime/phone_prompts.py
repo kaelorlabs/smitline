@@ -2,7 +2,7 @@
 import re
 import unicodedata
 
-from call_brief import disclosure_line
+from call_brief import disclosure_line, opening_line
 from startup_input import clip_tokens
 
 
@@ -67,7 +67,16 @@ def _who_line(brief, contact, *, inbound):
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
                        boundaries=()):
     who = brief.on_behalf_of
-    disclosure = disclosure_line(brief, greeting_name(contact))
+    # Who and why come first, so the call sounds genuine; the AI part comes later in the call.
+    steps = ('Open the way a person does on the phone: a short hello that says who you are calling '
+             'for and, in a few words, what it is about, for example: '
+             f'"{opening_line(brief, greeting_name(contact))} ..." with the reason in place of the '
+             'dots. Do not say that you are an AI in that hello. Then stop, let them answer, and '
+             'carry on the conversation. At a natural moment during the call, say plainly that you '
+             f'are {who}\'s AI assistant, in your own words, for example: "{disclosure_line(brief)}, '
+             'by the way." A good moment is when you get to what you need from them. It does not '
+             'have to be early, but never let the call end without it. Keep it relaxed rather than '
+             'formal.')
     if inbound:
         opening = (f'You are answering a phone call as the AI assistant of {who}. '
                    f'Start by saying: "Hi, you have reached {who}\'s AI assistant." '
@@ -75,17 +84,11 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
                    'if they want one. Do not promise anything on the owner\'s behalf.')
     elif brief.rehearsal:
         opening = (f'This is a rehearsal. The person on the phone is {who} practicing the other '
-                   'side of the call. Run the call exactly as you would for real, opening the same '
-                   f'way: "{disclosure}"')
+                   f'side of the call. Run the call exactly as you would for real. {steps}')
     else:
-        opening = (f"You are {who}'s AI assistant, making a phone call for them. Open the way a "
-                   'person does on the phone, in two steps. First only a short hello that says who '
-                   f'you are, for example: "{disclosure}" Then stop and let them answer. Once they '
-                   'reply ("hi", "yes?", "what is it about?"), say why you are calling. '
-                   f"Always say that you are {who}'s AI assistant in that first sentence, in plain "
-                   'words, and keep it relaxed rather than formal.')
+        opening = f"You are {who}'s AI assistant, making a phone call for them. {steps}"
     if recording:
-        opening += ' Also say that the call is recorded.'
+        opening += ' Also say in your first sentence that the call is recorded.'
     tone = (f'Tone: {brief.tone}' if brief.tone else
             'Tone: match the relationship: warm and relaxed with friends and family, polite and '
             'efficient with businesses.')
@@ -108,24 +111,26 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'Hand a question to your backend only for a fact you do not have or for careful '
          'reasoning; never for a greeting, a clarification, or repeating yourself. Do not say '
          '"hmm" or "let me check" unless you are really checking.'),
-        ('Boundaries: if anyone asks, say plainly that you are an AI assistant. Never claim to be '
-         f'{who} or a human. Only agree to what is listed above. If asked for something you do '
+        ('Boundaries: if anyone asks whether you are a person, a recording, or an AI, say right away '
+         f'and plainly that you are an AI assistant. Never claim to be {who} or a human. Only agree '
+         'to what is listed above. If asked for something you do '
          f'not know or may not agree to, say you will check with {who} and note it. Never make '
          'up facts, reasons, or plans that the brief does not give; say you do not know and that '
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
         ('Call screening: if an automated assistant answers ("the person you are calling is using '
          'a screening service", "I\'ll see if this person is available"), let it finish. When it asks '
-         f"who is calling and why, say in one sentence that you are {who}'s AI assistant and why "
-         'you are calling, then wait quietly for the person to pick up. When they do, greet them '
-         'and continue normally.'),
+         f'who is calling and why, say in one sentence that you are calling on behalf of {who} and '
+         'why, then wait quietly for the person to pick up. When they do, greet them, say in a few '
+         'words why you are calling, and carry on as usual.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them. If they ask not to be called again, apologize, say they will not be called again, '
          'say goodbye, and end the call.'),
         ('Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
-         f'the disclosure, why you called, and that they can reply to {who} directly. Never ask them '
-         'to call this number back, and share no private details. If a person picks up while you '
+         f"who you are calling for and why, that you are {who}'s AI assistant, and that they can "
+         f'reply to {who} directly. Never ask them to call this number back, and share no private '
+         'details. If a person picks up while you '
          'are leaving the message, stop and talk with them. End the call with the reason '
          'voicemail_left only after leaving a message on a recording. If a recording says the '
          'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
@@ -176,21 +181,26 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
     }
 
 
-def opening_cue(brief, *, inbound=False, name=None):
+def opening_cue(brief, *, inbound=False, name=None, recording=False):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
+    who = brief.on_behalf_of
     if inbound:
-        return f"Greet the caller: say they have reached {brief.on_behalf_of}'s AI assistant."
-    return (f"The call just connected. Say only a short, relaxed hello that says you are "
-            f'{brief.on_behalf_of}\'s AI assistant, like "{disclosure_line(brief, name)}", then stop '
-            'and wait for them to answer before you say why you are calling. If an automated '
-            'assistant or voicemail greeting is still talking, let it finish first.')
+        recorded = ' Say that the call is recorded.' if recording else ''
+        return f"Greet the caller: say they have reached {who}'s AI assistant.{recorded}"
+    # Several US states require consent before recording, so that notice cannot wait.
+    recorded = ', and that the call is recorded' if recording else ''
+    return ('The call just connected. Say only a short, relaxed hello that says you are calling on '
+            f'behalf of {who} and, in a few words, what about{recorded}, like '
+            f'"{opening_line(brief, name)} ...", then stop and wait for them to answer. Do not say '
+            'that you are an AI in this hello; say it later in the call. If an automated assistant '
+            'or voicemail greeting is still talking, let it finish first.')
 
 
 def machine_hint(brief):
     """Sent when the phone network guesses that a machine answered; it is often wrong."""
     return ('The phone network guesses that a machine may have answered: a voicemail system or an '
             'automated call screener. If a person is talking with you, ignore this and carry on. If '
-            'it is a call screener, say who you are and why you are calling, then wait for the '
+            'it is a call screener, say who you are calling for and why, then wait for the '
             'person. If it is a voicemail recording, wait for the beep and leave a short message as '
             'your instructions describe. Do not mention this note.')
 
@@ -200,13 +210,22 @@ HANGUP_YIELDED = ('The other person spoke after you said goodbye. Listen and ans
 
 
 def disclosure_reminder(brief):
+    """Sent when the call is ending and the agent has not said it is an AI."""
     who = brief.on_behalf_of
-    return (f"You have not yet said that you are {who}'s AI assistant. Say it now, naturally, "
-            f'for example: "By the way, I\'m {who}\'s AI assistant."')
+    return (f"Before the call ends: you have not yet told them that you are {who}'s AI assistant. "
+            'Say it now in one short, natural sentence, for example: '
+            f'"Oh, and just so you know, I\'m {who}\'s AI assistant." Then say goodbye.')
+
+
+def goodbye_cue(brief, text, *, disclosed):
+    """A wrap-up prompt that asks for the AI disclosure first when it has not been said."""
+    if disclosed:
+        return text
+    return f"{text} Before you say goodbye, tell them that you are {brief.on_behalf_of}'s AI assistant."
 
 
 # Words and phrases that say "AI" in common call languages. The check is a safety
-# net that triggers a spoken correction, not a guarantee of exact wording.
+# net that triggers a spoken reminder, not a guarantee of exact wording.
 AI_MARKERS = ('ai', 'a.i', 'artificial', 'automated', 'ia', 'i.a', 'ki', 'k.i', 'ии', 'एआई')
 AI_PHRASES = (
     'virtual assistant', 'inteligencia artificial', 'inteligência artificial',
@@ -223,24 +242,54 @@ def _words(text):
     return folded, [re.sub(r"['’]s$", '', word) for word in _WORD.findall(folded)]
 
 
+# A disclosure puts the AI word next to what the speaker is ("AI assistant", "asistente
+# de IA") or after "I'm" ("I'm an AI", "je suis une IA"); AI as a topic does not count.
+ASSISTANT_WORDS = frozenset((
+    'assistant', 'assistante', 'asistente', 'assistente', 'assistent', 'asystent', 'agent', 'agente',
+    'bot', 'chatbot', 'robot', 'receptionist',
+))
+SELF_WORDS = frozenset(("i'm", 'im', 'am', 'soy', 'suis', 'bin', 'sono', 'sou', 'jestem'))
+FILLER_WORDS = frozenset(('a', 'an', 'just', 'only', 'un', 'una', 'une', 'ein', 'eine', 'um', 'uma'))
+
+
 def mentions_ai(text):
-    """True when the text says the speaker is an AI or an automated assistant."""
+    """True when the text says "AI" in any form, including as a topic."""
     folded, words = _words(text)
     return any(word in AI_MARKERS for word in words) or any(p in folded for p in AI_PHRASES)
+
+
+def states_ai(text):
+    """True when the speaker says they are an AI: "I'm an AI", "Robin's AI assistant".
+
+    A mention of AI as a topic ("Robin is building an AI app") does not count.
+    """
+    folded, _ = _words(text)
+    for phrase in AI_PHRASES:
+        folded = folded.replace(phrase, ' ai assistant ' if 'assistant' in phrase else ' ai ')
+    words = _words(folded)[1]
+    for i, word in enumerate(words):
+        if word not in AI_MARKERS:
+            continue
+        if any(near in ASSISTANT_WORDS for near in words[max(0, i - 3):i + 4]):
+            return True
+        before = [w for w in words[max(0, i - 3):i] if w not in FILLER_WORDS]
+        if before and before[-1] in SELF_WORDS:
+            return True
+    return False
+
+
+def names(text, name):
+    """True when the text says the first word of NAME ("Sam" for "Sam Rivera", "Lee" for "Dr. Lee")."""
+    _, name_words = _words(name)
+    name_words = [w for w in name_words if w not in ('dr', 'mr', 'mrs', 'ms', 'the')] or name_words
+    return not name_words or name_words[0] in _words(text)[1]
 
 
 def discloses(text, name, language=None):
     """Did the agent say it is an AI and name who it is calling for?
 
-    Only the first word of the name is required ("Sam" for "Sam Rivera", "Lee" for
-    "Dr. Lee"). The language argument is kept for per-language rules; the markers
-    above already cover the common ones.
+    The language argument is kept for per-language rules; the markers above already
+    cover the common ones.
     """
     del language
-    if not mentions_ai(text):
-        return False
-    _, name_words = _words(name)
-    name_words = [w for w in name_words if w not in ('dr', 'mr', 'mrs', 'ms', 'the')] or name_words
-    if not name_words:
-        return True
-    return name_words[0] in _words(text)[1]
+    return states_ai(text) and names(text, name)
