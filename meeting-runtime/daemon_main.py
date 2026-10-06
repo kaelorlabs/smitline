@@ -36,7 +36,8 @@ def build_parser():
     return parser
 
 
-def build_call_service(project_root, data_root, daemon, lines=None, gateway_port=None):
+def build_call_service(project_root, data_root, daemon, lines=None, gateway_port=None,
+                       runtime_root=None):
     from call_hooks import load_hooks, read_env_file
     from call_notify import WebhookNotifier, load_or_create_secret
     from call_service import CallService
@@ -58,7 +59,10 @@ def build_call_service(project_root, data_root, daemon, lines=None, gateway_port
     port = gateway_port or int(startup_env.get('COLLEAGUE_GATEWAY_PORT') or GATEWAY_PORT)
     public = PublicUrl(environ, port)
     phone = PhoneLine(public_url=public.get, public_available=public.available, environ=environ)
-    available = {'meeting': MeetingLine(daemon), 'phone': phone}
+    from meeting_finalizer import meeting_transcript
+    recordings = Path(runtime_root or (Path(project_root) / 'meeting-runtime'))
+    meeting = MeetingLine(daemon, transcript=lambda meeting_id: meeting_transcript(recordings, meeting_id))
+    available = {'meeting': meeting, 'phone': phone}
     available.update(lines or {})
     service = CallService(store, hooks=hooks, lines=available)
     service.phone_line = phone
@@ -146,7 +150,8 @@ def build_app(args):
         auth_token=token,
         on_auth_token=publish_auth_token,
         supervisor=supervisor,
-        call_service_factory=lambda daemon: build_call_service(project_root, data_root, daemon),
+        call_service_factory=lambda daemon: build_call_service(project_root, data_root, daemon,
+                                                               runtime_root=runtime_root),
         api_tokens=api_tokens,
         server_mode=args.server,
     )

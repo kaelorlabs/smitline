@@ -51,8 +51,10 @@ class MeetingLine:
     channel = 'meeting'
 
     def __init__(self, daemon, *, poll_interval=2.0, handoff_timeout=120.0,
-                 sleep=asyncio.sleep, monotonic=None):
+                 sleep=asyncio.sleep, monotonic=None, transcript=None):
         self.daemon = daemon
+        # transcript(meeting_id): the finished meeting's transcript entries, read from its archive.
+        self._transcript = transcript or (lambda _meeting_id: [])
         self.poll_interval = poll_interval
         self.handoff_timeout = handoff_timeout
         self._sleep = sleep
@@ -105,6 +107,13 @@ class MeetingLine:
                 await self.daemon.cancel_meeting(meeting_id)
             await self._sleep(self.poll_interval)
         handoff = await self._await_handoff(meeting_id)
+        # The result is judged from what was said, so the call gets the meeting's transcript.
+        try:
+            entries = self._transcript(meeting_id)
+        except Exception:
+            entries = []
+        for entry in entries:
+            ctx.add_transcript(entry['speaker'], entry['text'])
         seconds = int(self._now() - started) if started is not None else 0
         if ctx.call_id in self._over_time:
             reason = 'max_duration'

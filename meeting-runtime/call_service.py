@@ -488,16 +488,20 @@ class CallService:
         record = self.store.get(context.call_id)
         duration = usage.get('voiceSeconds') or 0
         transcript = transcript_entries(context.transcript)
-        if handoff is not None:
-            return result_from_handoff(handoff, transcript=transcript, duration_seconds=duration)
         if record['channel'] == 'meeting':
-            if end_reason == 'canceled' and not duration:
-                return result_without_conversation('canceled', duration_seconds=duration)
-            return fallback_result(end_reason, transcript, duration, 'no meeting handoff was produced')
-        simple =result_without_conversation(end_reason, transcript=transcript,
-                                             duration_seconds=duration)
-        if simple is not None:
-            return simple
+            # A meeting is judged from its transcript like a call; the handoff only stands in
+            # when nothing was said.
+            if not transcript:
+                if handoff is not None:
+                    return result_from_handoff(handoff, duration_seconds=duration)
+                if end_reason == 'canceled' and not duration:
+                    return result_without_conversation('canceled', duration_seconds=duration)
+                return fallback_result(end_reason, transcript, duration, 'no meeting handoff was produced')
+        else:
+            simple = result_without_conversation(end_reason, transcript=transcript,
+                                                 duration_seconds=duration)
+            if simple is not None:
+                return simple
         try:
             summarizer = self._summarizer_factory(context.owner)
             result = await summarizer.summarize(record['brief'], transcript,

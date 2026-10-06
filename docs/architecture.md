@@ -83,10 +83,10 @@ sequenceDiagram
     Bot->>Live: start one gpt-live-1 session (Responses delegation)
     Bot-->>Daemon: live
     Note over Daemon: meeting ends or the agent calls end_call
-    Daemon-->>Agent: result from the meeting handoff (summary, decisions, action items, transcript)
+    Daemon-->>Agent: result summarized from the meeting's transcript (summary, decisions, action items, transcript)
 ```
 
-The brief's context, questions, and limits become the meeting's starting context. The voice session and its backend read it when the session starts. The meeting result is built from the local transcript into a handoff, without a model call.
+The brief's context, questions, and limits become the meeting's starting context. The voice session and its backend read it when the session starts. When the meeting ends, the call reads the meeting's transcript from its local archive, and the summary model judges the objective from it and writes the result, as for a phone call. The local handoff is still built without a model call, and is the result only when nothing was said.
 
 ## Selective speech (platform microphone and virtual gate)
 

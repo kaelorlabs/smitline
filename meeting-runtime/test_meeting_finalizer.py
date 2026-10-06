@@ -7,7 +7,7 @@ from pathlib import Path
 from agent_sessions import MeetingSession
 from call_record import CallRecord
 from handoff_builder import build_meeting_handoff, handoff_id_for
-from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization
+from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization, meeting_transcript
 from test_schemas import meeting_session_payload
 
 
@@ -134,6 +134,32 @@ class MeetingFinalizerTests(unittest.IsolatedAsyncioTestCase):
             encoding='utf-8')
         with self.assertRaises(ValueError):
             MeetingFinalizer(self.runtime).persist_local(meeting, reason='ended')
+
+
+
+class MeetingTranscriptTests(unittest.TestCase):
+    def test_pieces_from_one_side_join_into_lines(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = archive_dir(temp, 'mtg-3551117e1f72b1f5')
+            directory.mkdir(parents=True)
+            events = [
+                {'type': 'meeting.joined'},
+                {'type': 'transcript', 'speaker': 'meeting', 'text': ' Yep'},
+                {'type': 'transcript', 'speaker': 'agent', 'text': ' Hi everyone'},
+                {'type': 'transcript', 'speaker': 'agent', 'text': ','},
+                {'type': 'transcript', 'speaker': 'agent', 'text': " I'm Robin's AI assistant."},
+                {'type': 'transcript', 'speaker': 'meeting', 'text': '   '},
+                {'type': 'transcript', 'speaker': 'meeting', 'text': ' Two PRs works.'},
+            ]
+            (directory / 'events.jsonl').write_text(
+                '\n'.join(json.dumps(event) for event in events) + '\nnot json\n', encoding='utf-8')
+            self.assertEqual(meeting_transcript(temp, 'mtg-3551117e1f72b1f5'), [
+                {'speaker': 'meeting', 'text': 'Yep'},
+                {'speaker': 'agent', 'text': "Hi everyone, I'm Robin's AI assistant."},
+                {'speaker': 'meeting', 'text': 'Two PRs works.'},
+            ])
+            # No archive: no transcript, rather than an error.
+            self.assertEqual(meeting_transcript(temp, 'mtg-0000000000000000'), [])
 
 
 if __name__ == '__main__':

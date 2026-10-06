@@ -314,6 +314,48 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(h.summarizer.calls, 0)
             await h.service.shutdown()
 
+    async def test_a_meeting_with_a_transcript_is_summarized_from_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+            ticks = iter(range(0, 10000, 5))
+            spoken = [{'speaker': 'meeting', 'text': 'Two PRs works for me.'},
+                      {'speaker': 'agent', 'text': 'Noted.'}]
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks),
+                               transcript=lambda meeting_id: spoken if meeting_id == 'mtg-1' else [])
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(h.summarizer.calls, 1)
+            self.assertEqual(done['result']['source'], 'summary_model')
+            self.assertEqual(done['result']['transcript'], spoken)
+            lines = [e['data']['text'] for e in h.service.events(record['id']) if e['type'] == 'call.transcript']
+            self.assertEqual(lines, ['Two PRs works for me.', 'Noted.'])
+            await h.service.shutdown()
+
+    async def test_a_meeting_whose_summary_fails_says_so_and_keeps_the_transcript(self):
+        from call_result import SummaryUnavailable
+        with tempfile.TemporaryDirectory() as temp:
+            daemon = FakeDaemon()
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, sleep=no_sleep,
+                               transcript=lambda _meeting_id: [{'speaker': 'meeting', 'text': 'Hello?'}])
+            h = ServiceHarness(temp, lines={'meeting': line})
+
+            async def unavailable(*_args, **_kwargs):
+                raise SummaryUnavailable('summary request failed (429)')
+            h.summarizer.summarize = unavailable
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            done = await h.service.wait(record['id'], timeout=5)
+            self.assertEqual(done['result']['outcome'], 'failed')
+            self.assertIn('no summary was produced', done['result']['summary'])
+            self.assertEqual(done['result']['transcript'], [{'speaker': 'meeting', 'text': 'Hello?'}])
+            await h.service.shutdown()
+
     async def test_ending_before_the_meeting_exists_still_stops_it(self):
         with tempfile.TemporaryDirectory() as temp:
             daemon = FakeDaemon()
