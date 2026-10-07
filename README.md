@@ -17,6 +17,7 @@
   <a href="https://github.com/kaelorlabs/smitline/pkgs/container/smitline"><img alt="Docker image on GHCR" src="https://img.shields.io/badge/docker-ghcr.io%2Fkaelorlabs%2Fsmitline-555bc0"></a>
   <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline"><img alt="Listed in the official MCP Registry" src="https://img.shields.io/badge/MCP_Registry-io.github.kaelorlabs%2Fsmitline-2b2e38"></a>
   <a href="https://smithery.ai/servers/kaelorlabs/smitline"><img alt="Listed on Smithery" src="https://img.shields.io/badge/Smithery-kaelorlabs%2Fsmitline-2b2e38"></a>
+  <a href="https://glama.ai/mcp/servers/kaelorlabs/smitline"><img alt="Listed on Glama" src="https://img.shields.io/badge/Glama-kaelorlabs%2Fsmitline-2b2e38"></a>
 </p>
 
 <p align="center">
@@ -102,7 +103,7 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then 
 
 </details>
 
-**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Smithery](https://smithery.ai/servers/kaelorlabs/smitline) as `kaelorlabs/smitline`. Directories that mirror the registry, such as PulseMCP and GitHub's MCP registry, pick it up from there. Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
+**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, on [Smithery](https://smithery.ai/servers/kaelorlabs/smitline) as `kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline). Directories that mirror the registry, such as PulseMCP and GitHub's MCP registry, pick it up from there. Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
 
 ## Safe by default
 
