@@ -30,7 +30,7 @@ function simplePdf(text) {
 }
 
 test('stores pasted text and uploaded text without persisting raw files', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-context-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-context-'));
   const index = path.join(directory, 'index.json');
   const result = await addContext(index, {
     text: 'Launch target: October 4.',

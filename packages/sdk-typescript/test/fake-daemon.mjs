@@ -21,7 +21,7 @@ export async function startFakeDaemon(options = {}) {
   const token = options.token || 'test-daemon-token';
   const root = options.root;
   if (root) {
-    const authPath = path.join(root, '.colleague', 'daemon.auth');
+    const authPath = path.join(root, '.smitline', 'daemon.auth');
     await fs.mkdir(path.dirname(authPath), { recursive: true, mode: 0o700 });
     await fs.writeFile(authPath, `${token}\n`, { mode: 0o600 });
   }
@@ -158,7 +158,7 @@ export async function startFakeDaemon(options = {}) {
     },
     async writeAuth(nextToken) {
       if (!root) return;
-      await fs.writeFile(path.join(root, '.colleague', 'daemon.auth'), `${nextToken}\n`, { mode: 0o600 });
+      await fs.writeFile(path.join(root, '.smitline', 'daemon.auth'), `${nextToken}\n`, { mode: 0o600 });
     },
     close() {
       return new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

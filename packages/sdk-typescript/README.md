@@ -9,12 +9,12 @@ Requires Node.js 22+. This package is not published to npm: use it from a checko
 Both go through `startCall` with a brief. Run from the checkout's root:
 
 ```ts
-import { Colleague } from './packages/sdk-typescript/src/index.mjs';
+import { Smitline } from './packages/sdk-typescript/src/index.mjs';
 
-const colleague = new Colleague();
+const client = new Smitline();
 
 // A phone call
-const call = await colleague.startCall({
+const call = await client.startCall({
   channel: 'phone',
   to: '+14155550142',
   objective: 'Book a table for two at 7pm on Friday',
@@ -23,16 +23,16 @@ const call = await colleague.startCall({
 });
 
 // A meeting: `to` is the Zoom, Teams, or Google Meet invite URL
-const meeting = await colleague.startCall({
+const meeting = await client.startCall({
   channel: 'meeting',
   to: 'https://zoom.us/j/123456789',
   objective: 'Take notes on the roadmap review and answer questions about the launch plan',
   context: { summary: 'We ship the beta on the 14th.', details: longBackground },
 });
 
-let done = await colleague.waitForCall(meeting.id, 50);
+let done = await client.waitForCall(meeting.id, 50);
 while (!['completed', 'failed', 'canceled'].includes(done.status)) {
-  done = await colleague.waitForCall(meeting.id, 50);
+  done = await client.waitForCall(meeting.id, 50);
 }
 console.log(done.result?.summary);
 ```
@@ -64,8 +64,8 @@ console.log(done.result?.summary);
 
 The default transport:
 
-1. Connects to `127.0.0.1:8765` (or `COLLEAGUE_DAEMON_PORT`)
-2. Reads the host-only token from `.colleague/daemon.auth` under `root` (default: `COLLEAGUE_ROOT`, else the working directory) and never returns it
+1. Connects to `127.0.0.1:8765` (or `SMITLINE_DAEMON_PORT`)
+2. Reads the host-only token from `.smitline/daemon.auth` under `root` (default: `SMITLINE_ROOT`, else the working directory) and never returns it
 3. Sends `Authorization: Bearer …` on every request
 4. Rereads the token file after 401
 5. Starts `start-runtime-daemon.sh` if the port is closed (`autostart: false` turns this off)
@@ -75,8 +75,8 @@ When Smitline runs in the `smitline` container, the token is inside the containe
 ```js
 import { execFileSync } from 'node:child_process';
 
-const colleague = new Colleague({
+const client = new Smitline({
   autostart: false,
-  readAuth: () => execFileSync('docker', ['exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'], { encoding: 'utf8' }).trim(),
+  readAuth: () => execFileSync('docker', ['exec', '-u', 'app', 'smitline', 'cat', '/data/.smitline/daemon.auth'], { encoding: 'utf8' }).trim(),
 });
 ```

@@ -18,7 +18,7 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 
 ## Calls
 
-`http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
+`http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `SMITLINE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
 ## Contacts
 
@@ -56,7 +56,7 @@ The checks validate the meeting settings, the OpenAI key, and Docker availabilit
 
 Paste text or upload TXT, Markdown, CSV, TSV, JSON, YAML, PDF, or DOCX files under **Reference context**. The console extracts text locally and stores it in `context/index.json` under the meeting data (`/data/meetings` in the `smitline` volume, `meeting-runtime/` in a checkout). Individual files are limited to 8 MB, a batch can contain up to 10 files, and all saved extracted text is limited to 1,000,000 characters.
 
-The saved sources go to the meeting as its starting context. GPT-Live gets them as background, and so does the backend model it hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`). Longer material is cut to fit. The voice session reads the context when it starts, so add sources before starting the meeting, or restart the participant after changing them.
+The saved sources go to the meeting as its starting context. GPT-Live gets them as background, and so does the backend model it hands harder questions to (`SMITLINE_MEETING_BACKEND_MODEL`). Longer material is cut to fit. The voice session reads the context when it starts, so add sources before starting the meeting, or restart the participant after changing them.
 
 Use **Clear saved context** when the material should no longer be available. This deletes the local context index; it does not alter the original documents.
 

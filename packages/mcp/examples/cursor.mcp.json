@@ -4,7 +4,7 @@
       "command": "node",
       "args": ["/absolute/path/to/smitline/packages/mcp/src/server.mjs"],
       "env": {
-        "COLLEAGUE_ROOT": "/absolute/path/to/smitline"
+        "SMITLINE_ROOT": "/absolute/path/to/smitline"
       }
     }
   }

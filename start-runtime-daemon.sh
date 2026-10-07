@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # Starts the runtime daemon on this computer's Python, or in Docker when this
 # computer cannot create the daemon's virtual environment (for example Ubuntu
-# without python3-venv). COLLEAGUE_DAEMON_RUNTIME=host or docker picks one.
+# without python3-venv). SMITLINE_DAEMON_RUNTIME=host or docker picks one.
 set -euo pipefail
+# COLLEAGUE_* settings from before the rename set their SMITLINE_* names.
+for old in ${!COLLEAGUE_@}; do export "SMITLINE_${old#COLLEAGUE_}=${!old}"; done
 cd "$(dirname "$0")"
-HOST="${COLLEAGUE_DAEMON_HOST:-127.0.0.1}"
-PORT="${COLLEAGUE_DAEMON_PORT:-8765}"
+HOST="${SMITLINE_DAEMON_HOST:-127.0.0.1}"
+PORT="${SMITLINE_DAEMON_PORT:-8765}"
 ROOT="$(pwd)"
-VENV="${COLLEAGUE_PYTHON_VENV:-$ROOT/.venv}"
+VENV="${SMITLINE_PYTHON_VENV:-$ROOT/.venv}"
 REQ="$ROOT/meeting-runtime/requirements-daemon.txt"
-RUNTIME="${COLLEAGUE_DAEMON_RUNTIME:-auto}"
-IMAGE="${COLLEAGUE_DAEMON_IMAGE:-colleague-daemon:local}"
+RUNTIME="${SMITLINE_DAEMON_RUNTIME:-auto}"
+IMAGE="${SMITLINE_DAEMON_IMAGE:-smitline-daemon:local}"
 
 MODE=()
-if [[ "${COLLEAGUE_SERVER_MODE:-}" == 1 ]]; then
+if [[ "${SMITLINE_SERVER_MODE:-}" == 1 ]]; then
   MODE=(--server)
 fi
 
@@ -27,7 +29,7 @@ venv_usable() {
 }
 
 host_python_ready() {
-  [[ -n "${COLLEAGUE_PYTHON:-}" ]] || venv_usable \
+  [[ -n "${SMITLINE_PYTHON:-}" ]] || venv_usable \
     || python3 -c 'import sys, venv, ensurepip; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1
 }
 
@@ -36,10 +38,10 @@ docker_ready() {
 }
 
 run_on_host() {
-  if [[ -n "${COLLEAGUE_PYTHON:-}" ]]; then
-    PYTHON="$COLLEAGUE_PYTHON"
+  if [[ -n "${SMITLINE_PYTHON:-}" ]]; then
+    PYTHON="$SMITLINE_PYTHON"
     if ! has_aiohttp "$PYTHON"; then
-      echo 'Runtime daemon Python is missing aiohttp. Point COLLEAGUE_PYTHON at a venv with meeting-runtime/requirements-daemon.txt installed.' >&2
+      echo 'Runtime daemon Python is missing aiohttp. Point SMITLINE_PYTHON at a venv with meeting-runtime/requirements-daemon.txt installed.' >&2
       exit 1
     fi
   else
@@ -65,10 +67,10 @@ run_on_host() {
 run_in_docker() {
   local hash desktop sock name
   hash="$(cat Dockerfile.daemon "$REQ" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12)"
-  if [[ "$(docker image inspect -f '{{index .Config.Labels "colleague.hash"}}' "$IMAGE" 2>/dev/null || true)" != "$hash" ]]; then
+  if [[ "$(docker image inspect -f '{{index .Config.Labels "smitline.hash"}}' "$IMAGE" 2>/dev/null || true)" != "$hash" ]]; then
     echo 'Building the Smitline image (first start only; about a minute)...'
     tar -cf - Dockerfile.daemon -C meeting-runtime requirements-daemon.txt \
-      | docker build --quiet --label "colleague.hash=$hash" -t "$IMAGE" -f Dockerfile.daemon -
+      | docker build --quiet --label "smitline.hash=$hash" -t "$IMAGE" -f Dockerfile.daemon -
   fi
   # Host networking keeps the daemon and phone gateway on this computer's loopback,
   # exactly where they are without Docker. The checkout is mounted at the same path,
@@ -95,7 +97,7 @@ run_in_docker() {
   # Settings exported in this shell reach the daemon by name; values stay off the command line.
   for name in $(compgen -e); do
     case "$name" in
-      OPENAI_*|TWILIO_*|SIGNALWIRE_*|COLLEAGUE_*) args+=(-e "$name") ;;
+      OPENAI_*|TWILIO_*|SIGNALWIRE_*|SMITLINE_*) args+=(-e "$name") ;;
     esac
   done
   docker rm -f "smitline-daemon-$PORT" >/dev/null 2>&1 || true
@@ -107,7 +109,7 @@ case "$RUNTIME" in
   host) run_on_host ;;
   docker)
     if ! docker_ready; then
-      echo 'COLLEAGUE_DAEMON_RUNTIME=docker, but Docker is not running.' >&2
+      echo 'SMITLINE_DAEMON_RUNTIME=docker, but Docker is not running.' >&2
       exit 1
     fi
     run_in_docker ;;
@@ -121,6 +123,6 @@ case "$RUNTIME" in
       exit 1
     fi ;;
   *)
-    echo "COLLEAGUE_DAEMON_RUNTIME must be auto, host, or docker (got $RUNTIME)" >&2
+    echo "SMITLINE_DAEMON_RUNTIME must be auto, host, or docker (got $RUNTIME)" >&2
     exit 1 ;;
 esac

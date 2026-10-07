@@ -94,7 +94,7 @@ Off by default follows decision 10: context should be explicit. The user turns i
 | --- | --- |
 | `task`, `carryFrom` | The stored brief (`record.brief`), like other brief fields |
 | `carryNote`, `carried` | The call record (`call.json`), outside the brief |
-| Contact names, notes, auto-add setting | `.colleague/contacts.json`, mode 0600 |
+| Contact names, notes, auto-add setting | `.smitline/contacts.json`, mode 0600 |
 
 `contacts.json`:
 

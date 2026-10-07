@@ -20,14 +20,14 @@ export function publicSettings(values = {}) {
     platform: detectPlatform(values.MEETING_URL),
     meetingUrl: values.MEETING_URL || '',
     hasPasscode: Boolean(values.MEETING_PASSCODE),
-    participantName: values.COLLEAGUE_PARTICIPANT_NAME || 'Smitline',
-    meetingInstructions: values.COLLEAGUE_MEETING_INSTRUCTIONS || '',
+    participantName: values.SMITLINE_PARTICIPANT_NAME || 'Smitline',
+    meetingInstructions: values.SMITLINE_MEETING_INSTRUCTIONS || '',
   };
 }
 
-// The person Smitline acts for in meetings, from COLLEAGUE_OWNER_NAME. Empty when unset.
+// The person Smitline acts for in meetings, from SMITLINE_OWNER_NAME. Empty when unset.
 export function ownerName(values = {}) {
-  const name = String(values.COLLEAGUE_OWNER_NAME || '').replace(/\s+/g, ' ').trim();
+  const name = String(values.SMITLINE_OWNER_NAME || '').replace(/\s+/g, ' ').trim();
   return name && name.length <= 80 && !/[\u0000-\u001f]/.test(name) ? name : '';
 }
 
@@ -65,8 +65,8 @@ export function serializeSettings(input, previous = {}) {
   const lines = [
     `MEETING_URL=${clean(input.meetingUrl)}`,
     `MEETING_PASSCODE=${clean(input.passcode || (input.keepPasscode ? previous.MEETING_PASSCODE : ''))}`,
-    `COLLEAGUE_PARTICIPANT_NAME=${clean(input.participantName)}`,
-    `COLLEAGUE_MEETING_INSTRUCTIONS=${clean(input.meetingInstructions)}`,
+    `SMITLINE_PARTICIPANT_NAME=${clean(input.participantName)}`,
+    `SMITLINE_MEETING_INSTRUCTIONS=${clean(input.meetingInstructions)}`,
   ];
   return `${lines.join('\n')}\n`;
 }

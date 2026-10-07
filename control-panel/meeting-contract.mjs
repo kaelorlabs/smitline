@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { detectPlatform } from './config.mjs';
 
-export const CONTROL_DIR = '.colleague';
+export const CONTROL_DIR = '.smitline';
 export const ACTIVE_MEETING_NAME = 'portal-active.json';
 export const SUPERVISOR_ACTIVE_NAME = 'active-meeting.json';
 const ACTIVE_PHASES = new Set([

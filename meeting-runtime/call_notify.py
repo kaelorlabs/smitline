@@ -102,8 +102,8 @@ class WebhookNotifier:
         headers = {
             'Content-Type': 'application/json',
             'User-Agent': 'smitline-webhook/1',
-            'X-Colleague-Event': 'call.' + call['status'],
-            'X-Colleague-Signature': signature(self.secret, body),
+            'X-Smitline-Event': 'call.' + call['status'],
+            'X-Smitline-Signature': signature(self.secret, body),
         }
         # Outcomes are coarse on purpose: the result is readable by API callers, so
         # it must not become a probe of the receiver's exact responses.

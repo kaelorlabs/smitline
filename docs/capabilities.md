@@ -22,4 +22,4 @@ Live tenant policy can still refuse admission. Browser fixtures do not prove pro
 
 ## Voice
 
-GPT-Live (`gpt-live-1`) is the only voice on every channel. It hands harder questions to a backend model through Responses delegation: `COLLEAGUE_PHONE_BACKEND_MODEL` for phone calls and `COLLEAGUE_MEETING_BACKEND_MODEL` for meetings, both `gpt-5.6-terra` by default. `COLLEAGUE_PHONE_WEB_SEARCH=1` and `COLLEAGUE_MEETING_WEB_SEARCH=1` add OpenAI web search to that backend.
+GPT-Live (`gpt-live-1`) is the only voice on every channel. It hands harder questions to a backend model through Responses delegation: `SMITLINE_PHONE_BACKEND_MODEL` for phone calls and `SMITLINE_MEETING_BACKEND_MODEL` for meetings, both `gpt-5.6-terra` by default. `SMITLINE_PHONE_WEB_SEARCH=1` and `SMITLINE_MEETING_WEB_SEARCH=1` add OpenAI web search to that backend.

@@ -1,12 +1,12 @@
 // Local MCP over Streamable HTTP, served by the console at http://127.0.0.1:8095/mcp.
 // Agents on this computer (Claude Code, Codex, Cursor) connect with the bearer token in
-// <COLLEAGUE_ROOT>/.colleague/mcp.token instead of starting a stdio server. There is no
+// <SMITLINE_ROOT>/.smitline/mcp.token instead of starting a stdio server. There is no
 // OAuth: the token is the only credential, browsers are refused (any Origin header),
 // and only 127.0.0.1 or localhost Host names on the listening port are answered, so a
 // page on a rebound DNS name cannot reach it.
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { Colleague, redact } from '../../sdk-typescript/src/index.mjs';
+import { Smitline, redact } from '../../sdk-typescript/src/index.mjs';
 import { createMcpSession } from './session.mjs';
 import { readOrCreateLocalMcpToken } from './local-token.mjs';
 import {
@@ -40,13 +40,13 @@ function tokenMatches(given, expected) {
  *                    token file under root is read (and made) on each request, so a
  *                    replaced file takes effect at once.
  * options.colleague  the SDK client the call tools use; by default one that talks to
- *                    the loopback daemon with the token in <root>/.colleague/daemon.auth.
+ *                    the loopback daemon with the token in <root>/.smitline/daemon.auth.
  * options.port       the port the Host header must name; by default the port the
  *                    request arrived on.
  */
 export function createLocalMcpHandler({
   colleague,
-  root = process.env.COLLEAGUE_ROOT || CODE_ROOT,
+  root = process.env.SMITLINE_ROOT || CODE_ROOT,
   codeRoot = CODE_ROOT,
   token,
   port,
@@ -60,7 +60,7 @@ export function createLocalMcpHandler({
       : () => readOrCreateLocalMcpToken(root);
   let client = colleague || null;
   const calls = () => {
-    client ||= new Colleague({ root, codeRoot, host: '127.0.0.1', port: process.env.COLLEAGUE_DAEMON_PORT });
+    client ||= new Smitline({ root, codeRoot, host: '127.0.0.1', port: process.env.SMITLINE_DAEMON_PORT });
     return client;
   };
   const store = createSessionStore({

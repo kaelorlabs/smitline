@@ -58,7 +58,7 @@ function payload() {
 async function request(url, options = {}) {
   const response = await fetch(url, {
     ...options,
-    headers: { 'Content-Type': 'application/json', 'X-Colleague-Token': csrf, ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', 'X-Smitline-Token': csrf, ...(options.headers || {}) },
   });
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || 'Request failed.'), { result });

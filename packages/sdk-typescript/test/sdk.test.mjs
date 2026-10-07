@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  Colleague,
+  Smitline,
   ValidationError,
   StartupError,
   createLoopbackTransport,
@@ -16,7 +16,7 @@ import { startFakeDaemon } from './fake-daemon.mjs';
 const ZOOM = 'https://zoom.us/j/123456789';
 
 async function withDaemon(t, options, fn) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-sdk-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-sdk-'));
   const daemon = await startFakeDaemon({ root, ...options });
   t.after(async () => {
     await daemon.close();
@@ -28,12 +28,12 @@ async function withDaemon(t, options, fn) {
     autostart: false,
     spawnDaemon: null,
   });
-  const colleague = new Colleague({ transport });
+  const colleague = new Smitline({ transport });
   return fn({ root, daemon, transport, colleague });
 }
 
 test('the SDK exposes calls only, for calls and meetings only', () => {
-  const methods = Object.getOwnPropertyNames(Colleague.prototype).filter((name) => name !== 'constructor').sort();
+  const methods = Object.getOwnPropertyNames(Smitline.prototype).filter((name) => name !== 'constructor').sort();
   assert.deepEqual(methods, [
     'checkCall', 'downloadRecording', 'endCall', 'forgetContact', 'getCall', 'getContact', 'getDoNotCall', 'getProfile',
     'instructCall', 'listCalls', 'listContacts', 'listVoices', 'saveCallNote', 'startCall', 'transferCall',
@@ -103,7 +103,7 @@ test('startup errors are StartupError', async (t) => {
 });
 
 test('daemon autostart is serialized and uses the host-only token file', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-autostart-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-autostart-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const daemon = await startFakeDaemon({ root });
   t.after(() => daemon.close());
@@ -141,7 +141,7 @@ test('profile reads and updates, and silent notes, use the daemon routes', async
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     },
   });
-  const colleague = new Colleague({ transport });
+  const colleague = new Smitline({ transport });
   await colleague.getProfile();
   await colleague.updateProfile({ about: 'Robin builds Smitline.' });
   await colleague.getDoNotCall();
@@ -158,21 +158,21 @@ test('profile reads and updates, and silent notes, use the daemon routes', async
   ]);
 });
 
-test('managed (COLLEAGUE_MANAGED=1): the SDK never starts a daemon and says to restart the container', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-managed-'));
+test('managed (SMITLINE_MANAGED=1): the SDK never starts a daemon and says to restart the container', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-managed-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  assert.equal(isManaged({ COLLEAGUE_MANAGED: '1' }), true);
-  assert.equal(isManaged({ COLLEAGUE_MANAGED: '0' }), false);
+  assert.equal(isManaged({ SMITLINE_MANAGED: '1' }), true);
+  assert.equal(isManaged({ SMITLINE_MANAGED: '0' }), false);
   assert.equal(isManaged({}), false);
   let spawns = 0;
-  const previous = process.env.COLLEAGUE_MANAGED;
-  process.env.COLLEAGUE_MANAGED = '1';
+  const previous = process.env.SMITLINE_MANAGED;
+  process.env.SMITLINE_MANAGED = '1';
   let viaEnv;
   try {
     viaEnv = createLoopbackTransport({ root, port: 1, isPortOpen: async () => false });
   } finally {
-    if (previous === undefined) delete process.env.COLLEAGUE_MANAGED;
-    else process.env.COLLEAGUE_MANAGED = previous;
+    if (previous === undefined) delete process.env.SMITLINE_MANAGED;
+    else process.env.SMITLINE_MANAGED = previous;
   }
   await assert.rejects(() => viaEnv.listCalls(), (error) => (
     error instanceof StartupError && error.code === 'daemon_unavailable' && error.message === MANAGED_NOT_RUNNING
@@ -185,8 +185,8 @@ test('managed (COLLEAGUE_MANAGED=1): the SDK never starts a daemon and says to r
   assert.equal(spawns, 0);
 });
 
-test('the daemon launcher comes from codeRoot while COLLEAGUE_ROOT points at the data', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-data-'));
+test('the daemon launcher comes from codeRoot while SMITLINE_ROOT points at the data', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-data-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const daemon = await startFakeDaemon({ root });
   t.after(() => daemon.close());
@@ -194,7 +194,7 @@ test('the daemon launcher comes from codeRoot while COLLEAGUE_ROOT points at the
   let spawned;
   const transport = createLoopbackTransport({
     root,
-    codeRoot: '/opt/colleague-code',
+    codeRoot: '/opt/smitline-code',
     managed: false,
     port: daemon.port,
     isPortOpen: async () => open,
@@ -203,5 +203,5 @@ test('the daemon launcher comes from codeRoot while COLLEAGUE_ROOT points at the
   });
   await transport.listCalls();
   assert.equal(spawned.root, root);
-  assert.equal(spawned.codeRoot, '/opt/colleague-code');
+  assert.equal(spawned.codeRoot, '/opt/smitline-code');
 });

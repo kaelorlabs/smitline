@@ -103,14 +103,14 @@ def create_gateway_app(line, service, *, current_url, owner='local'):
 
     def max_inbound(env):
         try:
-            return max(0, int(env.get('COLLEAGUE_MAX_INBOUND') or DEFAULT_MAX_INBOUND))
+            return max(0, int(env.get('SMITLINE_MAX_INBOUND') or DEFAULT_MAX_INBOUND))
         except ValueError:
             return DEFAULT_MAX_INBOUND
 
     async def inbound(request):
         params = await verified_params(request)
         env = line.environ()
-        if env.get('COLLEAGUE_ACCEPT_INBOUND') != '1':
+        if env.get('SMITLINE_ACCEPT_INBOUND') != '1':
             return web.Response(text=REJECT, content_type=XML)
         if service.active_count(direction='inbound') >= max_inbound(env):
             return web.Response(text=BUSY, content_type=XML)

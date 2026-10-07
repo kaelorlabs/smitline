@@ -11,7 +11,7 @@ STATE_VERSION = 1
 ACTIVE_NAME = 'active-meeting.json'
 TOKEN_NAME = 'daemon.auth'
 MEETINGS_DIR = 'meetings'
-CONTROL_DIR = '.colleague'
+CONTROL_DIR = '.smitline'
 DAEMON_DATA_NAME = 'daemon-data'
 PORTAL_ACTIVE_NAME = 'portal-active.json'
 
@@ -116,12 +116,12 @@ def environ_from_state(payload):
         return {}
     mapping = {}
     if payload.get('participantName'):
-        mapping['COLLEAGUE_PARTICIPANT_NAME'] = str(payload['participantName'])
+        mapping['SMITLINE_PARTICIPANT_NAME'] = str(payload['participantName'])
     if payload.get('meetingInstructions') is not None:
-        mapping['COLLEAGUE_MEETING_INSTRUCTIONS'] = str(payload['meetingInstructions'])
+        mapping['SMITLINE_MEETING_INSTRUCTIONS'] = str(payload['meetingInstructions'])
     if payload.get('meetingUrl'):
         mapping['MEETING_URL'] = str(payload['meetingUrl'])
     if payload.get('voice'):
         # Validated by runtime_config; an unknown name falls back to the default voice.
-        mapping['COLLEAGUE_VOICE'] = str(payload['voice'])
+        mapping['SMITLINE_VOICE'] = str(payload['voice'])
     return mapping

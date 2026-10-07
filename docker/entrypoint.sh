@@ -3,7 +3,7 @@
 # user, then starts Smitline as that user. The meeting container runs as the same user,
 # so both can read the private files they share.
 set -eu
-DATA="${COLLEAGUE_ROOT:-/data}"
+DATA="${COLLEAGUE_ROOT:-${SMITLINE_ROOT:-/data}}"
 if [ "$(id -u)" = 0 ]; then
   mkdir -p "$DATA"
   if [ "$(stat -c %u "$DATA")" != "$(id -u app)" ]; then
