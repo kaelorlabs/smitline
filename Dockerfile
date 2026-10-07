@@ -46,7 +46,8 @@ RUN ln -s /app/docker/smitline /usr/local/bin/smitline \
 
 # The release version (0.1.0); the workflow sets it, local builds say dev.
 ARG VERSION=dev
-LABEL org.opencontainers.image.version=${VERSION} \n      io.modelcontextprotocol.server.name="io.github.kaelorlabs/smitline"
+LABEL org.opencontainers.image.version=${VERSION} \
+      io.modelcontextprotocol.server.name="io.github.kaelorlabs/smitline"
 ENV PYTHONUNBUFFERED=1 \
     COLLEAGUE_ROOT=/data \
     COLLEAGUE_MEETING_DATA=/data/meetings \
