@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from call_result import DEFAULT_SUMMARY_MODEL
 from phone_prompts import DEFAULT_BACKEND_MODEL
 
-PRICES_AS_OF = '2026-09-29'
+PRICES_AS_OF = '2026-10-06'
 CURRENCY = 'USD'
 # GPT-Live bills voice sessions per second at a per-minute rate.
 VOICE_MODEL = 'gpt-live-1'
@@ -28,9 +28,12 @@ TOKEN_PRICES = {
     'gpt-5.5': (5.00, 0.50, 30.00),
 }
 WEB_SEARCH_PER_CALL = 0.01
-# Only until the provider reports its price: USD per started minute, typical North American
-# rates. COLLEAGUE_PHONE_PRICE_PER_MINUTE overrides both.
-PHONE_PER_MINUTE = {'twilio': 0.014, 'signalwire': 0.017}
+# Only until the provider reports its price: USD per started minute, US rates, plus a fee
+# per answered call. SignalWire: $0.008 outbound plus $0.003 for the audio stream a minute,
+# and $0.006 a call (answering-machine detection); real SignalWire bills match this exactly.
+# COLLEAGUE_PHONE_PRICE_PER_MINUTE replaces the estimate with one all-in rate a minute.
+PHONE_PER_MINUTE = {'twilio': 0.014, 'signalwire': 0.011}
+PHONE_PER_CALL = {'signalwire': 0.006}
 DEFAULT_PHONE_PER_MINUTE = 0.014
 TERMINAL = frozenset({'completed', 'failed', 'canceled'})
 TWILIO_SID = re.compile(r'^CA[0-9a-f]{32}$')
@@ -71,13 +74,14 @@ def phone_provider(record):
 
 
 def _phone_rate(provider, environ):
+    """USD per started minute and per call for the estimate."""
     override = (environ or {}).get('COLLEAGUE_PHONE_PRICE_PER_MINUTE')
     if override:
         try:
-            return float(override)
+            return float(override), 0.0
         except ValueError:
             pass
-    return PHONE_PER_MINUTE.get(provider, DEFAULT_PHONE_PER_MINUTE)
+    return PHONE_PER_MINUTE.get(provider, DEFAULT_PHONE_PER_MINUTE), PHONE_PER_CALL.get(provider, 0.0)
 
 
 def _phone_item(record, environ):
@@ -91,9 +95,10 @@ def _phone_item(record, environ):
         return dict(item, amount=_money(price['amount']), source='provider')
     if not seconds:
         return None  # never answered: carriers do not charge for unanswered calls
-    rate = _phone_rate(provider, environ)
-    return dict(item, amount=_money(math.ceil(seconds / 60) * rate), source='estimate',
+    rate, per_call = _phone_rate(provider, environ)
+    item = dict(item, amount=_money(math.ceil(seconds / 60) * rate + per_call), source='estimate',
                 ratePerMinute=rate)
+    return dict(item, ratePerCall=per_call) if per_call else item
 
 
 def _voice_item(usage):

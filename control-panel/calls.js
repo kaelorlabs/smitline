@@ -746,7 +746,7 @@ function costRow(item) {
   if (item.kind === 'phone') {
     usage = item.source === 'provider'
       ? `${duration(item.seconds || 0)} · billed by ${provider}`
-      : `${duration(item.seconds || 0)} · estimated at ${rate(item.ratePerMinute)} until ${provider} reports its price`;
+      : `${duration(item.seconds || 0)} · estimated at ${rate(item.ratePerMinute)}${item.ratePerCall ? ` + ${money(item.ratePerCall)} a call` : ''} until ${provider} reports its price`;
   } else if (item.kind === 'voice') {
     usage = `${duration(item.seconds || 0)} at ${rate(item.ratePerMinute)}`;
   } else {
