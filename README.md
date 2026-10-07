@@ -15,6 +15,8 @@
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b2e38"></a>
   <a href="https://github.com/kaelorlabs/smitline/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/kaelorlabs/smitline?label=version&color=555bc0"></a>
   <a href="https://github.com/kaelorlabs/smitline/pkgs/container/smitline"><img alt="Docker image on GHCR" src="https://img.shields.io/badge/docker-ghcr.io%2Fkaelorlabs%2Fsmitline-555bc0"></a>
+  <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline"><img alt="Listed in the official MCP Registry" src="https://img.shields.io/badge/MCP_Registry-io.github.kaelorlabs%2Fsmitline-2b2e38"></a>
+  <a href="https://smithery.ai/servers/kaelorlabs/smitline"><img alt="Listed on Smithery" src="https://img.shields.io/badge/Smithery-kaelorlabs%2Fsmitline-2b2e38"></a>
 </p>
 
 <p align="center">
@@ -77,7 +79,7 @@ Your agent starts Smitline with one Docker command, opens a setup page on your c
 
 With these ready, setup takes about 10 minutes.
 
-A call costs about 6 cents a minute with SignalWire: roughly $0.008 for the phone line and $0.05 for GPT-Live. A two-minute test call to a plumber cost us 14 cents.
+A call costs about 6 cents a minute with SignalWire: roughly $0.011 for the phone line (plus $0.006 a call) and $0.05 for GPT-Live. A two-minute test call to a plumber cost us 14 cents.
 
 Then just ask: *"Call +1 … and …"*, *"Practice the call on me first"*, or *"Join this meeting: &lt;link&gt;"*. The dashboard is at http://127.0.0.1:8095.
 
@@ -99,6 +101,8 @@ docker run -d --name smitline --restart unless-stopped --network host -v smitlin
 In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then run `docker exec smitline smitline setup secrets` to open the setup page.
 
 </details>
+
+**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Smithery](https://smithery.ai/servers/kaelorlabs/smitline) as `kaelorlabs/smitline`. Directories that mirror the registry, such as PulseMCP and GitHub's MCP registry, pick it up from there. Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
 
 ## Safe by default
 
