@@ -143,11 +143,11 @@ Every finished call carries `cost`, in US dollars:
     { "kind": "voice", "model": "gpt-live-1", "seconds": 30, "amount": 0.025, "source": "list_price" },
     { "kind": "summary", "model": "gpt-5.6-luna", "input": 478, "output": 316, "amount": 0.000475, "source": "list_price" }
   ],
-  "pricesAsOf": "2026-09-29"
+  "pricesAsOf": "2026-10-06"
 }
 ```
 
-- **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`); `COLLEAGUE_PHONE_PRICE_PER_MINUTE` sets the estimate's rate. A handed-over call's second leg, to your phone, is not included.
+- **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`) at US rates: Twilio $0.014 a started minute; SignalWire $0.011 a started minute ($0.008 outbound plus $0.003 for the audio stream) and $0.006 a call (`ratePerMinute`, `ratePerCall`). `COLLEAGUE_PHONE_PRICE_PER_MINUTE` replaces the estimate with one rate a started minute. A handed-over call's second leg, to your phone, is not included.
 - **OpenAI:** GPT-Live seconds, and the background and summary models' tokens (cached input and web searches included), priced from the table in `call_costs.py`. OpenAI does not bill per call, so these amounts are calculated, not billed. A model with no known price is listed in `unpriced` and left out of the total. A call keeps the cost it was given when it ended; update the table when prices change.
 
 `GET /v1/calls` also returns `spend`: finished calls' totals and connected `seconds` per day, in the reader's time zone when `tzOffset` (minutes east of UTC) is given. `channel=phone` or `channel=meeting` limits both the calls and the spend to one kind. The console's Calls and Meetings pages show today, this month, all time, and the average per call or meeting, and for each one its brief, result, cost, and transcript.

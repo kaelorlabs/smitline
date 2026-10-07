@@ -64,6 +64,15 @@ class CallCostTests(unittest.TestCase):
         override = call_cost(phone_record(phoneSeconds=30),
                              {'COLLEAGUE_PHONE_PRICE_PER_MINUTE': '0.02'})
         self.assertEqual(by_kind(override)['phone']['amount'], 0.02)
+        self.assertNotIn('ratePerCall', by_kind(override)['phone'])
+
+    def test_signalwire_estimate_matches_its_bills(self):
+        # SignalWire bills $0.011 a started minute plus $0.006 a call: 2 min 1 s is $0.039.
+        phone = by_kind(call_cost(phone_record(phoneSeconds=121)))['phone']
+        self.assertEqual(phone['provider'], 'signalwire')
+        self.assertEqual((phone['amount'], phone['ratePerMinute'], phone['ratePerCall']),
+                         (0.039, 0.011, 0.006))
+        self.assertEqual(by_kind(call_cost(phone_record(phoneSeconds=53)))['phone']['amount'], 0.017)
 
     def test_provider_is_known_from_the_call_id(self):
         record = phone_record(phoneSeconds=10)
