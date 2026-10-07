@@ -6,6 +6,7 @@ Smitline is listed as `io.github.kaelorlabs/smitline` so agents and developers c
 | --- | --- | --- |
 | [Official MCP Registry](https://registry.modelcontextprotocol.io) | `server.json` (OCI package `ghcr.io/kaelorlabs/smitline`) | PulseMCP and GitHub's MCP registry pick entries up from here. |
 | [Glama](https://glama.ai/mcp/servers) | The GitHub repository; `glama.json` names the maintainers | Glama's search also needs its build check to pass. |
+| [Smithery](https://smithery.ai) | The MCP bundle `smitline.mcpb` ([packages/mcpb](../packages/mcpb)) | Smithery lists local servers only as bundles. The bundle relays to the `smitline` container and asks for its token. |
 
 ## Publishing a release to the official registry (maintainers)
 
@@ -22,3 +23,15 @@ The registry checks that the image carries the label `io.modelcontextprotocol.se
    ```
 
    `login github` opens GitHub's device sign-in. Publishing under `io.github.kaelorlabs/` needs an owner of the kaelorlabs organization. A new version is a new `publish`; earlier versions stay listed.
+
+## Publishing the bundle to Smithery (maintainers)
+
+```bash
+node packages/mcpb/build.mjs
+npx -y smithery@latest auth login
+npx -y smithery@latest mcp publish packages/mcpb/dist/smitline.mcpb -n kaelorlabs/smitline
+```
+
+`auth login` opens Smithery's sign-in. Publish again after a release so the bundle carries the new version and tool list.
+
+For Glama's build check, the image answers MCP over stdio with `docker run -i --rm ghcr.io/kaelorlabs/smitline mcp`, and lists its tools without any keys.
