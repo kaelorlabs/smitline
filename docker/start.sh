@@ -6,6 +6,12 @@ set -euo pipefail
 cd /app
 mkdir -p "$COLLEAGUE_ROOT/.colleague" "$COLLEAGUE_MEETING_DATA"
 chmod 700 "$COLLEAGUE_ROOT/.colleague" "$COLLEAGUE_MEETING_DATA"
+# With a command, run that smitline command instead of the services. With `mcp`, MCP clients
+# that start their own container talk stdio (docker run -i --rm ... ghcr.io/kaelorlabs/smitline mcp);
+# with --network host and the smitline volume, calls go to the running smitline container.
+if [[ $# -gt 0 ]]; then
+  exec /usr/local/bin/smitline "$@"
+fi
 MODE=(--host "${COLLEAGUE_DAEMON_HOST:-127.0.0.1}")
 if [[ "${COLLEAGUE_SERVER_MODE:-}" == 1 ]]; then
   MODE+=(--server)
