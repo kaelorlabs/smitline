@@ -1,0 +1,77 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kaelorlabs/smitline",
+  "title": "Smitline",
+  "description": "Phone calls and Zoom, Teams and Google Meet meetings for any AI agent. Self-hosted.",
+  "websiteUrl": "https://github.com/kaelorlabs/smitline",
+  "repository": {
+    "url": "https://github.com/kaelorlabs/smitline",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/kaelorlabs/smitline:0.2.0",
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--name",
+          "value": "smitline",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "--network",
+          "value": "host",
+          "isRequired": true,
+          "description": "Serves the console and MCP on 127.0.0.1:8095 and reaches the phone provider. On Docker Desktop, turn on host networking first."
+        },
+        {
+          "type": "named",
+          "name": "--restart",
+          "value": "unless-stopped"
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "smitline:/data",
+          "isRequired": true,
+          "description": "Keeps your keys, settings, and call history in the smitline volume."
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "/var/run/docker.sock:/var/run/docker.sock",
+          "description": "Needed for meetings only: Smitline starts a meeting container for each meeting. This gives it control of Docker; leave it out for phone calls only."
+        },
+        {
+          "type": "named",
+          "name": "-d",
+          "isRequired": true
+        }
+      ],
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://127.0.0.1:8095/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer {smitline_token}",
+            "isRequired": true,
+            "isSecret": true,
+            "description": "Smitline's local MCP token. Print it with: docker exec smitline smitline setup register --json",
+            "variables": {
+              "smitline_token": {
+                "isRequired": true,
+                "isSecret": true,
+                "description": "The token from docker exec smitline smitline setup register --json"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
