@@ -7,10 +7,11 @@ import {
   InterruptError,
   redact,
 } from '../../sdk-typescript/src/index.mjs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
-export const MCP_SERVER_VERSION = '0.1.0';
+export const MCP_SERVER_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const DEFAULT_SMITLINE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };
