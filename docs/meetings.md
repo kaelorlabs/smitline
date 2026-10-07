@@ -37,7 +37,7 @@ A `live` health status means the bridge reached the meeting audio loop. Verify a
 
 ## Appearing in the meeting
 
-A virtual camera shows Smitline listening, working, or speaking, and never displays task text. Turn it off in the console to join audio-only. Private context added in the console reaches the voice and its backend as background.
+A virtual camera shows Smitline listening, working, or speaking, and never displays task text. Turn it off in the console to join audio-only. By default the camera is a still picture that changes with the state, which costs almost no CPU. `COLLEAGUE_MEETING_CAMERA_STYLE=animated` switches to the animated camera, which redraws at 30 frames a second and needs about a full CPU core more. Private context added in the console reaches the voice and its backend as background.
 
 ## Debugging from a checkout
 

@@ -355,6 +355,7 @@ async def main():
             microphone,
             enabled=runtime.camera_enabled,
             logo_src=runtime.camera_logo_data_uri or None,
+            style=runtime.camera_style,
         )
         presence = Presence(state, camera_feed)
         presence.sync()

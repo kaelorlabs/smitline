@@ -12,8 +12,10 @@ Patches ``enumerateDevices`` to include a virtual camera so
 platforms that check for camera hardware still show a video toggle.
 
 The camera canvas renders the Smitline mark (or a validated
-local avatar) directly. Audio amplitude drives an equalizer that
-reacts to speech in real time. Presence uses ``set_visual_state``.
+local avatar) directly. Two styles: ``still`` shows one picture per
+presence state at a few frames a second, which costs almost no CPU;
+``animated`` redraws at 30 fps, with an equalizer driven by the voice's
+amplitude. Presence uses ``set_visual_state``.
 """
 
 import asyncio
@@ -453,70 +455,180 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
         return camTrack;
     }}
 
-    const md = navigator.mediaDevices;
+    {device_patch}
+}})();"""
+
+# Routes camera requests to the canvas track from _initCanvas(); shared by both
+# styles. Inserted through str.format, so its braces are single.
+_DEVICE_PATCH = """\
+const md = navigator.mediaDevices;
 
     window.__camOrigGUM = md.getUserMedia.bind(md);
-    md.getUserMedia = async (constraints) => {{
+    md.getUserMedia = async (constraints) => {
         const wantsVideo = !!constraints?.video;
         const wantsAudio = !!constraints?.audio;
 
-        if (wantsAudio) {{
-            const real = await window.__camOrigGUM({{
+        if (wantsAudio) {
+            const real = await window.__camOrigGUM({
                 audio: constraints.audio,
                 video: false,
-            }});
+            });
             if (wantsVideo) real.addTrack(_initCanvas().clone());
             return real;
-        }}
-        if (wantsVideo) {{
+        }
+        if (wantsVideo) {
             return new MediaStream([_initCanvas().clone()]);
-        }}
+        }
         return window.__camOrigGUM(constraints);
-    }};
+    };
 
     const origAddTrack = RTCPeerConnection.prototype.addTrack;
-    RTCPeerConnection.prototype.addTrack = function(track, ...streams) {{
-        if (track.kind === 'video') {{
+    RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
+        if (track.kind === 'video') {
             return origAddTrack.call(
                 this, _initCanvas().clone(), ...streams
             );
-        }}
+        }
         return origAddTrack.call(this, track, ...streams);
-    }};
+    };
 
     const origEnum = md.enumerateDevices.bind(md);
-    md.enumerateDevices = async () => {{
+    md.enumerateDevices = async () => {
         const devices = await origEnum();
         const hasCamera = devices.some(d => d.kind === 'videoinput');
-        if (!hasCamera) {{
-            devices.push({{
+        if (!hasCamera) {
+            devices.push({
                 deviceId: 'virtual-camera',
                 groupId: 'virtual',
                 kind: 'videoinput',
                 label: 'Smitline',
-                toJSON() {{ return this; }},
-            }});
-        }}
+                toJSON() { return this; },
+            });
+        }
         return devices;
-    }};
+    };"""
+
+# The low-cost style: one still picture per presence state (the mark, plus bars
+# while speaking or three dots while working), drawn when the state changes and
+# repainted every 0.4 s so the platform keeps receiving frames; while speaking,
+# each repaint moves on to the next of three bar pictures.
+# A still picture at a few frames a second costs the video encoder almost
+# nothing; the animated style redraws and encodes 1280x720 at 30 fps.
+_STILL_CAMERA_TEMPLATE = """\
+(() => {{
+    const W = {w}, H = {h}, FPS = {fps}, REPAINT_MS = {repaint_ms};
+    const LOGO_SRC = __LOGO_SRC__;
+    const VISUAL_STATES = new Set(__VISUAL_STATES__);
+    // Bar pictures, shown in turn while speaking.
+    const BARS = [[0.35, 0.6, 0.85, 1, 0.85, 0.6, 0.35],
+                  [0.7, 0.45, 1, 0.6, 0.95, 0.4, 0.65],
+                  [0.5, 0.9, 0.55, 0.8, 0.45, 1, 0.5]];
+    let tick = 0;
+
+    if (window.__camOrigGUM) return;
+
+    let camTrack = null;
+    window.__visualState = 'joining';
+
+    function _initCanvas() {{
+        if (camTrack) return camTrack;
+
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const ctx = c.getContext('2d');
+        let logoImg = null;
+
+        function draw() {{
+            const state = window.__visualState;
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#30323b';
+            ctx.fillRect(0, 0, W, H);
+            if (!logoImg) return;
+            const logoH = H * 0.35, cx = W / 2, cy = H / 2;
+            const below = cy + logoH / 2 + H * 0.08;
+            ctx.globalAlpha = state === 'ended' ? 0.38 : 1;
+            ctx.drawImage(logoImg, cx - logoH / 2, cy - logoH / 2, logoH, logoH);
+            ctx.fillStyle = '#ffffff';
+            if (state === 'speaking') {{
+                const gap = H * 0.024, barW = H * 0.012;
+                const bars = BARS[tick % BARS.length];
+                const ox = cx - (bars.length - 1) * gap / 2;
+                ctx.globalAlpha = 0.7;
+                bars.forEach((v, i) => {{
+                    const h = H * 0.06 * v;
+                    ctx.beginPath();
+                    ctx.roundRect(ox + i * gap - barW / 2, below - h / 2,
+                        barW, h, barW / 2);
+                    ctx.fill();
+                }});
+            }} else if (state === 'working' || state === 'finalizing'
+                    || state === 'joining') {{
+                const gap = H * 0.04, r = H * 0.012;
+                ctx.globalAlpha = 0.55;
+                for (let i = -1; i <= 1; i++) {{
+                    ctx.beginPath();
+                    ctx.arc(cx + i * gap, below, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }}
+            }}
+            ctx.globalAlpha = 1;
+        }}
+
+        const img = new Image();
+        img.onload = () => {{ logoImg = img; draw(); }};
+        img.src = LOGO_SRC;
+
+        window.__setVisualState = (name) => {{
+            if (!VISUAL_STATES.has(name) || name === window.__visualState) return;
+            window.__visualState = name;
+            draw();
+        }};
+        draw();
+        setInterval(() => {{ tick++; draw(); }}, REPAINT_MS);
+
+        camTrack = c.captureStream(FPS).getVideoTracks()[0];
+        return camTrack;
+    }}
+
+    {device_patch}
 }})();"""
 
+CAMERA_STYLES = ("still", "animated")
+_STILL_WIDTH = 640
+_STILL_HEIGHT = 360
+_STILL_FPS = 5
+_STILL_REPAINT_MS = 400
 
-def build_camera_override_script(*, logo_src: str | None = None) -> str:
+
+def build_camera_override_script(
+    *, logo_src: str | None = None, style: str = "animated"
+) -> str:
     """Build the getUserMedia override script without interpolating untrusted braces."""
-    script = _CAMERA_OVERRIDE_TEMPLATE.format(
-        w=_CAM_WIDTH,
-        h=_CAM_HEIGHT,
-        n_bands=_NUM_BANDS,
-        fx_speaking=_FX_SPEAKING,
-        fx_typing=_FX_TYPING,
-        fx_share=_FX_SHARE,
-        fx_reading=_FX_READING,
-        fx_interrupted=_FX_INTERRUPTED,
-        fx_thinking=_FX_THINKING,
-        fx_busy=_FX_BUSY,
-        fx_listening=_FX_LISTENING,
-    )
+    if style == "still":
+        script = _STILL_CAMERA_TEMPLATE.format(
+            w=_STILL_WIDTH,
+            h=_STILL_HEIGHT,
+            fps=_STILL_FPS,
+            repaint_ms=_STILL_REPAINT_MS,
+            device_patch=_DEVICE_PATCH,
+        )
+    elif style == "animated":
+        script = _CAMERA_OVERRIDE_TEMPLATE.format(
+            w=_CAM_WIDTH,
+            h=_CAM_HEIGHT,
+            n_bands=_NUM_BANDS,
+            fx_speaking=_FX_SPEAKING,
+            fx_typing=_FX_TYPING,
+            fx_share=_FX_SHARE,
+            fx_reading=_FX_READING,
+            fx_interrupted=_FX_INTERRUPTED,
+            fx_thinking=_FX_THINKING,
+            fx_busy=_FX_BUSY,
+            fx_listening=_FX_LISTENING,
+            device_patch=_DEVICE_PATCH,
+        )
+    else:
+        raise ValueError(f"Unknown camera style {style!r}")
     return (
         script.replace("__LOGO_SRC__", json.dumps(logo_src or _LOGO_SVG))
         .replace("__VISUAL_STATES__", json.dumps(list(_VISUAL_STATES)))
@@ -538,13 +650,18 @@ class CameraFeed:
         *,
         enabled: bool = True,
         logo_src: str | None = None,
+        style: str = "animated",
     ) -> None:
         """Initialize with the underlying audio writer."""
+        if style not in CAMERA_STYLES:
+            raise ValueError(f"Unknown camera style {style!r}")
         self.enabled = enabled
+        self.style = style
         self._logo_src = logo_src or _LOGO_SVG
         self._meeting_page: Page | None = None
         self._last_band_time: float = 0
-        if enabled:
+        # Only the animated style draws the voice's frequency bands.
+        if enabled and style == "animated":
             self.audio_writer = _AmplitudeAudioWriter(writer, self._on_bands)
         else:
             self.audio_writer = writer
@@ -555,7 +672,7 @@ class CameraFeed:
         if not self.enabled:
             return
         await meeting_page.add_init_script(
-            build_camera_override_script(logo_src=self._logo_src)
+            build_camera_override_script(logo_src=self._logo_src, style=self.style)
         )
 
     def set_visual_state(self, name: str | None) -> None:

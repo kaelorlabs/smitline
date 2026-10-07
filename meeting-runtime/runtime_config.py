@@ -46,6 +46,8 @@ class RuntimeConfig:
     # Responses delegation: the backend model GPT-Live hands hard questions to.
     backend_model: str = ''
     web_search: bool = False
+    # 'still' (default): one picture per state, almost no CPU. 'animated': the 30 fps canvas.
+    camera_style: str = 'still'
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -68,6 +70,9 @@ class RuntimeConfig:
         meeting_instructions = env.get('COLLEAGUE_MEETING_INSTRUCTIONS', '').strip()
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
+        camera_style = (env.get('COLLEAGUE_MEETING_CAMERA_STYLE') or 'still').strip().lower()
+        if camera_style not in ('still', 'animated'):
+            raise ValueError("COLLEAGUE_MEETING_CAMERA_STYLE must be 'still' or 'animated'")
         camera_enabled = True
         camera_default_on = True
         camera_logo = ''
@@ -92,7 +97,8 @@ class RuntimeConfig:
                    meeting_intro=_boolean(env.get('COLLEAGUE_MEETING_INTRO'), True),
                    owner_name=owner_name(state, env),
                    backend_model=backend_model or DEFAULT_BACKEND_MODEL,
-                   web_search=web_search)
+                   web_search=web_search,
+                   camera_style=camera_style)
 
 
 def meeting_state_from_environ(environ=None):
