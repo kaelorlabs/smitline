@@ -33,4 +33,20 @@ jobs:
           ./mcp-publisher --version
       - run: ./mcp-publisher validate
       - run: ./mcp-publisher login github-oidc
-      - run: ./mcp-publisher publish
+      # The registry sometimes times out (HTTP 504), sometimes after the version was saved; so
+      # after a failure, stop if the version is listed, otherwise retry.
+      - name: Publish
+        run: |
+          name="$(jq -r .name server.json)"
+          version="$(jq -r .version server.json)"
+          for attempt in 1 2 3 4; do
+            if ./mcp-publisher publish; then exit 0; fi
+            if curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=$name" \
+                | jq -e --arg v "$version" '.servers[] | select(.server.version == $v)' > /dev/null; then
+              echo "$name $version is listed"
+              exit 0
+            fi
+            echo "Attempt $attempt failed; retrying in $((attempt * 30)) s" >&2
+            sleep $((attempt * 30))
+          done
+          exit 1
