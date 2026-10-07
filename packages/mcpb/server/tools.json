@@ -8,7 +8,7 @@
     },
     "serverInfo": {
       "name": "smitline",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     "instructions": "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then wait_for_call until the call finishes, and report the outcome. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to."
   },
