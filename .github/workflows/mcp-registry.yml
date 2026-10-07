@@ -1,0 +1,36 @@
+# Publishes server.json to the official MCP Registry (registry.modelcontextprotocol.io) as
+# io.github.kaelorlabs/smitline. Runs after a version tag's images are published (from
+# images.yml), or by hand from the Actions tab. GitHub's OIDC token proves the run belongs to a
+# kaelorlabs repository, so no one has to sign in and no secret is stored.
+name: MCP Registry
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: server.json names a published image
+        run: |
+          version="$(jq -r .version server.json)"
+          image="$(jq -r '.packages[] | select(.registryType == "oci") | .identifier' server.json)"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "server.json says $version but the tag is $GITHUB_REF_NAME; update server.json in the release PR" >&2
+            exit 1
+          fi
+          docker manifest inspect "$image" > /dev/null
+          echo "Publishing $version ($image)"
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --version
+      - run: ./mcp-publisher validate
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
