@@ -1,6 +1,6 @@
 # Smitline MCP server
 
-The call tools for any MCP-capable agent (`smitline-mcp` 0.1.1): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
+The call tools for any MCP-capable agent (`smitline-mcp` 0.2.0): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
 
 - **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `smitline` container.
 - **stdio**, with `smitline mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.

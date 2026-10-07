@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "smitline",
   "display_name": "Smitline",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Phone calls and Zoom, Teams and Google Meet meetings for any AI agent. Self-hosted.",
   "long_description": "Smitline lets your agent place phone calls and join Zoom, Teams and Google Meet meetings. It says it is an AI, talks in real time with GPT-Live, and returns a structured result: the outcome, decisions, action items and the transcript. Smitline runs on your computer in Docker with your own OpenAI and phone-provider keys; this bundle connects your MCP client to it. Set it up first: https://github.com/kaelorlabs/smitline#readme",
   "author": {

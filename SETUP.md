@@ -192,7 +192,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 ## Updating and removing
 
 - **Update:** `docker pull ghcr.io/kaelorlabs/smitline`, then `docker rm -f smitline` and run the `docker run` command from step 2 again. The volume keeps everything.
-- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.1.0`, in both commands. The meeting image with the matching code is pulled for it.
+- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.2.0`, in both commands. The meeting image with the matching code is pulled for it.
 - **Remove:** `docker rm -f smitline`. Also run `docker volume rm smitline` to delete keys and records.
 
 ## Troubleshooting

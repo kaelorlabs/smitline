@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-06
 
 - **MCP bundle.** `packages/mcpb` builds `smitline.mcpb`, an [MCP bundle](https://github.com/modelcontextprotocol/mcpb) for Claude Desktop, Smithery, and other clients that install bundles. It relays to the `smitline` container's MCP endpoint with the token you enter when installing it, has no dependencies, and still lists the tools when Smitline is not running. `node packages/mcpb/build.mjs` builds it.
 - **Everything is called Smitline.** Settings are `SMITLINE_*` (was `COLLEAGUE_*`), the private folder is `.smitline/` (was `.colleague/`), the SDK classes are `Smitline` and `SmitlineError`, webhook and SIP headers are `X-Smitline-*`, and the `colleague` command aliases are gone. Existing installs keep working: on startup Smitline renames old keys in `.env` and moves `.colleague/` to `.smitline/` (leaving a link for older images), `COLLEAGUE_*` variables still apply, and `Colleague` / `ColleagueError` remain as SDK aliases. The meeting assistant no longer answers to "Colleague".
