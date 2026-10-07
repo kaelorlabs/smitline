@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "smitline",
   "display_name": "Smitline",
-  "version": "0.2.0",
-  "description": "Phone calls and Zoom, Teams and Google Meet meetings for any AI agent. Self-hosted.",
-  "long_description": "Smitline lets your agent place phone calls and join Zoom, Teams and Google Meet meetings. It says it is an AI, talks in real time with GPT-Live, and returns a structured result: the outcome, decisions, action items and the transcript. Smitline runs on your computer in Docker with your own OpenAI and phone-provider keys; this bundle connects your MCP client to it. Set it up first: https://github.com/kaelorlabs/smitline#readme",
+  "version": "0.2.1",
+  "description": "Make phone calls and join Zoom, Microsoft Teams and Google Meet meetings from any AI agent. A self-hosted voice agent.",
+  "long_description": "Smitline gives your AI agent a phone line and a seat in your meetings. It makes phone calls (restaurants, offices, plumbers, friends) through your own SignalWire or Twilio number, joins Zoom, Microsoft Teams and Google Meet meetings as a meeting bot that listens and answers when spoken to, says it is an AI, talks in real time with OpenAI GPT-Live, and returns a structured result: the outcome, details such as times and prices, decisions, action items, the transcript and the cost. Smitline runs on your computer in Docker with your own keys; this bundle connects your MCP client to it. Set it up first: https://github.com/kaelorlabs/smitline#readme",
   "author": {
     "name": "Kaelor Labs",
     "url": "https://github.com/kaelorlabs"
@@ -18,13 +18,28 @@
   "support": "https://github.com/kaelorlabs/smitline/issues",
   "icon": "icon.png",
   "license": "Apache-2.0",
-  "keywords": ["phone", "calls", "meetings", "zoom", "teams", "google meet", "voice", "self-hosted"],
+  "keywords": [
+    "phone calls",
+    "voice calls",
+    "voice agent",
+    "telephony",
+    "twilio",
+    "signalwire",
+    "meeting bot",
+    "zoom",
+    "microsoft teams",
+    "google meet",
+    "meetings",
+    "self-hosted"
+  ],
   "server": {
     "type": "node",
     "entry_point": "server/index.mjs",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/index.mjs"],
+      "args": [
+        "${__dirname}/server/index.mjs"
+      ],
       "env": {
         "SMITLINE_MCP_URL": "${user_config.url}",
         "SMITLINE_MCP_TOKEN": "${user_config.token}"
@@ -35,9 +50,9 @@
     "token": {
       "type": "string",
       "title": "Smitline MCP token",
-      "description": "Printed by: docker exec smitline smitline setup register --json",
+      "description": "Printed by: docker exec smitline smitline setup register --json. Without it the tools are listed, and calls say how to connect.",
       "sensitive": true,
-      "required": true
+      "required": false
     },
     "url": {
       "type": "string",
@@ -48,7 +63,13 @@
     }
   },
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
-    "runtimes": { "node": ">=18.0.0" }
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
   }
 }

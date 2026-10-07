@@ -79,3 +79,23 @@ test('a refused token is reported as such', async (t) => {
   assert.equal(out[0].result.isError, true);
   assert.match(out[0].result.content[0].text, /refused the token/);
 });
+
+test('with no token set, a tool call says to add it', async (t) => {
+  const server = http.createServer((request, response) => response.writeHead(401).end());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const child = spawn(process.execPath, [SERVER], { env: { ...process.env, SMITLINE_MCP_URL: `http://127.0.0.1:${server.address().port}/mcp`, SMITLINE_MCP_TOKEN: '${user_config.token}' } });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_calls', arguments: {} } })}\n`);
+  await new Promise((resolve) => child.on('close', resolve));
+  assert.match(JSON.parse(stdout.trim()).result.content[0].text, /No Smitline token is set/);
+});
+
+test('every tool has a title and annotations', async () => {
+  const { tools } = JSON.parse(fs.readFileSync(new URL('../server/tools.json', import.meta.url), 'utf8'));
+  for (const tool of tools) {
+    assert.ok(tool.title, tool.name);
+    assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', tool.name);
+  }
+});

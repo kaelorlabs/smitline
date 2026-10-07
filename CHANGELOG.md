@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-07
 
+- **Easier to find and to use from any agent.** Every MCP tool has a title and annotations (read-only, destructive, open-world), and the descriptions of `get_call`, `list_calls`, `list_contacts`, `send_call_instruction`, `check_call_brief` and `list_voices` say what they return, their errors and limits, and which tool to use instead. The registry listing has an icon and a description written the way people search ("make phone calls", "meetings"); the bundle's token is optional, so it installs before Smitline is set up, and says what to do when no token is set.
 - The README links Smitline's listings in the official MCP Registry (`io.github.kaelorlabs/smitline`), on Smithery (`kaelorlabs/smitline`) and on Glama, and the SignalWire cost line uses its current price.
 - Each version tag also publishes `server.json` to the official MCP Registry, from GitHub Actions with its OIDC token (`.github/workflows/mcp-registry.yml`, also runnable by hand).
 - The MCP bundle lists its tools in its manifest, so directories show them without running it. The build also writes `smitline-smithery.mcpb`, whose tools carry their input schemas, as Smithery requires.

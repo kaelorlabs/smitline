@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smitline"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local Smitline SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon."
 readme = "README.md"
 license = "Apache-2.0"

@@ -2,17 +2,26 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.kaelorlabs/smitline",
   "title": "Smitline",
-  "description": "Phone calls and Zoom, Teams and Google Meet meetings for any AI agent. Self-hosted.",
+  "description": "Make phone calls and join Zoom, Teams and Google Meet meetings from any AI agent. Self-hosted.",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/kaelorlabs/smitline/main/packages/mcpb/icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
   "websiteUrl": "https://github.com/kaelorlabs/smitline",
   "repository": {
     "url": "https://github.com/kaelorlabs/smitline",
     "source": "github"
   },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/kaelorlabs/smitline:0.2.0",
+      "identifier": "ghcr.io/kaelorlabs/smitline:0.2.1",
       "runtimeHint": "docker",
       "runtimeArguments": [
         {

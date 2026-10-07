@@ -29,9 +29,9 @@ export function createRelay({ url, token, fetchImpl = fetch, write }) {
     if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: SNAPSHOT.tools } };
     if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
     if (method === 'tools/call') {
-      const text = /token was refused/.test(error)
-        ? `Smitline at ${url} refused the token. Copy it again into this bundle's settings: docker exec smitline smitline setup register --json prints it.`
-        : `${NOT_RUNNING.replace('{url}', url)} (${error})`;
+      const text = !/token was refused/.test(error) ? `${NOT_RUNNING.replace('{url}', url)} (${error})`
+        : token ? `Smitline at ${url} refused the token. Copy it again into this bundle's settings: docker exec smitline smitline setup register --json prints it.`
+          : `No Smitline token is set. Add it in this bundle's settings: docker exec smitline smitline setup register --json prints it.`;
       return { jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text }] } };
     }
     return { jsonrpc: '2.0', id, error: { code: -32603, message: NOT_RUNNING.replace('{url}', url) } };
@@ -74,8 +74,13 @@ export function createRelay({ url, token, fetchImpl = fetch, write }) {
 }
 
 function main() {
-  const url = process.env.SMITLINE_MCP_URL || 'http://127.0.0.1:8095/mcp';
-  const token = (process.env.SMITLINE_MCP_TOKEN || '').trim();
+  // An unset optional setting can arrive as its literal placeholder, such as ${user_config.token}.
+  const setting = (name) => {
+    const value = (process.env[name] || '').trim();
+    return value.startsWith('${') ? '' : value;
+  };
+  const url = setting('SMITLINE_MCP_URL') || 'http://127.0.0.1:8095/mcp';
+  const token = setting('SMITLINE_MCP_TOKEN');
   const handle = createRelay({ url, token, write: (message) => process.stdout.write(`${JSON.stringify(message)}\n`) });
   // The session id comes back with the reply to initialize and every later message must carry
   // it, so messages wait for the latest initialize; after that they run side by side, so a long
