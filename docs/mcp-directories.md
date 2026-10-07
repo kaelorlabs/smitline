@@ -7,7 +7,7 @@ Smitline is listed so agents and developers can find it. Every listing describes
 | [Official MCP Registry](https://registry.modelcontextprotocol.io) | [`io.github.kaelorlabs/smitline`](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) | `server.json` (OCI package `ghcr.io/kaelorlabs/smitline`), published by GitHub Actions on every release. |
 | [Smithery](https://smithery.ai/servers/kaelorlabs/smitline) | [`kaelorlabs/smitline`](https://smithery.ai/servers/kaelorlabs/smitline) | The MCP bundle `smitline-smithery.mcpb` ([packages/mcpb](../packages/mcpb)). Smithery lists local servers only as bundles; the bundle relays to the `smitline` container and asks for its token. |
 | PulseMCP, GitHub's MCP registry | Mirrored from the official registry | Nothing to do: they read the official registry. |
-| [Glama](https://glama.ai/mcp/servers) | Submitted, awaiting review | The GitHub repository; `glama.json` names the maintainers. Glama's search also needs its build check to pass. |
+| [Glama](https://glama.ai/mcp/servers) | [`kaelorlabs/smitline`](https://glama.ai/mcp/servers/kaelorlabs/smitline) | The GitHub repository; `glama.json` names the maintainers. Glama's build check runs `node packages/mcp/src/server.mjs` from a clone (no install step, no keys) behind its `mcp-proxy`, and lists the tools. |
 
 ## Publishing a release to the official registry (maintainers)
 
