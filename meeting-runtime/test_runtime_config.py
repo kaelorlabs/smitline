@@ -13,6 +13,11 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertTrue(config.camera_default_on)
         self.assertEqual(config.backend_model, DEFAULT_BACKEND_MODEL)
         self.assertFalse(config.web_search)
+        self.assertEqual(config.camera_style, 'still')
+
+    def test_camera_style_comes_from_env(self):
+        config = RuntimeConfig.from_environ({'SMITLINE_MEETING_CAMERA_STYLE': 'Animated'})
+        self.assertEqual(config.camera_style, 'animated')
 
     def test_backend_model_and_web_search_come_from_env(self):
         config = RuntimeConfig.from_environ({
@@ -27,7 +32,8 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_invalid_values_fail_at_startup(self):
         for env in ({'SMITLINE_MEETING_BACKEND_MODEL': 'two words'},
                     {'SMITLINE_MEETING_INSTRUCTIONS': 'x' * 2001},
-                    {'SMITLINE_PARTICIPANT_NAME': ''}):
+                    {'SMITLINE_PARTICIPANT_NAME': ''},
+                    {'SMITLINE_MEETING_CAMERA_STYLE': 'video'}):
             with self.assertRaises(ValueError):
                 RuntimeConfig.from_environ(env)
 

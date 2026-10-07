@@ -956,4 +956,6 @@ test('setup set accepts the meeting and backend settings, and checks their value
   assert.equal(validateSetting('SMITLINE_MEETING_BACKEND_MODEL', 'gpt-5.6-luna'), 'gpt-5.6-luna');
   assert.throws(() => validateSetting('SMITLINE_PHONE_WEB_SEARCH', 'yes'), /must be 0 or 1/);
   assert.throws(() => validateSetting('SMITLINE_PHONE_BACKEND_MODEL', 'gpt 5; rm'), /model name/);
+  assert.equal(validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'animated'), 'animated');
+  assert.throws(() => validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'video'), /still or animated/);
 });

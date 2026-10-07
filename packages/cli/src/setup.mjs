@@ -25,7 +25,7 @@ export const SETTING_KEYS = Object.freeze([
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
   'SMITLINE_PHONE_AUDIO', 'SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
   'SMITLINE_CALLING_HOURS', 'SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR',
-  'SMITLINE_ALLOW_PREMIUM_NUMBERS',
+  'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETING_CAMERA_STYLE',
 ]);
 export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
@@ -187,6 +187,9 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   if (['SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR'].includes(key) && !/^[0-9]{1,4}$/.test(text)) {
     throw new Error(`${key} must be a whole number; 0 turns the limit off`);
+  }
+  if (key === 'SMITLINE_MEETING_CAMERA_STYLE' && !['still', 'animated'].includes(text)) {
+    throw new Error('SMITLINE_MEETING_CAMERA_STYLE must be still or animated');
   }
   if (key === 'SMITLINE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
     throw new Error('SMITLINE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');

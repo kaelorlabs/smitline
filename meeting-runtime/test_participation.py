@@ -124,6 +124,34 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    async def test_floor_follows_the_voice_while_silence_keeps_streaming(self):
+        # GPT-Live keeps sending silence between replies, so the queue never runs dry.
+        adapter, microphone, state = Adapter(), Mic(), {}
+        seen = []
+        participation = Participation(
+            adapter, microphone, state, quiet_seconds=.03,
+            on_presence=lambda: seen.append(state.get('floorState')))
+        task = asyncio.create_task(participation.run())
+        voice = struct.pack('<120h', *([500] * 120))
+        silence = bytes(240)
+
+        async def stream(frame, seconds):
+            for _ in range(int(seconds / .01)):
+                participation.offer(frame)
+                await asyncio.sleep(.01)
+        try:
+            await stream(voice, .05)
+            self.assertEqual(state['floorState'], 'speaking')
+            await stream(silence, .15)
+            self.assertEqual(state['floorState'], 'listening')
+            self.assertFalse(participation.gate.muted)
+            await stream(voice, .05)
+            self.assertEqual(state['floorState'], 'speaking')
+            self.assertEqual(seen[-3:], ['speaking', 'listening', 'speaking'])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_external_platform_mute_is_respected(self):
         adapter, microphone, state = Adapter(), Mic(), {}
         participation = Participation(adapter, microphone, state, quiet_seconds=.03)

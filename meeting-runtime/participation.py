@@ -117,6 +117,24 @@ class Participation:
             self.on_presence()
         return True
 
+    def _follow_voice(self):
+        """Keep floorState on audible speech while the gate is open.
+
+        GPT-Live keeps streaming silence between replies, so the queue rarely runs dry
+        and the quiet-time mute above may never come; the floor still returns to
+        listening once the voice has been quiet for quiet_seconds.
+        """
+        quiet = self.clock() - self.last_output_audio > self.quiet_seconds
+        floor = self.state.get('floorState')
+        if floor == 'speaking' and quiet:
+            self.state['floorState'] = 'listening'
+        elif floor == 'listening' and not quiet:
+            self.state['floorState'] = 'speaking'
+        else:
+            return
+        if self.on_presence:
+            self.on_presence()
+
     async def stop_output(self, mute_platform=False):
         async with self.lock:
             self._discard_pending()
@@ -170,6 +188,7 @@ class Participation:
                         if self.on_presence:
                             self.on_presence()
                     self.gate.offer(data)
+                    self._follow_voice()
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:
             await self.stop_output(mute_platform=True)
