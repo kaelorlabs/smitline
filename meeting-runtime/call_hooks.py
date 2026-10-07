@@ -157,6 +157,9 @@ class DefaultCallHooks:
         self.clock = clock
         self.do_not_call_list = DoNotCallList(
             Path(env_file).parent / '.colleague' / 'do-not-call.json' if env_file else None)
+        from contacts import ContactBook
+        self.contact_book = ContactBook(
+            Path(env_file).parent / '.colleague' / 'contacts.json' if env_file else None)
 
     def now(self):
         return self.clock() if self.clock else datetime.now(timezone.utc)

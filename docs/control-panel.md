@@ -20,6 +20,12 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 
 `http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `COLLEAGUE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
+## Contacts
+
+`http://127.0.0.1:8095/contacts` lists everyone your agent has called or been called by, latest first, with a search. Choosing one shows its calls and **What the next call would know**: the notes a new call to that number would start with. Give it a name and notes (for you; calls do not read them), and turn on **Add to new calls automatically** to have every new outbound call to that number start with those notes. Your agent can still leave them out of a call, and incoming calls never get them. **Forget name and notes** removes what you saved; the calls stay. Saving takes the console's token and a same-origin request.
+
+On **Calls**, the list can be grouped **By contact** or **By task**, and each call shows its contact and task, **Context Smitline started with** (the earlier calls' notes it carried), and **Saved for later calls** (a note your agent saved on it). See [earlier calls](calls.md#earlier-calls).
+
 ## Account
 
 `http://127.0.0.1:8095/setup` (**Account**) shows the checklist `smitline setup status` prints, with each item OK, needing a fix, or not checked, and every key and setting from the setup page. It verifies the keys online when it opens and on **Check again**.

@@ -238,12 +238,27 @@ export function createDaemonClient(options = {}) {
     getHandoff(meetingId, { startIfNeeded = false } = {}) {
       return send('GET', `/v1/meetings/${meetingId}/handoff`, undefined, { startIfNeeded });
     },
-    listCalls(limit = 30, tzOffset = '', channel = '') {
+    listCalls(limit = 30, tzOffset = '', channel = '', { contact = '', task = '' } = {}) {
       // tzOffset: the reader's minutes east of UTC, so spend is grouped by their local day.
       const zone = /^-?\d{1,3}$/.test(String(tzOffset)) ? `&tzOffset=${tzOffset}` : '';
       // channel: phone or meeting, for a page that shows only one kind and its own totals.
       const only = ['phone', 'meeting'].includes(channel) ? `&channel=${channel}` : '';
-      return send('GET', `/v1/calls?limit=${Number(limit) || 30}${zone}${only}`, undefined, { startIfNeeded: false });
+      // contact: one number's calls; task: one task's calls.
+      const who = /^\+[1-9][0-9]{7,14}$/.test(contact) ? `&contact=${encodeURIComponent(contact)}` : '';
+      const job = /^[a-z0-9][a-z0-9-]{0,63}$/.test(task) ? `&task=${task}` : '';
+      return send('GET', `/v1/calls?limit=${Number(limit) || 30}${zone}${only}${who}${job}`, undefined, { startIfNeeded: false });
+    },
+    listContacts() {
+      return send('GET', '/v1/contacts', undefined, { startIfNeeded: false });
+    },
+    getContact(number) {
+      return send('GET', `/v1/contacts/${encodeURIComponent(number)}`, undefined, { startIfNeeded: false });
+    },
+    updateContact(number, changes) {
+      return send('PATCH', `/v1/contacts/${encodeURIComponent(number)}`, changes, { startIfNeeded: false });
+    },
+    forgetContact(number) {
+      return send('DELETE', `/v1/contacts/${encodeURIComponent(number)}`, undefined, { startIfNeeded: false });
     },
     createCall(brief) {
       return send('POST', '/v1/calls', brief, { startIfNeeded: true });

@@ -65,18 +65,22 @@ const USAGE = `Usage:
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
                [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
-               [--check] [--wait]
+               [--task <id> [--task-title <text>]] [--carry-task] [--carry-contact | --no-carry-contact]
+               [--carry-call <id,id>] [--check] [--wait]
   smitline call --meeting <url> --objective <text> [...same options] [--wait]
   smitline call --channel meeting --to <url> --objective <text> [...same options] [--wait]
   smitline call --brief <json> | --brief-file <path> [--check] [--wait]
-  smitline calls list [--limit <n>]
+  smitline calls list [--limit <n>] [--channel phone|meeting] [--contact <+E.164>] [--task <id>]
   smitline calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
+  smitline calls note --call-id <id> --text <note for later calls>
   smitline calls instruct --call-id <id> --text <guidance> [--silent]
   smitline calls recording --call-id <id> [--format wav|mp3] [--out <file>]   (no --out: to stdout)
   smitline profile show
   smitline profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
   smitline profile person --name <name> [--relationship <text>] [--phone <+E.164>] [--notes <text>] [--remove]
   smitline do-not-call [list] | add <+E.164> [--reason <text>] | remove <+E.164>
+  smitline contacts [list] | show <+E.164> | forget <+E.164>
+  smitline contacts set <+E.164> [--name <text>] [--notes <text>] [--auto-context on|off]
   smitline voices
   smitline setup status [--json] [--no-verify]
   smitline setup secrets [--no-open] [--wait]
@@ -199,6 +203,17 @@ async function contextFromArgs(args, text) {
   return content.trim();
 }
 
+// Which earlier calls' notes the call starts with: its task, the same number, or named calls.
+function carryFromArgs(args, text) {
+  const carry = {};
+  if (args['carry-task'] === true) carry.task = true;
+  if (args['carry-contact'] === true) carry.contact = true;
+  if (args['no-carry-contact'] === true) carry.contact = false;
+  const calls = text(args['carry-call']);
+  if (calls) carry.calls = calls.split(',').map((id) => id.trim()).filter(Boolean);
+  return Object.keys(carry).length ? carry : undefined;
+}
+
 async function briefFromArgs(args, root) {
   if (args.brief || args['brief-file']) {
     const text = args.brief ? String(args.brief) : await fs.readFile(path.resolve(String(args['brief-file'])), 'utf8');
@@ -233,6 +248,8 @@ async function briefFromArgs(args, root) {
     afterHours: args['after-hours'] === true ? true : undefined,
     record: args.record === true ? true : undefined,
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
+    task: text(args.task) ? { id: text(args.task), ...(text(args['task-title']) ? { title: text(args['task-title']) } : {}) } : undefined,
+    carryFrom: carryFromArgs(args, text),
   };
   return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
 }
@@ -347,10 +364,17 @@ async function callsCommand(args) {
   const { client } = colleagueFromArgs(args);
   const action = args._[1] || 'list';
   if (action === 'list') {
-    printJson({ calls: await client.listCalls(Number(args.limit || 20)) });
+    const filters = Object.fromEntries(['channel', 'contact', 'task']
+      .filter((key) => args[key] !== undefined && args[key] !== true).map((key) => [key, String(args[key])]));
+    printJson({ calls: await client.listCalls(Number(args.limit || 20), filters) });
     return EXIT.ok;
   }
   const callId = requireCallId(args);
+  if (action === 'note') {
+    if (!args.text || args.text === true) throw new ValidationError('--text is required');
+    printJson(await client.saveCallNote(callId, String(args.text)));
+    return EXIT.ok;
+  }
   if (action === 'get') printJson(await client.getCall(callId));
   else if (action === 'wait') {
     const timeout = args.timeout === undefined ? null : Number(args.timeout);
@@ -767,6 +791,40 @@ async function doNotCallCommand(args) {
   return EXIT.ok;
 }
 
+async function contactsCommand(args) {
+  const { client } = colleagueFromArgs(args);
+  const action = args._[1] || 'list';
+  if (action === 'list') {
+    printJson({ contacts: await client.listContacts() });
+    return EXIT.ok;
+  }
+  const number = args._[2] === undefined ? undefined : String(args._[2]);
+  if (!['show', 'set', 'forget'].includes(action)) throw new ValidationError('unknown contacts command');
+  if (!number) throw new ValidationError(`usage: smitline contacts ${action} <+E.164>`);
+  if (action === 'show') printJson(await client.getContact(number));
+  else if (action === 'forget') printJson(await client.forgetContact(number));
+  else {
+    const changes = {};
+    for (const key of ['name', 'notes']) {
+      if (args[key] !== undefined) changes[key] = args[key] === true ? '' : String(args[key]);
+    }
+    if (args['auto-context'] !== undefined) {
+      if (!['on', 'off'].includes(String(args['auto-context']))) throw new ValidationError('--auto-context must be on or off');
+      changes.autoContext = String(args['auto-context']) === 'on';
+    }
+    if (!Object.keys(changes).length) {
+      throw new ValidationError('usage: smitline contacts set <+E.164> [--name <text>] [--notes <text>] [--auto-context on|off]');
+    }
+    try {
+      printJson(await client.updateContact(number, changes));
+    } catch (error) {
+      explainValidation(error);
+      throw error;
+    }
+  }
+  return EXIT.ok;
+}
+
 async function connectorCommand(args) {
   const root = dataRoot(args);
   const store = openConnectorStore(root);
@@ -809,6 +867,7 @@ async function main(argv = process.argv.slice(2)) {
     if (command === 'connector') return await connectorCommand(args);
     if (command === 'profile') return await profileCommand(args);
     if (command === 'do-not-call') return await doNotCallCommand(args);
+    if (command === 'contacts') return await contactsCommand(args);
     if (command === 'mcp') {
       // The stdio MCP server in this process (docker exec -i smitline smitline mcp).
       // stdout carries protocol frames only; this returns when stdin closes.

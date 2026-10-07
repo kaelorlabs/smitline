@@ -15,9 +15,16 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'record', 'notify', 'camera',
+    'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
+# A task ties calls toward one goal together, such as "roof repair quotes"; the agent names it.
+TASK_FIELDS = ('id', 'title')
+TASK_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
+# Which earlier calls' notes a call starts with. See docs/calls.md#earlier-calls.
+CARRY_FIELDS = ('task', 'contact', 'calls')
+CALL_ID = re.compile(r'^call-[0-9a-f]{16}$')
+MAX_CARRY_CALLS = 10
 # A meeting's virtual camera, as the console's manual start sets it. No avatarPath: a brief
 # never names a file on the computer running Smitline.
 CAMERA_FIELDS = ('enabled', 'defaultOn', 'avatarDataUri')
@@ -132,12 +139,23 @@ class CallBrief:
     webhook_url: str = None
     # Meetings only: {'enabled', 'defaultOn', 'avatarDataUri'}, as the meeting daemon takes it.
     camera: dict = field(default=None, compare=False)
+    # {'id', 'title'}: the task this call serves.
+    task: dict = field(default=None, compare=False)
+    # {'task', 'contact', 'calls'}: which earlier calls' notes to start with.
+    carry_from: dict = field(default=None, compare=False)
+    # The earlier calls' notes this call starts with, resolved by the call service; never stored
+    # in the brief (the call record keeps them as `carried`).
+    carried: tuple = field(default=(), compare=False)
 
     @property
     def session_context(self):
-        """Level-2 context as a structured object, whether the brief gave text or an object."""
+        """Level-2 context as a structured object, whether the brief gave text or an object,
+        with the notes of earlier calls this call starts with."""
         from briefing import parse_session_context
-        return parse_session_context(self.context)
+        context = parse_session_context(self.context)
+        if self.carried:
+            context = dict(context, earlierCalls=list(self.carried))
+        return context
 
     @property
     def platform(self):
@@ -166,6 +184,8 @@ class CallBrief:
             # The avatar image stays out of the stored brief, which every call listing returns.
             'camera': ({'enabled': self.camera['enabled'], 'defaultOn': self.camera['defaultOn']}
                        if self.camera else None),
+            'task': self.task,
+            'carryFrom': self.carry_from,
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -237,6 +257,35 @@ class CallBrief:
             reject_unknown_fields(camera, CAMERA_FIELDS, 'camera')
             from visual_presence import parse_camera_settings
             camera = parse_camera_settings(camera)
+        task = optional_field(data, 'task')
+        if task is not None:
+            task = require_mapping(task, 'task')
+            reject_unknown_fields(task, TASK_FIELDS, 'task')
+            task_id = require_string(task.get('id'), 'task.id', max_length=64)
+            if not TASK_ID.fullmatch(task_id):
+                raise ValueError('task.id must be lowercase letters, digits, and dashes, such as roof-quotes-oct')
+            task = {'id': task_id}
+            if optional_field(data['task'], 'title') is not None:
+                task['title'] = ' '.join(require_string(data['task']['title'], 'task.title', max_length=120).split())
+        carry_from = optional_field(data, 'carryFrom')
+        if carry_from is not None:
+            carry_from = require_mapping(carry_from, 'carryFrom')
+            reject_unknown_fields(carry_from, CARRY_FIELDS, 'carryFrom')
+            parsed = {}
+            for key in ('task', 'contact'):
+                if optional_field(carry_from, key) is not None:
+                    parsed[key] = require_bool(carry_from[key], f'carryFrom.{key}')
+            if parsed.get('task') and task is None:
+                raise ValueError('carryFrom.task needs the brief\'s task')
+            if parsed.get('contact') and channel != 'phone':
+                raise ValueError('carryFrom.contact is only for phone calls')
+            if optional_field(carry_from, 'calls') is not None:
+                calls = require_string_list(carry_from['calls'], 'carryFrom.calls',
+                                            max_items=MAX_CARRY_CALLS, item_max_length=21)
+                if not all(CALL_ID.fullmatch(call_id) for call_id in calls):
+                    raise ValueError('carryFrom.calls must be call ids such as call-0123456789abcdef')
+                parsed['calls'] = list(dict.fromkeys(calls))
+            carry_from = parsed or None
         tone = _optional_text(data, 'tone', 200)
         return cls(
             channel=channel,
@@ -259,6 +308,8 @@ class CallBrief:
             record=record,
             webhook_url=webhook_url,
             camera=camera,
+            task=task,
+            carry_from=carry_from,
         )
 
 

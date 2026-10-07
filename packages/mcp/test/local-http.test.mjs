@@ -97,7 +97,7 @@ test('local MCP sessions: initialize, the call tools, notifications, and DELETE'
   assert.equal(notified.status, 202);
   const listed = await request(port, { body: { jsonrpc: '2.0', id: 2, method: 'tools/list' }, headers: { ...withSession, 'MCP-Protocol-Version': '2025-06-18' } });
   assert.equal(listed.status, 200);
-  assert.equal(listed.body.result.tools.length, 11);
+  assert.equal(listed.body.result.tools.length, 13);
   assert.deepEqual(listed.body.result.tools.map((tool) => tool.name), CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
   const batch = await request(port, {
     body: [{ jsonrpc: '2.0', id: 3, method: 'ping' }, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'list_voices', arguments: {} } }],

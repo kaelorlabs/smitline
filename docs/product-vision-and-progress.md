@@ -121,6 +121,7 @@ These decisions should not be reversed casually. A proposal to change one should
 22. **Server mode is opt-in.** Loopback with a per-launch token stays the default. A non-loopback bind requires at least one long-lived API token (stored as a digest) and a TLS-terminating proxy; it exists so cloud agents can reach a self-hosted installation. (Added 2026-09-28; narrows decision 13 rather than replacing it.)
 23. **Responses delegation driven by the brief.** GPT-Live hands hard questions to a Responses backend model that knows the brief and context, because most callers are agents that cannot be reached mid-call. Phone calls use `COLLEAGUE_PHONE_BACKEND_MODEL`, meetings `COLLEAGUE_MEETING_BACKEND_MODEL`, both `gpt-5.6-terra` by default, with optional OpenAI web search. (Added 2026-09-28 for phone calls; extended to meetings 2026-09-30.)
 24. **Phone calls and meetings for any agent.** Smitline does not integrate with coding agents beyond being a tool they can call. Claude Code, Codex, and Cursor are callers like any other MCP client. (Added 2026-09-30.)
+25. **Explicit call memory.** A call starts with earlier calls' notes only when the agent asks (`carryFrom`) or the user switched it on for that contact. What a call carried is stored on its record. Inbound calls never carry context. Contacts stay a local file until the data grows enough to need SQLite. (Added 2026-10-06.)
 
 ## Current implementation snapshot
 

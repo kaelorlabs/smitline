@@ -506,7 +506,9 @@ export function createServer(options = {}) {
       try {
         if (!callId) {
           const query = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams;
-          return json(response, 200, await daemonClient.listCalls(50, query.get('tzOffset') || '', query.get('channel') || ''));
+          return json(response, 200, await daemonClient.listCalls(50, query.get('tzOffset') || '', query.get('channel') || '', {
+            contact: query.get('contact') || '', task: query.get('task') || '',
+          }));
         }
         if (!action) return json(response, 200, await daemonClient.getCall(callId));
         if (action === 'events') {
@@ -528,6 +530,20 @@ export function createServer(options = {}) {
       }
       return json(response, 405, { error: 'Method not allowed.' });
     }
+    // Contacts read like calls; changing or forgetting one needs the token and this console's Origin.
+    const contactMatch = pathname.match(/^\/api\/contacts(?:\/([^/]+))?$/);
+    let contactNumber = null;
+    if (contactMatch?.[1]) {
+      try { contactNumber = decodeURIComponent(contactMatch[1]); } catch { contactNumber = ''; }
+      if (!/^\+[1-9][0-9]{7,14}$/.test(contactNumber)) return json(response, 400, { error: 'Invalid number.' });
+    }
+    if (contactMatch && request.method === 'GET') {
+      try {
+        return json(response, 200, contactNumber ? await daemonClient.getContact(contactNumber) : await daemonClient.listContacts());
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+    }
     // Setup status names the owner's numbers, so even reading it takes the session token.
     // A same-origin GET carries no Origin header; a cross-site page cannot send this header.
     if (request.method === 'GET' && pathname === '/api/setup') {
@@ -541,6 +557,16 @@ export function createServer(options = {}) {
       const body = await readBody(request);
       const [status, payload] = pathname.endsWith('/save') ? await saveSettings(body) : await removeSaved(body);
       return json(response, status, payload);
+    }
+    if (contactNumber && (request.method === 'PATCH' || request.method === 'DELETE')) {
+      try {
+        const changes = request.method === 'PATCH' ? await readBody(request) : null;
+        return json(response, 200, changes
+          ? await daemonClient.updateContact(contactNumber, changes)
+          : await daemonClient.forgetContact(contactNumber));
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
     }
     if (callMatch && request.method === 'POST' && ['end', 'transfer'].includes(callMatch[2])) {
       try {
@@ -715,6 +741,8 @@ export function createServer(options = {}) {
         '/calls': ['calls.html', 'text/html; charset=utf-8'],
         '/calls.js': ['calls.js', 'text/javascript; charset=utf-8'],
         '/calls.css': ['calls.css', 'text/css; charset=utf-8'],
+        '/contacts': ['contacts.html', 'text/html; charset=utf-8'],
+        '/contacts.js': ['contacts.js', 'text/javascript; charset=utf-8'],
       };
       const asset = assets[pathname];
       if (!asset) { response.writeHead(404, headers('text/plain; charset=utf-8')); return response.end('Not found'); }

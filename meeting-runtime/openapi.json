@@ -38,7 +38,9 @@
         "parameters": [
           { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
           { "name": "tzOffset", "in": "query", "description": "The reader's minutes east of UTC; spend is grouped by their local day.", "schema": { "type": "integer", "minimum": -840, "maximum": 840, "default": 0 } },
-          { "name": "channel", "in": "query", "description": "Only phone calls or only meetings: the calls and the spend then cover that channel alone.", "schema": { "type": "string", "enum": ["phone", "meeting"] } }
+          { "name": "channel", "in": "query", "description": "Only phone calls or only meetings: the calls and the spend then cover that channel alone.", "schema": { "type": "string", "enum": ["phone", "meeting"] } },
+          { "name": "contact", "in": "query", "description": "Only phone calls to or from this E.164 number.", "schema": { "type": "string" } },
+          { "name": "task", "in": "query", "description": "Only calls whose brief names this task id.", "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" } }
         ],
         "responses": {
           "200": { "description": "Calls", "content": { "application/json": { "schema": { "type": "object", "properties": { "calls": { "type": "array", "items": { "$ref": "#/components/schemas/Call" } }, "spend": { "$ref": "#/components/schemas/Spend" } }, "required": ["calls", "spend"] } } } }
@@ -120,6 +122,59 @@
           "404": { "$ref": "#/components/responses/Error" },
           "409": { "$ref": "#/components/responses/Error" },
           "502": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/calls/{callId}/note": {
+      "post": {
+        "summary": "Save a note on a finished call for later calls to start with",
+        "operationId": "saveCallNote",
+        "parameters": [{ "name": "callId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["text"], "properties": { "text": { "type": "string", "maxLength": 1200 } } } } } },
+        "responses": {
+          "200": { "description": "The call with its note", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/contacts": {
+      "get": {
+        "summary": "List every number called or calling, with what the user saved about it, latest call first",
+        "operationId": "listContacts",
+        "responses": {
+          "200": { "description": "Contacts", "content": { "application/json": { "schema": { "type": "object", "required": ["contacts"], "properties": { "contacts": { "type": "array", "items": { "$ref": "#/components/schemas/Contact" } } } } } } },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/contacts/{number}": {
+      "parameters": [{ "name": "number", "in": "path", "required": true, "description": "E.164, with + encoded as %2B", "schema": { "type": "string" } }],
+      "get": {
+        "summary": "One contact, its calls, and the notes a new call to it would start with",
+        "operationId": "getContact",
+        "responses": {
+          "200": { "description": "The contact", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContactDetail" } } } },
+          "404": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "summary": "Set a contact's name, notes, or automatic context; an empty value or false clears it",
+        "operationId": "updateContact",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContactUpdate" } } } },
+        "responses": {
+          "200": { "description": "The contact", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContactDetail" } } } },
+          "422": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "summary": "Forget what was saved for a number. Its call records, and their notes, stay.",
+        "operationId": "forgetContact",
+        "responses": {
+          "200": { "description": "Whether anything was saved", "content": { "application/json": { "schema": { "type": "object", "required": ["forgotten"], "properties": { "forgotten": { "type": "boolean" } } } } } }
         }
       }
     },
@@ -216,6 +271,23 @@
               "enabled": { "type": "boolean", "description": "Show the camera tile in the meeting." },
               "defaultOn": { "type": "boolean", "description": "Turn the camera on after joining." },
               "avatarDataUri": { "type": "string", "description": "A PNG, JPEG, WebP, or SVG data: URI of up to 80 KB shown in the tile." }
+            }
+          },
+          "task": {
+            "type": "object", "additionalProperties": false, "required": ["id"],
+            "description": "The job this call serves, such as roof repair quotes. The first call that names a task creates it.",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "examples": ["roof-quotes-oct"] },
+              "title": { "type": "string", "maxLength": 120 }
+            }
+          },
+          "carryFrom": {
+            "type": "object", "additionalProperties": false,
+            "description": "Which earlier calls' notes this outbound call starts with: at most 10 notes and 4,000 characters, newest first. See docs/calls.md#earlier-calls.",
+            "properties": {
+              "task": { "type": "boolean", "description": "Earlier finished calls in this brief's task. Needs task." },
+              "contact": { "type": "boolean", "description": "Phone only: earlier calls to or from the same number. false overrides the contact's automatic context for this call." },
+              "calls": { "type": "array", "maxItems": 10, "items": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" } }
             }
           }
         }
@@ -318,7 +390,50 @@
         "properties": {
           "ok": { "type": "boolean" },
           "brief": { "$ref": "#/components/schemas/Brief" },
-          "problems": { "type": "array", "items": { "type": "string" } }
+          "problems": { "type": "array", "items": { "type": "string" } },
+          "carried": { "type": "integer", "description": "How many earlier calls' notes the call would start with." }
+        }
+      },
+      "CarriedNote": {
+        "type": "object",
+        "required": ["callId", "contact", "text", "by"],
+        "properties": {
+          "callId": { "type": "string" },
+          "contact": { "type": "string", "description": "Who the earlier call was with: a name, a number, or Meeting." },
+          "at": { "type": "string", "format": "date-time" },
+          "text": { "type": "string" },
+          "by": { "type": "string", "enum": ["agent", "result"], "description": "agent: a note saved with /v1/calls/{callId}/note. result: the call's summary and details." }
+        }
+      },
+      "Contact": {
+        "type": "object",
+        "required": ["number", "name", "notes", "autoContext", "calls"],
+        "properties": {
+          "number": { "type": "string", "description": "E.164" },
+          "name": { "type": "string", "description": "The saved name, else a profile person with this number, else the latest brief's contact name." },
+          "saved": { "type": "boolean", "description": "Whether the user saved a name, notes, or the setting for this number." },
+          "notes": { "type": "string" },
+          "autoContext": { "type": "boolean", "description": "New outbound calls to this number start with notes from earlier calls to it." },
+          "calls": { "type": "integer" },
+          "lastCallAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastObjective": { "type": ["string", "null"] }
+        }
+      },
+      "ContactDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Contact" },
+          { "type": "object", "properties": {
+            "history": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "direction": { "type": "string" }, "status": { "type": "string" }, "createdAt": { "type": "string" }, "objective": { "type": "string" }, "task": { "type": ["object", "null"] }, "outcome": { "type": ["string", "null"] }, "summary": { "type": ["string", "null"] } } } },
+            "nextCall": { "type": "array", "description": "The notes a new call to this number would start with when it carries the contact's earlier calls.", "items": { "$ref": "#/components/schemas/CarriedNote" } }
+          } }
+        ]
+      },
+      "ContactUpdate": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "name": { "type": "string", "maxLength": 80 },
+          "notes": { "type": "string", "maxLength": 600 },
+          "autoContext": { "type": "boolean" }
         }
       },
       "Call": {
@@ -341,6 +456,8 @@
           "recording": { "type": "object", "description": "Phone calls recorded with COLLEAGUE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
           "usage": { "type": "object", "description": "Measured usage: voiceSeconds, phoneSeconds, phoneProvider, phonePrice (the provider's own price, once reported), backendTokens and backendModel, summaryTokens and summaryModel." },
           "cost": { "$ref": "#/components/schemas/Cost" },
+          "carried": { "type": "array", "description": "The notes of earlier calls this call started with.", "items": { "$ref": "#/components/schemas/CarriedNote" } },
+          "carryNote": { "type": "object", "description": "A note saved on this finished call for later calls.", "properties": { "text": { "type": "string" }, "by": { "type": "string", "enum": ["agent"] }, "at": { "type": "string", "format": "date-time" } } },
           "error": { "type": "string" }
         }
       },

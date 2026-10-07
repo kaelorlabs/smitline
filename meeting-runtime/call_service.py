@@ -1,5 +1,6 @@
 """Calls: accept a brief, run it on a line (phone or meeting), and publish the result."""
 import asyncio
+import dataclasses
 import os
 
 from call_brief import BriefIncomplete, CallBrief
@@ -26,6 +27,10 @@ STATUS_RANK = {
     'queued': 0, 'connecting': 1, 'ringing': 2, 'waiting': 2, 'in_progress': 3,
     'summarizing': 4, 'completed': 5, 'failed': 5, 'canceled': 5,
 }
+# Notes for later calls: one note's length, and what one call may start with.
+MAX_NOTE = 1200
+MAX_CARRIED = 10
+MAX_CARRIED_CHARS = 4000
 
 
 class CallError(Exception):
@@ -91,6 +96,26 @@ class CallContext:
         self.ended = True
         await self.service._finalize(self, end_reason, usage=usage or {}, handoff=handoff,
                                      error=error)
+
+
+def carry_note(record):
+    """What a finished call offers later calls: the agent's note, else its result's summary and
+    details. None when it has neither."""
+    note = record.get('carryNote') or {}
+    if note.get('text'):
+        return {'text': note['text'], 'by': 'agent'}
+    result = record.get('result') or {}
+    parts = [str(result.get('summary') or '').strip()]
+    parts += [f'{item["label"]}: {item["value"]}' for item in result.get('details') or ()
+              if isinstance(item, dict) and item.get('label') and item.get('value')]
+    text = ' '.join(part for part in parts if part)
+    return {'text': text[:MAX_NOTE], 'by': 'result'} if text else None
+
+
+def note_line(item):
+    """One carried note as the voice and the backend read it."""
+    when = str(item.get('at') or '')[:10]
+    return f'{item["contact"]}{f" ({when})" if when else ""}: {item["text"]}'
 
 
 class CallService:
@@ -175,7 +200,13 @@ class CallService:
                     problems.append(str(error))
                 except CallRefused as error:
                     problems.append(error.message)
-        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems}
+        # How many earlier calls' notes the call would start with.
+        try:
+            carried = len(self._carried(owner, brief))
+        except CallError as error:
+            problems.append(error.message)
+            carried = 0
+        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems, 'carried': carried}
 
     def reconcile(self):
         """At startup, close calls a previous daemon left unfinished; nothing will finish them."""
@@ -202,13 +233,17 @@ class CallService:
         except MissingCredentials as error:
             raise CallError(503, 'not_configured', str(error),
                             provider=error.provider, missing=list(error.missing)) from error
-        return self._launch(brief, owner, line.start, direction='outbound')
+        # Outbound calls only: an incoming caller ID can be faked, so no earlier call is read to it.
+        carried = self._carried(owner, brief)
+        if carried:
+            brief = dataclasses.replace(brief, carried=tuple(note_line(item) for item in carried))
+        return self._launch(brief, owner, line.start, direction='outbound', carried=carried)
 
     async def create_inbound(self, brief, owner, start):
         """Record a call someone else placed to us; `start(ctx)` runs it on the line."""
         return self._launch(brief, owner, start, direction='inbound')
 
-    def _launch(self, brief, owner, start, *, direction):
+    def _launch(self, brief, owner, start, *, direction, carried=()):
         now = self.store.now()
         record = {
             'version': 1,
@@ -224,6 +259,9 @@ class CallService:
             'result': None,
             'usage': {},
         }
+        if carried:
+            # Exactly what this call knew of earlier calls, for the console and the result.
+            record['carried'] = list(carried)
         self.store.create(record)
         self._event(record['id'], 'call.created', channel=brief.channel, direction=direction)
         context = CallContext(self, record['id'], brief, owner)
@@ -329,6 +367,190 @@ class CallService:
             return updater(owner, update)
         except ValueError as error:
             raise CallError(422, 'invalid_request', str(error)) from error
+
+    # Contacts, tasks, and notes for later calls ------------------------------
+
+    def _contact_book(self):
+        book = getattr(self.hooks, 'contact_book', None)
+        if book is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no contacts')
+        return book
+
+    def _saved_contacts(self):
+        """{number: what the user saved}; empty when the hooks keep no contacts."""
+        from contacts import ContactsUnreadable
+        book = getattr(self.hooks, 'contact_book', None)
+        if book is None:
+            return {}
+        try:
+            return {entry['number']: entry for entry in book.entries() if entry.get('number')}
+        except ContactsUnreadable as error:
+            raise CallError(503, 'contacts_unreadable', str(error)) from error
+
+    def _profile_or_empty(self, owner):
+        getter = getattr(self.hooks, 'profile', None)
+        try:
+            return (getter(owner) or {}) if getter else {}
+        except Exception:
+            return {}
+
+    def _contact_name(self, number, saved, profile, records=()):
+        """The saved name, else a profile person with this number, else the latest brief's name."""
+        from briefing import contact_for
+        name = (saved.get(number) or {}).get('name') or (contact_for(profile, number) or {}).get('name')
+        if name:
+            return name
+        for record in records:
+            briefed = ((record.get('brief') or {}).get('contact') or {}).get('name')
+            if briefed:
+                return briefed
+        return ''
+
+    def _phone_records(self, owner):
+        return [record for record in self.store.list(owner=owner, limit=None)
+                if record.get('channel') == 'phone' and (record.get('brief') or {}).get('to')]
+
+    def _notes(self, records, saved, profile, by_number):
+        """Notes of finished calls, newest first, within MAX_CARRIED and MAX_CARRIED_CHARS."""
+        notes, total = [], 0
+        for record in records:
+            if record['status'] not in TERMINAL:
+                continue
+            note = carry_note(record)
+            if note is None:
+                continue
+            if len(notes) >= MAX_CARRIED or total + len(note['text']) > MAX_CARRIED_CHARS:
+                break
+            brief = record.get('brief') or {}
+            if record.get('channel') == 'phone':
+                number = brief.get('to')
+                label = self._contact_name(number, saved, profile, by_number.get(number, ())) or number
+            else:
+                label = 'Meeting'
+            notes.append({'callId': record['id'], 'contact': label,
+                          'at': record.get('endedAt') or record.get('createdAt'),
+                          'text': note['text'], 'by': note['by']})
+            total += len(note['text'])
+        return notes
+
+    def _carried(self, owner, brief):
+        """The notes of earlier calls an outbound call starts with; [] when it asks for none.
+
+        By task and by call only when the brief asks (carryFrom); by contact when it asks, or
+        when the user switched on the contact's autoContext and the brief does not say false.
+        """
+        wanted = brief.carry_from or {}
+        saved = self._saved_contacts() if brief.channel == 'phone' else {}
+        automatic = bool((saved.get(brief.to) or {}).get('autoContext'))
+        by_contact = brief.channel == 'phone' and wanted.get('contact', automatic)
+        by_task = bool(wanted.get('task') and brief.task)
+        named = wanted.get('calls') or []
+        if not (by_contact or by_task or named):
+            return []
+        records = self.store.list(owner=owner, limit=None)
+        known = {record['id'] for record in records}
+        missing = [call_id for call_id in named if call_id not in known]
+        if missing:
+            raise CallError(422, 'invalid_request', 'carryFrom.calls names calls that do not exist: '
+                            + ', '.join(missing))
+        task_id = (brief.task or {}).get('id')
+
+        def wanted_record(record):
+            earlier = record.get('brief') or {}
+            return (record['id'] in named
+                    or (by_task and (earlier.get('task') or {}).get('id') == task_id)
+                    or (by_contact and record.get('channel') == 'phone' and earlier.get('to') == brief.to))
+        chosen = [record for record in records if wanted_record(record)]
+        by_number = {}
+        for record in records:
+            if record.get('channel') == 'phone':
+                by_number.setdefault((record.get('brief') or {}).get('to'), []).append(record)
+        return self._notes(chosen, saved, self._profile_or_empty(owner), by_number)
+
+    def save_note(self, call_id, text, *, owner=None):
+        """Save a note on a finished call for later calls to start with."""
+        record = self.get(call_id, owner=owner)
+        if record['status'] not in TERMINAL:
+            raise CallError(409, 'conflict', 'a note can be saved once the call has ended')
+        if not isinstance(text, str) or not text.strip():
+            raise CallError(422, 'invalid_request', 'text is required')
+        text = ' '.join(text.split())
+        if len(text) > MAX_NOTE:
+            raise CallError(422, 'invalid_request', f'text must be at most {MAX_NOTE} characters')
+        return with_cost(self.store.update(call_id, carryNote={'text': text, 'by': 'agent',
+                                                               'at': self.store.now()}),
+                         self.environ)
+
+    def _contact_entry(self, number, records, saved, profile):
+        entry = saved.get(number) or {}
+        latest = records[0] if records else {}
+        return {
+            'number': number,
+            'name': self._contact_name(number, saved, profile, records),
+            # Whether the user saved anything for this number (a name, notes, or the setting).
+            'saved': bool(entry),
+            'notes': entry.get('notes', ''),
+            'autoContext': bool(entry.get('autoContext')),
+            'calls': len(records),
+            'lastCallAt': latest.get('createdAt'),
+            'lastObjective': (latest.get('brief') or {}).get('objective'),
+        }
+
+    def contacts(self, owner):
+        """Every number called or calling, with what the user saved about it, latest call first."""
+        saved = self._saved_contacts()
+        profile = self._profile_or_empty(owner)
+        by_number = {}
+        for record in self._phone_records(owner):
+            by_number.setdefault(record['brief']['to'], []).append(record)
+        numbers = list(by_number) + [number for number in saved if number not in by_number]
+        entries = [self._contact_entry(number, by_number.get(number, []), saved, profile) for number in numbers]
+        entries.sort(key=lambda item: item['lastCallAt'] or '', reverse=True)
+        return {'contacts': entries}
+
+    def contact(self, owner, number):
+        """One contact, its calls, and the notes a new call to it would start with."""
+        from call_brief import normalize_phone
+        try:
+            number = normalize_phone(number, 'number')
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
+        saved = self._saved_contacts()
+        profile = self._profile_or_empty(owner)
+        records = [record for record in self._phone_records(owner) if record['brief']['to'] == number]
+        if not records and number not in saved:
+            raise CallError(404, 'not_found', 'no calls to or from this number, and nothing saved for it')
+        entry = self._contact_entry(number, records, saved, profile)
+        entry['history'] = [{
+            'id': record['id'], 'direction': record.get('direction'), 'status': record['status'],
+            'createdAt': record.get('createdAt'), 'objective': (record.get('brief') or {}).get('objective'),
+            'task': (record.get('brief') or {}).get('task'),
+            'outcome': (record.get('result') or {}).get('outcome'),
+            'summary': (record.get('result') or {}).get('summary'),
+        } for record in records]
+        entry['nextCall'] = self._notes(records, saved, profile, {number: records})
+        return entry
+
+    def update_contact(self, owner, number, changes):
+        from contacts import ContactsUnreadable
+        try:
+            self._contact_book().update(number, changes)
+        except ContactsUnreadable as error:
+            raise CallError(503, 'contacts_unreadable', str(error)) from error
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
+        return self.contact(owner, number)
+
+    def forget_contact(self, owner, number):
+        """Drop the saved name, notes, and setting. Call records, and their notes, stay."""
+        from contacts import ContactsUnreadable
+        try:
+            forgotten = self._contact_book().forget(number)
+        except ContactsUnreadable as error:
+            raise CallError(503, 'contacts_unreadable', str(error)) from error
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
+        return {'forgotten': forgotten}
 
     def _honor_do_not_call(self, record, result):
         """The person asked not to be called again: put their number on the do-not-call list."""

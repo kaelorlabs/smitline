@@ -22,7 +22,9 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | `start_call` | Start a phone call or meeting from a brief. Returns at once. |
 | `check_call_brief` | Validate a brief without calling. Missing fields come with the question to ask the user. |
 | `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. |
-| `get_call`, `list_calls` | Read calls without waiting. |
+| `get_call`, `list_calls` | Read calls without waiting. `list_calls` can show only phone calls or meetings, one number's calls, or one task's. |
+| `save_call_note` | After a call, save a short note that later calls can start with (see [earlier calls](calls.md#earlier-calls)). |
+| `list_contacts` | The people and businesses Smitline has called or been called by. |
 | `send_call_instruction` | Pass new guidance to a call in progress, or with `silent: true` a background note. |
 | `end_call` | Wrap up politely, or cancel a call that has not connected. |
 | `transfer_call_to_me` | Hand a connected phone call to `COLLEAGUE_OWNER_PHONE`. |

@@ -51,6 +51,48 @@ export interface CallBrief {
   notify?: { webhookUrl?: string };
   /** Meetings only: Smitline's virtual camera tile; the avatar is a PNG, JPEG, WebP, or SVG data: URI of up to 80 KB. */
   camera?: { enabled?: boolean; defaultOn?: boolean; avatarDataUri?: string };
+  /** The job this call serves, such as roof repair quotes; id is lowercase letters, digits, and dashes. */
+  task?: { id: string; title?: string };
+  /** Start with notes from earlier calls: in this task, to the same number (phone only), or named calls (at most 10). */
+  carryFrom?: { task?: boolean; contact?: boolean; calls?: string[] };
+}
+
+/** A note from an earlier call that a call started with. */
+export interface CarriedNote {
+  callId: string;
+  contact: string;
+  at?: string;
+  text: string;
+  by: 'agent' | 'result';
+}
+
+export interface Contact {
+  number: string;
+  name: string;
+  notes: string;
+  autoContext: boolean;
+  calls: number;
+  lastCallAt?: string | null;
+  lastObjective?: string | null;
+}
+
+export interface ContactDetail extends Contact {
+  history: Array<{ id: string; direction?: string; status: string; createdAt?: string; objective?: string; task?: { id: string; title?: string } | null; outcome?: string | null; summary?: string | null }>;
+  /** The notes a new call to this number would start with when it carries the contact's earlier calls. */
+  nextCall: CarriedNote[];
+}
+
+export interface ContactUpdate {
+  name?: string;
+  notes?: string;
+  autoContext?: boolean;
+}
+
+export interface CallFilters {
+  channel?: 'phone' | 'meeting';
+  /** E.164 */
+  contact?: string;
+  task?: string;
 }
 
 export type CallStatus =
@@ -86,6 +128,10 @@ export interface Call {
   line?: Record<string, unknown>;
   result: CallResult | null;
   usage?: Record<string, unknown>;
+  /** The notes of earlier calls this call started with. */
+  carried?: CarriedNote[];
+  /** A note saved on this finished call for later calls. */
+  carryNote?: { text: string; by: 'agent'; at: string };
   error?: string;
 }
 
@@ -125,11 +171,16 @@ export interface DoNotCallUpdate {
 }
 
 export interface DaemonTransport {
-  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[] }>;
+  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
   waitForCall(callId: string, timeoutSeconds?: number): Promise<Call>;
-  listCalls(limit?: number): Promise<{ calls: Call[] }>;
+  listCalls(limit?: number, filters?: CallFilters): Promise<{ calls: Call[] }>;
+  saveCallNote(callId: string, text: string): Promise<Call>;
+  listContacts(): Promise<{ contacts: Contact[] }>;
+  getContact(number: string): Promise<ContactDetail>;
+  updateContact(number: string, changes: ContactUpdate): Promise<ContactDetail>;
+  forgetContact(number: string): Promise<{ forgotten: boolean }>;
   instructCall(callId: string, text: string, options?: { silent?: boolean }): Promise<{ delivered: boolean }>;
   getProfile(): Promise<Profile>;
   updateProfile(update: ProfileUpdate): Promise<Profile>;
@@ -155,12 +206,19 @@ export interface ColleagueOptions {
 
 export class Colleague {
   constructor(options?: ColleagueOptions);
-  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[] }>;
+  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
   /** Place a phone call or join a meeting; returns the queued call at once. */
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
   waitForCall(callId: string, timeoutSeconds?: number): Promise<Call>;
-  listCalls(limit?: number): Promise<Call[]>;
+  listCalls(limit?: number, filters?: CallFilters): Promise<Call[]>;
+  /** Save a note on a finished call for later calls to start with (brief.carryFrom). */
+  saveCallNote(callId: string, text: string): Promise<Call>;
+  listContacts(): Promise<Contact[]>;
+  getContact(number: string): Promise<ContactDetail>;
+  updateContact(number: string, changes: ContactUpdate): Promise<ContactDetail>;
+  /** Forget what was saved for a number; its call records stay. */
+  forgetContact(number: string): Promise<{ forgotten: boolean }>;
   instructCall(callId: string, text: string, options?: { silent?: boolean }): Promise<{ delivered: boolean }>;
   getProfile(): Promise<Profile>;
   updateProfile(update: ProfileUpdate): Promise<Profile>;

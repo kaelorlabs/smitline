@@ -805,7 +805,7 @@ test('/mcp is the local agents endpoint, behind its own token rather than the co
     assert.equal(opened.status, 200);
     const listed = await post({ Authorization: `Bearer ${token}`, 'Mcp-Session-Id': opened.headers['mcp-session-id'] },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.equal(listed.body.result.tools.length, 11);
+    assert.equal(listed.body.result.tools.length, 13);
     assert.ok(logs.some((line) => /session opened/.test(line)));
     assert.ok(!logs.join('\n').includes(token));
   } finally {
@@ -946,10 +946,41 @@ test('the calls list passes the page channel on to the daemon', async () => {
   try {
     const base = `http://127.0.0.1:${server.address().port}`;
     await fetch(`${base}/api/calls?tzOffset=60&channel=meeting`);
+    await fetch(`${base}/api/calls?contact=%2B14155550142&task=roof-quotes`);
     await fetch(`${base}/api/calls`);
-    assert.deepEqual(asked, [[50, '60', 'meeting'], [50, '', '']]);
+    assert.deepEqual(asked, [
+      [50, '60', 'meeting', { contact: '', task: '' }],
+      [50, '', '', { contact: '+14155550142', task: 'roof-quotes' }],
+      [50, '', '', { contact: '', task: '' }],
+    ]);
   } finally {
     server.close();
     await once(server, 'close');
   }
+});
+
+test('contacts read openly; changing or forgetting one needs this console', async () => {
+  const actions = [];
+  const daemon = {
+    async listContacts() { actions.push(['list']); return { contacts: [{ number: '+14155550142' }] }; },
+    async getContact(number) { actions.push(['get', number]); return { number }; },
+    async updateContact(number, changes) { actions.push(['update', number, changes]); return { number, ...changes }; },
+    async forgetContact(number) { actions.push(['forget', number]); return { forgotten: true }; },
+  };
+  await withPanel(async panel => {
+    assert.match(await (await fetch(`${panel.base}/contacts`)).text(), /src="\/contacts\.js"/);
+    assert.equal((await (await fetch(`${panel.base}/api/contacts`)).json()).contacts.length, 1);
+    assert.equal((await (await fetch(`${panel.base}/api/contacts/%2B14155550142`)).json()).number, '+14155550142');
+    assert.equal((await fetch(`${panel.base}/api/contacts/not-a-number`)).status, 400);
+    const bootstrap = await panel.bootstrap();
+    const patch = (headers) => fetch(`${panel.base}/api/contacts/%2B14155550142`, { method: 'PATCH', headers, body: JSON.stringify({ autoContext: true }) });
+    assert.equal((await patch({ 'Content-Type': 'application/json' })).status, 403);
+    assert.equal((await patch({ ...panel.headers(bootstrap.token), Origin: 'https://evil.example' })).status, 403);
+    assert.equal((await patch(panel.headers(bootstrap.token))).status, 200);
+    assert.equal((await fetch(`${panel.base}/api/contacts/%2B14155550142`, { method: 'DELETE' })).status, 403);
+    assert.equal((await fetch(`${panel.base}/api/contacts/%2B14155550142`, { method: 'DELETE', headers: panel.headers(bootstrap.token) })).status, 200);
+    assert.deepEqual(actions, [
+      ['list'], ['get', '+14155550142'], ['update', '+14155550142', { autoContext: true }], ['forget', '+14155550142'],
+    ]);
+  }, { daemon });
 });

@@ -51,6 +51,8 @@ const state = {
   calls: [],
   spend: null,
   filter: 'all',
+  // How the Calls list is grouped: newest, contact, or task; remembered in this browser.
+  group: (() => { try { return localStorage.getItem('smitline.callsGroup') || 'newest'; } catch { return 'newest'; } })(),
   loaded: false,
   known: new Set(),
   selected: location.hash.slice(1) || null,
@@ -423,6 +425,51 @@ function renderFilters() {
   }
 }
 
+// Calls grouped by the number called or by the task they serve; newest first within each.
+const groupHeads = new Map();
+
+function groupOf(call) {
+  const b = brief(call);
+  if (state.group === 'contact') {
+    return { key: `contact:${b.to}`, title: contactName(call) || formatPhone(b.to) };
+  }
+  const task = b.task;
+  return task ? { key: `task:${task.id}`, title: task.title || task.id } : { key: 'task:', title: 'Not in a task' };
+}
+
+function groupHead(key, title, count) {
+  let head = groupHeads.get(key);
+  if (!head) {
+    head = Object.assign(document.createElement('li'), { className: 'group-head' });
+    head.append(document.createElement('h3'), document.createElement('span'));
+    groupHeads.set(key, head);
+  }
+  head.firstChild.textContent = title;
+  head.lastChild.textContent = count === 1 ? `1 ${WORDS.one}` : `${count} ${WORDS.many}`;
+  return head;
+}
+
+// The list in display order: plain, or each group's head followed by its calls.
+function listNodes(shown) {
+  if (MEETINGS || !['contact', 'task'].includes(state.group)) {
+    for (const head of groupHeads.values()) head.remove();
+    groupHeads.clear();
+    return shown.map(listItem);
+  }
+  const groups = new Map();
+  for (const call of shown) {
+    const { key, title } = groupOf(call);
+    if (!groups.has(key)) groups.set(key, { title, calls: [] });
+    groups.get(key).calls.push(call);
+  }
+  // "Not in a task" goes last; other groups keep the order of their newest call.
+  const ordered = [...groups].sort(([a], [b]) => (a === 'task:') - (b === 'task:'));
+  for (const [key, head] of groupHeads) {
+    if (!groups.has(key)) { head.remove(); groupHeads.delete(key); }
+  }
+  return ordered.flatMap(([key, group]) => [groupHead(key, group.title, group.calls.length), ...group.calls.map(listItem)]);
+}
+
 // Update items in place so keyboard focus and scroll position survive each refresh.
 function renderList() {
   renderFilters();
@@ -432,8 +479,7 @@ function renderList() {
   for (const [id, entry] of listItems) {
     if (!ids.has(id)) { entry.item.remove(); listItems.delete(id); }
   }
-  shown.forEach((call, index) => {
-    const item = listItem(call);
+  listNodes(shown).forEach((item, index) => {
     if (list.children[index] !== item) list.insertBefore(item, list.children[index] || null);
   });
   $('list-loading').hidden = true;
@@ -605,6 +651,49 @@ function backgroundNodes(context) {
     nodes.push(more);
   }
   return nodes;
+}
+
+// Who the call was with (a link to the contact) and the task it served.
+function renderTags(call) {
+  const tags = $('call-tags');
+  if (!tags) return;
+  const b = brief(call);
+  const chips = [];
+  if (call.channel === 'phone' && b.to) {
+    chips.push(Object.assign(document.createElement('a'), {
+      className: 'chip neutral', href: `/contacts#${encodeURIComponent(b.to)}`,
+      textContent: `Contact · ${contactName(call) || formatPhone(b.to)}`,
+    }));
+  }
+  if (b.task?.id) {
+    chips.push(Object.assign(document.createElement('span'), { className: 'chip progress', textContent: `Task · ${b.task.title || b.task.id}` }));
+  }
+  tags.replaceChildren(...chips);
+  tags.hidden = chips.length === 0;
+}
+
+// The notes of earlier calls this call started with, and the note it left for later calls.
+function renderCarried(call) {
+  const section = $('carried');
+  if (section) {
+    const carried = Array.isArray(call.carried) ? call.carried : [];
+    section.hidden = carried.length === 0;
+    $('carried-list').replaceChildren(...carried.map((note) => {
+      const item = document.createElement('li');
+      const from = Object.assign(document.createElement('a'), {
+        className: 'carried-from', href: `/calls#${note.callId}`,
+        textContent: [note.contact, note.at ? when(note.at) : ''].filter(Boolean).join(', '),
+      });
+      item.append(from, Object.assign(document.createElement('span'), { textContent: note.text }),
+        Object.assign(document.createElement('span'), { className: 'muted small', textContent: note.by === 'agent' ? 'Note from your agent' : 'From that call’s summary' }));
+      return item;
+    }));
+  }
+  const saved = $('carry-note');
+  if (saved) {
+    saved.hidden = !call.carryNote?.text;
+    $('carry-note-text').textContent = call.carryNote?.text || '';
+  }
 }
 
 function renderBrief(call) {
@@ -825,6 +914,8 @@ function renderCall(call, { focusTitle = false } = {}) {
     $(`recording-${format}`).href = recording ? `/api/calls/${encodeURIComponent(call.id)}/recording?format=${format}` : '';
   }
   $('result-pending').hidden = call.status !== 'summarizing';
+  renderTags(call);
+  renderCarried(call);
   renderBrief(call);
   renderResult(call);
   renderCost(call);
@@ -863,6 +954,11 @@ async function refreshDetail(options) {
     if (fromList?.cost && JSON.stringify(fromList.cost) !== JSON.stringify(state.call.cost)) {
       state.call = { ...state.call, cost: fromList.cost };
       renderCost(state.call);
+    }
+    // An agent can save a note for later calls after the call ended.
+    if (fromList && fromList.carryNote?.text !== state.call.carryNote?.text) {
+      state.call = { ...state.call, carryNote: fromList.carryNote };
+      renderCarried(state.call);
     }
     renderMeta(state.call);
     return;
@@ -1039,6 +1135,22 @@ $('handoff-button')?.addEventListener('click', () => {
   link.click();
   URL.revokeObjectURL(link.href);
 });
+
+function renderGrouping() {
+  document.querySelectorAll('#grouping [data-group]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.group === state.group));
+  });
+}
+
+document.querySelectorAll('#grouping [data-group]').forEach((button) => {
+  button.addEventListener('click', () => {
+    state.group = button.dataset.group;
+    try { localStorage.setItem('smitline.callsGroup', state.group); } catch { /* not kept */ }
+    renderGrouping();
+    renderList();
+  });
+});
+renderGrouping();
 
 $('back-button').addEventListener('click', () => {
   if (history.state?.fromList) history.back();
