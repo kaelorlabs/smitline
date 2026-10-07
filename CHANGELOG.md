@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The MCP bundle lists its tools in its manifest, so directories show them without running it. The build also writes `smitline-smithery.mcpb`, whose tools carry their input schemas, as Smithery requires.
 - The meeting camera is now a still picture by default: the Smitline mark, with bars that cycle through three pictures while it speaks and dots while it works, at 640×360 and a few frames a second. The animated camera kept a CPU core busy and delayed Smitline's voice on a one-core machine; with the camera off, a one-core meeting used 33–48% of the core and replied as fast as an unlimited one. `COLLEAGUE_MEETING_CAMERA_STYLE=animated` brings back the animated camera.
 - A meeting's speaking state now ends when Smitline's voice goes quiet. GPT-Live keeps sending silence between replies, so before, Smitline counted as speaking from its first reply until it left.
 

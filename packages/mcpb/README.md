@@ -19,4 +19,4 @@ If Smitline is not running, the client still sees the tools, and a call to one s
 node packages/mcpb/build.mjs
 ```
 
-This refreshes `server/tools.json` from the MCP server's own tool list, and writes `packages/mcpb/dist/smitline.mcpb` with the repository's version. `npm test` fails when `tools.json` is out of date.
+This refreshes `server/tools.json` from the MCP server's own tool list, and writes `packages/mcpb/dist/smitline.mcpb` with the repository's version, plus `smitline-smithery.mcpb` for Smithery, whose manifest also carries each tool's input schema. `npm test` fails when `tools.json` is out of date.
