@@ -2,7 +2,7 @@
 // Builds the MCP bundles: refreshes server/tools.json from the real MCP server's answers to
 // initialize and tools/list, sets the bundle version from the repository, and zips:
 //   dist/smitline.mcpb           the standard bundle (Claude Desktop and other MCPB clients)
-//   dist/smitline-smithery.mcpb  the same, with each tool's input schema in the manifest, which
+//   dist/smitline-smithery.mcpb  the same, with each tool's title, input schema and annotations in the manifest, which
 //                                Smithery needs to list the tools of a bundle it does not run;
 //                                the MCPB manifest schema itself allows only name and description
 //   node packages/mcpb/build.mjs [--check]   (--check fails if tools.json is out of date)
@@ -50,7 +50,7 @@ async function main() {
   const tools = JSON.parse(fresh).tools;
   await bundle({ ...manifest, tools: tools.map(({ name, description }) => ({ name, description })) },
     path.join(HERE, 'dist', 'smitline.mcpb'));
-  await bundle({ ...manifest, tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
+  await bundle({ ...manifest, tools: tools.map(({ name, title, description, inputSchema, annotations }) => ({ name, title, description, inputSchema, annotations })) },
     path.join(HERE, 'dist', 'smitline-smithery.mcpb'));
 }
 

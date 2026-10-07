@@ -8,13 +8,20 @@
     },
     "serverInfo": {
       "name": "smitline",
-      "version": "0.2.0"
+      "version": "0.2.1"
     },
     "instructions": "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then wait_for_call until the call finishes, and report the outcome. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to."
   },
   "tools": [
     {
       "name": "start_call",
+      "title": "Start a phone call or join a meeting",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
       "description": "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
       "inputSchema": {
         "type": "object",
@@ -225,7 +232,12 @@
     },
     {
       "name": "check_call_brief",
-      "description": "Validate a brief and report missing fields or configuration without placing the call. Missing fields come with a question to ask the user.",
+      "title": "Check a call brief",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Validate a brief exactly as start_call would, without placing a phone call or joining a meeting. Returns ok, the brief as it would be placed, the problems that would stop it (such as missing setup or a refused number), and how many earlier calls' notes it would start with. Missing fields come back as brief_incomplete with a question to ask the user. Use it when unsure whether a brief is complete; start_call runs the same checks itself.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -435,6 +447,11 @@
     },
     {
       "name": "wait_for_call",
+      "title": "Wait for a call to finish",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
       "description": "Wait for a call to finish and return it with its result: outcome, summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. If status is not completed, failed, or canceled, call again. Tell the user the outcome in plain words.",
       "inputSchema": {
         "type": "object",
@@ -458,7 +475,12 @@
     },
     {
       "name": "get_call",
-      "description": "Get a call and its current status without waiting.",
+      "title": "Get a call",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A finished call includes its result (outcome, summary, details, transcript) and cost. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -475,7 +497,12 @@
     },
     {
       "name": "list_calls",
-      "description": "List recent calls, newest first: all of them, or only phone calls or meetings, calls to or from one number, or the calls in one task.",
+      "title": "List calls and meetings",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List recent phone calls and meetings, newest first, with each call's id, status, brief, and outcome. Filter by channel (phone or meeting), by contact (calls to or from one E.164 number), or by task id. limit defaults to 20 (at most 100); there is no paging, so narrow with the filters. Use get_call or wait_for_call for one call's full result.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -504,6 +531,13 @@
     },
     {
       "name": "save_call_note",
+      "title": "Save a note on a call",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
       "description": "After a call ends, save a short note for later calls, such as the quote, terms, and dates a business gave. Later calls start with it when their brief's carryFrom names this call, its task, or its number. Without a note, later calls use the call's summary instead.",
       "inputSchema": {
         "type": "object",
@@ -526,7 +560,12 @@
     },
     {
       "name": "list_contacts",
-      "description": "List the people and businesses Smitline has called or been called by, with how many calls, the latest one, and the name and notes the user saved.",
+      "title": "List contacts",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List the people and businesses Smitline has called or been called by: each phone number with the name and notes the user saved, how many calls, the latest call, and whether earlier calls carry over automatically. Read-only and takes no arguments. Use list_calls with contact to see one contact's calls, and get_profile for the people the user described.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -535,7 +574,14 @@
     },
     {
       "name": "send_call_instruction",
-      "description": "Give the assistant new guidance during a call in progress, for example an answer the user just provided. With silent: true it is a background note the assistant uses when relevant, instead of acting on it now.",
+      "title": "Guide a call in progress",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Pass new guidance to the voice during a phone call or meeting that is still in progress, for example an answer the user just gave or a change of plan. It acts on it right away; with silent: true it keeps it as a background note and uses it when relevant. Errors with conflict once the call has ended. To end the call use end_call; to take it over use transfer_call_to_me.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -560,6 +606,13 @@
     },
     {
       "name": "end_call",
+      "title": "End a call",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
       "description": "Ask the assistant to wrap up politely and hang up, or cancel a call that has not connected yet.",
       "inputSchema": {
         "type": "object",
@@ -577,6 +630,13 @@
     },
     {
       "name": "transfer_call_to_me",
+      "title": "Take over a phone call",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
       "description": "Hand a connected phone call to the user's own phone. Only when the user asks to take over.",
       "inputSchema": {
         "type": "object",
@@ -594,7 +654,12 @@
     },
     {
       "name": "list_voices",
-      "description": "List the GPT-Live voices available for calls.",
+      "title": "List voices",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List the GPT-Live voices a phone call or meeting can use, and the default voice. Pass one as voice in start_call's brief; without it, calls use the default chosen in setup. Read-only and takes no arguments.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -603,6 +668,11 @@
     },
     {
       "name": "get_profile",
+      "title": "Read the user's profile",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
       "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries.",
       "inputSchema": {
         "type": "object",
@@ -612,6 +682,13 @@
     },
     {
       "name": "update_profile",
+      "title": "Update the user's profile",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
       "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. Never put passwords, keys, or payment details here.",
       "inputSchema": {
         "type": "object",
