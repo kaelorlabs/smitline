@@ -1,0 +1,54 @@
+{
+  "manifest_version": "0.3",
+  "name": "smitline",
+  "display_name": "Smitline",
+  "version": "0.1.1",
+  "description": "Phone calls and Zoom, Teams and Google Meet meetings for any AI agent. Self-hosted.",
+  "long_description": "Smitline lets your agent place phone calls and join Zoom, Teams and Google Meet meetings. It says it is an AI, talks in real time with GPT-Live, and returns a structured result: the outcome, decisions, action items and the transcript. Smitline runs on your computer in Docker with your own OpenAI and phone-provider keys; this bundle connects your MCP client to it. Set it up first: https://github.com/kaelorlabs/smitline#readme",
+  "author": {
+    "name": "Kaelor Labs",
+    "url": "https://github.com/kaelorlabs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kaelorlabs/smitline"
+  },
+  "homepage": "https://github.com/kaelorlabs/smitline",
+  "documentation": "https://github.com/kaelorlabs/smitline/blob/main/docs/agents.md",
+  "support": "https://github.com/kaelorlabs/smitline/issues",
+  "icon": "icon.png",
+  "license": "Apache-2.0",
+  "keywords": ["phone", "calls", "meetings", "zoom", "teams", "google meet", "voice", "self-hosted"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.mjs"],
+      "env": {
+        "SMITLINE_MCP_URL": "${user_config.url}",
+        "SMITLINE_MCP_TOKEN": "${user_config.token}"
+      }
+    }
+  },
+  "user_config": {
+    "token": {
+      "type": "string",
+      "title": "Smitline MCP token",
+      "description": "Printed by: docker exec smitline smitline setup register --json",
+      "sensitive": true,
+      "required": true
+    },
+    "url": {
+      "type": "string",
+      "title": "Smitline MCP address",
+      "description": "Where the smitline container serves MCP.",
+      "default": "http://127.0.0.1:8095/mcp",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  }
+}
