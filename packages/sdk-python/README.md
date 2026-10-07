@@ -1,6 +1,6 @@
 # Smitline Python SDK
 
-Versioned local SDK (`colleague-ai` 0.1.0) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
+Versioned local SDK (`smitline` 0.1.1) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
 
 Requires Python 3.10+. This package is not published to PyPI: use it from a checkout of this repository, with `packages/sdk-python` on `PYTHONPATH` or installed with `pip install ./packages/sdk-python`. There are no third-party runtime dependencies.
 
@@ -9,7 +9,7 @@ Requires Python 3.10+. This package is not published to PyPI: use it from a chec
 Both go through `start_call` with a brief:
 
 ```python
-from colleague_ai import Colleague
+from smitline import Colleague
 
 colleague = Colleague()
 

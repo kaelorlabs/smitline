@@ -7,14 +7,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import colleague_ai
-from colleague_ai import (
+import smitline
+from smitline import (
     Colleague,
     ColleagueError,
     StartupError,
     ValidationError,
 )
-from colleague_ai.client import LoopbackTransport
+from smitline.client import LoopbackTransport
 
 
 ZOOM = 'https://zoom.us/j/123456789'
@@ -79,7 +79,7 @@ class LoopbackHttpTests(unittest.TestCase):
 
 class CallTests(unittest.IsolatedAsyncioTestCase):
     def test_the_sdk_exposes_calls_only(self):
-        self.assertNotIn('MeetingHandle', colleague_ai.__all__)
+        self.assertNotIn('MeetingHandle', smitline.__all__)
         methods = sorted(name for name in vars(Colleague) if not name.startswith('_'))
         self.assertEqual(methods, [
             'check_call', 'end_call', 'forget_contact', 'get_call', 'get_contact', 'get_do_not_call',
@@ -180,7 +180,7 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0], ('POST', '/v1/calls', brief))
 
     def test_error_details_are_kept(self):
-        from colleague_ai.client import _map_http_error
+        from smitline.client import _map_http_error
         error = _map_http_error(422, {'error': {
             'code': 'brief_incomplete', 'message': 'brief is missing objective',
             'missing': [{'field': 'objective', 'question': 'What should the call achieve?'}]}}, 'x')
