@@ -11,7 +11,7 @@ class PreflightTests(unittest.TestCase):
         (root / '.env').write_text('OPENAI_API_KEY=secret\n')
         (root / '.env.meeting').write_text(
             'MEETING_URL=https://us05web.zoom.us/j/123456789\n'
-            'COLLEAGUE_MEETING_INSTRUCTIONS=Focus on release readiness.\n'
+            'SMITLINE_MEETING_INSTRUCTIONS=Focus on release readiness.\n'
         )
         return root
 
@@ -27,21 +27,21 @@ class PreflightTests(unittest.TestCase):
             (root / '.env').write_text('OPENAI_API_KEY=replace_with_your_project_api_key\n')
             (root / '.env.meeting').write_text(
                 'MEETING_URL=http://example.com/room\n'
-                f'COLLEAGUE_MEETING_INSTRUCTIONS={"x" * 2001}\n'
+                f'SMITLINE_MEETING_INSTRUCTIONS={"x" * 2001}\n'
             )
             with self.assertRaises(ValueError) as caught:
                 validate(root)
             message = str(caught.exception)
             self.assertIn('OPENAI_API_KEY', message)
             self.assertIn('HTTPS Zoom, Teams, or Google Meet', message)
-            self.assertIn('COLLEAGUE_MEETING_INSTRUCTIONS', message)
+            self.assertIn('SMITLINE_MEETING_INSTRUCTIONS', message)
             self.assertNotIn('replace_with_your_project_api_key', message)
 
     def test_meeting_web_search_needs_no_extra_key(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.configured_root(directory)
             with (root / '.env.meeting').open('a') as stream:
-                stream.write('COLLEAGUE_MEETING_WEB_SEARCH=1\n')
+                stream.write('SMITLINE_MEETING_WEB_SEARCH=1\n')
             self.assertTrue(validate(root).web_search)
 
 

@@ -371,7 +371,7 @@ class HostUnmuteRequestTests(unittest.IsolatedAsyncioTestCase):
 
         socket = FakeLiveSocket(bridge)
         adapter, microphone, record = HostAskingAdapter(), Mic(), Events()
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
 
         async def wait_until(check):
             for _ in range(200):
@@ -492,7 +492,7 @@ class BridgeBackendTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bridge, 'stop', asyncio.Event()):
             task = asyncio.create_task(bridge.run_voice(
                 IdleSpeaker(), microphone, None, 'test-only',
-                RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0'}), adapter))
+                RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'}), adapter))
             try:
                 await wait_until(lambda: any(e['type'] == 'session.start' for e in socket.sent))
                 start = next(e for e in socket.sent if e['type'] == 'session.start')

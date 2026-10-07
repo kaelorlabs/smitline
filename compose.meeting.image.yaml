@@ -1,20 +1,20 @@
 # The meeting container when Smitline runs from its published image. The runtime starts
-# it through the host's Docker (meeting_supervisor.py) with COLLEAGUE_MEETING_IMAGE,
-# COLLEAGUE_ROOT, and COLLEAGUE_VOLUME set. Its code is in the image; its data is the same
+# it through the host's Docker (meeting_supervisor.py) with SMITLINE_MEETING_IMAGE,
+# SMITLINE_ROOT, and SMITLINE_VOLUME set. Its code is in the image; its data is the same
 # volume the smitline container keeps at /data. From a checkout, compose.meeting.yaml is used.
 name: smitline
 services:
   meeting-agent:
-    image: ${COLLEAGUE_MEETING_IMAGE:?set by the smitline image}
-    user: "${COLLEAGUE_UID:-1001}:${COLLEAGUE_GID:-1001}"
+    image: ${SMITLINE_MEETING_IMAGE:?set by the smitline image}
+    user: "${SMITLINE_UID:-1001}:${SMITLINE_GID:-1001}"
     env_file:
-      - path: ${COLLEAGUE_ROOT:-/data}/.env
-      - path: ${COLLEAGUE_ROOT:-/data}/.env.meeting
+      - path: ${SMITLINE_ROOT:-/data}/.env
+      - path: ${SMITLINE_ROOT:-/data}/.env.meeting
         required: false
     environment:
       HOME: /tmp
-      COLLEAGUE_AUTH_MODE: ${COLLEAGUE_AUTH_MODE:-}
-      COLLEAGUE_RUNTIME_STATE: ${COLLEAGUE_RUNTIME_STATE:-}
+      SMITLINE_AUTH_MODE: ${SMITLINE_AUTH_MODE:-}
+      SMITLINE_RUNTIME_STATE: ${SMITLINE_RUNTIME_STATE:-}
     shm_size: "2gb"
     ports:
       - "127.0.0.1:6082:6080"
@@ -25,4 +25,4 @@ services:
 volumes:
   data:
     external: true
-    name: ${COLLEAGUE_VOLUME:-smitline}
+    name: ${SMITLINE_VOLUME:-smitline}

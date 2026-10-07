@@ -1,4 +1,7 @@
 """Meeting browser participant with GPT-Live audio; no local speech models."""
+import old_names
+old_names.adopt_old_settings()
+
 import asyncio
 import base64
 import contextlib
@@ -410,7 +413,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        mode = os.environ.get('COLLEAGUE_AUTH_MODE')
+        mode = os.environ.get('SMITLINE_AUTH_MODE')
         if mode == 'teams':
             from teams_account import connect
             asyncio.run(connect())

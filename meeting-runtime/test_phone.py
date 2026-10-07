@@ -442,7 +442,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_session_gets_the_three_levels_of_context(self):
         from briefing import save_profile
         self.h.hooks.env_file = Path(self.temp.name) / '.env'
-        save_profile(Path(self.temp.name) / '.colleague' / 'profile.json', {
+        save_profile(Path(self.temp.name) / '.smitline' / 'profile.json', {
             'about': 'Robin builds Smitline.', 'boundaries': ['Never discuss money.'],
             'people': [{'name': 'Sam', 'relationship': 'close friend', 'phone': '+14155550143'}]})
         record, session = await self.h.dial(
@@ -640,7 +640,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(audio['replyDelayMs']['median'], 450)  # from their last word
 
     async def test_audio_trace_is_written_when_asked(self):
-        self.h.env['COLLEAGUE_AUDIO_TRACE'] = '1'
+        self.h.env['SMITLINE_AUDIO_TRACE'] = '1'
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
@@ -699,7 +699,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CallError) as caught:
             await self.h.service.transfer(record['id'])
         self.assertEqual(caught.exception.code, 'not_ready')
-        self.h.env['COLLEAGUE_OWNER_PHONE'] = '+14155550199'
+        self.h.env['SMITLINE_OWNER_PHONE'] = '+14155550199'
         session.owner_phone = '+14155550199'
         result = await self.h.service.transfer(record['id'])
         self.assertEqual(result, {'transferred': True})
@@ -725,7 +725,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
                 await missing.service.create(brief())
             self.assertEqual(caught.exception.details['missing'],
                              ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
-                              'TWILIO_FROM_NUMBER or COLLEAGUE_CALLER_ID'])
+                              'TWILIO_FROM_NUMBER or SMITLINE_CALLER_ID'])
         self.h.line.gateway_ready = False
         with self.assertRaises(CallError) as caught:
             await self.h.service.create(brief())
@@ -780,7 +780,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('voice connection was lost', done['error'])
 
     async def test_transfer_cancels_the_pending_hangup_and_failures_are_reported(self):
-        self.h.env['COLLEAGUE_OWNER_PHONE'] = '+14155550199'
+        self.h.env['SMITLINE_OWNER_PHONE'] = '+14155550199'
         record, session = await self.h.dial()
         session.owner_phone = '+14155550199'
         ws, live, task = await self.h.connect(record, session)
@@ -804,7 +804,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
 
     def test_inbound_brief_tolerates_withheld_numbers_and_bad_webhooks(self):
         parsed = inbound_brief({'TWILIO_FROM_NUMBER': '+15005550006',
-                                'COLLEAGUE_NOTIFY_WEBHOOK': 'http://example.com/x'}, 'anonymous')
+                                'SMITLINE_NOTIFY_WEBHOOK': 'http://example.com/x'}, 'anonymous')
         self.assertEqual(parsed.to, '+15005550006')
         self.assertIn('withheld', parsed.context)
         self.assertIsNone(parsed.webhook_url)
@@ -856,8 +856,8 @@ class PromptTests(unittest.TestCase):
         self.assertFalse(mentions_ai('Hello, I would like a table'))
 
     def test_inbound_brief(self):
-        parsed = inbound_brief({'COLLEAGUE_OWNER_NAME': 'Robin',
-                                'COLLEAGUE_NOTIFY_WEBHOOK': 'https://example.com/h'}, '+14155550100')
+        parsed = inbound_brief({'SMITLINE_OWNER_NAME': 'Robin',
+                                'SMITLINE_NOTIFY_WEBHOOK': 'https://example.com/h'}, '+14155550100')
         self.assertEqual((parsed.on_behalf_of, parsed.webhook_url), ('Robin', 'https://example.com/h'))
 
 
@@ -1173,7 +1173,7 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(configured)
         self.assertIn('PhoneNumber=%2B15005550006', requests[0][1])
         requests.clear()
-        Service.hooks = DefaultCallHooks(environ={**ENV, 'COLLEAGUE_CALLER_ID': '+14155550199'})
+        Service.hooks = DefaultCallHooks(environ={**ENV, 'SMITLINE_CALLER_ID': '+14155550199'})
         self.assertEqual(Service.hooks.credentials('local', 'twilio')['fromNumber'], '+14155550199')
         await configure_inbound(
             Service, twilio_factory=lambda creds: TwilioClient(creds['accountSid'], creds['authToken'],
@@ -1182,7 +1182,7 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('PhoneNumber=%2B15005550006', requests[0][1])
         # A caller ID alone can place calls but cannot receive them.
         only_caller_id = {k: v for k, v in ENV.items() if k != 'TWILIO_FROM_NUMBER'}
-        Service.hooks = DefaultCallHooks(environ={**only_caller_id, 'COLLEAGUE_CALLER_ID': '+14155550199'})
+        Service.hooks = DefaultCallHooks(environ={**only_caller_id, 'SMITLINE_CALLER_ID': '+14155550199'})
         self.assertFalse(await configure_inbound(
             Service, twilio_factory=lambda creds: TwilioClient(creds['accountSid'], creds['authToken'],
                                                                request=request),
@@ -1206,12 +1206,12 @@ class TwilioTests(unittest.IsolatedAsyncioTestCase):
 
 class TunnelTests(unittest.IsolatedAsyncioTestCase):
     def test_configured_url(self):
-        self.assertEqual(configured_url({'COLLEAGUE_PUBLIC_URL': 'https://calls.example.com/'}),
+        self.assertEqual(configured_url({'SMITLINE_PUBLIC_URL': 'https://calls.example.com/'}),
                          'https://calls.example.com')
         self.assertIsNone(configured_url({}))
         for bad in ('http://calls.example.com', 'https://calls.example.com/path'):
             with self.assertRaises(TunnelError):
-                configured_url({'COLLEAGUE_PUBLIC_URL': bad})
+                configured_url({'SMITLINE_PUBLIC_URL': bad})
 
     async def test_quick_tunnel_from_binary_or_docker(self):
         class Stream:
@@ -1392,7 +1392,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         params = {'CallSid': 'CA777', 'From': '+14155550100', 'To': '+15005550006'}
         response = await self.post_signed('/twilio/inbound', params)
         self.assertIn('<Reject/>', await response.text())
-        self.h.env.update(COLLEAGUE_ACCEPT_INBOUND='1', COLLEAGUE_OWNER_NAME='Robin')
+        self.h.env.update(SMITLINE_ACCEPT_INBOUND='1', SMITLINE_OWNER_NAME='Robin')
         response = await self.post_signed('/twilio/inbound', params)
         twiml = await response.text()
         self.assertIn('<Connect><Stream url="wss://abc-123.trycloudflare.com/twilio/media">', twiml)
@@ -1451,14 +1451,14 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'not_ready')
         self.assertEqual(len(fetched), 2)
         # Direct SIP calls cannot be recorded yet, so asking is refused before dialing.
-        self.h.env.update(COLLEAGUE_PHONE_AUDIO='sip', COLLEAGUE_SIP_TRUNK_URL='sips:t.example',
-                          COLLEAGUE_SIP_USERNAME='u', COLLEAGUE_SIP_PASSWORD='p')
+        self.h.env.update(SMITLINE_PHONE_AUDIO='sip', SMITLINE_SIP_TRUNK_URL='sips:t.example',
+                          SMITLINE_SIP_USERNAME='u', SMITLINE_SIP_PASSWORD='p')
         with self.assertRaises(CallError) as caught:
             await self.h.service.create(brief(record=True, to='+14155550123'))
         self.assertEqual(caught.exception.code, 'recording_unavailable')
 
     async def test_inbound_calls_are_capped(self):
-        self.h.env.update(COLLEAGUE_ACCEPT_INBOUND='1', COLLEAGUE_MAX_INBOUND='1')
+        self.h.env.update(SMITLINE_ACCEPT_INBOUND='1', SMITLINE_MAX_INBOUND='1')
         first = {'CallSid': 'CA1', 'From': '+14155550100', 'To': '+15005550006'}
         response = await self.post_signed('/twilio/inbound', first)
         self.assertIn('<Connect>', await response.text())
@@ -1484,11 +1484,11 @@ class SignalWireTests(unittest.IsolatedAsyncioTestCase):
         # Twilio stays the choice when both are set, unless the setting says otherwise.
         both = {**ENV, **self.SW_ENV}
         self.assertEqual(phone_provider(both), 'twilio')
-        self.assertEqual(phone_provider({**both, 'COLLEAGUE_PHONE_PROVIDER': 'signalwire'}), 'signalwire')
+        self.assertEqual(phone_provider({**both, 'SMITLINE_PHONE_PROVIDER': 'signalwire'}), 'signalwire')
         with self.assertRaises(MissingCredentials) as caught:
             DefaultCallHooks(environ={'SIGNALWIRE_PROJECT_ID': 'p-123'}).credentials('local', 'twilio')
         self.assertEqual(caught.exception.missing, (
-            'SIGNALWIRE_SPACE', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_FROM_NUMBER or COLLEAGUE_CALLER_ID'))
+            'SIGNALWIRE_SPACE', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_FROM_NUMBER or SMITLINE_CALLER_ID'))
 
     async def test_calls_go_to_the_space_with_documented_parameters(self):
         from twilio_client import client_for
@@ -1566,9 +1566,9 @@ class FakeSideband(FakeLive):
         FakeSideband.instances.append(self)
 
 
-SIP_ENV = {**ENV, 'COLLEAGUE_PHONE_AUDIO': 'sip', 'COLLEAGUE_SIP_TRUNK_URL': 'sips:acme-openai.dapp.signalwire.com:5061',
-           'COLLEAGUE_SIP_USERNAME': '+15005550006', 'COLLEAGUE_SIP_PASSWORD': 'sip-secret',
-           'COLLEAGUE_OWNER_PHONE': '+14155550199'}
+SIP_ENV = {**ENV, 'SMITLINE_PHONE_AUDIO': 'sip', 'SMITLINE_SIP_TRUNK_URL': 'sips:acme-openai.dapp.signalwire.com:5061',
+           'SMITLINE_SIP_USERNAME': '+15005550006', 'SMITLINE_SIP_PASSWORD': 'sip-secret',
+           'SMITLINE_OWNER_PHONE': '+14155550199'}
 
 
 class SipPhoneTests(unittest.IsolatedAsyncioTestCase):
@@ -1657,10 +1657,10 @@ class SipPhoneTests(unittest.IsolatedAsyncioTestCase):
         await self.h.service.end(record['id'])
 
     async def test_missing_trunk_settings_are_named(self):
-        self.h.env.pop('COLLEAGUE_SIP_PASSWORD')
+        self.h.env.pop('SMITLINE_SIP_PASSWORD')
         with self.assertRaises(CallError) as caught:
             await self.h.service.create(brief())
-        self.assertEqual(caught.exception.details['missing'], ['COLLEAGUE_SIP_PASSWORD'])
+        self.assertEqual(caught.exception.details['missing'], ['SMITLINE_SIP_PASSWORD'])
 
     async def test_taking_over_refers_the_call_to_the_owner(self):
         record = await self.h.service.create(brief())
@@ -1682,7 +1682,7 @@ class SipWebhookTests(unittest.IsolatedAsyncioTestCase):
         FakeLive.instances = []
         FakeSideband.instances = []
         self.temp = tempfile.TemporaryDirectory()
-        env = {**ENV, 'COLLEAGUE_PHONE_AUDIO': 'sip-webhook', 'OPENAI_PROJECT_ID': 'proj_abc',
+        env = {**ENV, 'SMITLINE_PHONE_AUDIO': 'sip-webhook', 'OPENAI_PROJECT_ID': 'proj_abc',
                'OPENAI_WEBHOOK_SECRET': self.SECRET}
         self.h = PhoneHarness(self.temp.name, env=env)
         self.client = FakeSipClient()
@@ -1711,16 +1711,16 @@ class SipWebhookTests(unittest.IsolatedAsyncioTestCase):
         record = await self.h.service.create(brief())
         await until(lambda: self.h.twilio.created)
         twiml = self.h.twilio.created[0]['twiml']
-        self.assertIn('<Sip codecs="PCMU,PCMA,OPUS">sip:proj_abc@sip.api.openai.com;transport=tls?X-Colleague-Call=' + record['id'], twiml)
+        self.assertIn('<Sip codecs="PCMU,PCMA,OPUS">sip:proj_abc@sip.api.openai.com;transport=tls?X-Smitline-Call=' + record['id'], twiml)
         token = self.h.line.session(record['id']).token
-        self.assertIn('X-Colleague-Token=' + token, twiml.replace('&amp;', '&'))
+        self.assertIn('X-Smitline-Token=' + token, twiml.replace('&amp;', '&'))
         # A forged webhook is refused.
         body, headers = self.signed({'type': 'live.transport.incoming', 'data': {'session_id': 'live_x'}})
         bad = dict(headers, **{'webhook-signature': 'v1,AAAA'})
         self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=bad)).status, 403)
         # OpenAI announces the call with our headers: it is accepted and steered.
         event = {'type': 'live.transport.incoming', 'data': {'type': 'sip', 'session_id': 'live_in_1', 'sip_headers': [
-            {'name': 'X-Colleague-Call', 'value': record['id']}, {'name': 'X-Colleague-Token', 'value': token}]}}
+            {'name': 'X-Smitline-Call', 'value': record['id']}, {'name': 'X-Smitline-Token', 'value': token}]}}
         body, headers = self.signed(event)
         self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=headers)).status, 200)
         side = await until_value(lambda: FakeSideband.instances and FakeSideband.instances[-1])
@@ -1737,7 +1737,7 @@ class SipWebhookTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_calls_this_installation_did_not_place_are_turned_away(self):
         event = {'type': 'live.transport.incoming', 'data': {'type': 'sip', 'session_id': 'live_stranger',
-                                                            'sip_headers': [{'name': 'X-Colleague-Call', 'value': 'call-0000000000000000'}]}}
+                                                            'sip_headers': [{'name': 'X-Smitline-Call', 'value': 'call-0000000000000000'}]}}
         body, headers = self.signed(event)
         self.assertEqual((await self.gateway.post('/openai/webhook', data=body, headers=headers)).status, 200)
         await until(lambda: ('reject', 'live_stranger', 486) in self.client.calls)

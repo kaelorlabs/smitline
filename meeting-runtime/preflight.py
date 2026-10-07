@@ -1,4 +1,7 @@
 """Validate local meeting configuration without exposing secret values."""
+import old_names
+old_names.adopt_old_settings()
+
 import os
 from pathlib import Path
 import re
@@ -58,7 +61,7 @@ def validate(root):
 
 if __name__ == '__main__':
     try:
-        config = validate(os.environ.get('COLLEAGUE_ROOT') or Path(__file__).resolve().parent.parent)
+        config = validate(os.environ.get('SMITLINE_ROOT') or Path(__file__).resolve().parent.parent)
     except (OSError, ValueError) as exc:
         print(f'Configuration check failed:\n{exc}', file=sys.stderr)
         raise SystemExit(2)

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Smitline calls API",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Start phone calls and meetings from a brief and read structured results. See docs/calls.md.",
     "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
   },
@@ -228,7 +228,7 @@
   },
   "components": {
     "securitySchemes": {
-      "bearer": { "type": "http", "scheme": "bearer", "description": "The per-launch token in .colleague/daemon.auth, or an API token in server mode." }
+      "bearer": { "type": "http", "scheme": "bearer", "description": "The per-launch token in .smitline/daemon.auth, or an API token in server mode." }
     },
     "parameters": {
       "CallId": { "name": "callId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" } }
@@ -453,7 +453,7 @@
           "line": { "type": "object", "description": "Line references such as meetingId." },
           "result": { "oneOf": [{ "$ref": "#/components/schemas/Result" }, { "type": "null" }] },
           "direction": { "type": "string", "enum": ["outbound", "inbound"] },
-          "recording": { "type": "object", "description": "Phone calls recorded with COLLEAGUE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
+          "recording": { "type": "object", "description": "Phone calls recorded with SMITLINE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
           "usage": { "type": "object", "description": "Measured usage: voiceSeconds, phoneSeconds, phoneProvider, phonePrice (the provider's own price, once reported), backendTokens and backendModel, summaryTokens and summaryModel." },
           "cost": { "$ref": "#/components/schemas/Cost" },
           "carried": { "type": "array", "description": "The notes of earlier calls this call started with.", "items": { "$ref": "#/components/schemas/CarriedNote" } },

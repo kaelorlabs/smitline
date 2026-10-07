@@ -40,18 +40,17 @@ COPY docker ./docker
 COPY packages ./packages
 COPY control-panel ./control-panel
 COPY meeting-runtime ./meeting-runtime
-# `colleague` stays as an alias of `smitline` for scripts written before the rename.
-RUN ln -s /app/docker/smitline /usr/local/bin/smitline \
-    && ln -s /app/docker/smitline /usr/local/bin/colleague
+RUN ln -s /app/docker/smitline /usr/local/bin/smitline
 
 # The release version (0.1.0); the workflow sets it, local builds say dev.
 ARG VERSION=dev
-LABEL org.opencontainers.image.version=${VERSION}
+LABEL org.opencontainers.image.version=${VERSION} \
+      io.modelcontextprotocol.server.name="io.github.kaelorlabs/smitline"
 ENV PYTHONUNBUFFERED=1 \
-    COLLEAGUE_ROOT=/data \
-    COLLEAGUE_MEETING_DATA=/data/meetings \
-    COLLEAGUE_MANAGED=1 \
-    COLLEAGUE_MEETING_IMAGE=${MEETING_IMAGE} \
-    COLLEAGUE_VERSION=${VERSION}
+    SMITLINE_ROOT=/data \
+    SMITLINE_MEETING_DATA=/data/meetings \
+    SMITLINE_MANAGED=1 \
+    SMITLINE_MEETING_IMAGE=${MEETING_IMAGE} \
+    SMITLINE_VERSION=${VERSION}
 VOLUME /data
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/entrypoint.sh"]

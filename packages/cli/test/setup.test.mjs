@@ -15,7 +15,7 @@ import {
 const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 
 async function tempRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-setup-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-setup-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -23,18 +23,18 @@ async function tempRoot(t) {
 test('.env merge keeps other lines and writes 0600', async (t) => {
   const root = await tempRoot(t);
   await fs.writeFile(path.join(root, '.env'), '# keys\nOPENAI_API_KEY=replace_with_key\nPORT=8093\n');
-  writeEnv(root, { OPENAI_API_KEY: 'sk-new', COLLEAGUE_OWNER_NAME: 'Robin' });
+  writeEnv(root, { OPENAI_API_KEY: 'sk-new', SMITLINE_OWNER_NAME: 'Robin' });
   const text = await fs.readFile(path.join(root, '.env'), 'utf8');
-  assert.equal(text, '# keys\nOPENAI_API_KEY=sk-new\nPORT=8093\nCOLLEAGUE_OWNER_NAME=Robin\n');
+  assert.equal(text, '# keys\nOPENAI_API_KEY=sk-new\nPORT=8093\nSMITLINE_OWNER_NAME=Robin\n');
   assert.equal(statSync(path.join(root, '.env')).mode & 0o777, 0o600);
   assert.deepEqual(parseEnv('export A="x y"\nB=\'z\'\n#C=1'), { A: 'x y', B: 'z' });
-  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.equal(readEnv(root).SMITLINE_OWNER_NAME, 'Robin');
 
   // A key assigned twice: readers take the last one, so repeats must go.
-  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_VOICE=marin\nPORT=1\nCOLLEAGUE_VOICE=quartz\n');
-  writeEnv(root, { COLLEAGUE_VOICE: 'cinder' });
-  assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'COLLEAGUE_VOICE=cinder\nPORT=1\n');
-  assert.equal(readEnv(root).COLLEAGUE_VOICE, 'cinder');
+  await fs.writeFile(path.join(root, '.env'), 'SMITLINE_VOICE=marin\nPORT=1\nSMITLINE_VOICE=quartz\n');
+  writeEnv(root, { SMITLINE_VOICE: 'cinder' });
+  assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'SMITLINE_VOICE=cinder\nPORT=1\n');
+  assert.equal(readEnv(root).SMITLINE_VOICE, 'cinder');
 
   // null removes every assignment of a key, and adds nothing for a key that was not there.
   await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-a\nPORT=1\nexport OPENAI_API_KEY=sk-b\n');
@@ -45,15 +45,15 @@ test('.env merge keeps other lines and writes 0600', async (t) => {
 test('the Account page sees whether each field is saved, never a secret', async (t) => {
   const root = await tempRoot(t);
   const key = `sk-proj-${'A'.repeat(150)}`;
-  writeEnv(root, { OPENAI_API_KEY: key, COLLEAGUE_OWNER_NAME: 'Robin', COLLEAGUE_CONNECTOR_PASSPHRASE: 'correct horse battery staple', TWILIO_AUTH_TOKEN: 'abcdef0123456789abcdef0123456789', TWILIO_ACCOUNT_SID: `AC${'0'.repeat(32)}` });
+  writeEnv(root, { OPENAI_API_KEY: key, SMITLINE_OWNER_NAME: 'Robin', SMITLINE_CONNECTOR_PASSPHRASE: 'correct horse battery staple', TWILIO_AUTH_TOKEN: 'abcdef0123456789abcdef0123456789', TWILIO_ACCOUNT_SID: `AC${'0'.repeat(32)}` });
   const fields = Object.fromEntries(accountFields(readEnv(root), { SIGNALWIRE_PROJECT_ID: 'from-the-environment' }).map((field) => [field.key, field]));
   assert.equal(fields.OPENAI_API_KEY.shown, 'sk-proj-');
   assert.equal(fields.OPENAI_API_KEY.revoke.url, 'https://platform.openai.com/api-keys');
   // Only a key format's fixed start is shown; a key without one shows nothing.
   assert.equal(fields.TWILIO_ACCOUNT_SID.shown, 'AC');
   assert.equal(fields.TWILIO_AUTH_TOKEN.shown, '');
-  assert.equal(fields.COLLEAGUE_CONNECTOR_PASSPHRASE.shown, '');
-  assert.equal(fields.COLLEAGUE_OWNER_NAME.shown, 'Robin');
+  assert.equal(fields.SMITLINE_CONNECTOR_PASSPHRASE.shown, '');
+  assert.equal(fields.SMITLINE_OWNER_NAME.shown, 'Robin');
   assert.equal(fields.SIGNALWIRE_API_TOKEN.saved, false);
   assert.equal('shown' in fields.SIGNALWIRE_API_TOKEN, false);
   assert.deepEqual([fields.SIGNALWIRE_PROJECT_ID.saved, fields.SIGNALWIRE_PROJECT_ID.fromEnvironment], [true, true]);
@@ -62,54 +62,54 @@ test('the Account page sees whether each field is saved, never a secret', async 
 
   removeSetting(root, 'OPENAI_API_KEY');
   assert.equal('OPENAI_API_KEY' in readEnv(root), false);
-  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.equal(readEnv(root).SMITLINE_OWNER_NAME, 'Robin');
   assert.throws(() => removeSetting(root, 'PATH'), /unknown setting PATH/);
 });
 
 test('settings are validated and secrets are refused', () => {
-  assert.equal(validateSetting('COLLEAGUE_OWNER_PHONE', '+1 (415) 555-0142'), '+14155550142');
-  assert.equal(validateSetting('COLLEAGUE_VOICE', 'quartz'), 'quartz');
-  assert.throws(() => validateSetting('COLLEAGUE_VOICE', 'alloy'), /one of/);
+  assert.equal(validateSetting('SMITLINE_OWNER_PHONE', '+1 (415) 555-0142'), '+14155550142');
+  assert.equal(validateSetting('SMITLINE_VOICE', 'quartz'), 'quartz');
+  assert.throws(() => validateSetting('SMITLINE_VOICE', 'alloy'), /one of/);
   assert.throws(() => validateSetting('OPENAI_API_KEY', 'sk'), /secret/);
-  assert.throws(() => validateSetting('COLLEAGUE_PUBLIC_URL', 'http://x'), /https/);
+  assert.throws(() => validateSetting('SMITLINE_PUBLIC_URL', 'http://x'), /https/);
   assert.throws(() => validateSetting('PATH', '/bin'), /unknown setting/);
-  assert.throws(() => validateSetting('COLLEAGUE_OWNER_NAME', 'a\nb'), /one line/);
+  assert.throws(() => validateSetting('SMITLINE_OWNER_NAME', 'a\nb'), /one line/);
   // Voices OpenAI adds later can be allowed without a release.
-  const env = { COLLEAGUE_EXTRA_VOICES: 'aurora, bad name,nova' };
+  const env = { SMITLINE_EXTRA_VOICES: 'aurora, bad name,nova' };
   assert.deepEqual(availableVoices(env).slice(-2), ['aurora', 'nova']);
-  assert.equal(validateSetting('COLLEAGUE_VOICE', 'aurora', { env }), 'aurora');
-  assert.throws(() => validateSetting('COLLEAGUE_VOICE', 'aurora', { env: {} }), /one of/);
-  assert.equal(validateSetting('COLLEAGUE_EXTRA_VOICES', 'aurora, nova'), 'aurora,nova');
-  assert.throws(() => validateSetting('COLLEAGUE_EXTRA_VOICES', 'Aurora!'), /voice names/);
+  assert.equal(validateSetting('SMITLINE_VOICE', 'aurora', { env }), 'aurora');
+  assert.throws(() => validateSetting('SMITLINE_VOICE', 'aurora', { env: {} }), /one of/);
+  assert.equal(validateSetting('SMITLINE_EXTRA_VOICES', 'aurora, nova'), 'aurora,nova');
+  assert.throws(() => validateSetting('SMITLINE_EXTRA_VOICES', 'Aurora!'), /voice names/);
 });
 
 test('connector settings take an https origin and a passphrase of at least 12 characters', () => {
-  assert.equal(validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://smitline.example.com/'), 'https://smitline.example.com');
-  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'http://smitline.example.com'), /https/);
-  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_URL', 'https://smitline.example.com/mcp'), /no path/);
-  assert.throws(() => validateSetting('COLLEAGUE_CONNECTOR_PASSPHRASE', 'correct horse battery staple'), /secret/);
+  assert.equal(validateSetting('SMITLINE_CONNECTOR_URL', 'https://smitline.example.com/'), 'https://smitline.example.com');
+  assert.throws(() => validateSetting('SMITLINE_CONNECTOR_URL', 'http://smitline.example.com'), /https/);
+  assert.throws(() => validateSetting('SMITLINE_CONNECTOR_URL', 'https://smitline.example.com/mcp'), /no path/);
+  assert.throws(() => validateSetting('SMITLINE_CONNECTOR_PASSPHRASE', 'correct horse battery staple'), /secret/);
   const passphrase = 'correct horse battery staple';
-  assert.deepEqual(sanitizeSubmission(new URLSearchParams({ COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase })),
-    { updates: { COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase }, errors: [] });
-  assert.match(sanitizeSubmission(new URLSearchParams({ COLLEAGUE_CONNECTOR_PASSPHRASE: 'too short' })).errors[0], /at least 12/);
-  const html = renderSecretsPage({ COLLEAGUE_CONNECTOR_PASSPHRASE: passphrase }, '/setup/x');
+  assert.deepEqual(sanitizeSubmission(new URLSearchParams({ SMITLINE_CONNECTOR_PASSPHRASE: passphrase })),
+    { updates: { SMITLINE_CONNECTOR_PASSPHRASE: passphrase }, errors: [] });
+  assert.match(sanitizeSubmission(new URLSearchParams({ SMITLINE_CONNECTOR_PASSPHRASE: 'too short' })).errors[0], /at least 12/);
+  const html = renderSecretsPage({ SMITLINE_CONNECTOR_PASSPHRASE: passphrase }, '/setup/x');
   assert.match(html, /Remote connector \(server mode\)/);
   assert.ok(!html.includes(passphrase));
 });
 
 test('secrets page submission is validated and never echoes secrets', async (t) => {
   const { updates, errors } = sanitizeSubmission(new URLSearchParams({
-    OPENAI_API_KEY: 'sk-abc', COLLEAGUE_OWNER_PHONE: 'nope', TWILIO_AUTH_TOKEN: 'has space',
+    OPENAI_API_KEY: 'sk-abc', SMITLINE_OWNER_PHONE: 'nope', TWILIO_AUTH_TOKEN: 'has space',
   }));
   // Whitespace pasted into a key (a wrapped display adds line breaks) is dropped, not rejected.
   assert.deepEqual(updates, { OPENAI_API_KEY: 'sk-abc', TWILIO_AUTH_TOKEN: 'hasspace' });
   assert.equal(errors.length, 1);
   const pasted = sanitizeSubmission(new URLSearchParams({
-    SIGNALWIRE_API_TOKEN: ' SWAPI-abc\n def\u200b ', COLLEAGUE_CONNECTOR_PASSPHRASE: 'correct horse\nbattery staple',
+    SIGNALWIRE_API_TOKEN: ' SWAPI-abc\n def\u200b ', SMITLINE_CONNECTOR_PASSPHRASE: 'correct horse\nbattery staple',
   }));
   assert.deepEqual(pasted.updates, { SIGNALWIRE_API_TOKEN: 'SWAPI-abcdef' });
   assert.match(pasted.errors[0], /must be one line/);
-  const html = renderSecretsPage({ OPENAI_API_KEY: 'sk-secret-value', COLLEAGUE_OWNER_NAME: 'Robin' }, '/setup/x');
+  const html = renderSecretsPage({ OPENAI_API_KEY: 'sk-secret-value', SMITLINE_OWNER_NAME: 'Robin' }, '/setup/x');
   assert.ok(!html.includes('sk-secret-value'));
   assert.match(html, /Saved: Robin/);
 
@@ -126,7 +126,7 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.match(first, /name="action" value="done"/);
 
   // Each save keeps the page open for more.
-  const saved = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-live', COLLEAGUE_OWNER_NAME: 'Robin' });
+  const saved = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-live', SMITLINE_OWNER_NAME: 'Robin' });
   assert.equal(saved.status, 200);
   const afterSave = await saved.text();
   assert.match(afterSave, /Saved on this computer/);
@@ -135,7 +135,7 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-live');
 
   // A field that needs a fix does not throw away the valid ones next to it.
-  const partial = await postForm(pageUrl, { TWILIO_ACCOUNT_SID: 'AC-secret-sid', COLLEAGUE_OWNER_PHONE: 'nope' });
+  const partial = await postForm(pageUrl, { TWILIO_ACCOUNT_SID: 'AC-secret-sid', SMITLINE_OWNER_PHONE: 'nope' });
   assert.equal(partial.status, 422);
   const partialHtml = await partial.text();
   assert.match(partialHtml, /aria-invalid="true"/);
@@ -144,7 +144,7 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   assert.equal(readEnv(root).TWILIO_ACCOUNT_SID, 'AC-secret-sid');
 
   // Done refuses to finish while a phone provider is half set up, and keeps what was typed.
-  const refused = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', COLLEAGUE_OWNER_PHONE: '+14155550142', action: 'done' });
+  const refused = await postForm(pageUrl, { OPENAI_API_KEY: 'sk-newer', SMITLINE_OWNER_PHONE: '+14155550142', action: 'done' });
   assert.equal(refused.status, 422);
   assert.match(await refused.text(), /Twilio Auth Token is required for Twilio phone calls/);
   assert.equal(readEnv(root).OPENAI_API_KEY, 'sk-newer');
@@ -152,8 +152,8 @@ test('secrets page submission is validated and never echoes secrets', async (t) 
   const finished = await postForm(pageUrl, { TWILIO_AUTH_TOKEN: 'tok\n en', action: 'done' });
   assert.equal(finished.status, 200);
   assert.match(await finished.text(), /All set/);
-  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'COLLEAGUE_OWNER_PHONE', 'TWILIO_AUTH_TOKEN'] });
-  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'COLLEAGUE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'COLLEAGUE_OWNER_PHONE'], ['TWILIO_AUTH_TOKEN']]);
+  assert.deepEqual(await done, { saved: ['OPENAI_API_KEY', 'SMITLINE_OWNER_NAME', 'TWILIO_ACCOUNT_SID', 'SMITLINE_OWNER_PHONE', 'TWILIO_AUTH_TOKEN'] });
+  assert.deepEqual(savedEvents, [['OPENAI_API_KEY', 'SMITLINE_OWNER_NAME'], ['TWILIO_ACCOUNT_SID'], ['OPENAI_API_KEY', 'SMITLINE_OWNER_PHONE'], ['TWILIO_AUTH_TOKEN']]);
   assert.equal(readEnv(root).TWILIO_AUTH_TOKEN, 'token');
   const closed = await fetch(pageUrl).then((response) => response.status, () => 'closed');
   assert.ok([410, 'closed'].includes(closed), String(closed));
@@ -180,15 +180,15 @@ test('the secrets page times out: with saves it resolves, without it rejects', a
 
   const root = await tempRoot(t);
   const used = await servedUrl({ root, timeoutMs: 600 });
-  assert.equal((await postForm(used.pageUrl, { COLLEAGUE_OWNER_NAME: 'Robin' })).status, 200);
-  assert.deepEqual(await used.done, { saved: ['COLLEAGUE_OWNER_NAME'], timedOut: true });
+  assert.equal((await postForm(used.pageUrl, { SMITLINE_OWNER_NAME: 'Robin' })).status, 200);
+  assert.deepEqual(await used.done, { saved: ['SMITLINE_OWNER_NAME'], timedOut: true });
 });
 
 test('the secrets page uses a fixed port, and any free port when that one is busy', async (t) => {
   assert.equal(SETUP_PAGE_PORT, 8096);
   assert.equal(setupPagePort({}), 8096);
-  assert.equal(setupPagePort({ COLLEAGUE_SETUP_PORT: '9123' }), 9123);
-  assert.equal(setupPagePort({ COLLEAGUE_SETUP_PORT: 'nope' }), 8096);
+  assert.equal(setupPagePort({ SMITLINE_SETUP_PORT: '9123' }), 9123);
+  assert.equal(setupPagePort({ SMITLINE_SETUP_PORT: 'nope' }), 8096);
 
   const free = await closedPort();
   const first = await servedUrl({ root: await tempRoot(t), port: free, timeoutMs: 400 });
@@ -203,11 +203,11 @@ test('the secrets page uses a fixed port, and any free port when that one is bus
 
 test('the secrets page explains saved fields, errors, and the finish without echoing values', () => {
   const saved = { OPENAI_API_KEY: 'sk-secret-value', TWILIO_AUTH_TOKEN: 'token-secret' };
-  const errors = ['COLLEAGUE_OWNER_PHONE must be an E.164 number such as +14155550142'];
+  const errors = ['SMITLINE_OWNER_PHONE must be an E.164 number such as +14155550142'];
   const html = renderSecretsPage(saved, '/setup/x', '', { savedNow: ['OPENAI_API_KEY'], errors, done: true });
   assert.ok(!html.includes('sk-secret-value') && !html.includes('token-secret'));
-  assert.match(html, /<input id="COLLEAGUE_OWNER_PHONE"[^>]*aria-invalid="true"/);
-  assert.match(html, /<a href="#COLLEAGUE_OWNER_PHONE">/);
+  assert.match(html, /<input id="SMITLINE_OWNER_PHONE"[^>]*aria-invalid="true"/);
+  assert.match(html, /<a href="#SMITLINE_OWNER_PHONE">/);
   assert.match(html, /Show my own number/);
   const finished = renderSecretsPage(saved, '/setup/x', '', { finished: true });
   assert.match(finished, /still missing/);
@@ -261,8 +261,8 @@ test('status reports what to ask the user, and verifies keys when present', asyn
     return Response.json({ outgoing_caller_ids: [{ phone_number: '+14155550100' }] });
   };
   const envLines = [
-    'OPENAI_API_KEY=sk-test', 'COLLEAGUE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
-    'TWILIO_AUTH_TOKEN=tok', 'COLLEAGUE_OWNER_PHONE=+14155550100',
+    'OPENAI_API_KEY=sk-test', 'SMITLINE_OWNER_NAME=Robin', 'TWILIO_ACCOUNT_SID=AC1',
+    'TWILIO_AUTH_TOKEN=tok', 'SMITLINE_OWNER_PHONE=+14155550100',
   ];
   // No number chosen yet.
   await fs.writeFile(path.join(root, '.env'), envLines.join('\n'));
@@ -273,7 +273,7 @@ test('status reports what to ask the user, and verifies keys when present', asyn
   assert.deepEqual(callerStep.suggest, { key: 'TWILIO_FROM_NUMBER', value: '+15005550006' });
   assert.equal(callerStep.ask, undefined);
   // A verified mobile alone is enough for outgoing calls.
-  await fs.writeFile(path.join(root, '.env'), [...envLines, 'COLLEAGUE_CALLER_ID=+14155550100'].join('\n'));
+  await fs.writeFile(path.join(root, '.env'), [...envLines, 'SMITLINE_CALLER_ID=+14155550100'].join('\n'));
   const callerOnly = await setupStatus({ root, env: {}, fetchImpl, runner, find });
   assert.equal(callerOnly.phoneReady, true);
   assert.match(callerOnly.checks.find((c) => c.id === 'caller_id').detail, /incoming calls also need TWILIO_FROM_NUMBER/);
@@ -366,7 +366,7 @@ test('register from WSL also adds Windows apps and installs the call skills', as
 
 test('setup secrets starts the page in the background and prints its address', async (t) => {
   const root = await tempRoot(t);
-  const started = await runCli(['setup', 'secrets', '--no-open', '--root', root], { COLLEAGUE_SETUP_PAGE_TIMEOUT_MS: '5000' });
+  const started = await runCli(['setup', 'secrets', '--no-open', '--root', root], { SMITLINE_SETUP_PAGE_TIMEOUT_MS: '5000' });
   assert.equal(started.code, 0, started.stderr);
   const { url, opened, next } = JSON.parse(started.stdout);
   assert.equal(opened, false);
@@ -380,15 +380,15 @@ test('setup secrets starts the page in the background and prints its address', a
   const saved = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ OPENAI_API_KEY: 'sk-test', COLLEAGUE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
+    body: new URLSearchParams({ OPENAI_API_KEY: 'sk-test', SMITLINE_OWNER_NAME: 'Robin', action: 'done' }).toString(),
   });
   assert.equal(saved.status, 200);
-  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.equal(readEnv(root).SMITLINE_OWNER_NAME, 'Robin');
 });
 
 test('a voice preview calls the owner in that voice without saving it', async (t) => {
   const root = await tempRoot(t);
-  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\nCOLLEAGUE_OWNER_PHONE=+14155550100\n');
+  await fs.writeFile(path.join(root, '.env'), 'SMITLINE_OWNER_NAME=Robin\nSMITLINE_OWNER_PHONE=+14155550100\n');
   const daemon = await fakeCallsDaemon(root);
   t.after(daemon.close);
   const preview = await runCli(['setup', 'voice', '--preview', 'cinder', '--root', root, '--port', String(daemon.port)]);
@@ -396,15 +396,15 @@ test('a voice preview calls the owner in that voice without saving it', async (t
   const brief = daemon.seen.find((item) => item.method === 'POST').body;
   assert.equal(brief.voice, 'cinder');
   assert.equal(brief.to, '+14155550100');
-  assert.equal(readEnv(root).COLLEAGUE_VOICE, undefined);
+  assert.equal(readEnv(root).SMITLINE_VOICE, undefined);
   const bad = await runCli(['setup', 'voice', '--preview', 'alloy', '--root', root]);
   assert.equal(bad.code, 2);
 });
 
 async function fakeCallsDaemon(root) {
   const token = 'fake-token';
-  await fs.mkdir(path.join(root, '.colleague'), { recursive: true });
-  await fs.writeFile(path.join(root, '.colleague', 'daemon.auth'), `${token}\n`);
+  await fs.mkdir(path.join(root, '.smitline'), { recursive: true });
+  await fs.writeFile(path.join(root, '.smitline', 'daemon.auth'), `${token}\n`);
   const seen = [];
   let polls = 0;
   const server = http.createServer(async (request, response) => {
@@ -464,8 +464,8 @@ function runCli(args, env = {}) {
 test('setup stop stops the daemon, but not in the middle of a call unless forced', async (t) => {
   const root = await tempRoot(t);
   const token = 'fake-token';
-  await fs.mkdir(path.join(root, '.colleague'), { recursive: true });
-  await fs.writeFile(path.join(root, '.colleague', 'daemon.auth'), `${token}\n`);
+  await fs.mkdir(path.join(root, '.smitline'), { recursive: true });
+  await fs.writeFile(path.join(root, '.smitline', 'daemon.auth'), `${token}\n`);
   let calls = [{ id: 'call-0123456789abcdef', status: 'in_progress' }, { id: 'call-fedcba9876543210', status: 'completed' }];
   const seen = [];
   const server = http.createServer((request, response) => {
@@ -486,7 +486,7 @@ test('setup stop stops the daemon, but not in the middle of a call unless forced
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const port = server.address().port;
-  const env = { COLLEAGUE_DAEMON_PORT: String(port), COLLEAGUE_MANAGED: '' };
+  const env = { SMITLINE_DAEMON_PORT: String(port), SMITLINE_MANAGED: '' };
 
   const busy = await runCli(['setup', 'stop', '--root', root], env);
   assert.equal(busy.code, 2);
@@ -507,14 +507,14 @@ test('setup stop stops the daemon, but not in the middle of a call unless forced
   assert.equal(JSON.parse(idle.stdout).running, false);
 
   // In the container, the container is stopped from the host.
-  const managed = await runCli(['setup', 'stop'], { ...env, COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root });
+  const managed = await runCli(['setup', 'stop'], { ...env, SMITLINE_MANAGED: '1', SMITLINE_ROOT: root });
   assert.equal(managed.code, 0, managed.stderr);
   assert.match(JSON.parse(managed.stdout).next, /docker stop smitline/);
 });
 
 test('call builds a brief, waits for the result, and shows questions for missing fields', async (t) => {
   const root = await tempRoot(t);
-  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\n');
+  await fs.writeFile(path.join(root, '.env'), 'SMITLINE_OWNER_NAME=Robin\n');
   const daemon = await fakeCallsDaemon(root);
   t.after(daemon.close);
   const common = ['--root', root, '--port', String(daemon.port)];
@@ -552,7 +552,7 @@ test('status verifies a SignalWire account on its Space and suggests its number'
   await fs.writeFile(path.join(root, 'start-runtime-daemon.sh'), '#!/bin/sh\n');
   await fs.mkdir(path.join(root, 'node_modules', 'mammoth'), { recursive: true });
   await fs.writeFile(path.join(root, '.env'), [
-    'OPENAI_API_KEY=sk-test', 'COLLEAGUE_OWNER_NAME=Robin', 'COLLEAGUE_OWNER_PHONE=+14165550100',
+    'OPENAI_API_KEY=sk-test', 'SMITLINE_OWNER_NAME=Robin', 'SMITLINE_OWNER_PHONE=+14165550100',
     'SIGNALWIRE_SPACE=acme.signalwire.com', 'SIGNALWIRE_PROJECT_ID=1a2b3c4d-0000', 'SIGNALWIRE_API_TOKEN=PT-secret',
   ].join('\n'));
   const requests = [];
@@ -578,7 +578,7 @@ test('status verifies a SignalWire account on its Space and suggests its number'
   assert.equal(validateSetting('SIGNALWIRE_SPACE', 'https://Acme.signalwire.com/dashboard'), 'acme.signalwire.com');
   assert.equal(validateSetting('SIGNALWIRE_SPACE', 'acme'), 'acme.signalwire.com');
   assert.throws(() => validateSetting('SIGNALWIRE_API_TOKEN', 'PT-1'), /secret/);
-  assert.throws(() => validateSetting('COLLEAGUE_PHONE_PROVIDER', 'vonage'), /twilio or signalwire/);
+  assert.throws(() => validateSetting('SMITLINE_PHONE_PROVIDER', 'vonage'), /twilio or signalwire/);
 });
 
 test('the setup page offers SignalWire first and folds Twilio away', () => {
@@ -594,7 +594,7 @@ test('the setup page offers SignalWire first and folds Twilio away', () => {
 
 test('Done needs the OpenAI key and a complete SignalWire setup', () => {
   assert.deepEqual(missingForDone({}), ['OpenAI API key is required', 'Your name is required']);
-  const base = { OPENAI_API_KEY: 'sk-live', COLLEAGUE_OWNER_NAME: 'Robin' };
+  const base = { OPENAI_API_KEY: 'sk-live', SMITLINE_OWNER_NAME: 'Robin' };
   assert.deepEqual(missingForDone(base), []);
   assert.deepEqual(missingForDone({ ...base, SIGNALWIRE_SPACE: 'acme.signalwire.com', SIGNALWIRE_PROJECT_ID: 'p', SIGNALWIRE_SIGNING_KEY: 'PSK' }),
     ['API token is required for SignalWire phone calls']);
@@ -612,10 +612,10 @@ test('sip-trunk creates the SignalWire script and SIP address OpenAI dials out t
     SIGNALWIRE_FROM_NUMBER: '+14155550124' };
   const trunk = await createSignalWireTrunk({ env, fetchImpl, password: 'generated-secret' });
   assert.deepEqual(trunk.settings, {
-    COLLEAGUE_SIP_TRUNK_URL: 'sips:acme-smitline-openai.dapp.signalwire.com:5061',
-    COLLEAGUE_SIP_USERNAME: '+14155550124',
-    COLLEAGUE_SIP_PASSWORD: 'generated-secret',
-    COLLEAGUE_PHONE_AUDIO: 'sip',
+    SMITLINE_SIP_TRUNK_URL: 'sips:acme-smitline-openai.dapp.signalwire.com:5061',
+    SMITLINE_SIP_USERNAME: '+14155550124',
+    SMITLINE_SIP_PASSWORD: 'generated-secret',
+    SMITLINE_PHONE_AUDIO: 'sip',
   });
   const [script, address] = requests;
   assert.equal(script[0], 'https://acme.signalwire.com/api/fabric/resources/swml_scripts');
@@ -641,26 +641,26 @@ test('status says how call audio travels and what direct SIP still needs', async
   const relay = await setupStatus({ root, env: {}, verify: false, runner, find });
   assert.match(relay.checks.find((c) => c.id === 'phone_audio').detail, /^relayed through this computer/);
   await fs.writeFile(path.join(root, '.env'), [
-    'COLLEAGUE_PHONE_AUDIO=sip',
-    'COLLEAGUE_SIP_TRUNK_URL=sips:a.dapp.signalwire.com:5061',
-    'COLLEAGUE_SIP_USERNAME=+14155550124',
+    'SMITLINE_PHONE_AUDIO=sip',
+    'SMITLINE_SIP_TRUNK_URL=sips:a.dapp.signalwire.com:5061',
+    'SMITLINE_SIP_USERNAME=+14155550124',
   ].join('\n'));
   const partial = await setupStatus({ root, env: {}, verify: false, runner, find });
   const audio = partial.checks.find((c) => c.id === 'phone_audio');
   assert.equal(audio.ok, false);
-  assert.match(audio.detail, /missing COLLEAGUE_SIP_PASSWORD/);
+  assert.match(audio.detail, /missing SMITLINE_SIP_PASSWORD/);
   // OpenAI dials out, so nothing here has to be reachable from the internet.
   assert.equal(partial.checks.find((c) => c.id === 'public_url').ok, true);
-  assert.equal(validateSetting('COLLEAGUE_PHONE_AUDIO', 'sip-webhook'), 'sip-webhook');
-  assert.throws(() => validateSetting('COLLEAGUE_PHONE_AUDIO', 'webrtc'), /relay, sip, sip-webhook/);
-  assert.throws(() => validateSetting('COLLEAGUE_SIP_TRUNK_URL', 'sip:host'), /sips:/);
+  assert.equal(validateSetting('SMITLINE_PHONE_AUDIO', 'sip-webhook'), 'sip-webhook');
+  assert.throws(() => validateSetting('SMITLINE_PHONE_AUDIO', 'webrtc'), /relay, sip, sip-webhook/);
+  assert.throws(() => validateSetting('SMITLINE_SIP_TRUNK_URL', 'sip:host'), /sips:/);
   assert.throws(() => validateSetting('OPENAI_PROJECT_ID', 'abc'), /proj_/);
-  assert.throws(() => validateSetting('COLLEAGUE_SIP_PASSWORD', 'x'), /secret/);
+  assert.throws(() => validateSetting('SMITLINE_SIP_PASSWORD', 'x'), /secret/);
 });
 
 test('profile commands and the new call flags reach the daemon', async (t) => {
   const root = await tempRoot(t);
-  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\n');
+  await fs.writeFile(path.join(root, '.env'), 'SMITLINE_OWNER_NAME=Robin\n');
   const daemon = await fakeCallsDaemon(root);
   t.after(daemon.close);
   const common = ['--root', root, '--port', String(daemon.port)];
@@ -768,7 +768,7 @@ async function listing(dir) {
 
 test('managed status skips host-only checks and says Smitline runs in its container', async (t) => {
   const root = await tempRoot(t);
-  await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME=Robin\n');
+  await fs.writeFile(path.join(root, '.env'), 'OPENAI_API_KEY=sk-test\nSMITLINE_OWNER_NAME=Robin\n');
   const ran = [];
   const runner = (binary, args) => { ran.push(`${binary} ${args.join(' ')}`); return fakeRunner({ 'docker info': 0 })(binary, args); };
   const status = await setupStatus({ root, env: {}, verify: false, runner, find: () => null, managed: true });
@@ -797,7 +797,7 @@ test('managed setup status from the CLI', async (t) => {
   const root = await tempRoot(t);
   const port = await closedPort();
   const result = await runCli(['setup', 'status', '--json', '--no-verify'], {
-    COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port),
+    SMITLINE_MANAGED: '1', SMITLINE_ROOT: root, SMITLINE_DAEMON_PORT: String(port),
   });
   const report = JSON.parse(result.stdout);
   assert.ok(!report.checks.some((c) => c.id === 'line_endings'));
@@ -805,18 +805,18 @@ test('managed setup status from the CLI', async (t) => {
   const daemon = report.checks.find((c) => c.id === 'daemon');
   assert.equal(daemon.ok, false);
   assert.match(daemon.fix, /docker restart smitline/);
-  // The image sets COLLEAGUE_VERSION; it shows in the JSON and in the plain-text status.
-  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port), COLLEAGUE_VERSION: '9.8.7' };
+  // The image sets SMITLINE_VERSION; it shows in the JSON and in the plain-text status.
+  const env = { SMITLINE_MANAGED: '1', SMITLINE_ROOT: root, SMITLINE_DAEMON_PORT: String(port), SMITLINE_VERSION: '9.8.7' };
   assert.equal(JSON.parse((await runCli(['setup', 'status', '--json', '--no-verify'], env)).stdout).version, '9.8.7');
   assert.match((await runCli(['setup', 'status', '--no-verify'], env)).stdout, /Smitline version.*9\.8\.7/);
 });
 
-test('the version comes from COLLEAGUE_VERSION, then package.json, then dev', async (t) => {
+test('the version comes from SMITLINE_VERSION, then package.json, then dev', async (t) => {
   const code = await tempRoot(t);
   assert.equal(colleagueVersion(code, {}), 'dev');
   await fs.writeFile(path.join(code, 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0' }));
   assert.equal(colleagueVersion(code, {}), '0.1.0');
-  assert.equal(colleagueVersion(code, { COLLEAGUE_VERSION: '0.2.0' }), '0.2.0');
+  assert.equal(colleagueVersion(code, { SMITLINE_VERSION: '0.2.0' }), '0.2.0');
   const status = await setupStatus({ root: code, env: {}, verify: false, runner: fakeRunner({}), find: () => null, managed: true, version: '0.1.0' });
   assert.equal(status.version, '0.1.0');
   assert.deepEqual(status.checks.find((c) => c.id === 'version'), {
@@ -829,11 +829,11 @@ test('managed setup register prints how to connect host agents and writes nothin
   const home = await tempRoot(t);
   await fs.mkdir(path.join(home, '.claude'));
   await fs.mkdir(path.join(home, '.cursor'));
-  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, HOME: home, PATH: process.env.PATH };
+  const env = { SMITLINE_MANAGED: '1', SMITLINE_ROOT: root, HOME: home, PATH: process.env.PATH };
   const result = await runCli(['setup', 'register', '--json'], env);
   assert.equal(result.code, 0, result.stderr);
   const report = JSON.parse(result.stdout);
-  const token = (await fs.readFile(path.join(root, '.colleague', 'mcp.token'), 'utf8')).trim();
+  const token = (await fs.readFile(path.join(root, '.smitline', 'mcp.token'), 'utf8')).trim();
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(report.managed, true);
   assert.deepEqual(report.mcp, { url: 'http://127.0.0.1:8095/mcp', headers: { Authorization: `Bearer ${token}` } });
@@ -859,7 +859,7 @@ test('managed setup register prints how to connect host agents and writes nothin
   assert.match(report.agents['claude-desktop'].note, /which docker/);
   // Nothing on the "host" side changed; only the token was made, under the data root.
   assert.deepEqual(await listing(home), ['.claude', '.cursor']);
-  assert.deepEqual(await listing(root), ['.colleague', path.join('.colleague', 'mcp.token')]);
+  assert.deepEqual(await listing(root), ['.smitline', path.join('.smitline', 'mcp.token')]);
 
   // The same token again, and a plain-text version for a person.
   const text = await runCli(['setup', 'register'], env);
@@ -891,19 +891,19 @@ test('register outside the container also offers the local HTTP endpoint', async
 test('managed setup start reports the daemon and never starts one', async (t) => {
   const root = await tempRoot(t);
   const port = await closedPort();
-  const env = { COLLEAGUE_MANAGED: '1', COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) };
+  const env = { SMITLINE_MANAGED: '1', SMITLINE_ROOT: root, SMITLINE_DAEMON_PORT: String(port) };
   const down = await runCli(['setup', 'start'], env);
   assert.equal(down.code, 3);
   assert.deepEqual(JSON.parse(down.stdout), {
     running: false, started: false, port, managed: true,
     error: 'Smitline is not running; restart the container: docker restart smitline',
   });
-  await assert.rejects(fs.access(path.join(root, '.colleague', 'daemon.log')));
+  await assert.rejects(fs.access(path.join(root, '.smitline', 'daemon.log')));
 
   const daemon = http.createServer((request, response) => response.end());
   await new Promise((resolve) => daemon.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => daemon.close(resolve)));
-  const up = await runCli(['setup', 'start'], { ...env, COLLEAGUE_DAEMON_PORT: String(daemon.address().port) });
+  const up = await runCli(['setup', 'start'], { ...env, SMITLINE_DAEMON_PORT: String(daemon.address().port) });
   assert.equal(up.code, 0, up.stderr);
   assert.deepEqual(JSON.parse(up.stdout), { running: true, started: false, port: daemon.address().port, managed: true });
 
@@ -914,21 +914,21 @@ test('managed setup start reports the daemon and never starts one', async (t) =>
   assert.match(call.stderr, /Hint: Restart the container/);
 });
 
-test('COLLEAGUE_ROOT is where the CLI keeps .env and the local MCP token', async (t) => {
+test('SMITLINE_ROOT is where the CLI keeps .env and the local MCP token', async (t) => {
   const root = await tempRoot(t);
-  const saved = await runCli(['setup', 'set', 'COLLEAGUE_OWNER_NAME', 'Robin'], { COLLEAGUE_ROOT: root });
+  const saved = await runCli(['setup', 'set', 'SMITLINE_OWNER_NAME', 'Robin'], { SMITLINE_ROOT: root });
   assert.equal(saved.code, 0, saved.stderr);
-  assert.equal(readEnv(root).COLLEAGUE_OWNER_NAME, 'Robin');
+  assert.equal(readEnv(root).SMITLINE_OWNER_NAME, 'Robin');
   assert.equal(statSync(path.join(root, '.env')).mode & 0o777, 0o600);
   const { dataRoot } = await import('../src/smitline.mjs');
-  const previous = process.env.COLLEAGUE_ROOT;
-  process.env.COLLEAGUE_ROOT = root;
+  const previous = process.env.SMITLINE_ROOT;
+  process.env.SMITLINE_ROOT = root;
   try {
     assert.equal(dataRoot({}), root);
     assert.equal(dataRoot({ root: '/elsewhere' }), '/elsewhere');
   } finally {
-    if (previous === undefined) delete process.env.COLLEAGUE_ROOT;
-    else process.env.COLLEAGUE_ROOT = previous;
+    if (previous === undefined) delete process.env.SMITLINE_ROOT;
+    else process.env.SMITLINE_ROOT = previous;
   }
   assert.equal(dataRoot({}), path.resolve(previous || path.resolve(path.dirname(cli), '../../..')));
 });
@@ -936,7 +936,7 @@ test('COLLEAGUE_ROOT is where the CLI keeps .env and the local MCP token', async
 test('smitline mcp serves MCP on stdin and stdout', async (t) => {
   const root = await tempRoot(t);
   const child = spawn(process.execPath, [cli, 'mcp'], {
-    env: { ...process.env, COLLEAGUE_ROOT: root }, stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, SMITLINE_ROOT: root }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -952,10 +952,10 @@ test('smitline mcp serves MCP on stdin and stdout', async (t) => {
 
 test('setup set accepts the meeting and backend settings, and checks their values', async () => {
   const { validateSetting } = await import('../src/setup.mjs');
-  assert.equal(validateSetting('COLLEAGUE_MEETING_INTRO', '0'), '0');
-  assert.equal(validateSetting('COLLEAGUE_MEETING_BACKEND_MODEL', 'gpt-5.6-luna'), 'gpt-5.6-luna');
-  assert.throws(() => validateSetting('COLLEAGUE_PHONE_WEB_SEARCH', 'yes'), /must be 0 or 1/);
-  assert.throws(() => validateSetting('COLLEAGUE_PHONE_BACKEND_MODEL', 'gpt 5; rm'), /model name/);
-  assert.equal(validateSetting('COLLEAGUE_MEETING_CAMERA_STYLE', 'animated'), 'animated');
-  assert.throws(() => validateSetting('COLLEAGUE_MEETING_CAMERA_STYLE', 'video'), /still or animated/);
+  assert.equal(validateSetting('SMITLINE_MEETING_INTRO', '0'), '0');
+  assert.equal(validateSetting('SMITLINE_MEETING_BACKEND_MODEL', 'gpt-5.6-luna'), 'gpt-5.6-luna');
+  assert.throws(() => validateSetting('SMITLINE_PHONE_WEB_SEARCH', 'yes'), /must be 0 or 1/);
+  assert.throws(() => validateSetting('SMITLINE_PHONE_BACKEND_MODEL', 'gpt 5; rm'), /model name/);
+  assert.equal(validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'animated'), 'animated');
+  assert.throws(() => validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'video'), /still or animated/);
 });

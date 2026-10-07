@@ -16,24 +16,24 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.camera_style, 'still')
 
     def test_camera_style_comes_from_env(self):
-        config = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_CAMERA_STYLE': 'Animated'})
+        config = RuntimeConfig.from_environ({'SMITLINE_MEETING_CAMERA_STYLE': 'Animated'})
         self.assertEqual(config.camera_style, 'animated')
 
     def test_backend_model_and_web_search_come_from_env(self):
         config = RuntimeConfig.from_environ({
-            'COLLEAGUE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'COLLEAGUE_MEETING_WEB_SEARCH': '1'})
+            'SMITLINE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'SMITLINE_MEETING_WEB_SEARCH': '1'})
         self.assertEqual(config.backend_model, 'gpt-5.6-mini')
         self.assertTrue(config.web_search)
 
     def test_accepts_operator_meeting_guidance(self):
-        config = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on launch readiness.'})
+        config = RuntimeConfig.from_environ({'SMITLINE_MEETING_INSTRUCTIONS': 'Focus on launch readiness.'})
         self.assertEqual(config.meeting_instructions, 'Focus on launch readiness.')
 
     def test_invalid_values_fail_at_startup(self):
-        for env in ({'COLLEAGUE_MEETING_BACKEND_MODEL': 'two words'},
-                    {'COLLEAGUE_MEETING_INSTRUCTIONS': 'x' * 2001},
-                    {'COLLEAGUE_PARTICIPANT_NAME': ''},
-                    {'COLLEAGUE_MEETING_CAMERA_STYLE': 'video'}):
+        for env in ({'SMITLINE_MEETING_BACKEND_MODEL': 'two words'},
+                    {'SMITLINE_MEETING_INSTRUCTIONS': 'x' * 2001},
+                    {'SMITLINE_PARTICIPANT_NAME': ''},
+                    {'SMITLINE_MEETING_CAMERA_STYLE': 'video'}):
             with self.assertRaises(ValueError):
                 RuntimeConfig.from_environ(env)
 
@@ -59,8 +59,8 @@ class RuntimeConfigTests(unittest.TestCase):
                 'cameraAvatarPath': '/etc/passwd',
             })
             config = RuntimeConfig.from_environ({
-                'COLLEAGUE_RUNTIME_STATE': str(path),
-                'COLLEAGUE_CAMERA_ENABLED': '1',
+                'SMITLINE_RUNTIME_STATE': str(path),
+                'SMITLINE_CAMERA_ENABLED': '1',
             })
             self.assertFalse(config.camera_enabled)
             self.assertFalse(config.camera_default_on)

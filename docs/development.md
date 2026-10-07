@@ -26,13 +26,11 @@ Smitline runs as one container, `smitline`, which starts a second container for 
 | **Calls API** | `/v1/calls`: any agent sends a brief (phone number or meeting link, goal, context) and reads a structured result. See [calls](calls.md). |
 | **Phone gateway** | `127.0.0.1:8766`: the only provider-facing routes, exposed through a quick tunnel or your proxy. See [phone calls](phone.md). |
 | **Console** | Meetings and Calls tabs, and the local MCP endpoint `/mcp`, on `127.0.0.1:8095` (`./start-control-panel.sh` from a checkout). |
-| **TypeScript SDK** | `@colleague-ai/sdk`: calls, profile, and voices. Not published to npm; use it from a checkout. |
-| **Python SDK** | `colleague-ai`: the same contract. Not published to PyPI; use it from a checkout. |
+| **TypeScript SDK** | `smitline-sdk`: calls, profile, and voices. Not published to npm; use it from a checkout. |
+| **Python SDK** | `smitline` (`from smitline import ...`): the same contract. Not published to PyPI; use it from a checkout. |
 | **CLI** | `packages/cli`: `smitline call`, `calls`, `profile`, `do-not-call`, `voices`, `setup`, `mcp`, and `connector`. In the image: `docker exec smitline smitline ...`. |
 | **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`smitline mcp`; Claude Desktop runs `docker exec -i smitline smitline mcp`). |
 | **Remote connector** | `./start-connector.sh`, from a checkout (the image does not run it yet): the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](agents.md). |
-
-Smitline was first developed as Colleague AI. The SDK package names, the `COLLEAGUE_*` settings, and the `.colleague/` folder keep that name for now; they work the same.
 
 ## Project layout
 
@@ -50,7 +48,7 @@ Smitline was first developed as Colleague AI. The SDK package names, the `COLLEA
 
 ## Run from a checkout
 
-Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.colleague/` in the checkout:
+Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.smitline/` in the checkout:
 
 ```bash
 git clone https://github.com/kaelorlabs/smitline.git ~/smitline

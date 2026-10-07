@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import '../../cli/src/adopt-old-settings.mjs';
 import { createMcpSession } from './session.mjs';
 import { redact } from '../../sdk-typescript/src/index.mjs';
 import { fileURLToPath } from 'node:url';

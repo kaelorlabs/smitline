@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 SCHEMA_VERSION = 1
-SDK_VERSION = '0.1.1'
+SDK_VERSION = '0.2.0'
 
 def redact(value: Any) -> str:
     import re
@@ -26,7 +26,7 @@ def redact(value: Any) -> str:
     return text
 
 
-class ColleagueError(Exception):
+class SmitlineError(Exception):
     def __init__(self, message, *, code='runtime', status=None, archive_path=None):
         super().__init__(redact(message))
         self.code = code
@@ -34,31 +34,31 @@ class ColleagueError(Exception):
         self.archive_path = archive_path
 
 
-class ValidationError(ColleagueError):
+class ValidationError(SmitlineError):
     def __init__(self, message, **extra):
         extra.setdefault('code', 'validation')
         super().__init__(message, **extra)
 
 
-class StartupError(ColleagueError):
+class StartupError(SmitlineError):
     def __init__(self, message, **extra):
         extra.setdefault('code', 'startup')
         super().__init__(message, **extra)
 
 
-class RuntimeError(ColleagueError):
+class RuntimeError(SmitlineError):
     def __init__(self, message, **extra):
         extra.setdefault('code', extra.get('code') or 'runtime')
         super().__init__(message, **extra)
 
 
-class FinalizationError(ColleagueError):
+class FinalizationError(SmitlineError):
     def __init__(self, message, **extra):
         extra.setdefault('code', extra.get('code') or 'finalization')
         super().__init__(message, **extra)
 
 
-class InterruptError(ColleagueError):
+class InterruptError(SmitlineError):
     def __init__(self, message='interrupted', **extra):
         extra.setdefault('code', 'interrupt')
         super().__init__(message, **extra)
@@ -89,7 +89,7 @@ class LoopbackTransport:
                  is_port_open=None, read_auth=None, autostart=True, startup_timeout_s=60.0):
         self.root = Path(root or os.getcwd())
         self.host = host
-        self.port = int(port or os.environ.get('COLLEAGUE_DAEMON_PORT') or 8765)
+        self.port = int(port or os.environ.get('SMITLINE_DAEMON_PORT') or 8765)
         self._request = request
         self._spawn_daemon = spawn_daemon if spawn_daemon is not None else (
             self._default_spawn if autostart else None
@@ -112,7 +112,7 @@ class LoopbackTransport:
             sock.close()
 
     def _default_read_auth(self):
-        path = self.root / '.colleague' / 'daemon.auth'
+        path = self.root / '.smitline' / 'daemon.auth'
         try:
             raw = path.read_text(encoding='utf-8')
         except OSError:
@@ -134,9 +134,9 @@ class LoopbackTransport:
             start_new_session=True,
             env={
                 **os.environ,
-                'COLLEAGUE_ROOT': str(self.root),
-                'COLLEAGUE_DAEMON_HOST': self.host,
-                'COLLEAGUE_DAEMON_PORT': str(self.port),
+                'SMITLINE_ROOT': str(self.root),
+                'SMITLINE_DAEMON_HOST': self.host,
+                'SMITLINE_DAEMON_PORT': str(self.port),
             },
         )
 
@@ -167,7 +167,7 @@ class LoopbackTransport:
         if self._request:
             try:
                 return self._request(method, path, body=body, token=self._token)
-            except ColleagueError as error:
+            except SmitlineError as error:
                 if error.status == 401 and not retried:
                     self._token = self._read_auth()
                     if self._token:
@@ -276,7 +276,7 @@ def create_loopback_transport(**options):
     return LoopbackTransport(**options)
 
 
-class Colleague:
+class Smitline:
     def __init__(self, *, transport=None, **options):
         self._transport = transport or create_loopback_transport(**options)
 
@@ -346,3 +346,8 @@ class Colleague:
 
     async def list_voices(self):
         return self._transport.list_voices()
+
+
+# Names from before the product was called Smitline.
+Colleague = Smitline
+ColleagueError = SmitlineError

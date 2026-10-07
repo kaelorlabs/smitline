@@ -16,7 +16,7 @@ const INITIALIZE = {
 };
 
 async function tempRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-local-mcp-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-local-mcp-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -126,7 +126,7 @@ test('local MCP keeps at most maxSessions, dropping the least recently used', as
   assert.equal((await request(port, { body: { jsonrpc: '2.0', id: 2, method: 'ping' }, headers: { ...auth(), 'Mcp-Session-Id': ids[2] } })).status, 200);
 });
 
-test('by default the token comes from <root>/.colleague/mcp.token', async (t) => {
+test('by default the token comes from <root>/.smitline/mcp.token', async (t) => {
   const root = await tempRoot(t);
   const { port } = await startLocal(t, { token: undefined, root });
   assert.equal((await request(port, { body: INITIALIZE, headers: auth() })).status, 401);
@@ -139,7 +139,7 @@ test('the local MCP token is made once, private, and stable', async (t) => {
   const root = await tempRoot(t);
   const token = readOrCreateLocalMcpToken(root);
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
-  const file = path.join(root, '.colleague', 'mcp.token');
+  const file = path.join(root, '.smitline', 'mcp.token');
   assert.equal(localMcpTokenPath(root), file);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal(statSync(path.dirname(file)).mode & 0o777, 0o700);

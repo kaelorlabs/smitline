@@ -1,3 +1,5 @@
+import '../packages/cli/src/adopt-old-settings.mjs';
+import { migrateData } from '../packages/cli/src/old-names.mjs';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,19 +30,19 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // The code (this repository, /app in the container): scripts and static files.
 const CODE_ROOT = path.dirname(HERE);
-const PORT = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095);
+const PORT = Number(process.env.SMITLINE_CONTROL_PORT || 8095);
 
 /**
- * Where the console keeps and reads data. COLLEAGUE_ROOT is the data root (.env,
- * .env.meeting, .colleague/); COLLEAGUE_MEETING_DATA holds run/, recordings/,
+ * Where the console keeps and reads data. SMITLINE_ROOT is the data root (.env,
+ * .env.meeting, .smitline/); SMITLINE_MEETING_DATA holds run/, recordings/,
  * profiles/, and context/. Unset, both are the repository as before: the repository
  * root and its meeting-runtime directory. An explicit root (tests) keeps its own
- * meeting-runtime directory unless COLLEAGUE_MEETING_DATA is set.
+ * meeting-runtime directory unless SMITLINE_MEETING_DATA is set.
  */
 export function consolePaths({ env = process.env, root, codeRoot = CODE_ROOT } = {}) {
-  const dataRoot = path.resolve(root || env.COLLEAGUE_ROOT || codeRoot);
-  const runtimeRoot = env.COLLEAGUE_MEETING_DATA
-    ? path.resolve(env.COLLEAGUE_MEETING_DATA)
+  const dataRoot = path.resolve(root || env.SMITLINE_ROOT || codeRoot);
+  const runtimeRoot = env.SMITLINE_MEETING_DATA
+    ? path.resolve(env.SMITLINE_MEETING_DATA)
     : path.join(root ? dataRoot : codeRoot, 'meeting-runtime');
   return {
     codeRoot,
@@ -174,7 +176,7 @@ export function createServer(options = {}) {
     return parseEnv(fs.readFileSync(path.join(root, '.env'), 'utf8'));
   }
 
-  // COLLEAGUE_OWNER_NAME lives in .env (smitline setup); .env.meeting may also set it.
+  // SMITLINE_OWNER_NAME lives in .env (smitline setup); .env.meeting may also set it.
   function meetingOwner() {
     let secrets = {};
     try { secrets = secretsEnv(); } catch { /* no .env yet */ }
@@ -368,7 +370,7 @@ export function createServer(options = {}) {
   function authorized(request) {
     const origin = request.headers.origin;
     const allowedOrigins = [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
-    return allowedOrigins.includes(origin) && request.headers['x-colleague-token'] === token;
+    return allowedOrigins.includes(origin) && request.headers['x-smitline-token'] === token;
   }
 
   // Account page --------------------------------------------------------------
@@ -449,11 +451,11 @@ export function createServer(options = {}) {
   }
 
   function spawnPlatformAccount(mode) {
-    // The launcher lives with the code; COLLEAGUE_* in the environment point it at the data.
+    // The launcher lives with the code; SMITLINE_* in the environment point it at the data.
     const spawnFn = spawnAccount || ((env) => spawn('/bin/bash', [path.join(codeRoot, 'start-meeting-agent.sh')], {
       cwd: codeRoot, env,
     }));
-    return spawnFn({ ...process.env, COLLEAGUE_AUTH_MODE: mode });
+    return spawnFn({ ...process.env, SMITLINE_AUTH_MODE: mode });
   }
 
   async function api(request, response, pathname) {
@@ -547,7 +549,7 @@ export function createServer(options = {}) {
     // Setup status names the owner's numbers, so even reading it takes the session token.
     // A same-origin GET carries no Origin header; a cross-site page cannot send this header.
     if (request.method === 'GET' && pathname === '/api/setup') {
-      if (request.headers['x-colleague-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+      if (request.headers['x-smitline-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
       const verify = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('verify') !== '0';
       return json(response, 200, await setupView({ verify }));
     }
@@ -757,6 +759,7 @@ export function createServer(options = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  migrateData(consolePaths().root);
   createServer().listen(PORT, '127.0.0.1', () => {
     console.log(`Smitline control panel: http://127.0.0.1:${PORT}`);
   });

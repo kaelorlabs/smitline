@@ -1,6 +1,6 @@
 {
   "name": "smitline",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,7 @@
     "directory": "packages/cli"
   },
   "bin": {
-    "smitline": "./src/smitline.mjs",
-    "colleague": "./src/smitline.mjs"
+    "smitline": "./src/smitline.mjs"
   },
   "files": [
     "src",

@@ -15,12 +15,12 @@ class BrowserEnvironmentTests(unittest.TestCase):
     def test_keys_and_meeting_details_stay_out_of_the_browser(self):
         env = browser_environment({
             'OPENAI_API_KEY': 'x', 'TWILIO_ACCOUNT_SID': 'x',
-            'TWILIO_AUTH_TOKEN': 'x', 'COLLEAGUE_CONNECTOR_PASSPHRASE': 'x',
+            'TWILIO_AUTH_TOKEN': 'x', 'SMITLINE_CONNECTOR_PASSPHRASE': 'x',
             'MEETING_URL': 'x', 'MEETING_PASSCODE': 'x', 'SOME_SECRET': 'x',
-            'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse', 'COLLEAGUE_OWNER_NAME': 'Robin',
+            'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse', 'SMITLINE_OWNER_NAME': 'Robin',
         })
         self.assertEqual(env, {'DISPLAY': ':99', 'PULSE_SERVER': 'unix:/tmp/pulse',
-                               'COLLEAGUE_OWNER_NAME': 'Robin'})
+                               'SMITLINE_OWNER_NAME': 'Robin'})
 
 
 class SessionConfigTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class SessionConfigTests(unittest.TestCase):
 
     def test_hard_questions_use_responses_delegation(self):
         from phone_prompts import DEFAULT_BACKEND_MODEL
-        config = build_session_config(RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'}))
+        config = build_session_config(RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'}))
         delegation = config['delegation']
         self.assertEqual(delegation['type'], 'responses')
         responses = delegation['responses']
@@ -49,13 +49,13 @@ class SessionConfigTests(unittest.TestCase):
         self.assertNotIn('tools', responses)
         self.assertIn('on behalf of Robin', responses['instructions'])
         searching = build_session_config(RuntimeConfig.from_environ({
-            'COLLEAGUE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'COLLEAGUE_MEETING_WEB_SEARCH': '1'}))
+            'SMITLINE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'SMITLINE_MEETING_WEB_SEARCH': '1'}))
         self.assertEqual(searching['delegation']['responses']['model'], 'gpt-5.6-mini')
         self.assertEqual(searching['delegation']['responses']['tools'], [{'type': 'web_search'}])
 
     def test_operator_guidance_and_handoff_input_are_applied(self):
         runtime = RuntimeConfig.from_environ({
-            'COLLEAGUE_MEETING_INSTRUCTIONS': 'Focus on release blockers.',
+            'SMITLINE_MEETING_INSTRUCTIONS': 'Focus on release blockers.',
         })
         config = build_session_config(runtime, {'context': context_payload()})
         self.assertIn('Focus on release blockers.', config['instructions'])
@@ -68,16 +68,16 @@ class SessionConfigTests(unittest.TestCase):
         self.assertIn('user', roles)
 
     def test_valid_voice_setting_selects_the_output_voice(self):
-        config = build_session_config(RuntimeConfig.from_environ({'COLLEAGUE_VOICE': 'cinder'}))
+        config = build_session_config(RuntimeConfig.from_environ({'SMITLINE_VOICE': 'cinder'}))
         self.assertEqual(config['audio']['output'], {'voice': 'cinder'})
         extra = RuntimeConfig.from_environ({
-            'COLLEAGUE_VOICE': 'aurora', 'COLLEAGUE_EXTRA_VOICES': 'aurora, lumen'})
+            'SMITLINE_VOICE': 'aurora', 'SMITLINE_EXTRA_VOICES': 'aurora, lumen'})
         self.assertEqual(build_session_config(extra)['audio']['output'], {'voice': 'aurora'})
         self.assertNotIn('output', build_session_config(RuntimeConfig.from_environ({}))['audio'])
 
     def test_unknown_voice_is_ignored_with_a_log_line(self):
         with self.assertLogs('colleague.meeting', 'WARNING') as logs:
-            runtime = RuntimeConfig.from_environ({'COLLEAGUE_VOICE': 'alloy'})
+            runtime = RuntimeConfig.from_environ({'SMITLINE_VOICE': 'alloy'})
         self.assertIn('alloy', logs.output[0])
         config = build_session_config(runtime)
         self.assertEqual(config['audio'], {'format': {'type': 'audio/pcm', 'rate': 24000}})
@@ -89,10 +89,10 @@ class MeetingIntroTests(unittest.TestCase):
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
         write_private_json(path, {'version': 1, 'meetingId': 'mtg-intro0000001', **payload})
-        return {'COLLEAGUE_RUNTIME_STATE': str(path), 'COLLEAGUE_OWNER_NAME': 'Owner Setting'}
+        return {'SMITLINE_RUNTIME_STATE': str(path), 'SMITLINE_OWNER_NAME': 'Owner Setting'}
 
     def test_intro_is_on_by_default_and_names_the_owner_setting(self):
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
         config = build_session_config(runtime)
         self.assertIn(self.INTRO.format('Robin'), config['instructions'])
         self.assertIn('default to listening silently', config['instructions'].lower())
@@ -125,30 +125,27 @@ class MeetingIntroTests(unittest.TestCase):
         self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
                       intro_event(runtime)['content'])
 
-    def test_people_can_address_it_as_smitline_as_heard_or_as_colleague(self):
+    def test_people_can_address_it_as_smitline_or_as_heard(self):
         prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
         self.assertIn('people address you as "Smitline".', prompt)
         for heard in ('"smit line"', '"Smith line"', '"Smithline"', '"Smitlin"'):
             self.assertIn(heard, prompt)
-        self.assertIn('"Colleague" also addresses you', prompt)
-        self.assertIn('not when they talk about a colleague of theirs', prompt)
+        self.assertNotIn('Colleague', prompt)
 
     def test_a_custom_participant_name_is_accepted_alongside_smitline(self):
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_PARTICIPANT_NAME': 'Robin Bot'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_PARTICIPANT_NAME': 'Robin Bot'})
         prompt = build_session_config(runtime)['instructions']
         self.assertIn('people address you as "Robin Bot" or "Smitline".', prompt)
-        self.assertIn('"Colleague" also addresses you', prompt)
         self.assertEqual(addressing_instructions('smitline'), addressing_instructions(''))
 
     def test_addressing_names_stay_when_the_intro_is_off(self):
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
         prompt = build_session_config(runtime)['instructions']
         self.assertIn('"Smitline"', prompt)
-        self.assertIn('"Colleague" also addresses you', prompt)
 
     def test_intro_can_be_switched_off(self):
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': '0',
-                                              'COLLEAGUE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0',
+                                              'SMITLINE_OWNER_NAME': 'Robin'})
         self.assertIsNone(intro_event(runtime))
         self.assertNotIn('Robin', build_session_config(runtime)['instructions'])
         self.assertNotIn('Opening disclosure', build_session_config(runtime)['instructions'])
@@ -156,7 +153,7 @@ class MeetingIntroTests(unittest.TestCase):
 
 class IntroduceTests(unittest.IsolatedAsyncioTestCase):
     async def test_cue_waits_for_the_meeting_microphone_and_is_sent_once(self):
-        runtime = RuntimeConfig.from_environ({'COLLEAGUE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
         participation = SimpleNamespace(platform_ready=False)
         ready, stop, sent = asyncio.Event(), asyncio.Event(), []
 
@@ -179,7 +176,7 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
             sent.append(event)
 
         ready.set()
-        off = RuntimeConfig.from_environ({'COLLEAGUE_MEETING_INTRO': 'off'})
+        off = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': 'off'})
         self.assertFalse(await introduce(send, off, SimpleNamespace(platform_ready=True), ready, stop))
         stop.set()
         on = RuntimeConfig.from_environ({})

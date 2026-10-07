@@ -187,10 +187,10 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report['ok'])
         self.assertIn('not available', report['problems'][0])
         self.h.service.hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k',
-                                                         'COLLEAGUE_ALLOWED_CALLING_CODES': '44'})
+                                                         'SMITLINE_ALLOWED_CALLING_CODES': '44'})
         blocked = await self.h.service.check(brief())
         self.assertFalse(blocked['ok'])
-        self.assertIn('COLLEAGUE_ALLOWED_CALLING_CODES', blocked['problems'][0])
+        self.assertIn('SMITLINE_ALLOWED_CALLING_CODES', blocked['problems'][0])
 
     async def test_a_request_not_to_call_again_is_honored(self):
         summarize = self.h.summarizer.summarize
@@ -211,7 +211,7 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('smitline do-not-call remove +14155550142', caught.exception.message)
         # A rehearsal is the owner playing the other side; it never fills the list.
         self.h.service.update_do_not_call('local', {'remove': ['+14155550142']})
-        self.h.hooks._environ['COLLEAGUE_OWNER_PHONE'] = '+14155550142'
+        self.h.hooks._environ['SMITLINE_OWNER_PHONE'] = '+14155550142'
         self.h.line.proceed = asyncio.Event()
         rehearsal = await self.h.service.create(brief(rehearsal=True))
         self.h.line.proceed.set()

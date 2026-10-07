@@ -314,20 +314,20 @@ class CallBrief:
 
 
 def available_voices(environ=None):
-    """Documented GPT-Live voices plus any listed in COLLEAGUE_EXTRA_VOICES."""
+    """Documented GPT-Live voices plus any listed in SMITLINE_EXTRA_VOICES."""
     import os
     from voice_core import GPT_LIVE_VOICES
-    extra = (environ if environ is not None else os.environ).get('COLLEAGUE_EXTRA_VOICES', '')
+    extra = (environ if environ is not None else os.environ).get('SMITLINE_EXTRA_VOICES', '')
     names = [name.strip() for name in extra.split(',') if VOICE.fullmatch(name.strip() or '-')]
     return tuple(dict.fromkeys(GPT_LIVE_VOICES + tuple(names)))
 
 
 def default_voice(environ=None):
-    """COLLEAGUE_VOICE when it names a known voice; otherwise GPT-Live's default."""
+    """SMITLINE_VOICE when it names a known voice; otherwise GPT-Live's default."""
     import os
     from voice_core import DEFAULT_VOICE
     env = environ if environ is not None else os.environ
-    voice = str(env.get('COLLEAGUE_VOICE') or '').strip()
+    voice = str(env.get('SMITLINE_VOICE') or '').strip()
     return voice if voice in available_voices(env) else DEFAULT_VOICE
 
 

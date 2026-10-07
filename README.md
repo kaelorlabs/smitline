@@ -126,6 +126,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 | [Phone calls](docs/phone.md) | SignalWire and Twilio, guardrails, recording, settings |
 | [Meetings](docs/meetings.md) | Joining Zoom, Teams and Meet, and the meetings console |
 | [Agents](docs/agents.md) | MCP, the CLI, SDKs, and the remote connector for cloud agents |
+| [MCP directories](docs/mcp-directories.md) | Where Smitline is listed, and publishing a release there |
 | [Security and privacy](docs/security.md) | What stays local, what goes where, and how it's protected |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
 | [Development](docs/development.md) | Running from a checkout, tests, project layout |

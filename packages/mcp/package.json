@@ -1,6 +1,7 @@
 {
-  "name": "@colleague-ai/mcp",
-  "version": "0.1.1",
+  "name": "smitline-mcp",
+  "mcpName": "io.github.kaelorlabs/smitline",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -12,8 +13,7 @@
     "directory": "packages/mcp"
   },
   "bin": {
-    "smitline-mcp": "./src/server.mjs",
-    "colleague-mcp": "./src/server.mjs"
+    "smitline-mcp": "./src/server.mjs"
   },
   "main": "./src/session.mjs",
   "files": [

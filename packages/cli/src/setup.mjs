@@ -13,19 +13,19 @@ import { isManaged } from '../../sdk-typescript/src/index.mjs';
 
 export const SECRET_KEYS = Object.freeze([
   'OPENAI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SIGNALWIRE_API_TOKEN', 'SIGNALWIRE_SIGNING_KEY',
-  'COLLEAGUE_CONNECTOR_PASSPHRASE', 'COLLEAGUE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
+  'SMITLINE_CONNECTOR_PASSPHRASE', 'SMITLINE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
 ]);
 export const SETTING_KEYS = Object.freeze([
-  'COLLEAGUE_OWNER_NAME', 'COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_VOICE', 'COLLEAGUE_CALLER_ID',
-  'TWILIO_FROM_NUMBER', 'COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_ALLOWED_CALLING_CODES',
-  'COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE',
-  'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH',
-  'COLLEAGUE_PHONE_BACKEND_MODEL', 'COLLEAGUE_MEETING_BACKEND_MODEL', 'COLLEAGUE_CONNECTOR_URL',
-  'COLLEAGUE_EXTRA_VOICES', 'COLLEAGUE_MAX_INBOUND', 'COLLEAGUE_PHONE_PROVIDER',
+  'SMITLINE_OWNER_NAME', 'SMITLINE_OWNER_PHONE', 'SMITLINE_VOICE', 'SMITLINE_CALLER_ID',
+  'TWILIO_FROM_NUMBER', 'SMITLINE_ACCEPT_INBOUND', 'SMITLINE_ALLOWED_CALLING_CODES',
+  'SMITLINE_PUBLIC_URL', 'SMITLINE_NOTIFY_WEBHOOK', 'SMITLINE_RECORD_CALLS', 'SMITLINE_STREAM_REALTIME', 'SMITLINE_AUDIO_TRACE',
+  'SMITLINE_MEETING_INTRO', 'SMITLINE_PHONE_WEB_SEARCH', 'SMITLINE_MEETING_WEB_SEARCH',
+  'SMITLINE_PHONE_BACKEND_MODEL', 'SMITLINE_MEETING_BACKEND_MODEL', 'SMITLINE_CONNECTOR_URL',
+  'SMITLINE_EXTRA_VOICES', 'SMITLINE_MAX_INBOUND', 'SMITLINE_PHONE_PROVIDER',
   'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_FROM_NUMBER',
-  'COLLEAGUE_PHONE_AUDIO', 'COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
-  'COLLEAGUE_CALLING_HOURS', 'COLLEAGUE_MAX_CALLS_PER_NUMBER', 'COLLEAGUE_MAX_CALLS_PER_HOUR',
-  'COLLEAGUE_ALLOW_PREMIUM_NUMBERS', 'COLLEAGUE_MEETING_CAMERA_STYLE',
+  'SMITLINE_PHONE_AUDIO', 'SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'OPENAI_PROJECT_ID',
+  'SMITLINE_CALLING_HOURS', 'SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR',
+  'SMITLINE_ALLOW_PREMIUM_NUMBERS', 'SMITLINE_MEETING_CAMERA_STYLE',
 ]);
 export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
@@ -41,7 +41,7 @@ const INSTALLED_SKILLS = ['call-with-smitline'];
 
 /** 'twilio' or 'signalwire', chosen the same way as the daemon (call_hooks.phone_provider). */
 export function phoneProvider(env) {
-  const chosen = String(env.COLLEAGUE_PHONE_PROVIDER || '').trim().toLowerCase();
+  const chosen = String(env.SMITLINE_PHONE_PROVIDER || '').trim().toLowerCase();
   if (['twilio', 'signalwire'].includes(chosen)) return chosen;
   return present(env.SIGNALWIRE_PROJECT_ID) && !present(env.TWILIO_ACCOUNT_SID) ? 'signalwire' : 'twilio';
 }
@@ -53,9 +53,9 @@ export function signalwireSpace(value) {
   return text.includes('.') ? text : `${text}.signalwire.com`;
 }
 
-/** GPT-Live voices plus any listed in COLLEAGUE_EXTRA_VOICES (new voices OpenAI adds). */
+/** GPT-Live voices plus any listed in SMITLINE_EXTRA_VOICES (new voices OpenAI adds). */
 export function availableVoices(env = process.env) {
-  const extra = String(env.COLLEAGUE_EXTRA_VOICES || '').split(',').map((name) => name.trim())
+  const extra = String(env.SMITLINE_EXTRA_VOICES || '').split(',').map((name) => name.trim())
     .filter((name) => VOICE_NAME.test(name));
   return [...new Set([...GPT_LIVE_VOICES, ...extra])];
 }
@@ -126,14 +126,14 @@ export function connectorOrigin(value, { allowLoopback = false } = {}) {
   try {
     url = new URL(String(value).trim());
   } catch {
-    throw new Error('COLLEAGUE_CONNECTOR_URL must be an https URL such as https://smitline.example.com');
+    throw new Error('SMITLINE_CONNECTOR_URL must be an https URL such as https://smitline.example.com');
   }
   const loopback = allowLoopback && url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
   if (url.protocol !== 'https:' && !loopback) {
-    throw new Error(`COLLEAGUE_CONNECTOR_URL must be an https URL${allowLoopback ? ' (plain http is allowed only for 127.0.0.1 and localhost)' : ''}`);
+    throw new Error(`SMITLINE_CONNECTOR_URL must be an https URL${allowLoopback ? ' (plain http is allowed only for 127.0.0.1 and localhost)' : ''}`);
   }
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
-    throw new Error('COLLEAGUE_CONNECTOR_URL must be only the origin, such as https://smitline.example.com, with no path');
+    throw new Error('SMITLINE_CONNECTOR_URL must be only the origin, such as https://smitline.example.com, with no path');
   }
   return url.origin;
 }
@@ -145,17 +145,17 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   }
   const text = String(value ?? '').trim();
   if (/[\r\n]/.test(text)) throw new Error(`${key} must be one line`);
-  if (['COLLEAGUE_OWNER_PHONE', 'COLLEAGUE_CALLER_ID', 'TWILIO_FROM_NUMBER', 'SIGNALWIRE_FROM_NUMBER'].includes(key)) {
+  if (['SMITLINE_OWNER_PHONE', 'SMITLINE_CALLER_ID', 'TWILIO_FROM_NUMBER', 'SIGNALWIRE_FROM_NUMBER'].includes(key)) {
     const compact = text.replace(/[\s().-]/g, '');
     if (!E164.test(compact)) throw new Error(`${key} must be an E.164 number such as +14155550142`);
     return compact;
   }
-  if (key === 'COLLEAGUE_VOICE' && !availableVoices(env).includes(text)) {
-    throw new Error(`COLLEAGUE_VOICE must be one of: ${availableVoices(env).join(', ')}`);
+  if (key === 'SMITLINE_VOICE' && !availableVoices(env).includes(text)) {
+    throw new Error(`SMITLINE_VOICE must be one of: ${availableVoices(env).join(', ')}`);
   }
-  if (key === 'COLLEAGUE_EXTRA_VOICES') {
+  if (key === 'SMITLINE_EXTRA_VOICES') {
     const names = text.split(',').map((name) => name.trim()).filter(Boolean);
-    if (names.some((name) => !VOICE_NAME.test(name))) throw new Error('COLLEAGUE_EXTRA_VOICES must be voice names separated by commas');
+    if (names.some((name) => !VOICE_NAME.test(name))) throw new Error('SMITLINE_EXTRA_VOICES must be voice names separated by commas');
     return names.join(',');
   }
   if (key === 'SIGNALWIRE_SPACE') {
@@ -166,50 +166,50 @@ export function validateSetting(key, value, { env = process.env } = {}) {
   if (key === 'SIGNALWIRE_PROJECT_ID' && !/^[A-Za-z0-9-]{8,64}$/.test(text)) {
     throw new Error('SIGNALWIRE_PROJECT_ID must be the Project ID from the API Credentials page, such as 1a2b3c4d-...');
   }
-  if (key === 'COLLEAGUE_PHONE_AUDIO' && !PHONE_AUDIO_MODES.includes(text)) {
-    throw new Error(`COLLEAGUE_PHONE_AUDIO must be one of: ${PHONE_AUDIO_MODES.join(', ')}`);
+  if (key === 'SMITLINE_PHONE_AUDIO' && !PHONE_AUDIO_MODES.includes(text)) {
+    throw new Error(`SMITLINE_PHONE_AUDIO must be one of: ${PHONE_AUDIO_MODES.join(', ')}`);
   }
-  if (key === 'COLLEAGUE_SIP_TRUNK_URL' && !/^sips:[a-z0-9.-]+(:\d{1,5})?$/i.test(text)) {
-    throw new Error('COLLEAGUE_SIP_TRUNK_URL must be a sips: address such as sips:sip.example.com:5061');
+  if (key === 'SMITLINE_SIP_TRUNK_URL' && !/^sips:[a-z0-9.-]+(:\d{1,5})?$/i.test(text)) {
+    throw new Error('SMITLINE_SIP_TRUNK_URL must be a sips: address such as sips:sip.example.com:5061');
   }
   if (key === 'OPENAI_PROJECT_ID' && !/^proj_[A-Za-z0-9]+$/.test(text)) {
     throw new Error('OPENAI_PROJECT_ID must be your OpenAI project ID, which starts with proj_');
   }
-  if (key === 'COLLEAGUE_PHONE_PROVIDER' && !['twilio', 'signalwire'].includes(text)) {
-    throw new Error('COLLEAGUE_PHONE_PROVIDER must be twilio or signalwire');
+  if (key === 'SMITLINE_PHONE_PROVIDER' && !['twilio', 'signalwire'].includes(text)) {
+    throw new Error('SMITLINE_PHONE_PROVIDER must be twilio or signalwire');
   }
-  if (key === 'COLLEAGUE_CALLING_HOURS' && text !== 'off') {
+  if (key === 'SMITLINE_CALLING_HOURS' && text !== 'off') {
     const match = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(text);
     const [startH, startM, endH, endM] = match ? match.slice(1).map(Number) : [];
     if (!match || startH > 23 || endH > 23 || startM > 59 || endM > 59 || startH * 60 + startM >= endH * 60 + endM) {
-      throw new Error('COLLEAGUE_CALLING_HOURS must look like 08:00-21:00 (the recipient\'s time), or be off');
+      throw new Error('SMITLINE_CALLING_HOURS must look like 08:00-21:00 (the recipient\'s time), or be off');
     }
   }
-  if (['COLLEAGUE_MAX_CALLS_PER_NUMBER', 'COLLEAGUE_MAX_CALLS_PER_HOUR'].includes(key) && !/^[0-9]{1,4}$/.test(text)) {
+  if (['SMITLINE_MAX_CALLS_PER_NUMBER', 'SMITLINE_MAX_CALLS_PER_HOUR'].includes(key) && !/^[0-9]{1,4}$/.test(text)) {
     throw new Error(`${key} must be a whole number; 0 turns the limit off`);
   }
-  if (key === 'COLLEAGUE_MEETING_CAMERA_STYLE' && !['still', 'animated'].includes(text)) {
-    throw new Error('COLLEAGUE_MEETING_CAMERA_STYLE must be still or animated');
+  if (key === 'SMITLINE_MEETING_CAMERA_STYLE' && !['still', 'animated'].includes(text)) {
+    throw new Error('SMITLINE_MEETING_CAMERA_STYLE must be still or animated');
   }
-  if (key === 'COLLEAGUE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
-    throw new Error('COLLEAGUE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
+  if (key === 'SMITLINE_MAX_INBOUND' && !/^[0-9]{1,2}$/.test(text)) {
+    throw new Error('SMITLINE_MAX_INBOUND must be a number of simultaneous incoming calls, such as 2');
   }
-  if (['COLLEAGUE_ACCEPT_INBOUND', 'COLLEAGUE_RECORD_CALLS', 'COLLEAGUE_STREAM_REALTIME', 'COLLEAGUE_AUDIO_TRACE',
-    'COLLEAGUE_MEETING_INTRO', 'COLLEAGUE_PHONE_WEB_SEARCH', 'COLLEAGUE_MEETING_WEB_SEARCH',
-    'COLLEAGUE_ALLOW_PREMIUM_NUMBERS'].includes(key)
+  if (['SMITLINE_ACCEPT_INBOUND', 'SMITLINE_RECORD_CALLS', 'SMITLINE_STREAM_REALTIME', 'SMITLINE_AUDIO_TRACE',
+    'SMITLINE_MEETING_INTRO', 'SMITLINE_PHONE_WEB_SEARCH', 'SMITLINE_MEETING_WEB_SEARCH',
+    'SMITLINE_ALLOW_PREMIUM_NUMBERS'].includes(key)
     && !['0', '1'].includes(text)) {
     throw new Error(`${key} must be 0 or 1`);
   }
-  if (['COLLEAGUE_PHONE_BACKEND_MODEL', 'COLLEAGUE_MEETING_BACKEND_MODEL'].includes(key)
+  if (['SMITLINE_PHONE_BACKEND_MODEL', 'SMITLINE_MEETING_BACKEND_MODEL'].includes(key)
     && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(text)) {
     throw new Error(`${key} must be a model name, such as gpt-5.6-terra`);
   }
-  if (['COLLEAGUE_PUBLIC_URL', 'COLLEAGUE_NOTIFY_WEBHOOK'].includes(key) && !/^https:\/\/[^\s/]+/.test(text)) {
+  if (['SMITLINE_PUBLIC_URL', 'SMITLINE_NOTIFY_WEBHOOK'].includes(key) && !/^https:\/\/[^\s/]+/.test(text)) {
     throw new Error(`${key} must be an https URL`);
   }
-  if (key === 'COLLEAGUE_CONNECTOR_URL') return connectorOrigin(text);
-  if (key === 'COLLEAGUE_OWNER_NAME' && (!text || text.length > 120)) {
-    throw new Error('COLLEAGUE_OWNER_NAME must be 1 to 120 characters');
+  if (key === 'SMITLINE_CONNECTOR_URL') return connectorOrigin(text);
+  if (key === 'SMITLINE_OWNER_NAME' && (!text || text.length > 120)) {
+    throw new Error('SMITLINE_OWNER_NAME must be 1 to 120 characters');
   }
   return text;
 }
@@ -333,9 +333,9 @@ export function registeredAgents(root, { runner = run, home = os.homedir(), find
   return agents;
 }
 
-/** This build's version: COLLEAGUE_VERSION (set in the image), else the root package.json, else 'dev'. */
+/** This build's version: SMITLINE_VERSION (set in the image), else the root package.json, else 'dev'. */
 export function colleagueVersion(codeRoot, env = process.env) {
-  if (present(env.COLLEAGUE_VERSION)) return env.COLLEAGUE_VERSION.trim();
+  if (present(env.SMITLINE_VERSION)) return env.SMITLINE_VERSION.trim();
   try {
     const { version } = JSON.parse(fs.readFileSync(path.join(codeRoot, 'package.json'), 'utf8'));
     if (typeof version === 'string' && version.trim()) return version.trim();
@@ -344,9 +344,9 @@ export function colleagueVersion(codeRoot, env = process.env) {
 }
 
 /**
- * options.root      the data root (.env); COLLEAGUE_ROOT in the container.
+ * options.root      the data root (.env); SMITLINE_ROOT in the container.
  * options.codeRoot  the checkout (launcher, node_modules, .venv); defaults to root.
- * options.managed   in the Smitline container (COLLEAGUE_MANAGED=1): host-only checks
+ * options.managed   in the Smitline container (SMITLINE_MANAGED=1): host-only checks
  *                   (operating system, checkout, line endings, Node dependencies, where the
  *                   daemon runs) are replaced by one passing "runs in its container" check.
  */
@@ -355,7 +355,7 @@ export async function setupStatus({
   managed = isManaged(), version = colleagueVersion(codeRoot),
 } = {}) {
   // The daemon reads the process environment first, then .env; mirror that here.
-  const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|SIGNALWIRE_|COLLEAGUE_)/.test(key) && present(value);
+  const relevant = ([key, value]) => /^(OPENAI_|TWILIO_|SIGNALWIRE_|SMITLINE_)/.test(key) && present(value);
   const env = { ...readEnv(root), ...Object.fromEntries(Object.entries(overrides || process.env).filter(relevant)) };
   const checks = [];
   // Always passes; it puts the version in the plain-text status too.
@@ -392,9 +392,9 @@ export async function setupStatus({
     checks.push(check('dependencies', 'Node dependencies installed', fs.existsSync(path.join(codeRoot, 'node_modules', 'mammoth')), { fix: 'npm install' }));
     // start-runtime-daemon.sh runs the daemon on this computer's Python when it can make a
     // venv, otherwise in Docker. A venv made without python3-venv has no pip, so look for pip.
-    const venvReady = present(process.env.COLLEAGUE_PYTHON) || fs.existsSync(path.join(codeRoot, '.venv', 'bin', 'pip'));
+    const venvReady = present(process.env.SMITLINE_PYTHON) || fs.existsSync(path.join(codeRoot, '.venv', 'bin', 'pip'));
     const python = venvReady ? { status: 0 } : runner('python3', ['-c', 'import sys, ensurepip, venv; sys.exit(0 if sys.version_info >= (3, 10) else 3)']);
-    const forced = process.env.COLLEAGUE_DAEMON_RUNTIME;
+    const forced = process.env.SMITLINE_DAEMON_RUNTIME;
     const onHost = python.status === 0 && forced !== 'docker';
     const inDocker = !onHost && docker.status === 0 && forced !== 'host';
     const runtimeDetail = onHost ? `Python on this computer${venvReady ? '' : '; the first start sets it up'}`
@@ -414,10 +414,10 @@ export async function setupStatus({
     ask: 'Please enter your OpenAI API key on the setup page I opened in your browser. Do not paste it into this chat.',
     fix: openai.fix || 'smitline setup secrets',
   }));
-  checks.push(check('owner_name', 'Name to call on behalf of', present(env.COLLEAGUE_OWNER_NAME), {
-    detail: present(env.COLLEAGUE_OWNER_NAME) ? env.COLLEAGUE_OWNER_NAME : 'missing',
+  checks.push(check('owner_name', 'Name to call on behalf of', present(env.SMITLINE_OWNER_NAME), {
+    detail: present(env.SMITLINE_OWNER_NAME) ? env.SMITLINE_OWNER_NAME : 'missing',
     ask: "Please add your name on the setup page; every call opens with \"I'm calling on behalf of [your name]\".",
-    fix: 'smitline setup secrets (or: smitline setup set COLLEAGUE_OWNER_NAME "<name>")',
+    fix: 'smitline setup secrets (or: smitline setup set SMITLINE_OWNER_NAME "<name>")',
   }));
 
   // Phone calls go through SignalWire (free trial works) or Twilio (upgraded account).
@@ -435,13 +435,13 @@ export async function setupStatus({
     ask: 'Do you want phone calls too? SignalWire works with Smitline: sign up at https://signalwire.com (free, no card), then enter its details on the setup page. Its free trial calls only numbers you verify in SignalWire, up to 10; adding a card and $5 of credit lets it call anyone (SETUP.md has the steps).',
     fix: account.fix || 'smitline setup secrets',
   }));
-  // Outgoing calls show COLLEAGUE_CALLER_ID (a verified number) or else the provider number.
+  // Outgoing calls show SMITLINE_CALLER_ID (a verified number) or else the provider number.
   // Incoming calls can only ring a number bought from the provider.
-  const from = present(env.COLLEAGUE_CALLER_ID) ? env.COLLEAGUE_CALLER_ID : env[numberKey];
+  const from = present(env.SMITLINE_CALLER_ID) ? env.SMITLINE_CALLER_ID : env[numberKey];
   let callerOk = present(from) && E164.test(from);
   let callerDetail = !present(from) ? 'no number chosen yet' : (callerOk ? from : `${from} is not an E.164 number`);
   let callerAsk = `Should calls come from your ${providerName} number, or show your own mobile number (verified in ${providerName})?`;
-  let callerFix = `smitline setup set ${numberKey} +1... (or COLLEAGUE_CALLER_ID for a verified mobile)`;
+  let callerFix = `smitline setup set ${numberKey} +1... (or SMITLINE_CALLER_ID for a verified mobile)`;
   let suggest = null;
   if (Array.isArray(account.numbers)) {
     const verified = account.verified || [];
@@ -458,10 +458,10 @@ export async function setupStatus({
       callerDetail = `${providerName} numbers: ${account.numbers.join(', ')}`;
       callerAsk = `Which number should calls come from: ${account.numbers.join(', ')}?`;
     } else if (!present(from) && verified.length) {
-      suggest = { key: 'COLLEAGUE_CALLER_ID', value: verified[0] };
+      suggest = { key: 'SMITLINE_CALLER_ID', value: verified[0] };
       callerDetail = `no ${providerName} number yet; ${verified[0]} is verified and can be shown on outgoing calls`;
       callerAsk = undefined;
-      callerFix = `smitline setup set COLLEAGUE_CALLER_ID ${verified[0]}`;
+      callerFix = `smitline setup set SMITLINE_CALLER_ID ${verified[0]}`;
     }
   }
   if (callerOk && !present(env[numberKey])) {
@@ -472,18 +472,18 @@ export async function setupStatus({
   });
   if (suggest && !callerOk) callerCheck.suggest = suggest;
   checks.push(callerCheck);
-  let ownerDetail = env.COLLEAGUE_OWNER_PHONE || 'missing';
-  if (present(env.COLLEAGUE_OWNER_PHONE) && account.trial && !(account.verified || []).includes(env.COLLEAGUE_OWNER_PHONE)) {
+  let ownerDetail = env.SMITLINE_OWNER_PHONE || 'missing';
+  if (present(env.SMITLINE_OWNER_PHONE) && account.trial && !(account.verified || []).includes(env.SMITLINE_OWNER_PHONE)) {
     ownerDetail += `; a ${providerName} trial can only call it once it is verified in ${providerName} (Verified Caller IDs)`;
   }
-  checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.COLLEAGUE_OWNER_PHONE), {
+  checks.push(check('owner_phone', 'Your phone number (for the test call and transfers)', present(env.SMITLINE_OWNER_PHONE), {
     group: 'phone', required: false, detail: ownerDetail,
     ask: 'Please add your phone number on the setup page; I will call it once so you can hear Smitline.',
-    fix: 'smitline setup secrets (or: smitline setup set COLLEAGUE_OWNER_PHONE +1...)',
+    fix: 'smitline setup secrets (or: smitline setup set SMITLINE_OWNER_PHONE +1...)',
   }));
   // Direct SIP keeps call audio between the provider and OpenAI; the relay passes it through here.
-  const audioMode = PHONE_AUDIO_MODES.includes(env.COLLEAGUE_PHONE_AUDIO) ? env.COLLEAGUE_PHONE_AUDIO : 'relay';
-  const audioNeeds = { sip: ['COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'COLLEAGUE_SIP_PASSWORD'],
+  const audioMode = PHONE_AUDIO_MODES.includes(env.SMITLINE_PHONE_AUDIO) ? env.SMITLINE_PHONE_AUDIO : 'relay';
+  const audioNeeds = { sip: ['SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'SMITLINE_SIP_PASSWORD'],
     'sip-webhook': ['OPENAI_PROJECT_ID', 'OPENAI_WEBHOOK_SECRET'], relay: [] }[audioMode];
   const audioMissing = audioNeeds.filter((key) => !present(env[key]));
   const audioDetail = {
@@ -496,11 +496,11 @@ export async function setupStatus({
     detail: audioMissing.length ? `${audioDetail}; missing ${audioMissing.join(', ')}` : audioDetail,
     fix: audioMode === 'sip' ? 'smitline setup sip-trunk' : 'smitline setup secrets',
   }));
-  const reachable = audioMode === 'sip' || present(env.COLLEAGUE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
+  const reachable = audioMode === 'sip' || present(env.SMITLINE_PUBLIC_URL) || Boolean(find('cloudflared')) || docker.status === 0;
   checks.push(check('public_url', 'The phone provider can reach this computer', reachable, {
     group: 'phone', required: false,
-    detail: present(env.COLLEAGUE_PUBLIC_URL) ? env.COLLEAGUE_PUBLIC_URL : (reachable ? 'Cloudflare quick tunnel on first call' : 'no tunnel available'),
-    fix: 'Start Docker or install cloudflared, or set COLLEAGUE_PUBLIC_URL on a server',
+    detail: present(env.SMITLINE_PUBLIC_URL) ? env.SMITLINE_PUBLIC_URL : (reachable ? 'Cloudflare quick tunnel on first call' : 'no tunnel available'),
+    fix: 'Start Docker or install cloudflared, or set SMITLINE_PUBLIC_URL on a server',
   }));
 
   if (managed) {
@@ -518,7 +518,7 @@ export async function setupStatus({
       fix: 'smitline setup register',
     }));
   }
-  const daemon = await portOpen(Number(process.env.COLLEAGUE_DAEMON_PORT || 8765));
+  const daemon = await portOpen(Number(process.env.SMITLINE_DAEMON_PORT || 8765));
   if (managed) {
     checks.push(check('daemon', 'Runtime daemon', daemon, {
       required: false, detail: daemon ? 'running' : 'not running', fix: 'Restart the container: docker restart smitline',
@@ -534,7 +534,7 @@ export async function setupStatus({
   const firstCallReady = phoneReady && checks.find((c) => c.id === 'owner_phone').ok === true;
   // Phone steps become next steps once the user has started on phone calls; until then
   // only the question "do you want phone calls?" is asked, and the rest is optional.
-  const wantsPhone = accountSaved || [numberKey, 'COLLEAGUE_CALLER_ID', 'COLLEAGUE_OWNER_PHONE', 'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'TWILIO_ACCOUNT_SID']
+  const wantsPhone = accountSaved || [numberKey, 'SMITLINE_CALLER_ID', 'SMITLINE_OWNER_PHONE', 'SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'TWILIO_ACCOUNT_SID']
     .some((key) => present(env[key]));
   const step = (c) => ({ id: c.id, ask: c.ask, fix: c.fix, ...(c.suggest ? { suggest: c.suggest } : {}) });
   const pending = checks.filter((c) => c.ok !== true);
@@ -547,7 +547,7 @@ export async function setupStatus({
     phoneReady,
     meetingsReady,
     firstCallReady,
-    voice: env.COLLEAGUE_VOICE || 'marin',
+    voice: env.SMITLINE_VOICE || 'marin',
     voices: availableVoices(env),
     checks,
     next,
@@ -565,7 +565,7 @@ export async function setupStatus({
  */
 export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch, password = crypto.randomBytes(24).toString('base64url'), name = 'smitline-openai' }) {
   const space = signalwireSpace(env.SIGNALWIRE_SPACE);
-  const number = env.COLLEAGUE_CALLER_ID || env.SIGNALWIRE_FROM_NUMBER;
+  const number = env.SMITLINE_CALLER_ID || env.SIGNALWIRE_FROM_NUMBER;
   if (!space || !present(env.SIGNALWIRE_PROJECT_ID) || !present(env.SIGNALWIRE_API_TOKEN)) {
     throw new Error('Set up SignalWire first: smitline setup secrets');
   }
@@ -618,10 +618,10 @@ export async function createSignalWireTrunk({ env, fetchImpl = globalThis.fetch,
   if (!/^[a-z0-9.-]+$/i.test(host)) throw new Error('SignalWire did not return the SIP address');
   return {
     settings: {
-      COLLEAGUE_SIP_TRUNK_URL: `sips:${host}:5061`,
-      COLLEAGUE_SIP_USERNAME: number,
-      COLLEAGUE_SIP_PASSWORD: password,
-      COLLEAGUE_PHONE_AUDIO: 'sip',
+      SMITLINE_SIP_TRUNK_URL: `sips:${host}:5061`,
+      SMITLINE_SIP_USERNAME: number,
+      SMITLINE_SIP_PASSWORD: password,
+      SMITLINE_PHONE_AUDIO: 'sip',
     },
     scriptId,
     addressId: address.id || address.data?.id || null,
@@ -641,9 +641,9 @@ const REVOKE = {
 // Also the field list of the console's Account page.
 export const FIELDS = [
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', group: 'Required', secret: true, revoke: REVOKE.openai, hint: 'Starts with sk-. Create one at https://platform.openai.com/api-keys. The live voice needs billing turned on (a paid API tier).' },
-  { key: 'COLLEAGUE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m calling on behalf of [your name] about…”' },
-  { key: 'COLLEAGUE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
-  { key: 'COLLEAGUE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
+  { key: 'SMITLINE_OWNER_NAME', label: 'Your name', group: 'Required', hint: 'Every call opens with: “Hi, I’m calling on behalf of [your name] about…”' },
+  { key: 'SMITLINE_OWNER_PHONE', label: 'Your phone number', group: 'Phone calls (optional)', hint: 'Smitline rings it for the test call and when you take over a call. Include the country code, such as +1 415 555 0142.' },
+  { key: 'SMITLINE_CALLER_ID', label: 'Show my own number (optional)', group: 'Phone calls (optional)', hint: 'A number you verified with SignalWire or Twilio (Verified Caller IDs). Outgoing calls show it instead of the provider number. Incoming calls still ring the provider number.' },
   { key: 'SIGNALWIRE_SPACE', label: 'Space URL', group: 'SignalWire (free trial)', hint: 'The address you sign in at, such as yourname.signalwire.com.' },
   { key: 'SIGNALWIRE_PROJECT_ID', label: 'Project ID', group: 'SignalWire (free trial)', hint: 'On the API Credentials page of your SignalWire Dashboard.' },
   { key: 'SIGNALWIRE_API_TOKEN', label: 'API token', group: 'SignalWire (free trial)', secret: true, revoke: REVOKE.signalwire, hint: 'API Credentials > New, with the Voice and Numbers permissions. Copy it right after you create it; it starts with SWAPI (older tokens start with PT).' },
@@ -652,10 +652,10 @@ export const FIELDS = [
   { key: 'TWILIO_ACCOUNT_SID', label: 'Twilio Account SID', group: 'Twilio (upgraded account)', secret: true, hint: 'Starts with AC. Find it under Account Info on the home page of https://console.twilio.com.' },
   { key: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', group: 'Twilio (upgraded account)', secret: true, revoke: REVOKE.twilio, hint: 'Next to the Account SID in the Twilio console. Press Show, then copy it.' },
   { key: 'TWILIO_FROM_NUMBER', label: 'Twilio phone number', group: 'Twilio (upgraded account)', hint: 'A number you bought in Twilio. Include the country code, such as +1 415 555 0142.' },
-  { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (COLLEAGUE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
+  { key: 'OPENAI_PROJECT_ID', label: 'OpenAI project ID', group: 'Direct phone audio (advanced)', hint: 'Only for direct audio through an OpenAI webhook (SMITLINE_PHONE_AUDIO=sip-webhook). Settings > Project > General on platform.openai.com; it starts with proj_.' },
   { key: 'OPENAI_WEBHOOK_SECRET', label: 'OpenAI webhook signing secret', group: 'Direct phone audio (advanced)', secret: true, revoke: REVOKE.webhook, hint: 'Shown once when you create the webhook in Settings > Project > Webhooks. It starts with whsec_.' },
-  { key: 'COLLEAGUE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
-  { key: 'COLLEAGUE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
+  { key: 'SMITLINE_CONNECTOR_URL', label: 'Connector address', group: 'Remote connector (server mode)', hint: 'This server’s public address, starting with https:// and nothing after the name, such as smitline.example.com. See docs/agents.md.' },
+  { key: 'SMITLINE_CONNECTOR_PASSPHRASE', label: 'Owner passphrase', group: 'Remote connector (server mode)', secret: true, spaces: true, minLength: CONNECTOR_PASSPHRASE_MIN, hint: 'At least 12 characters; a few random words work well. You type it each time you approve an app that connects.' },
 ];
 
 export function escapeHtml(value) {
@@ -978,11 +978,11 @@ export function removeSetting(root, key) {
 // Users often sign up for OpenAI or a phone provider while the page waits, so it lasts an hour.
 export const SECRETS_PAGE_MINUTES = 60;
 // A fixed port, so the address is predictable (Docker Desktop's host networking, SSH
-// forwarding). COLLEAGUE_SETUP_PORT overrides it; if it is busy, any free port is used.
+// forwarding). SMITLINE_SETUP_PORT overrides it; if it is busy, any free port is used.
 export const SETUP_PAGE_PORT = 8096;
 
 export function setupPagePort(env = process.env) {
-  const port = Number(env.COLLEAGUE_SETUP_PORT);
+  const port = Number(env.SMITLINE_SETUP_PORT);
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : SETUP_PAGE_PORT;
 }
 
@@ -1131,7 +1131,7 @@ function installSkills(root, skillsDir) {
 }
 
 /** The console's MCP endpoint for local agents, with the header they send. */
-export function localMcpConnection({ token, port = Number(process.env.COLLEAGUE_CONTROL_PORT || 8095) } = {}) {
+export function localMcpConnection({ token, port = Number(process.env.SMITLINE_CONTROL_PORT || 8095) } = {}) {
   return {
     url: `http://127.0.0.1:${port}/mcp`,
     headers: { Authorization: `Bearer ${token}` },
@@ -1144,7 +1144,7 @@ export function localMcpConnection({ token, port = Number(process.env.COLLEAGUE_
  * where the call skill is. Nothing is written.
  */
 export function containerRegistration({
-  codeRoot, token, port, container = process.env.COLLEAGUE_CONTAINER_NAME || 'smitline',
+  codeRoot, token, port, container = process.env.SMITLINE_CONTAINER_NAME || 'smitline',
 } = {}) {
   const mcp = localMcpConnection({ token, port });
   const authorization = mcp.headers.Authorization;

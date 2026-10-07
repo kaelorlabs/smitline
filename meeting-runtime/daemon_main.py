@@ -1,4 +1,7 @@
 """Production daemon entrypoint: loopback by default, server mode on request."""
+import old_names
+old_names.adopt_old_settings()
+
 from pathlib import Path
 import argparse
 import asyncio
@@ -23,14 +26,14 @@ def write_auth_token(root, token=None):
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Smitline runtime daemon')
-    # --root holds .env and .colleague/; --runtime-root holds meeting run/, recordings/, and
-    # profiles/. From a checkout both default to the checkout; the image sets COLLEAGUE_ROOT and
-    # COLLEAGUE_MEETING_DATA to its data volume.
-    parser.add_argument('--root', default=os.environ.get('COLLEAGUE_ROOT')
+    # --root holds .env and .smitline/; --runtime-root holds meeting run/, recordings/, and
+    # profiles/. From a checkout both default to the checkout; the image sets SMITLINE_ROOT and
+    # SMITLINE_MEETING_DATA to its data volume.
+    parser.add_argument('--root', default=os.environ.get('SMITLINE_ROOT')
                         or str(Path(__file__).resolve().parent.parent))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--runtime-root', default=os.environ.get('COLLEAGUE_MEETING_DATA') or None)
+    parser.add_argument('--runtime-root', default=os.environ.get('SMITLINE_MEETING_DATA') or None)
     parser.add_argument('--server', action='store_true',
                         help='allow a non-loopback bind; requires an API token')
     return parser
@@ -50,13 +53,13 @@ def build_call_service(project_root, data_root, daemon, lines=None, gateway_port
     # Startup settings honor .env like everything else; the environment wins.
     startup_env = {**read_env_file(project_root / '.env'), **os.environ}
     store = CallStore(data_root / 'calls')
-    # Receivers on the local network (https://nas.lan) need COLLEAGUE_WEBHOOK_ALLOW_PRIVATE=1.
+    # Receivers on the local network (https://nas.lan) need SMITLINE_WEBHOOK_ALLOW_PRIVATE=1.
     notifier = WebhookNotifier(load_or_create_secret(data_root / 'webhook.secret'),
-                               allow_private=startup_env.get('COLLEAGUE_WEBHOOK_ALLOW_PRIVATE') == '1')
-    hooks = load_hooks(startup_env.get('COLLEAGUE_CALL_HOOKS'), env_file=project_root / '.env',
+                               allow_private=startup_env.get('SMITLINE_WEBHOOK_ALLOW_PRIVATE') == '1')
+    hooks = load_hooks(startup_env.get('SMITLINE_CALL_HOOKS'), env_file=project_root / '.env',
                        store=store, notifier=notifier)
     environ = lambda: getattr(hooks, 'environ', os.environ)
-    port = gateway_port or int(startup_env.get('COLLEAGUE_GATEWAY_PORT') or GATEWAY_PORT)
+    port = gateway_port or int(startup_env.get('SMITLINE_GATEWAY_PORT') or GATEWAY_PORT)
     public = PublicUrl(environ, port)
     phone = PhoneLine(public_url=public.get, public_available=public.available, environ=environ)
     from meeting_finalizer import meeting_transcript
@@ -116,7 +119,7 @@ def attach_phone_gateway(app, service):
             print(f'phone gateway could not listen on 127.0.0.1:{service.gateway_port} '
                   f'({error.strerror}); phone calls are disabled', flush=True)
             return
-        if service.phone_line.environ().get('COLLEAGUE_ACCEPT_INBOUND') == '1':
+        if service.phone_line.environ().get('SMITLINE_ACCEPT_INBOUND') == '1':
             service.inbound_task = asyncio.create_task(configure_inbound(service))
 
     async def stop_gateway(_app):
@@ -132,6 +135,7 @@ def attach_phone_gateway(app, service):
 
 def build_app(args):
     project_root = Path(args.root).resolve()
+    old_names.migrate_data(project_root)
     data_root = daemon_data_path(project_root)
     api_tokens = ApiTokenStore(data_root / 'api-tokens.json')
     if args.server:

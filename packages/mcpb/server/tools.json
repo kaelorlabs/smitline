@@ -1,0 +1,677 @@
+{
+  "initialize": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {
+      "tools": {
+        "listChanged": false
+      }
+    },
+    "serverInfo": {
+      "name": "smitline",
+      "version": "0.2.0"
+    },
+    "instructions": "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then wait_for_call until the call finishes, and report the outcome. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to."
+  },
+  "tools": [
+    {
+      "name": "start_call",
+      "description": "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel",
+          "objective"
+        ],
+        "properties": {
+          "channel": {
+            "enum": [
+              "phone",
+              "meeting"
+            ],
+            "description": "phone to place a call; meeting to join Zoom, Teams, or Google Meet"
+          },
+          "to": {
+            "type": "string",
+            "description": "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone."
+          },
+          "onBehalfOf": {
+            "type": "string",
+            "description": "The user's name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Defaults to the name given at setup."
+          },
+          "objective": {
+            "type": "string",
+            "description": "What the call must achieve, in one or two sentences"
+          },
+          "context": {
+            "description": "What you and the user have been working on that the other party may ask about. Text, or an object: summary (a few sentences), facts, decisions, openQuestions, and details (long reference material). The voice starts with a short version and looks details up when asked; it never recites them.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 6000
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "facts": {
+                    "type": "array",
+                    "maxItems": 40,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "decisions": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "openQuestions": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "details": {
+                    "type": "string",
+                    "maxLength": 24000
+                  }
+                }
+              }
+            ]
+          },
+          "questions": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "description": "What to find out on the call. The result answers each one."
+          },
+          "tone": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "How to come across, such as \"casual, he is a close friend\". Defaults to matching the relationship."
+          },
+          "contact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "description": "Who is being called, when the user's profile does not already know this number.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "relationship": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 600
+              }
+            }
+          },
+          "mayAgreeTo": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the assistant may agree to without checking back, such as acceptable times or prices"
+          },
+          "mustNotShare": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Information the assistant must never share"
+          },
+          "successCriteria": {
+            "type": "string",
+            "description": "How to tell the call succeeded"
+          },
+          "language": {
+            "type": "string",
+            "description": "Language tag such as en or es"
+          },
+          "voice": {
+            "type": "string",
+            "description": "GPT-Live voice name; see list_voices"
+          },
+          "maxMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 240,
+            "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)."
+          },
+          "rehearsal": {
+            "type": "boolean",
+            "description": "Phone only: practice on the user's own phone first, with the user playing the other side"
+          },
+          "record": {
+            "type": "boolean",
+            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+          },
+          "afterHours": {
+            "type": "boolean",
+            "description": "Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now."
+          },
+          "notify": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "webhookUrl": {
+                "type": "string",
+                "description": "https URL that receives the finished call"
+              }
+            }
+          },
+          "task": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "description": "The job several calls serve, such as getting quotes from ten roofers. Use the same id for each call in it.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "description": "Lowercase letters, digits, and dashes, such as roof-quotes-oct"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 120
+              }
+            }
+          },
+          "carryFrom": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Start with short notes from earlier calls (at most 10). task: earlier calls in this brief's task; contact: earlier calls to the same number (phone only), or false to skip what the user switched on for that contact; calls: these call ids. Only carry what this call needs: the assistant may mention it to the other party, so do not carry one business's details to another unless the objective calls for it.",
+            "properties": {
+              "task": {
+                "type": "boolean"
+              },
+              "contact": {
+                "type": "boolean"
+              },
+              "calls": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "description": "Call id returned by start_call, such as call-0123456789abcdef"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "check_call_brief",
+      "description": "Validate a brief and report missing fields or configuration without placing the call. Missing fields come with a question to ask the user.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel",
+          "objective"
+        ],
+        "properties": {
+          "channel": {
+            "enum": [
+              "phone",
+              "meeting"
+            ],
+            "description": "phone to place a call; meeting to join Zoom, Teams, or Google Meet"
+          },
+          "to": {
+            "type": "string",
+            "description": "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone."
+          },
+          "onBehalfOf": {
+            "type": "string",
+            "description": "The user's name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Defaults to the name given at setup."
+          },
+          "objective": {
+            "type": "string",
+            "description": "What the call must achieve, in one or two sentences"
+          },
+          "context": {
+            "description": "What you and the user have been working on that the other party may ask about. Text, or an object: summary (a few sentences), facts, decisions, openQuestions, and details (long reference material). The voice starts with a short version and looks details up when asked; it never recites them.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 6000
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "facts": {
+                    "type": "array",
+                    "maxItems": 40,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "decisions": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "openQuestions": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 400
+                    }
+                  },
+                  "details": {
+                    "type": "string",
+                    "maxLength": 24000
+                  }
+                }
+              }
+            ]
+          },
+          "questions": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "description": "What to find out on the call. The result answers each one."
+          },
+          "tone": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "How to come across, such as \"casual, he is a close friend\". Defaults to matching the relationship."
+          },
+          "contact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "description": "Who is being called, when the user's profile does not already know this number.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "relationship": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 600
+              }
+            }
+          },
+          "mayAgreeTo": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the assistant may agree to without checking back, such as acceptable times or prices"
+          },
+          "mustNotShare": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Information the assistant must never share"
+          },
+          "successCriteria": {
+            "type": "string",
+            "description": "How to tell the call succeeded"
+          },
+          "language": {
+            "type": "string",
+            "description": "Language tag such as en or es"
+          },
+          "voice": {
+            "type": "string",
+            "description": "GPT-Live voice name; see list_voices"
+          },
+          "maxMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 240,
+            "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)."
+          },
+          "rehearsal": {
+            "type": "boolean",
+            "description": "Phone only: practice on the user's own phone first, with the user playing the other side"
+          },
+          "record": {
+            "type": "boolean",
+            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+          },
+          "afterHours": {
+            "type": "boolean",
+            "description": "Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now."
+          },
+          "notify": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "webhookUrl": {
+                "type": "string",
+                "description": "https URL that receives the finished call"
+              }
+            }
+          },
+          "task": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "description": "The job several calls serve, such as getting quotes from ten roofers. Use the same id for each call in it.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "description": "Lowercase letters, digits, and dashes, such as roof-quotes-oct"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 120
+              }
+            }
+          },
+          "carryFrom": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Start with short notes from earlier calls (at most 10). task: earlier calls in this brief's task; contact: earlier calls to the same number (phone only), or false to skip what the user switched on for that contact; calls: these call ids. Only carry what this call needs: the assistant may mention it to the other party, so do not carry one business's details to another unless the objective calls for it.",
+            "properties": {
+              "task": {
+                "type": "boolean"
+              },
+              "contact": {
+                "type": "boolean"
+              },
+              "calls": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "description": "Call id returned by start_call, such as call-0123456789abcdef"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "wait_for_call",
+      "description": "Wait for a call to finish and return it with its result: outcome, summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. If status is not completed, failed, or canceled, call again. Tell the user the outcome in plain words.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 280,
+            "description": "How long to wait in this request. Default 50."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_call",
+      "description": "Get a call and its current status without waiting.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_calls",
+      "description": "List recent calls, newest first: all of them, or only phone calls or meetings, calls to or from one number, or the calls in one task.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "channel": {
+            "enum": [
+              "phone",
+              "meeting"
+            ]
+          },
+          "contact": {
+            "type": "string",
+            "description": "E.164 number, such as +14155550142"
+          },
+          "task": {
+            "type": "string",
+            "description": "Task id from a brief"
+          }
+        }
+      }
+    },
+    {
+      "name": "save_call_note",
+      "description": "After a call ends, save a short note for later calls, such as the quote, terms, and dates a business gave. Later calls start with it when their brief's carryFrom names this call, its task, or its number. Without a note, later calls use the call's summary instead.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId",
+          "text"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1200
+          }
+        }
+      }
+    },
+    {
+      "name": "list_contacts",
+      "description": "List the people and businesses Smitline has called or been called by, with how many calls, the latest one, and the name and notes the user saved.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "send_call_instruction",
+      "description": "Give the assistant new guidance during a call in progress, for example an answer the user just provided. With silent: true it is a background note the assistant uses when relevant, instead of acting on it now.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId",
+          "text"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "silent": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "end_call",
+      "description": "Ask the assistant to wrap up politely and hang up, or cancel a call that has not connected yet.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "transfer_call_to_me",
+      "description": "Hand a connected phone call to the user's own phone. Only when the user asks to take over.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_voices",
+      "description": "List the GPT-Live voices available for calls.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_profile",
+      "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "update_profile",
+      "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. Never put passwords, keys, or payment details here.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "about": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Who the user is: role, work, what they are building."
+          },
+          "style": {
+            "type": "string",
+            "maxLength": 600,
+            "description": "How the user likes to come across on calls."
+          },
+          "boundaries": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          "people": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "relationship": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "phone": {
+                  "type": "string",
+                  "description": "E.164, such as +14155550142"
+                },
+                "notes": {
+                  "type": "string",
+                  "maxLength": 600
+                }
+              }
+            }
+          },
+          "removePeople": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

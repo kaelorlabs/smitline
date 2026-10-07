@@ -33,7 +33,7 @@ _CAM_HEIGHT = 720
 _BAND_THROTTLE_S = 0.05
 _NUM_BANDS = 7
 
-_COLLEAGUE_MARK_SVG = (
+_SMITLINE_MARK_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">'
     '<rect width="128" height="128" rx="28" fill="#30323b"/>'
     '<rect x="34" y="44" width="12" height="40" rx="4" fill="#fff"/>'
@@ -41,7 +41,7 @@ _COLLEAGUE_MARK_SVG = (
     '<rect x="82" y="44" width="12" height="40" rx="4" fill="#fff"/>'
     "</svg>"
 )
-_LOGO_SVG = "data:image/svg+xml," + quote(_COLLEAGUE_MARK_SVG, safe="")
+_LOGO_SVG = "data:image/svg+xml," + quote(_SMITLINE_MARK_SVG, safe="")
 _VISUAL_STATES = (
     "joining",
     "listening",

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import './adopt-old-settings.mjs';
+import { migrateData } from './old-names.mjs';
 import fs from 'node:fs/promises';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -7,7 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
-  Colleague,
+  Smitline,
   EXIT,
   ValidationError,
   StartupError,
@@ -37,12 +39,12 @@ import { readOrCreateLocalMcpToken } from '../../mcp/src/local-token.mjs';
 
 const interruptState = { requested: false, handler: null };
 // The checkout (/app in the container): scripts, skills, and the MCP server live here.
-const DEFAULT_COLLEAGUE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
-const CODE_ROOT = DEFAULT_COLLEAGUE_ROOT;
+const DEFAULT_SMITLINE_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+const CODE_ROOT = DEFAULT_SMITLINE_ROOT;
 
-/** The release: COLLEAGUE_VERSION (set in the image), else the checkout's package.json. */
+/** The release: SMITLINE_VERSION (set in the image), else the checkout's package.json. */
 function colleagueVersion() {
-  if (process.env.COLLEAGUE_VERSION) return process.env.COLLEAGUE_VERSION;
+  if (process.env.SMITLINE_VERSION) return process.env.SMITLINE_VERSION;
   try {
     return JSON.parse(readFileSync(path.join(CODE_ROOT, 'package.json'), 'utf8')).version || 'unknown';
   } catch {
@@ -50,9 +52,9 @@ function colleagueVersion() {
   }
 }
 
-/** The data root (.env, .colleague/): --root, else COLLEAGUE_ROOT, else the checkout. */
+/** The data root (.env, .smitline/): --root, else SMITLINE_ROOT, else the checkout. */
 function dataRoot(args = {}) {
-  return path.resolve(args.root && args.root !== true ? String(args.root) : process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT);
+  return path.resolve(args.root && args.root !== true ? String(args.root) : process.env.SMITLINE_ROOT || DEFAULT_SMITLINE_ROOT);
 }
 
 function requestInterrupt() {
@@ -176,11 +178,11 @@ function colleagueFromArgs(args) {
   const root = dataRoot(args);
   return {
     root,
-    client: new Colleague({
+    client: new Smitline({
       root,
       codeRoot: CODE_ROOT,
-      host: args.host || process.env.COLLEAGUE_DAEMON_HOST || '127.0.0.1',
-      port: Number(args.port || process.env.COLLEAGUE_DAEMON_PORT || 8765),
+      host: args.host || process.env.SMITLINE_DAEMON_HOST || '127.0.0.1',
+      port: Number(args.port || process.env.SMITLINE_DAEMON_PORT || 8765),
     }),
   };
 }
@@ -233,7 +235,7 @@ async function briefFromArgs(args, root) {
   const brief = {
     channel,
     to,
-    onBehalfOf: text(args['on-behalf-of']) || process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME,
+    onBehalfOf: text(args['on-behalf-of']) || process.env.SMITLINE_OWNER_NAME || env.SMITLINE_OWNER_NAME,
     objective: text(args.objective),
     context: await contextFromArgs(args, text),
     questions: splitList(args.questions),
@@ -467,23 +469,23 @@ function tail(file, lines = 15) {
 
 /**
  * Start the runtime daemon in the background and wait for it, showing progress.
- * In the container (COLLEAGUE_MANAGED=1) the container runs the daemon: nothing is
+ * In the container (SMITLINE_MANAGED=1) the container runs the daemon: nothing is
  * started, and a closed port is an error that says to restart the container.
  */
 async function startDaemon(root, { timeoutMs = 240_000, managed = isManaged() } = {}) {
-  const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+  const port = Number(process.env.SMITLINE_DAEMON_PORT || 8765);
   if (await portOpen(port)) return { running: true, started: false, port, ...(managed ? { managed: true } : {}) };
   if (managed) throw new StartupError(MANAGED_NOT_RUNNING, { code: 'daemon_unavailable' });
-  const dir = path.join(root, '.colleague');
+  const dir = path.join(root, '.smitline');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const log = path.join(dir, 'daemon.log');
   const fd = openSync(log, 'a', 0o600);
-  // The launcher is part of the code; COLLEAGUE_ROOT tells it where the data is.
+  // The launcher is part of the code; SMITLINE_ROOT tells it where the data is.
   const child = spawn('bash', [path.join(CODE_ROOT, 'start-runtime-daemon.sh')], {
     cwd: CODE_ROOT,
     detached: true,
     stdio: ['ignore', fd, fd],
-    env: { ...process.env, COLLEAGUE_ROOT: root, COLLEAGUE_DAEMON_PORT: String(port) },
+    env: { ...process.env, SMITLINE_ROOT: root, SMITLINE_DAEMON_PORT: String(port) },
   });
   closeSync(fd);
   let exitCode = null;
@@ -562,7 +564,7 @@ async function setupCommand(args) {
     // Background page process: announce the address on stdout, then stay quiet.
     await serveSecretsPage({
       root,
-      timeoutMs: Number(process.env.COLLEAGUE_SETUP_PAGE_TIMEOUT_MS) || undefined,
+      timeoutMs: Number(process.env.SMITLINE_SETUP_PAGE_TIMEOUT_MS) || undefined,
       onUrl(url) {
         process.stdout.write(`${JSON.stringify({ url })}\n`);
       },
@@ -597,7 +599,7 @@ async function setupCommand(args) {
   if (action === 'start') {
     if (isManaged()) {
       // The container runs the daemon; only say whether it is up.
-      const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+      const port = Number(process.env.SMITLINE_DAEMON_PORT || 8765);
       const running = await portOpen(port);
       printJson({ running, started: false, port, managed: true, ...(running ? {} : { error: MANAGED_NOT_RUNNING }) });
       return running ? EXIT.ok : EXIT.startup;
@@ -608,7 +610,7 @@ async function setupCommand(args) {
   if (action === 'stop') {
     // Stops the daemon, and with it the phone tunnel. It starts again on the next call
     // or with smitline setup start.
-    const port = Number(process.env.COLLEAGUE_DAEMON_PORT || 8765);
+    const port = Number(process.env.SMITLINE_DAEMON_PORT || 8765);
     if (isManaged()) {
       printJson({ stopped: false, managed: true, next: 'Smitline runs in its container; on this computer run: docker stop smitline' });
       return EXIT.ok;
@@ -659,7 +661,7 @@ async function setupCommand(args) {
     writeEnv(root, trunk.settings);
     printJson({
       saved: Object.keys(trunk.settings),
-      trunk: trunk.settings.COLLEAGUE_SIP_TRUNK_URL,
+      trunk: trunk.settings.SMITLINE_SIP_TRUNK_URL,
       next: 'Calls now use direct SIP. OpenAI must enable outbound SIP for your organization; until then each call is relayed as before.',
     });
     return EXIT.ok;
@@ -685,13 +687,13 @@ async function setupCommand(args) {
       return String(value);
     };
     if (args.set && args.set !== true) {
-      writeEnv(root, { COLLEAGUE_VOICE: pick(args.set, 'set') });
+      writeEnv(root, { SMITLINE_VOICE: pick(args.set, 'set') });
     }
     if (args.preview && args.preview !== true) {
       // A short call to the owner's phone in that voice; nothing is saved.
       const voice = pick(args.preview, 'preview');
-      const phone = env.COLLEAGUE_OWNER_PHONE;
-      const name = env.COLLEAGUE_OWNER_NAME;
+      const phone = env.SMITLINE_OWNER_PHONE;
+      const name = env.SMITLINE_OWNER_NAME;
       if (!phone || !name) {
         throw new ValidationError('a voice preview calls your phone; set your name and phone first on the setup page');
       }
@@ -707,15 +709,15 @@ async function setupCommand(args) {
         }),
       });
     }
-    printJson({ voice: readEnv(root).COLLEAGUE_VOICE || 'marin', voices });
+    printJson({ voice: readEnv(root).SMITLINE_VOICE || 'marin', voices });
     return EXIT.ok;
   }
   if (action === 'call-me') {
     const env = readEnv(root);
-    const phone = process.env.COLLEAGUE_OWNER_PHONE || env.COLLEAGUE_OWNER_PHONE;
-    const name = process.env.COLLEAGUE_OWNER_NAME || env.COLLEAGUE_OWNER_NAME;
+    const phone = process.env.SMITLINE_OWNER_PHONE || env.SMITLINE_OWNER_PHONE;
+    const name = process.env.SMITLINE_OWNER_NAME || env.SMITLINE_OWNER_NAME;
     if (!phone || !name) {
-      throw new ValidationError('set your name and phone first: smitline setup set COLLEAGUE_OWNER_NAME "<name>" and COLLEAGUE_OWNER_PHONE +1...');
+      throw new ValidationError('set your name and phone first: smitline setup set SMITLINE_OWNER_NAME "<name>" and SMITLINE_OWNER_PHONE +1...');
     }
     return callCommand({
       ...args,
@@ -830,7 +832,7 @@ async function connectorCommand(args) {
   const store = openConnectorStore(root);
   const action = args._[1] || 'status';
   if (action === 'status') {
-    const url = process.env.COLLEAGUE_CONNECTOR_URL || readEnv(root).COLLEAGUE_CONNECTOR_URL || null;
+    const url = process.env.SMITLINE_CONNECTOR_URL || readEnv(root).SMITLINE_CONNECTOR_URL || null;
     printJson({ connectorUrl: url ? `${url.replace(/\/$/, '')}/mcp` : null, ...store.summary() });
     return EXIT.ok;
   }
@@ -851,6 +853,7 @@ async function connectorCommand(args) {
 
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  migrateData(dataRoot(args));
   const command = args._[0];
   if (command === 'version' || args.version === true) {
     process.stdout.write(`smitline ${colleagueVersion()}\n`);
@@ -902,4 +905,4 @@ if (invoked) {
   main().then((code) => exitWhenFlushed(code ?? 0), (error) => exitForError(error));
 }
 
-export { main, parseArgs, dataRoot, DEFAULT_COLLEAGUE_ROOT };
+export { main, parseArgs, dataRoot, DEFAULT_SMITLINE_ROOT };

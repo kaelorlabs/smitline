@@ -1,6 +1,6 @@
 # Smitline MCP server
 
-The call tools for any MCP-capable agent (`@colleague-ai/mcp` 0.1.1): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
+The call tools for any MCP-capable agent (`smitline-mcp` 0.2.0): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
 
 - **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `smitline` container.
 - **stdio**, with `smitline mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.
@@ -38,7 +38,7 @@ With the `smitline` container running, this prints the URL, the `Authorization` 
 docker exec smitline smitline setup register --json
 ```
 
-The token is kept in `/data/.colleague/mcp.token` in the `smitline` volume and stays the same across restarts. For example, Claude Code:
+The token is kept in `/data/.smitline/mcp.token` in the `smitline` volume and stays the same across restarts. For example, Claude Code:
 
 ```bash
 claude mcp add --transport http --scope user smitline http://127.0.0.1:8095/mcp --header "Authorization: Bearer <token>"
@@ -81,6 +81,6 @@ Cursor (`mcp.json`, see `examples/cursor.mcp.json`):
 ## Security
 
 - Loopback daemon only (`127.0.0.1`)
-- `.colleague/daemon.auth` is read by the SDK and never returned
+- `.smitline/daemon.auth` is read by the SDK and never returned
 - stdio: stdout is JSON-RPC frames only; logs go to stderr and are redacted
 - Calls run in the daemon, so stopping the MCP server does not end a call in progress

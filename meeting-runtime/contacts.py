@@ -51,7 +51,7 @@ class ContactBook:
             return []
         except (OSError, ValueError) as error:
             # Saving over a damaged file would lose every name and setting in it.
-            raise ContactsUnreadable('The contacts file (.colleague/contacts.json) cannot be read; '
+            raise ContactsUnreadable('The contacts file (.smitline/contacts.json) cannot be read; '
                                      'fix or remove it.') from error
         return [entry for entry in data.get('contacts') or [] if isinstance(entry, dict)]
 
