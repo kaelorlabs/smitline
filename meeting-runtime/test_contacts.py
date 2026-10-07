@@ -35,7 +35,7 @@ def finished(h, *, to='+14155550142', day=1, channel='phone', direction='outboun
 class ContactBookTests(unittest.TestCase):
     def test_saves_clears_and_forgets(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / '.colleague' / 'contacts.json'
+            path = Path(temp) / '.smitline' / 'contacts.json'
             book = ContactBook(path)
             entry = book.update('+1 (415) 555-0142', {'name': ' City  Dental ', 'autoContext': True})
             self.assertEqual((entry['number'], entry['name'], entry['autoContext']),

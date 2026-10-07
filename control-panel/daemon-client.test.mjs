@@ -8,13 +8,13 @@ import { createDaemonClient, DEFAULT_DAEMON_READY_MS } from './daemon-client.mjs
 
 function tempRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-client-'));
-  fs.mkdirSync(path.join(root, '.colleague'), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(root, '.smitline'), { recursive: true, mode: 0o700 });
   return root;
 }
 
 test('starts the daemon when the port is closed and waits for the auth token', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
+  const tokenPath = path.join(root, '.smitline', 'daemon.auth');
   const spawns = [];
   const client = createDaemonClient({
     root,
@@ -44,7 +44,7 @@ test('fails fast when the daemon process exits before writing an auth token', as
   const listeners = {};
   const client = createDaemonClient({
     root,
-    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    tokenPath: path.join(root, '.smitline', 'daemon.auth'),
     isPortOpen: async () => false,
     spawnDaemon() {
       return {
@@ -65,7 +65,7 @@ test('fails fast when the daemon child has already exited', async () => {
   const root = tempRoot();
   const client = createDaemonClient({
     root,
-    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    tokenPath: path.join(root, '.smitline', 'daemon.auth'),
     isPortOpen: async () => false,
     spawnDaemon() {
       return { exitCode: 1, unref() {}, on() {} };
@@ -81,7 +81,7 @@ test('times out when the daemon never writes an auth token', async () => {
   const started = Date.now();
   const client = createDaemonClient({
     root,
-    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    tokenPath: path.join(root, '.smitline', 'daemon.auth'),
     isPortOpen: async () => false,
     spawnDaemon() { return { unref() {}, on() {} }; },
     timeoutMs: 40,
@@ -99,20 +99,20 @@ test('default spawn writes daemon.log when the launcher is missing', async () =>
     // The launcher comes from the code root; point it at an empty directory.
     codeRoot: root,
     managed: false,
-    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    tokenPath: path.join(root, '.smitline', 'daemon.auth'),
     isPortOpen: async () => false,
     timeoutMs: 800,
     pollMs: 10,
   });
   await assert.rejects(client.ensure(), /failed to start|did not become ready/);
-  const logPath = path.join(root, '.colleague', 'daemon.log');
+  const logPath = path.join(root, '.smitline', 'daemon.log');
   assert.equal(fs.existsSync(logPath), true);
-  assert.equal(fs.statSync(path.join(root, '.colleague')).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(root, '.smitline')).mode & 0o777, 0o700);
 });
 
 test('does not spawn when a healthy daemon is already listening', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
+  const tokenPath = path.join(root, '.smitline', 'daemon.auth');
   fs.writeFileSync(tokenPath, 'existing-token\n', { mode: 0o600 });
   let spawns = 0;
   const client = createDaemonClient({
@@ -132,7 +132,7 @@ test('does not spawn when a healthy daemon is already listening', async () => {
 
 test('re-reads a rotated auth token after 401 and never logs the secret', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
+  const tokenPath = path.join(root, '.smitline', 'daemon.auth');
   fs.writeFileSync(tokenPath, 'stale-token\n', { mode: 0o600 });
   const seen = [];
   const client = createDaemonClient({
@@ -159,7 +159,7 @@ test('status probes do not start a daemon when none is running', async () => {
   let spawns = 0;
   const client = createDaemonClient({
     root,
-    tokenPath: path.join(root, '.colleague', 'daemon.auth'),
+    tokenPath: path.join(root, '.smitline', 'daemon.auth'),
     isPortOpen: async () => false,
     spawnDaemon() { spawns += 1; return { unref() {}, on() {} }; },
   });
@@ -167,11 +167,11 @@ test('status probes do not start a daemon when none is running', async () => {
   assert.equal(spawns, 0);
 });
 
-test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the container', async () => {
+test('managed (SMITLINE_MANAGED=1): never spawns, and says to restart the container', async () => {
   const root = tempRoot();
   let spawns = 0;
-  const previous = process.env.COLLEAGUE_MANAGED;
-  process.env.COLLEAGUE_MANAGED = '1';
+  const previous = process.env.SMITLINE_MANAGED;
+  process.env.SMITLINE_MANAGED = '1';
   let client;
   try {
     client = createDaemonClient({
@@ -182,20 +182,20 @@ test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the conta
       pollMs: 5,
     });
   } finally {
-    if (previous === undefined) delete process.env.COLLEAGUE_MANAGED;
-    else process.env.COLLEAGUE_MANAGED = previous;
+    if (previous === undefined) delete process.env.SMITLINE_MANAGED;
+    else process.env.SMITLINE_MANAGED = previous;
   }
   assert.equal(client.managed, true);
-  assert.equal(client.tokenPath, path.join(root, '.colleague', 'daemon.auth'));
+  assert.equal(client.tokenPath, path.join(root, '.smitline', 'daemon.auth'));
   await assert.rejects(client.createMeeting({ meetingUrl: 'https://us05web.zoom.us/j/1' }), (error) => (
     /docker restart smitline/.test(error.message) && error.code === 'daemon_unavailable' && error.status === 503
   ));
   await assert.rejects(client.getMeeting('mtg-1'), /docker restart smitline/);
   assert.equal(spawns, 0);
-  assert.equal(fs.existsSync(path.join(root, '.colleague', 'daemon.log')), false);
+  assert.equal(fs.existsSync(path.join(root, '.smitline', 'daemon.log')), false);
 
   // A running daemon is used as usual.
-  fs.writeFileSync(path.join(root, '.colleague', 'daemon.auth'), 'managed-token\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(root, '.smitline', 'daemon.auth'), 'managed-token\n', { mode: 0o600 });
   const running = createDaemonClient({
     root,
     managed: true,
@@ -212,7 +212,7 @@ test('managed (COLLEAGUE_MANAGED=1): never spawns, and says to restart the conta
 
 test('lists calls of one channel, and drops a channel or time zone it does not know', async () => {
   const root = tempRoot();
-  const tokenPath = path.join(root, '.colleague', 'daemon.auth');
+  const tokenPath = path.join(root, '.smitline', 'daemon.auth');
   fs.writeFileSync(tokenPath, 'daemon-secret-token\n', { mode: 0o600 });
   const urls = [];
   const client = createDaemonClient({

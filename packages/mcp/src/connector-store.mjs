@@ -1,5 +1,5 @@
 // Registered OAuth clients and grants for the remote connector. Tokens are
-// stored only as SHA-256 digests, in private files under .colleague/connector/.
+// stored only as SHA-256 digests, in private files under .smitline/connector/.
 // The files are re-read when they change on disk, so `smitline connector
 // revoke` takes effect on a running connector.
 import crypto from 'node:crypto';
@@ -19,7 +19,7 @@ export function sha256(value) {
 }
 
 export function connectorDir(root) {
-  return path.join(root, '.colleague', 'connector');
+  return path.join(root, '.smitline', 'connector');
 }
 
 function own(table, key) {

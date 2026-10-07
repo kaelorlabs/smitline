@@ -62,7 +62,7 @@ class CallCostTests(unittest.TestCase):
         self.assertEqual((phone['source'], phone['amount'], phone['provider']), ('estimate', 0.028, 'twilio'))
         self.assertTrue(cost['estimated'])
         override = call_cost(phone_record(phoneSeconds=30),
-                             {'COLLEAGUE_PHONE_PRICE_PER_MINUTE': '0.02'})
+                             {'SMITLINE_PHONE_PRICE_PER_MINUTE': '0.02'})
         self.assertEqual(by_kind(override)['phone']['amount'], 0.02)
         self.assertNotIn('ratePerCall', by_kind(override)['phone'])
 

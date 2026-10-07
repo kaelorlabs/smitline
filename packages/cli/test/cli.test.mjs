@@ -6,17 +6,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startFakeDaemon } from '../../sdk-typescript/test/fake-daemon.mjs';
-import { DEFAULT_COLLEAGUE_ROOT, parseArgs } from '../src/smitline.mjs';
+import { DEFAULT_SMITLINE_ROOT, parseArgs } from '../src/smitline.mjs';
 
 const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 const ZOOM = 'https://zoom.us/j/555111222';
 
 test('installed CLI resolves the Smitline repository independently of caller cwd', () => {
-  assert.equal(DEFAULT_COLLEAGUE_ROOT, path.resolve(path.dirname(cli), '../../..'));
+  assert.equal(DEFAULT_SMITLINE_ROOT, path.resolve(path.dirname(cli), '../../..'));
 });
 
 test('CLI executes when invoked through an installed symlink', async (t) => {
-  const installDir = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-link-'));
+  const installDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-cli-link-'));
   t.after(() => fs.rm(installDir, { recursive: true, force: true }));
   const installedCli = path.join(installDir, 'smitline');
   await fs.symlink(cli, installedCli);
@@ -61,24 +61,24 @@ function runColleague(args, { env = {}, cwd, pipeThroughCat = false } = {}) {
 }
 
 async function withDaemon(t, options = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-cli-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-cli-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.writeFile(path.join(root, '.env'), 'COLLEAGUE_OWNER_NAME=Robin\n');
+  await fs.writeFile(path.join(root, '.env'), 'SMITLINE_OWNER_NAME=Robin\n');
   const daemon = await startFakeDaemon({ root, ...options });
   t.after(() => daemon.close());
   return { root, daemon, common: ['--root', root, '--port', String(daemon.port)] };
 }
 
 test('--version and version print the release', async () => {
-  const { version } = JSON.parse(await fs.readFile(path.join(DEFAULT_COLLEAGUE_ROOT, 'package.json'), 'utf8'));
+  const { version } = JSON.parse(await fs.readFile(path.join(DEFAULT_SMITLINE_ROOT, 'package.json'), 'utf8'));
   assert.match(version, /^\d+\.\d+\.\d+/);
-  const env = { COLLEAGUE_VERSION: '' };
+  const env = { SMITLINE_VERSION: '' };
   for (const args of [['--version'], ['version']]) {
     const result = await runColleague(args, { env });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, `smitline ${version}\n`);
   }
-  const image = await runColleague(['--version'], { env: { COLLEAGUE_VERSION: '0.1.0-test' } });
+  const image = await runColleague(['--version'], { env: { SMITLINE_VERSION: '0.1.0-test' } });
   assert.equal(image.stdout, 'smitline 0.1.0-test\n');
   assert.match((await runColleague(['help'], { env })).stdout, /smitline version \| --version/);
 });

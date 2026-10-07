@@ -42,7 +42,7 @@ PRIVATE_RENDER_TOKENS = (
     'api key', 'secret', 'checking project', 'preparing handoff',
 )
 
-COLLEAGUE_MARK_SVG = (
+SMITLINE_MARK_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" '
     'aria-label="Smitline">'
     '<rect width="128" height="128" rx="28" fill="#30323b"/>'
@@ -51,7 +51,7 @@ COLLEAGUE_MARK_SVG = (
     '<rect x="82" y="44" width="12" height="40" rx="4" fill="#fff"/>'
     '</svg>'
 )
-DEFAULT_AVATAR_DATA_URI = 'data:image/svg+xml,' + quote(COLLEAGUE_MARK_SVG, safe='')
+DEFAULT_AVATAR_DATA_URI = 'data:image/svg+xml,' + quote(SMITLINE_MARK_SVG, safe='')
 
 
 def default_avatar_data_uri():

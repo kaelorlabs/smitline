@@ -9,12 +9,12 @@ Requires Python 3.10+. This package is not published to PyPI: use it from a chec
 Both go through `start_call` with a brief:
 
 ```python
-from smitline import Colleague
+from smitline import Smitline
 
-colleague = Colleague()
+client = Smitline()
 
 # A phone call
-call = await colleague.start_call({
+call = await client.start_call({
     'channel': 'phone',
     'to': '+14155550142',
     'objective': 'Book a table for two at 7pm on Friday',
@@ -23,16 +23,16 @@ call = await colleague.start_call({
 })
 
 # A meeting: 'to' is the Zoom, Teams, or Google Meet invite URL
-meeting = await colleague.start_call({
+meeting = await client.start_call({
     'channel': 'meeting',
     'to': 'https://zoom.us/j/123456789',
     'objective': 'Take notes on the roadmap review and answer questions about the launch plan',
     'context': {'summary': 'We ship the beta on the 14th.'},
 })
 
-done = await colleague.wait_for_call(meeting['id'], 50)
+done = await client.wait_for_call(meeting['id'], 50)
 while done['status'] not in ('completed', 'failed', 'canceled'):
-    done = await colleague.wait_for_call(meeting['id'], 50)
+    done = await client.wait_for_call(meeting['id'], 50)
 print(done['result']['summary'])
 ```
 
@@ -44,7 +44,7 @@ print(done['result']['summary'])
 
 Typed errors: `ValidationError`, `StartupError`, `RuntimeError`.
 
-The loopback transport reads `.colleague/daemon.auth` under `root` (default: the working directory), authenticates every request, rotates a stale token from that file, and can start `start-runtime-daemon.sh` (`autostart=False` turns this off).
+The loopback transport reads `.smitline/daemon.auth` under `root` (default: the working directory), authenticates every request, rotates a stale token from that file, and can start `start-runtime-daemon.sh` (`autostart=False` turns this off).
 
 When Smitline runs in the `smitline` container, the token is inside the container and changes each time it starts. Pass a `read_auth` function that fetches it, and turn off autostart:
 
@@ -52,8 +52,8 @@ When Smitline runs in the `smitline` container, the token is inside the containe
 import subprocess
 
 def read_auth():
-    return subprocess.run(['docker', 'exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'],
+    return subprocess.run(['docker', 'exec', '-u', 'app', 'smitline', 'cat', '/data/.smitline/daemon.auth'],
                           capture_output=True, text=True, check=True).stdout.strip()
 
-colleague = Colleague(read_auth=read_auth, autostart=False)
+client = Smitline(read_auth=read_auth, autostart=False)
 ```

@@ -34,7 +34,7 @@ function fakeColleague() {
 }
 
 async function tempRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'colleague-connector-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'smitline-connector-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -451,7 +451,7 @@ test('token files hold only digests, in private files', async (t) => {
   const rotated = (await tokenRequest(base, {
     grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id,
   })).body;
-  const dir = path.join(root, '.colleague', 'connector');
+  const dir = path.join(root, '.smitline', 'connector');
   const stored = await fs.readFile(path.join(dir, 'tokens.json'), 'utf8');
   const secrets = [tokens.access_token, tokens.refresh_token, rotated.access_token, rotated.refresh_token, code];
   for (const secret of secrets) {
@@ -469,7 +469,7 @@ test('token files hold only digests, in private files', async (t) => {
 test('smitline connector status and revoke act on a running connector', async (t) => {
   const { base, root } = await startServer(t);
   const { client, tokens } = await signIn(base);
-  const status = await runCli([cli, 'connector', 'status', '--root', root], { COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com' });
+  const status = await runCli([cli, 'connector', 'status', '--root', root], { SMITLINE_CONNECTOR_URL: 'https://smitline.example.com' });
   assert.equal(status.code, 0, status.stderr);
   const report = JSON.parse(status.stdout);
   assert.equal(report.connectorUrl, 'https://smitline.example.com/mcp');
@@ -499,27 +499,27 @@ test('smitline connector status and revoke act on a running connector', async (t
 test('configuration comes from the environment or .env and is required', async (t) => {
   const root = await tempRoot(t);
   assert.throws(() => loadConnectorConfig({ root, env: {} }), (error) => (
-    /COLLEAGUE_CONNECTOR_URL is not set/.test(error.message) && /COLLEAGUE_CONNECTOR_PASSPHRASE is not set/.test(error.message)
+    /SMITLINE_CONNECTOR_URL is not set/.test(error.message) && /SMITLINE_CONNECTOR_PASSPHRASE is not set/.test(error.message)
   ));
-  const env = { COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com', COLLEAGUE_CONNECTOR_PASSPHRASE: PASSPHRASE };
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'http://smitline.example.com' } }), /https/);
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_URL: 'https://smitline.example.com/mcp' } }), /no path/);
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_PASSPHRASE: 'short' } }), /at least 12/);
-  assert.throws(() => loadConnectorConfig({ root, env: { ...env, COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS: 'nonsense' } }), /invalid origin/);
+  const env = { SMITLINE_CONNECTOR_URL: 'https://smitline.example.com', SMITLINE_CONNECTOR_PASSPHRASE: PASSPHRASE };
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, SMITLINE_CONNECTOR_URL: 'http://smitline.example.com' } }), /https/);
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, SMITLINE_CONNECTOR_URL: 'https://smitline.example.com/mcp' } }), /no path/);
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, SMITLINE_CONNECTOR_PASSPHRASE: 'short' } }), /at least 12/);
+  assert.throws(() => loadConnectorConfig({ root, env: { ...env, SMITLINE_CONNECTOR_ALLOWED_ORIGINS: 'nonsense' } }), /invalid origin/);
 
-  await fs.writeFile(path.join(root, '.env'), `COLLEAGUE_CONNECTOR_URL=https://smitline.example.com/\nCOLLEAGUE_CONNECTOR_PASSPHRASE=${PASSPHRASE}\n`);
+  await fs.writeFile(path.join(root, '.env'), `SMITLINE_CONNECTOR_URL=https://smitline.example.com/\nSMITLINE_CONNECTOR_PASSPHRASE=${PASSPHRASE}\n`);
   const fromFile = loadConnectorConfig({ root, env: {} });
   assert.equal(fromFile.baseUrl, 'https://smitline.example.com');
   assert.equal(fromFile.passphrase, PASSPHRASE);
   assert.equal(fromFile.port, 8767);
-  const overridden = loadConnectorConfig({ root, env: { COLLEAGUE_CONNECTOR_URL: 'http://127.0.0.1:9000', COLLEAGUE_CONNECTOR_PORT: '9000' } });
+  const overridden = loadConnectorConfig({ root, env: { SMITLINE_CONNECTOR_URL: 'http://127.0.0.1:9000', SMITLINE_CONNECTOR_PORT: '9000' } });
   assert.equal(overridden.baseUrl, 'http://127.0.0.1:9000');
   assert.equal(overridden.port, 9000);
 
   const empty = await tempRoot(t);
-  const childEnv = { COLLEAGUE_ROOT: empty, COLLEAGUE_CONNECTOR_URL: '', COLLEAGUE_CONNECTOR_PASSPHRASE: '' };
+  const childEnv = { SMITLINE_ROOT: empty, SMITLINE_CONNECTOR_URL: '', SMITLINE_CONNECTOR_PASSPHRASE: '' };
   const refused = await runCli([remote], childEnv);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /cannot start/);
-  assert.match(refused.stderr, /COLLEAGUE_CONNECTOR_URL is not set/);
+  assert.match(refused.stderr, /SMITLINE_CONNECTOR_URL is not set/);
 });

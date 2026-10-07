@@ -5,8 +5,8 @@ const state = { token: '', fields: [], status: null, open: null, mode: null, not
 
 // Which checklist line tells whether a saved field works.
 const CHECK_FOR = {
-  OPENAI_API_KEY: 'openai_key', COLLEAGUE_OWNER_NAME: 'owner_name', COLLEAGUE_OWNER_PHONE: 'owner_phone',
-  COLLEAGUE_CALLER_ID: 'caller_id', SIGNALWIRE_FROM_NUMBER: 'caller_id', TWILIO_FROM_NUMBER: 'caller_id',
+  OPENAI_API_KEY: 'openai_key', SMITLINE_OWNER_NAME: 'owner_name', SMITLINE_OWNER_PHONE: 'owner_phone',
+  SMITLINE_CALLER_ID: 'caller_id', SIGNALWIRE_FROM_NUMBER: 'caller_id', TWILIO_FROM_NUMBER: 'caller_id',
   SIGNALWIRE_SPACE: 'phone_account', SIGNALWIRE_PROJECT_ID: 'phone_account', SIGNALWIRE_API_TOKEN: 'phone_account',
   SIGNALWIRE_SIGNING_KEY: 'phone_account', TWILIO_ACCOUNT_SID: 'phone_account', TWILIO_AUTH_TOKEN: 'phone_account',
   OPENAI_PROJECT_ID: 'phone_audio', OPENAI_WEBHOOK_SECRET: 'phone_audio',
@@ -37,7 +37,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, {
       ...options,
-      headers: { 'X-Colleague-Token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'X-Smitline-Token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
     });
   } catch {
     throw Object.assign(new Error('The console is not responding. Reload the page.'), { offline: true });

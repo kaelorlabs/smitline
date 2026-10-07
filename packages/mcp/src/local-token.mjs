@@ -1,5 +1,5 @@
 // The bearer token local agents send to the console's MCP endpoint
-// (http://127.0.0.1:8095/mcp). It lives in <COLLEAGUE_ROOT>/.colleague/mcp.token,
+// (http://127.0.0.1:8095/mcp). It lives in <SMITLINE_ROOT>/.smitline/mcp.token,
 // readable only by its owner, and is made on first need.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -8,7 +8,7 @@ import path from 'node:path';
 export const LOCAL_MCP_TOKEN_FILE = 'mcp.token';
 
 export function localMcpTokenPath(root) {
-  return path.join(root, '.colleague', LOCAL_MCP_TOKEN_FILE);
+  return path.join(root, '.smitline', LOCAL_MCP_TOKEN_FILE);
 }
 
 function readToken(file) {

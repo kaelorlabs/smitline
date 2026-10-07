@@ -51,7 +51,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 
 A meeting brief may also set `camera` (meetings only): `{ "enabled": true, "defaultOn": true, "avatarDataUri": "data:image/png;base64,..." }`. `enabled` shows Smitline's virtual camera tile, `defaultOn` turns it on after joining (both default to `true`), and the avatar is a PNG, JPEG, WebP, or SVG of up to 80 KB. The stored brief keeps `enabled` and `defaultOn` but not the image.
 
-Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `COLLEAGUE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `COLLEAGUE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `COLLEAGUE_VOICE`, then `marin`; `COLLEAGUE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now. `record: true` (phone only) records the call in the owner's phone account; see [recording](phone.md#how-a-call-runs).
+Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup provides them. `onBehalfOf` defaults to `SMITLINE_OWNER_NAME`. A rehearsal (`"rehearsal": true`, phone only) calls `SMITLINE_OWNER_PHONE`, so `to` may be left out, and any other number is refused. `voice` defaults to `SMITLINE_VOICE`, then `marin`; `SMITLINE_EXTRA_VOICES` allows voice names beyond the documented ones. Phone numbers use E.164 (`+` and 8 to 15 digits); emergency and crisis numbers are refused. Meeting briefs use a Zoom, Teams, or Google Meet invite URL as `to`. Before a phone call rings, the [guardrails](phone.md#guardrails) check the number, the person's local time, the do-not-call list, and how often the number was called; a refusal is a `403` with a code such as `outside_calling_hours`. `afterHours: true` (phone only) skips the calling-hours check when the user confirms the person expects a call now. `record: true` (phone only) records the call in the owner's phone account; see [recording](phone.md#how-a-call-runs).
 
 `POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
 
@@ -61,7 +61,7 @@ A phone call gets three levels of context, so the voice can talk like someone wh
 
 | Level | Comes from | Holds |
 | --- | --- | --- |
-| Profile | `GET` and `PATCH /v1/profile`, kept in `.colleague/profile.json` (owner-only) | Who the owner is, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries |
+| Profile | `GET` and `PATCH /v1/profile`, kept in `.smitline/profile.json` (owner-only) | Who the owner is, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries |
 | Session | The brief's `context` | What the agent and the owner have been working on: text (at most 6,000 characters), or an object with `summary`, `facts`, `decisions`, `openQuestions`, and long `details` (at most 24,000 characters) |
 | Goal | The rest of the brief | `objective`, `questions`, `mayAgreeTo`, `mustNotShare`, `successCriteria`, `tone`, and `contact` |
 
@@ -87,7 +87,7 @@ The person called comes from `contact`, or else from the profile entry with the 
 
 During a call, `POST /v1/calls/{id}/instructions` with `"silent": true` adds a background note, such as something the owner just remembered. The voice uses it when it becomes relevant instead of acting on it at once.
 
-Meetings get the session context and `questions` as their starting context, with the summary, facts, notes from earlier calls, and details cut to 8,000 characters together; the profile is used on phone calls. In a meeting, the backend model GPT-Live hands harder questions to (`COLLEAGUE_MEETING_BACKEND_MODEL`) gets that context too, up to about 4,000 tokens. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
+Meetings get the session context and `questions` as their starting context, with the summary, facts, notes from earlier calls, and details cut to 8,000 characters together; the profile is used on phone calls. In a meeting, the backend model GPT-Live hands harder questions to (`SMITLINE_MEETING_BACKEND_MODEL`) gets that context too, up to about 4,000 tokens. Never put passwords, keys, or card numbers in the profile or the context: the voice may repeat anything it knows.
 
 ## Earlier calls
 
@@ -105,7 +105,7 @@ Carrying context between different businesses is the point of a quotes task and 
 
 ## Contacts
 
-A contact is a phone number Smitline has called or been called from. `GET /v1/contacts` lists them, latest call first, with the number of calls and the name: the one the user saved, else a profile person with that number, else the latest brief's `contact.name`. `GET /v1/contacts/{number}` (with `+` written as `%2B`) adds the call history and `nextCall`, the notes a new call to the number would start with. `PATCH /v1/contacts/{number}` sets `name` (80 characters), `notes` (600, for the user only; calls do not read them), and `autoContext`; an empty value or `false` clears one. `DELETE /v1/contacts/{number}` forgets what was saved; the number's call records and their notes stay. What the user saves is kept in `.colleague/contacts.json` (owner-only); a file that cannot be read stops contact changes rather than being replaced. Profile people stay what they are: people the user knows, added to every call to their number.
+A contact is a phone number Smitline has called or been called from. `GET /v1/contacts` lists them, latest call first, with the number of calls and the name: the one the user saved, else a profile person with that number, else the latest brief's `contact.name`. `GET /v1/contacts/{number}` (with `+` written as `%2B`) adds the call history and `nextCall`, the notes a new call to the number would start with. `PATCH /v1/contacts/{number}` sets `name` (80 characters), `notes` (600, for the user only; calls do not read them), and `autoContext`; an empty value or `false` clears one. `DELETE /v1/contacts/{number}` forgets what was saved; the number's call records and their notes stay. What the user saves is kept in `.smitline/contacts.json` (owner-only); a file that cannot be read stops contact changes rather than being replaced. Profile people stay what they are: people the user knows, added to every call to their number.
 
 ## Result
 
@@ -129,7 +129,7 @@ A contact is a phone number Smitline has called or been called from. `GET /v1/co
 }
 ```
 
-`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` during the call (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once the provider finishes the file; `GET /v1/calls/{id}/recording` downloads it. Phone results are summarized from the transcript by a backend model (`COLLEAGUE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results are summarized the same way from the meeting's transcript, which the call gets from the meeting archive when the meeting ends, with rules for meetings: whether the objective was met is judged only from what was said, and open questions are only those still unresolved at the end. A meeting where nothing was said falls back to its handoff, which never counts as `achieved` (`partial` when it records decisions or action items, `not_reached` otherwise). `source` records which path produced the result.
+`outcome` is one of `achieved`, `partial`, `not_reached`, `voicemail`, `declined`, `failed`, `canceled`. Outgoing phone results also carry `disclosureVerified`: whether the agent was heard saying it is an AI calling for `onBehalfOf` during the call (see [phone calls](phone.md)). Recorded calls get a `recording` field on the call once the provider finishes the file; `GET /v1/calls/{id}/recording` downloads it. Phone results are summarized from the transcript by a backend model (`SMITLINE_SUMMARY_MODEL`, default `gpt-5.6-luna`), which treats the transcript as untrusted data. Unanswered and busy calls get a result without a model call. If summarizing fails, the result still carries the transcript and says why. When the other person asked not to be called again, the result has `doNotCall: true` and their number goes on the do-not-call list. Meeting results are summarized the same way from the meeting's transcript, which the call gets from the meeting archive when the meeting ends, with rules for meetings: whether the objective was met is judged only from what was said, and open questions are only those still unresolved at the end. A meeting where nothing was said falls back to its handoff, which never counts as `achieved` (`partial` when it records decisions or action items, `not_reached` otherwise). `source` records which path produced the result.
 
 ## Cost
 
@@ -147,7 +147,7 @@ Every finished call carries `cost`, in US dollars:
 }
 ```
 
-- **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`) at US rates: Twilio $0.014 a started minute; SignalWire $0.011 a started minute ($0.008 outbound plus $0.003 for the audio stream) and $0.006 a call (`ratePerMinute`, `ratePerCall`). `COLLEAGUE_PHONE_PRICE_PER_MINUTE` replaces the estimate with one rate a started minute. A handed-over call's second leg, to your phone, is not included.
+- **Phone line:** what Twilio or SignalWire charged, read from the provider's record of the call. Providers fill it in shortly after a call ends; the daemon checks after 20 seconds, 1, 5, and 30 minutes, and looks up older calls once when the call list is read. Until then the line is estimated from the minutes (`source: estimate`, `estimated: true`) at US rates: Twilio $0.014 a started minute; SignalWire $0.011 a started minute ($0.008 outbound plus $0.003 for the audio stream) and $0.006 a call (`ratePerMinute`, `ratePerCall`). `SMITLINE_PHONE_PRICE_PER_MINUTE` replaces the estimate with one rate a started minute. A handed-over call's second leg, to your phone, is not included.
 - **OpenAI:** GPT-Live seconds, and the background and summary models' tokens (cached input and web searches included), priced from the table in `call_costs.py`. OpenAI does not bill per call, so these amounts are calculated, not billed. A model with no known price is listed in `unpriced` and left out of the total. A call keeps the cost it was given when it ended; update the table when prices change.
 
 `GET /v1/calls` also returns `spend`: finished calls' totals and connected `seconds` per day, in the reader's time zone when `tzOffset` (minutes east of UTC) is given. `channel=phone` or `channel=meeting` limits both the calls and the spend to one kind. The console's Calls and Meetings pages show today, this month, all time, and the average per call or meeting, and for each one its brief, result, cost, and transcript.
@@ -161,7 +161,7 @@ Every finished call carries `cost`, in US dollars:
 | `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
 
-Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.colleague/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents; an https URL may not name a private, loopback, or link-local IP address, and a host name that resolves to one is refused at delivery (`rejected`, with no request sent) unless `COLLEAGUE_WEBHOOK_ALLOW_PRIVATE=1`. Delivery is retried three times with backoff. The outcome is recorded as a `call.webhook` event with `delivered`, `attempts`, and a coarse `error` (`rejected`, `failed`, or `unreachable`), never the receiver's exact response.
+Webhook bodies are signed: `X-Smitline-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.smitline/daemon-data/webhook.secret`. Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents; an https URL may not name a private, loopback, or link-local IP address, and a host name that resolves to one is refused at delivery (`rejected`, with no request sent) unless `SMITLINE_WEBHOOK_ALLOW_PRIVATE=1`. Delivery is retried three times with backoff. The outcome is recorded as a `call.webhook` event with `delivered`, `attempts`, and a coarse `error` (`rejected`, `failed`, or `unreachable`), never the receiver's exact response.
 
 ## Reliability
 
@@ -186,7 +186,7 @@ Webhook bodies are signed: `X-Colleague-Signature: sha256=<hex HMAC of the raw b
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
-| `GET /v1/do-not-call` | Numbers Smitline refuses to call because the person asked not to be called again, kept in `.colleague/do-not-call.json`. |
+| `GET /v1/do-not-call` | Numbers Smitline refuses to call because the person asked not to be called again, kept in `.smitline/do-not-call.json`. |
 | `PATCH /v1/do-not-call` | `{"add": ["+1...", {"number": "+1...", "reason": "..."}], "remove": ["+1..."]}`. CLI: `smitline do-not-call add|remove <number>`. |
 | `GET /v1/openapi.json` | The machine-readable API description. |
 
@@ -212,17 +212,17 @@ The call service calls a small hooks object so a managed deployment can add acco
 | `owner_for(request)` | `local` |
 | `credentials(owner, provider)` | Reads `OPENAI_API_KEY` and `TWILIO_*` from the environment. |
 | `precheck(owner, brief)` | For phone calls, applies the country allow-list and the [guardrails](phone.md#guardrails). |
-| `do_not_call(owner)`, `update_do_not_call(owner, update)` | Read and change `.colleague/do-not-call.json`. Without them, `/v1/do-not-call` returns `501` and a request not to be called again is only reported in the result. |
+| `do_not_call(owner)`, `update_do_not_call(owner, update)` | Read and change `.smitline/do-not-call.json`. Without them, `/v1/do-not-call` returns `501` and a request not to be called again is only reported in the result. |
 | `record_usage(owner, call, usage)` | Appends a line to `usage.jsonl` in the call store. |
 | `notify(owner, call)` | Sends the brief's webhook, if any. |
-| `profile(owner)`, `save_profile(owner, profile)` | Read and write `.colleague/profile.json` next to `.env`. Without them, calls get no profile and `/v1/profile` returns `501`. |
+| `profile(owner)`, `save_profile(owner, profile)` | Read and write `.smitline/profile.json` next to `.env`. Without them, calls get no profile and `/v1/profile` returns `501`. |
 
-Set `COLLEAGUE_CALL_HOOKS=module:factory` to load different hooks.
+Set `SMITLINE_CALL_HOOKS=module:factory` to load different hooks.
 
 ## Access
 
-The daemon listens on loopback with a per-launch token by default. The token is in `.colleague/daemon.auth` (`/data/.colleague/daemon.auth` in the image) and changes each time the daemon starts.
+The daemon listens on loopback with a per-launch token by default. The token is in `.smitline/daemon.auth` (`/data/.smitline/daemon.auth` in the image) and changes each time the daemon starts.
 
-Server mode also accepts long-lived API tokens; only SHA-256 digests are stored. It refuses to start without at least one API token and must sit behind a TLS-terminating proxy. From a checkout, create a token with `python3 meeting-runtime/api_tokens.py create --name NAME`, then start the daemon with `COLLEAGUE_SERVER_MODE=1 COLLEAGUE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`. In the image, create the token as the `app` user, so the file stays readable to the daemon: `docker exec -u app smitline python meeting-runtime/api_tokens.py --root /data create --name NAME`. The container's start script reads the same two variables, so pass `-e COLLEAGUE_SERVER_MODE=1 -e COLLEAGUE_DAEMON_HOST=0.0.0.0` to `docker run`.
+Server mode also accepts long-lived API tokens; only SHA-256 digests are stored. It refuses to start without at least one API token and must sit behind a TLS-terminating proxy. From a checkout, create a token with `python3 meeting-runtime/api_tokens.py create --name NAME`, then start the daemon with `SMITLINE_SERVER_MODE=1 SMITLINE_DAEMON_HOST=0.0.0.0 ./start-runtime-daemon.sh`. In the image, create the token as the `app` user, so the file stays readable to the daemon: `docker exec -u app smitline python meeting-runtime/api_tokens.py --root /data create --name NAME`. The container's start script reads the same two variables, so pass `-e SMITLINE_SERVER_MODE=1 -e SMITLINE_DAEMON_HOST=0.0.0.0` to `docker run`.
 
 Credentials come from the process environment first, then the ignored `.env` (`/data/.env` in the image), which is reread for every call, so keys added during setup work without a restart.

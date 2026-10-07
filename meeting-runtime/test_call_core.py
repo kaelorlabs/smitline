@@ -87,8 +87,8 @@ class BriefTests(unittest.TestCase):
 
     def test_voice_list_is_extendable(self):
         self.assertIn('marin', available_voices({}))
-        self.assertIn('newvoice', available_voices({'COLLEAGUE_EXTRA_VOICES': 'newvoice, Bad Name'}))
-        self.assertNotIn('Bad Name', available_voices({'COLLEAGUE_EXTRA_VOICES': 'Bad Name'}))
+        self.assertIn('newvoice', available_voices({'SMITLINE_EXTRA_VOICES': 'newvoice, Bad Name'}))
+        self.assertNotIn('Bad Name', available_voices({'SMITLINE_EXTRA_VOICES': 'Bad Name'}))
 
     def test_rejects_secret_fields(self):
         with self.assertRaises(ValueError):
@@ -161,7 +161,7 @@ class NotifierTests(unittest.IsolatedAsyncioTestCase):
         result = await WebhookNotifier('s3cret', post=post).deliver(self.call())
         self.assertEqual(result, {'delivered': True, 'attempts': 1})
         url, body, headers = sent[0]
-        self.assertEqual(headers['X-Colleague-Signature'], signature('s3cret', body))
+        self.assertEqual(headers['X-Smitline-Signature'], signature('s3cret', body))
         self.assertEqual(json.loads(body)['type'], 'call.completed')
 
     async def test_retries_server_errors_but_not_client_errors(self):
@@ -238,18 +238,18 @@ class HookTests(unittest.TestCase):
             with self.assertRaises(MissingCredentials) as caught:
                 hooks.credentials('local', 'twilio')
             self.assertEqual(caught.exception.missing,
-                         ('TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER or COLLEAGUE_CALLER_ID'))
+                         ('TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER or SMITLINE_CALLER_ID'))
             override = DefaultCallHooks(environ={'OPENAI_API_KEY': 'from-env'}, env_file=env_file)
             self.assertEqual(override.credentials('local', 'openai')['apiKey'], 'from-env')
 
     def test_calling_code_allow_list(self):
-        hooks = DefaultCallHooks(environ={'COLLEAGUE_ALLOWED_CALLING_CODES': '1, +44',
-                                          'COLLEAGUE_CALLING_HOURS': 'off'})
+        hooks = DefaultCallHooks(environ={'SMITLINE_ALLOWED_CALLING_CODES': '1, +44',
+                                          'SMITLINE_CALLING_HOURS': 'off'})
         hooks.precheck('local', CallBrief.from_dict(phone_brief()))
         hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+442079460123')))
         with self.assertRaises(CallRefused):
             hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+919876543210')))
-        DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off'}).precheck(
+        DefaultCallHooks(environ={'SMITLINE_CALLING_HOURS': 'off'}).precheck(
             'local', CallBrief.from_dict(phone_brief(to='+919876543210')))
 
     def test_load_hooks(self):
@@ -392,13 +392,13 @@ class GuardrailTests(unittest.TestCase):
         self.assertIn('E.164', str(caught.exception))
 
     def test_premium_and_satellite_numbers_are_refused(self):
-        hooks = DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off'})
+        hooks = DefaultCallHooks(environ={'SMITLINE_CALLING_HOURS': 'off'})
         self.assertEqual(self.refused(hooks, to='+1 900 555 0100').code, 'high_cost_number')
         self.assertIn('premium-rate', self.refused(hooks, to='+44 871 234 5678').message)
         self.assertIn('satellite', self.refused(hooks, to='+882 123 456 789').message)
         hooks.precheck('local', CallBrief.from_dict(phone_brief(to='+1 800 555 0100')))
-        allowed = DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': 'off',
-                                            'COLLEAGUE_ALLOW_PREMIUM_NUMBERS': '1'})
+        allowed = DefaultCallHooks(environ={'SMITLINE_CALLING_HOURS': 'off',
+                                            'SMITLINE_ALLOW_PREMIUM_NUMBERS': '1'})
         allowed.precheck('local', CallBrief.from_dict(phone_brief(to='+1 900 555 0100')))
 
     def test_calls_happen_in_the_recipients_daytime(self):
@@ -414,14 +414,14 @@ class GuardrailTests(unittest.TestCase):
         # The user confirmed the person expects the call.
         night.precheck('local', CallBrief.from_dict(phone_brief(afterHours=True)))
         # The owner's own phone may ring at any hour.
-        own = DefaultCallHooks(environ={'COLLEAGUE_OWNER_PHONE': '+14155550142'}, clock=at(6))
+        own = DefaultCallHooks(environ={'SMITLINE_OWNER_PHONE': '+14155550142'}, clock=at(6))
         own.precheck('local', CallBrief.from_dict(phone_brief()))
         for hours in ('off', '07:00-23:30'):
-            DefaultCallHooks(environ={'COLLEAGUE_CALLING_HOURS': hours}, clock=at(6)).precheck(
+            DefaultCallHooks(environ={'SMITLINE_CALLING_HOURS': hours}, clock=at(6)).precheck(
                 'local', CallBrief.from_dict(phone_brief()))
         for hours in ('late', '21:00-08:00', '08:00-25:00'):
             self.assertEqual(self.refused(DefaultCallHooks(
-                environ={'COLLEAGUE_CALLING_HOURS': hours}, clock=at(18))).code, 'invalid_calling_hours')
+                environ={'SMITLINE_CALLING_HOURS': hours}, clock=at(18))).code, 'invalid_calling_hours')
         with self.assertRaises(ValueError):
             CallBrief.from_dict(phone_brief(channel='meeting', to=ZOOM, afterHours=True))
         self.assertTrue(CallBrief.from_dict(phone_brief(afterHours=True)).to_dict()['afterHours'])
@@ -452,19 +452,19 @@ class GuardrailTests(unittest.TestCase):
         hooks.precheck('local', CallBrief.from_dict(phone_brief()))
         calls.records[0]['brief']['rehearsal'] = False
         calls.records[1]['direction'] = 'outbound'
-        DefaultCallHooks(environ={'COLLEAGUE_OWNER_PHONE': number}, store=calls,
+        DefaultCallHooks(environ={'SMITLINE_OWNER_PHONE': number}, store=calls,
                          clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
-        DefaultCallHooks(environ={'COLLEAGUE_MAX_CALLS_PER_NUMBER': '0'}, store=calls,
+        DefaultCallHooks(environ={'SMITLINE_MAX_CALLS_PER_NUMBER': '0'}, store=calls,
                          clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
         self.assertEqual(self.refused(DefaultCallHooks(
-            environ={'COLLEAGUE_MAX_CALLS_PER_NUMBER': 'many'}, store=calls,
+            environ={'SMITLINE_MAX_CALLS_PER_NUMBER': 'many'}, store=calls,
             clock=at(18))).code, 'invalid_call_limit')
 
         busy = FakeCalls([placed_at(f'+1415555{index:04d}', index + 1, now) for index in range(20)])
         refused = self.refused(DefaultCallHooks(environ={}, store=busy, clock=at(18)))
         self.assertEqual(refused.code, 'too_many_calls')
         self.assertIn('placed 20 calls in the last hour', refused.message)
-        DefaultCallHooks(environ={'COLLEAGUE_MAX_CALLS_PER_HOUR': '25'}, store=busy,
+        DefaultCallHooks(environ={'SMITLINE_MAX_CALLS_PER_HOUR': '25'}, store=busy,
                          clock=at(18)).precheck('local', CallBrief.from_dict(phone_brief()))
 
     def test_record_is_a_phone_only_flag(self):
@@ -481,7 +481,7 @@ class GuardrailTests(unittest.TestCase):
                 '+1 (415) 555-0142', {'number': '+14155550199', 'reason': 'Asked by email'}]})
             self.assertEqual([e['number'] for e in listed['numbers']], ['+14155550142', '+14155550199'])
             self.assertEqual(listed['numbers'][0]['addedAt'], '2026-09-30T18:00:00Z')
-            path = Path(temp) / '.colleague' / 'do-not-call.json'
+            path = Path(temp) / '.smitline' / 'do-not-call.json'
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             refused = self.refused(hooks)
             self.assertEqual(refused.code, 'do_not_call')
@@ -621,7 +621,7 @@ class MeetingPayloadTests(unittest.TestCase):
         self.assertEqual(set(payload), {"meetingUrl", "context", "onBehalfOf", "voice"})
         self.assertEqual(payload["onBehalfOf"], "Sam")
         self.assertEqual(payload["voice"], "cinder")
-        self.assertEqual(environ_from_state({"voice": "cinder"})["COLLEAGUE_VOICE"], "cinder")
+        self.assertEqual(environ_from_state({"voice": "cinder"})["SMITLINE_VOICE"], "cinder")
         plain = meeting_payload(CallBrief.from_dict({
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
             "objective": "Take notes"}))

@@ -1,4 +1,7 @@
 """Long-lived API tokens for server mode. Only SHA-256 digests are stored."""
+import old_names
+old_names.adopt_old_settings()
+
 from datetime import datetime, timezone
 from pathlib import Path
 import argparse

@@ -38,7 +38,7 @@ def context_from_brief(brief):
 
 
 def meeting_payload(brief):
-    # The meeting's opening disclosure names onBehalfOf; a brief's voice overrides COLLEAGUE_VOICE.
+    # The meeting's opening disclosure names onBehalfOf; a brief's voice overrides SMITLINE_VOICE.
     payload = {
         'meetingUrl': brief.to,
         'context': context_from_brief(brief),

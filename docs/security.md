@@ -4,7 +4,7 @@ Smitline runs on your computer with your own keys. There is no Smitline server: 
 
 ## Security model
 
-- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.colleague/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](calls.md#access)). Only the phone gateway's routes, which check the provider's signatures, are exposed through a tunnel.
+- **Loopback by default.** The runtime daemon binds `127.0.0.1` with a per-launch bearer token in `.smitline/daemon.auth`. Public binds are rejected unless server mode is turned on with a long-lived API token (see [calls](calls.md#access)). Only the phone gateway's routes, which check the provider's signatures, are exposed through a tunnel.
 - **Host-owned secrets.** OpenAI and SignalWire or Twilio keys stay in the `smitline` data volume (the ignored `.env` in a checkout), typed into a one-time local page or the console's Account page rather than an agent chat. The console never returns a key (at most a known prefix such as `sk-proj-`), and saving or removing one requires its per-session token and a request from the console's own origin, so other websites the user visits cannot change keys. Removing a key only deletes Smitline's copy; it stays valid where it was issued. Local agents reach the MCP endpoint with a local token; browsers are refused. Browser profiles, transcripts, call records, and context stay on disk and gitignored.
 - **Fail closed.** Unknown fields, unsupported meeting links, and incomplete briefs are rejected with a readable reason.
 - **No secret-bearing logs.** Tokens are not placed in URLs, query strings, events, or errors.

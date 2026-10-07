@@ -9,8 +9,8 @@ sys.path.insert(0, str(ROOT))
 
 import smitline
 from smitline import (
-    Colleague,
-    ColleagueError,
+    Smitline,
+    SmitlineError,
     StartupError,
     ValidationError,
 )
@@ -28,7 +28,7 @@ class LoopbackHttpTests(unittest.TestCase):
         def request(method, path, body=None, token=None):
             seen_tokens.append(token)
             if token != 'rotated-token':
-                raise ColleagueError('unauthorized', code='unauthorized', status=401)
+                raise SmitlineError('unauthorized', code='unauthorized', status=401)
             if method == 'POST' and path == '/v1/calls':
                 return {'id': 'call-0123456789abcdef', 'channel': body['channel'], 'status': 'queued', 'brief': body}
             raise AssertionError(path)
@@ -52,8 +52,8 @@ class LoopbackHttpTests(unittest.TestCase):
     def test_daemon_autostart_uses_lock_and_token_file(self):
         spawns = []
         root = Path(tempfile.mkdtemp())
-        (root / '.colleague').mkdir()
-        (root / '.colleague' / 'daemon.auth').write_text('host-token\n')
+        (root / '.smitline').mkdir()
+        (root / '.smitline' / 'daemon.auth').write_text('host-token\n')
         opened = {'value': False}
 
         def spawn():
@@ -80,7 +80,7 @@ class LoopbackHttpTests(unittest.TestCase):
 class CallTests(unittest.IsolatedAsyncioTestCase):
     def test_the_sdk_exposes_calls_only(self):
         self.assertNotIn('MeetingHandle', smitline.__all__)
-        methods = sorted(name for name in vars(Colleague) if not name.startswith('_'))
+        methods = sorted(name for name in vars(Smitline) if not name.startswith('_'))
         self.assertEqual(methods, [
             'check_call', 'end_call', 'forget_contact', 'get_call', 'get_contact', 'get_do_not_call',
             'get_profile', 'instruct_call', 'list_calls', 'list_contacts', 'list_voices',
@@ -101,7 +101,7 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
 
         transport = LoopbackTransport(request=request, read_auth=lambda: 't',
                                       is_port_open=lambda: True, autostart=False)
-        client = Colleague(transport=transport)
+        client = Smitline(transport=transport)
         await client.list_calls(5, task='roof-quotes', contact='+14155550142')
         await client.save_call_note('call-0123456789abcdef', 'Apex: $14,200.')
         self.assertEqual(len(await client.list_contacts()), 1)
@@ -129,7 +129,7 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
 
         transport = LoopbackTransport(request=request, read_auth=lambda: 't',
                                       is_port_open=lambda: True, autostart=False)
-        client = Colleague(transport=transport)
+        client = Smitline(transport=transport)
         brief = {'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Robin',
                  'objective': 'Book a table'}
         self.assertEqual((await client.start_call(brief))['status'], 'queued')
@@ -168,7 +168,7 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
                 return {'default': 'marin', 'voices': ['marin']}
             return {'id': 'call-0123456789abcdef', 'channel': 'meeting', 'status': 'waiting'}
 
-        client = Colleague(transport=LoopbackTransport(request=request, read_auth=lambda: 't',
+        client = Smitline(transport=LoopbackTransport(request=request, read_auth=lambda: 't',
                                                        is_port_open=lambda: True, autostart=False))
         brief = {'channel': 'meeting', 'to': ZOOM, 'objective': 'Take notes on the roadmap review'}
         call = await client.start_call(brief)

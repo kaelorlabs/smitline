@@ -19,15 +19,15 @@ export const EXIT = Object.freeze({
 // The first start creates a Python environment and installs packages.
 const DEFAULT_STARTUP_TIMEOUT_MS = 60000;
 
-// In the Smitline container (COLLEAGUE_MANAGED=1) the container runs the daemon;
+// In the Smitline container (SMITLINE_MANAGED=1) the container runs the daemon;
 // nothing else may start one.
 export const MANAGED_NOT_RUNNING = 'Smitline is not running; restart the container: docker restart smitline';
 
 export function isManaged(env = process.env) {
-  return String(env?.COLLEAGUE_MANAGED ?? '').trim() === '1';
+  return String(env?.SMITLINE_MANAGED ?? '').trim() === '1';
 }
 
-export class ColleagueError extends Error {
+export class SmitlineError extends Error {
   constructor(message, { code = 'runtime', status, archivePath } = {}) {
     super(redact(message));
     this.name = this.constructor.name;
@@ -37,31 +37,31 @@ export class ColleagueError extends Error {
   }
 }
 
-export class ValidationError extends ColleagueError {
+export class ValidationError extends SmitlineError {
   constructor(message, extra = {}) {
     super(message, { code: 'validation', ...extra });
   }
 }
 
-export class StartupError extends ColleagueError {
+export class StartupError extends SmitlineError {
   constructor(message, extra = {}) {
     super(message, { code: 'startup', ...extra });
   }
 }
 
-export class RuntimeError extends ColleagueError {
+export class RuntimeError extends SmitlineError {
   constructor(message, extra = {}) {
     super(message, { code: extra.code || 'runtime', ...extra });
   }
 }
 
-export class FinalizationError extends ColleagueError {
+export class FinalizationError extends SmitlineError {
   constructor(message, extra = {}) {
     super(message, { code: extra.code || 'finalization', ...extra });
   }
 }
 
-export class InterruptError extends ColleagueError {
+export class InterruptError extends SmitlineError {
   constructor(message = 'interrupted', extra = {}) {
     super(message, { code: 'interrupt', ...extra });
   }
@@ -103,7 +103,7 @@ async function readJson(response) {
 }
 
 function defaultDaemonAuthPath(root) {
-  return `${root}/.colleague/daemon.auth`;
+  return `${root}/.smitline/daemon.auth`;
 }
 
 async function readDaemonAuth(root, fsApi) {
@@ -157,7 +157,7 @@ function defaultIsPortOpen(host, port) {
 }
 
 // start-runtime-daemon.sh lives with the code (codeRoot); the daemon keeps its data,
-// .env, and auth token under the data root (COLLEAGUE_ROOT).
+// .env, and auth token under the data root (SMITLINE_ROOT).
 function defaultSpawnDaemon({ root, codeRoot, host, port }) {
   const dataRoot = path.resolve(root);
   const scriptRoot = path.resolve(codeRoot || root);
@@ -168,19 +168,19 @@ function defaultSpawnDaemon({ root, codeRoot, host, port }) {
     stdio: 'ignore',
     env: {
       ...process.env,
-      COLLEAGUE_ROOT: dataRoot,
-      COLLEAGUE_DAEMON_HOST: host,
-      COLLEAGUE_DAEMON_PORT: String(port),
+      SMITLINE_ROOT: dataRoot,
+      SMITLINE_DAEMON_HOST: host,
+      SMITLINE_DAEMON_PORT: String(port),
     },
   });
 }
 export function createLoopbackTransport(options = {}) {
   const fsApi = options.fs || { readFile };
-  const root = options.root || process.env.COLLEAGUE_ROOT || process.cwd();
+  const root = options.root || process.env.SMITLINE_ROOT || process.cwd();
   const codeRoot = options.codeRoot || root;
   const managed = options.managed ?? isManaged();
   const host = options.host || '127.0.0.1';
-  const port = Number(options.port || process.env.COLLEAGUE_DAEMON_PORT || 8765);
+  const port = Number(options.port || process.env.SMITLINE_DAEMON_PORT || 8765);
   const origin = `http://${host}:${port}`;
   const fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis);
   // Managed: the container owns the daemon, so it is never started from here.
@@ -336,7 +336,7 @@ export function createLoopbackTransport(options = {}) {
   };
 }
 
-export class Colleague {
+export class Smitline {
   constructor(options = {}) {
     this._transport = options.transport || createLoopbackTransport(options);
   }
@@ -436,4 +436,7 @@ export class Colleague {
   }
 }
 
-export default Colleague;
+export default Smitline;
+
+// Names from before the product was called Smitline.
+export { Smitline as Colleague, SmitlineError as ColleagueError };

@@ -59,8 +59,8 @@ class SipConfigTests(unittest.TestCase):
 
     def test_sip_uri_carries_correlation_headers(self):
         self.assertEqual(openai_sip_uri('proj_1'), 'sip:proj_1@sip.api.openai.com;transport=tls')
-        self.assertEqual(openai_sip_uri('proj_1', {'X-Colleague-Call': 'call-0123456789abcdef'}),
-                         'sip:proj_1@sip.api.openai.com;transport=tls?X-Colleague-Call=call-0123456789abcdef')
+        self.assertEqual(openai_sip_uri('proj_1', {'X-Smitline-Call': 'call-0123456789abcdef'}),
+                         'sip:proj_1@sip.api.openai.com;transport=tls?X-Smitline-Call=call-0123456789abcdef')
 
 
 class WebhookTests(unittest.TestCase):
@@ -87,9 +87,9 @@ class WebhookTests(unittest.TestCase):
         event = {'type': 'live.transport.incoming', 'data': {
             'type': 'sip', 'session_id': 'live_u0_abc',
             'sip_headers': [{'name': 'From', 'value': 'sip:+1415@x'},
-                            {'name': 'X-Colleague-Call', 'value': 'call-0123456789abcdef'}]}}
+                            {'name': 'X-Smitline-Call', 'value': 'call-0123456789abcdef'}]}}
         self.assertEqual(incoming_call(event),
-                         ('live_u0_abc', {'From': 'sip:+1415@x', 'X-Colleague-Call': 'call-0123456789abcdef'}))
+                         ('live_u0_abc', {'From': 'sip:+1415@x', 'X-Smitline-Call': 'call-0123456789abcdef'}))
         legacy = {'type': 'live.call.incoming', 'data': {'session_id': 'live_2'}}
         self.assertEqual(incoming_call(legacy), ('live_2', {}))
         self.assertIsNone(incoming_call({'type': 'realtime.call.incoming', 'data': {'call_id': 'rtc_1'}}))

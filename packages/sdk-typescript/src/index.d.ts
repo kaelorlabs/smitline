@@ -2,18 +2,18 @@
 export const SCHEMA_VERSION = 1;
 export const SDK_VERSION: string;
 
-export class ColleagueError extends Error {
+export class SmitlineError extends Error {
   code: string;
   status?: number;
   archivePath?: string;
   /** Extra fields from the daemon's error, such as `missing` questions for an incomplete brief. */
   details?: Record<string, unknown>;
 }
-export class ValidationError extends ColleagueError {}
-export class StartupError extends ColleagueError {}
-export class RuntimeError extends ColleagueError {}
-export class FinalizationError extends ColleagueError {}
-export class InterruptError extends ColleagueError {}
+export class ValidationError extends SmitlineError {}
+export class StartupError extends SmitlineError {}
+export class RuntimeError extends SmitlineError {}
+export class FinalizationError extends SmitlineError {}
+export class InterruptError extends SmitlineError {}
 
 export function redact(value: unknown): string;
 
@@ -192,20 +192,20 @@ export interface DaemonTransport {
   listVoices(): Promise<{ default: string; voices: string[] }>;
 }
 
-export interface ColleagueOptions {
+export interface SmitlineOptions {
   transport?: DaemonTransport;
-  /** Data root holding .env and .colleague/daemon.auth; defaults to COLLEAGUE_ROOT, then the working directory. */
+  /** Data root holding .env and .smitline/daemon.auth; defaults to SMITLINE_ROOT, then the working directory. */
   root?: string;
   /** Where start-runtime-daemon.sh lives, when it differs from root. */
   codeRoot?: string;
-  /** True in the Smitline container (COLLEAGUE_MANAGED=1): the daemon is never started from here. */
+  /** True in the Smitline container (SMITLINE_MANAGED=1): the daemon is never started from here. */
   managed?: boolean;
   host?: string;
   port?: number;
 }
 
-export class Colleague {
-  constructor(options?: ColleagueOptions);
+export class Smitline {
+  constructor(options?: SmitlineOptions);
   checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
   /** Place a phone call or join a meeting; returns the queued call at once. */
   startCall(brief: CallBrief): Promise<Call>;
@@ -245,7 +245,7 @@ export function createLoopbackTransport(options?: {
 }): DaemonTransport;
 
 export const MANAGED_NOT_RUNNING: string;
-/** True when COLLEAGUE_MANAGED=1: the Smitline container runs the daemon. */
+/** True when SMITLINE_MANAGED=1: the Smitline container runs the daemon. */
 export function isManaged(env?: Record<string, string | undefined>): boolean;
 
 export const EXIT: {
@@ -258,4 +258,7 @@ export const EXIT: {
   readonly interrupt: 130;
 };
 
-export default Colleague;
+export default Smitline;
+
+/** Names from before the product was called Smitline. */
+export { Smitline as Colleague, SmitlineError as ColleagueError, SmitlineOptions as ColleagueOptions };

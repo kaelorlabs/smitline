@@ -126,7 +126,7 @@ If a call on a trial fails right away, the number is probably not verified: veri
 
 - **Twilio, upgraded account.** Twilio's free trial blocks live audio streaming, so it cannot carry a Smitline call; the status says so. With funds added, enter the Account SID, Auth Token, and a Twilio number on the page.
 
-If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `COLLEAGUE_PHONE_PROVIDER=signalwire`.
+If the account has one number, the status suggests it and you set it. If it has several, ask which one. When both providers are set up, Twilio is used unless `SMITLINE_PHONE_PROVIDER=signalwire`.
 
 ### Optional: direct audio
 
@@ -204,7 +204,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `do
 | `docker run` in Git Bash fails on the socket path | Put `MSYS_NO_PATHCONV=1 ` in front, or write `-v //var/run/docker.sock:/var/run/docker.sock` |
 | `Smitline is not running` | `docker restart smitline`; `docker logs smitline` shows why it stopped |
 | The OpenAI key "cannot use gpt-live-1" | Add billing at platform.openai.com; GPT-Live needs a paid API tier |
-| `The phone provider can reach this computer` fails | Check the network; the container opens a Cloudflare quick tunnel on the first call. On a server set `COLLEAGUE_PUBLIC_URL` |
+| `The phone provider can reach this computer` fails | Check the network; the container opens a Cloudflare quick tunnel on the first call. On a server set `SMITLINE_PUBLIC_URL` |
 | A call fails with "trial accounts have limited parameter access" | That is a Twilio trial; use SignalWire's free trial, or upgrade the Twilio account |
 | A SignalWire call is refused or fails at once | A trial calls only verified numbers: verify the number in SignalWire (Phone Numbers > Verified Caller IDs), or add $5 of credit to call anyone |
 | The agent does not show the call tools | Run step 7 again and restart the agent app |

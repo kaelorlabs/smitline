@@ -12,7 +12,7 @@ The steps below use the console. When an agent starts the meeting, steps 1 and 2
 4. Start Smitline. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.
 5. Admit the participant. It connects computer audio and starts listening continuously.
 6. The adapter opens the platform microphone once and keeps the audio connection stable. The virtual microphone transmits silence while Smitline listens and immediately transports speech when GPT-Live chooses to respond.
-7. Once its microphone is open, Smitline says one short AI disclosure naming the person it acts for, then listens. Turn this off with `docker exec smitline smitline setup set COLLEAGUE_MEETING_INTRO 0` (from a checkout: `smitline setup set ...`). `COLLEAGUE_VOICE` picks the GPT-Live voice.
+7. Once its microphone is open, Smitline says one short AI disclosure naming the person it acts for, then listens. Turn this off with `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 0` (from a checkout: `smitline setup set ...`). `SMITLINE_VOICE` picks the GPT-Live voice.
 8. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
 9. A host or participant mute is authoritative; Smitline does not reopen the platform microphone on its own. In Zoom it accepts the host's explicit "Ask to unmute" request.
 10. Stop Smitline to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
@@ -21,7 +21,7 @@ A connected profile marker means a signed-in account menu was seen. Google or Mi
 
 ## Voice context and usage
 
-The runtime keeps **one continuous `gpt-live-1` session** from admission to shutdown, preserving the original audio conversation within the model's context limits. Its live instructions default to silence and permit a response only for a direct address, an explicit question or task, or an important factual correction that can be established. Questions that need careful reasoning or precise facts go to a backend model through Responses delegation (`COLLEAGUE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `COLLEAGUE_MEETING_WEB_SEARCH=1` adds OpenAI web search). The backend gets the meeting context and guidance.
+The runtime keeps **one continuous `gpt-live-1` session** from admission to shutdown, preserving the original audio conversation within the model's context limits. Its live instructions default to silence and permit a response only for a direct address, an explicit question or task, or an important factual correction that can be established. Questions that need careful reasoning or precise facts go to a backend model through Responses delegation (`SMITLINE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `SMITLINE_MEETING_WEB_SEARCH=1` adds OpenAI web search). The backend gets the meeting context and guidance.
 
 **Quiet participation is not zero API usage.** Live has no Realtime `create_response: false` control. Prompted selectivity reduces unnecessary responses but does not guarantee that the service never generates one. A backend answer already requested can arrive after the conversation has moved on.
 

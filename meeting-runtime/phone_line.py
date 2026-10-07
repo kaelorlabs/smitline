@@ -449,7 +449,7 @@ class PhoneSession:
                       'pauses': 0, 'backchannels': 0, 'stopDelaysMs': []}
         self.detector = SpeechDetector()
         self._hello_heard = asyncio.Event()  # they finished their first words (heard locally)
-        self._trace = None  # COLLEAGUE_AUDIO_TRACE=1: timing of audio events, for diagnosis
+        self._trace = None  # SMITLINE_AUDIO_TRACE=1: timing of audio events, for diagnosis
         self._trace_start = None
         self._barge = None  # 'paused' while deciding, 'dropped' after an interruption
         self._dropped_at = None
@@ -476,7 +476,7 @@ class PhoneSession:
         session = self.brief.session_context
         owner = self.brief.on_behalf_of
         notes = voice_notes(profile, contact, session, owner)
-        self.backend_model = env.get('COLLEAGUE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
+        self.backend_model = env.get('SMITLINE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
         return session_config(
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording, contact=contact,
@@ -486,7 +486,7 @@ class PhoneSession:
             voice=self.brief.voice or default_voice(env),
             delegation=delegation_config(
                 self.brief, model=self.backend_model,
-                web_search=env.get('COLLEAGUE_PHONE_WEB_SEARCH') == '1', inbound=self.inbound,
+                web_search=env.get('SMITLINE_PHONE_WEB_SEARCH') == '1', inbound=self.inbound,
                 background=backend_background(profile, contact, session, owner)),
             seed_input=voice_input(notes),
         )
@@ -533,7 +533,7 @@ class PhoneSession:
         self.last_activity = self.started_at
         self.connected.set()
         self.ctx.set_status('in_progress')
-        if self.line.environ().get('COLLEAGUE_AUDIO_TRACE') == '1':
+        if self.line.environ().get('SMITLINE_AUDIO_TRACE') == '1':
             self._trace, self._trace_start = [], time.monotonic()
         # The provider's clock paces the assistant's speech: this computer's may run fast or slow.
         self.provider_clock = ProviderClock()
@@ -989,7 +989,7 @@ class PhoneSession:
 
     async def transfer(self):
         if not self.owner_phone:
-            raise NotReady('Set COLLEAGUE_OWNER_PHONE to transfer calls to your phone.')
+            raise NotReady('Set SMITLINE_OWNER_PHONE to transfer calls to your phone.')
         if self._pending_hangup is not None:
             self._pending_hangup.cancel()
             self._pending_hangup = None
@@ -1197,21 +1197,21 @@ class PhoneLine:
         mode = hooks.credentials(owner, 'sip')['mode']
         if brief.record and mode != 'relay':
             raise CallRefused('recording_unavailable', 'Recording a call needs '
-                              'COLLEAGUE_PHONE_AUDIO=relay; calls over direct SIP cannot be '
+                              'SMITLINE_PHONE_AUDIO=relay; calls over direct SIP cannot be '
                               'recorded yet.')
         if mode == 'sip':
             return  # OpenAI dials out: nothing on this computer has to be reachable
         if not self.gateway_ready:
             raise CallRefused('gateway_unavailable', 'The phone gateway could not start; see the '
-                              'daemon log. Set COLLEAGUE_GATEWAY_PORT to a free port.')
+                              'daemon log. Set SMITLINE_GATEWAY_PORT to a free port.')
         if self._public_available is not None and not self._public_available():
             raise CallRefused('no_public_url', 'Twilio cannot reach this computer. Set '
-                              'COLLEAGUE_PUBLIC_URL, or install cloudflared or Docker for a '
+                              'SMITLINE_PUBLIC_URL, or install cloudflared or Docker for a '
                               'quick tunnel.')
 
     def _recording(self, brief):
-        """Record this call: the brief asked for it, or COLLEAGUE_RECORD_CALLS=1 records every call."""
-        return bool(brief.record) or self.environ().get('COLLEAGUE_RECORD_CALLS') == '1'
+        """Record this call: the brief asked for it, or SMITLINE_RECORD_CALLS=1 records every call."""
+        return bool(brief.record) or self.environ().get('SMITLINE_RECORD_CALLS') == '1'
 
     async def recording_audio(self, credentials, record, fmt):
         """The call's recording from the provider, as (bytes, content type).
@@ -1259,8 +1259,8 @@ class PhoneLine:
         return SipPhoneSession(
             self, ctx, api_key=openai['apiKey'], client=self.sip_client_factory(openai['apiKey']),
             twilio=self.twilio_factory(phone) if bridged else None,
-            from_number=env.get('COLLEAGUE_CALLER_ID') or phone['fromNumber'],
-            owner_phone=env.get('COLLEAGUE_OWNER_PHONE'), bridged=bridged)
+            from_number=env.get('SMITLINE_CALLER_ID') or phone['fromNumber'],
+            owner_phone=env.get('SMITLINE_OWNER_PHONE'), bridged=bridged)
 
     async def _start_sip(self, ctx):
         """OpenAI dials out through the provider's SIP trunk; audio never touches this computer."""
@@ -1304,8 +1304,8 @@ class PhoneLine:
             base = (await self._public_url()).rstrip('/')
             if session.canceled:
                 return await self._finish(ctx, session)
-            uri = openai_sip_uri(sip['projectId'], {'X-Colleague-Call': ctx.call_id,
-                                                    'X-Colleague-Token': session.token})
+            uri = openai_sip_uri(sip['projectId'], {'X-Smitline-Call': ctx.call_id,
+                                                    'X-Smitline-Token': session.token})
             created = await session.twilio.create_call(
                 to=ctx.brief.to, from_=session.from_number, twiml=sip_dial_twiml(uri),
                 status_callback=f'{base}/twilio/status/{ctx.call_id}', timeout=RING_SECONDS,
@@ -1334,10 +1334,10 @@ class PhoneLine:
 
     def on_sip_incoming(self, session_id, headers):
         """OpenAI announced a call handed over by the provider; True if it is ours to accept."""
-        session = self.sessions.get(headers.get('X-Colleague-Call') or '')
+        session = self.sessions.get(headers.get('X-Smitline-Call') or '')
         if not isinstance(session, SipPhoneSession) or not session.bridged:
             return False
-        if not secrets.compare_digest(session.token, headers.get('X-Colleague-Token') or ''):
+        if not secrets.compare_digest(session.token, headers.get('X-Smitline-Token') or ''):
             return False
         if session.incoming.done():
             return True  # a retried webhook for a call already claimed
@@ -1350,9 +1350,9 @@ class PhoneLine:
         twilio = self.twilio_factory(twilio_creds)
         session = PhoneSession(
             self, ctx, api_key=openai['apiKey'], twilio=twilio,
-            from_number=env.get('COLLEAGUE_CALLER_ID') or twilio_creds['fromNumber'],
+            from_number=env.get('SMITLINE_CALLER_ID') or twilio_creds['fromNumber'],
             token=secrets.token_urlsafe(24), recording=self._recording(ctx.brief),
-            owner_phone=env.get('COLLEAGUE_OWNER_PHONE'))
+            owner_phone=env.get('SMITLINE_OWNER_PHONE'))
         self.sessions[ctx.call_id] = session
         try:
             ctx.set_status('connecting')
@@ -1360,9 +1360,9 @@ class PhoneLine:
             if session.canceled:
                 return await self._finish(ctx, session)
             stream_url = 'wss://' + base.split('://', 1)[1] + '/twilio/media'
-            # COLLEAGUE_STREAM_REALTIME=1 lets SignalWire's player smooth packet delays and bursts.
+            # SMITLINE_STREAM_REALTIME=1 lets SignalWire's player smooth packet delays and bursts.
             realtime = (getattr(twilio, 'flavor', 'twilio') == 'signalwire'
-                        and self.environ().get('COLLEAGUE_STREAM_REALTIME') == '1')
+                        and self.environ().get('SMITLINE_STREAM_REALTIME') == '1')
             twiml = stream_twiml(stream_url, {'callId': ctx.call_id, 'token': session.token},
                                  realtime=realtime)
             created = await twilio.create_call(
@@ -1470,7 +1470,7 @@ class PhoneLine:
             from_number=twilio_creds.get('twilioNumber') or twilio_creds['fromNumber'],
             token=token, inbound=True,
             # Incoming calls are not recorded, so the greeting must not say they are.
-            recording=False, owner_phone=env.get('COLLEAGUE_OWNER_PHONE'))
+            recording=False, owner_phone=env.get('SMITLINE_OWNER_PHONE'))
         session.call_sid = call_sid
         self.sessions[ctx.call_id] = session
         try:
@@ -1579,19 +1579,19 @@ def inbound_brief(environ, caller):
     try:
         to = normalize_phone(caller or '')
     except ValueError:
-        to = environ.get('TWILIO_FROM_NUMBER') or environ.get('COLLEAGUE_CALLER_ID') or '+10000000000'
+        to = environ.get('TWILIO_FROM_NUMBER') or environ.get('SMITLINE_CALLER_ID') or '+10000000000'
         context = 'The caller withheld their number. Ask for a callback number.'
     notify = None
     try:
-        if environ.get('COLLEAGUE_NOTIFY_WEBHOOK'):
-            notify = {'webhookUrl': validate_webhook_url(environ['COLLEAGUE_NOTIFY_WEBHOOK'])}
+        if environ.get('SMITLINE_NOTIFY_WEBHOOK'):
+            notify = {'webhookUrl': validate_webhook_url(environ['SMITLINE_NOTIFY_WEBHOOK'])}
     except ValueError as error:
-        print(f'COLLEAGUE_NOTIFY_WEBHOOK is ignored: {error}', flush=True)
+        print(f'SMITLINE_NOTIFY_WEBHOOK is ignored: {error}', flush=True)
         notify = None
     payload = {
         'channel': 'phone',
         'to': to,
-        'onBehalfOf': environ.get('COLLEAGUE_OWNER_NAME') or 'the owner',
+        'onBehalfOf': environ.get('SMITLINE_OWNER_NAME') or 'the owner',
         'objective': 'Answer an incoming call and take a clear message with a callback number.',
     }
     if context:

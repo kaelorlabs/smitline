@@ -65,7 +65,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_profiles_are_saved_privately(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / '.colleague' / 'profile.json'
+            path = Path(temp) / '.smitline' / 'profile.json'
             self.assertEqual(load_profile(path), {'version': 1})
             save_profile(path, PROFILE)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -136,7 +136,7 @@ class ProfileApiTests(unittest.IsolatedAsyncioTestCase):
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
         self.auth = {'Authorization': 'Bearer launch-token'}
-        self.path = root / '.colleague' / 'profile.json'
+        self.path = root / '.smitline' / 'profile.json'
 
     async def asyncTearDown(self):
         await self.client.close()

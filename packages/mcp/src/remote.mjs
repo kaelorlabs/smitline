@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import '../../cli/src/adopt-old-settings.mjs';
 // Remote connector: MCP Streamable HTTP with OAuth 2.1 sign-in, so cloud agents
 // can place calls through this server. Only the call tools are exposed. The
 // daemon stays on loopback; tools reach it through the TypeScript SDK.
@@ -6,7 +7,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Colleague, redact } from '../../sdk-typescript/src/index.mjs';
+import { Smitline, redact } from '../../sdk-typescript/src/index.mjs';
 import { CONNECTOR_PASSPHRASE_MIN, PAGE_STYLE, connectorOrigin, escapeHtml, readEnv } from '../../cli/src/setup.mjs';
 import { createMcpSession } from './session.mjs';
 import { openConnectorStore, sha256 } from './connector-store.mjs';
@@ -68,32 +69,32 @@ export function loadConnectorConfig({ root = DEFAULT_ROOT, env = process.env } =
   };
   const problems = [];
   let baseUrl = '';
-  if (!value('COLLEAGUE_CONNECTOR_URL')) {
-    problems.push('COLLEAGUE_CONNECTOR_URL is not set. Set it to the public https address of this server: smitline setup set COLLEAGUE_CONNECTOR_URL https://smitline.example.com');
+  if (!value('SMITLINE_CONNECTOR_URL')) {
+    problems.push('SMITLINE_CONNECTOR_URL is not set. Set it to the public https address of this server: smitline setup set SMITLINE_CONNECTOR_URL https://smitline.example.com');
   } else {
     try {
-      baseUrl = connectorOrigin(value('COLLEAGUE_CONNECTOR_URL'), { allowLoopback: true });
+      baseUrl = connectorOrigin(value('SMITLINE_CONNECTOR_URL'), { allowLoopback: true });
     } catch (error) {
       problems.push(error.message);
     }
   }
-  const passphrase = value('COLLEAGUE_CONNECTOR_PASSPHRASE');
+  const passphrase = value('SMITLINE_CONNECTOR_PASSPHRASE');
   if (!passphrase) {
-    problems.push('COLLEAGUE_CONNECTOR_PASSPHRASE is not set. Run smitline setup secrets and choose an owner passphrase under "Remote connector (server mode)".');
+    problems.push('SMITLINE_CONNECTOR_PASSPHRASE is not set. Run smitline setup secrets and choose an owner passphrase under "Remote connector (server mode)".');
   } else if (passphrase.length < CONNECTOR_PASSPHRASE_MIN) {
-    problems.push(`COLLEAGUE_CONNECTOR_PASSPHRASE must be at least ${CONNECTOR_PASSPHRASE_MIN} characters.`);
+    problems.push(`SMITLINE_CONNECTOR_PASSPHRASE must be at least ${CONNECTOR_PASSPHRASE_MIN} characters.`);
   }
-  const port = Number(value('COLLEAGUE_CONNECTOR_PORT') || DEFAULT_CONNECTOR_PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('COLLEAGUE_CONNECTOR_PORT must be a port number.');
+  const port = Number(value('SMITLINE_CONNECTOR_PORT') || DEFAULT_CONNECTOR_PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('SMITLINE_CONNECTOR_PORT must be a port number.');
   const allowedOrigins = [];
-  for (const item of value('COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS').split(',').map((entry) => entry.trim()).filter(Boolean)) {
+  for (const item of value('SMITLINE_CONNECTOR_ALLOWED_ORIGINS').split(',').map((entry) => entry.trim()).filter(Boolean)) {
     let origin = 'null';
     try { origin = new URL(item).origin; } catch { /* reported below */ }
-    if (origin === 'null') problems.push(`COLLEAGUE_CONNECTOR_ALLOWED_ORIGINS has an invalid origin: ${item}`);
+    if (origin === 'null') problems.push(`SMITLINE_CONNECTOR_ALLOWED_ORIGINS has an invalid origin: ${item}`);
     else allowedOrigins.push(origin);
   }
   if (problems.length) throw Object.assign(new Error(problems.join('\n')), { code: 'config' });
-  return { root, baseUrl, passphrase, port, allowedOrigins, daemonPort: value('COLLEAGUE_DAEMON_PORT') || undefined };
+  return { root, baseUrl, passphrase, port, allowedOrigins, daemonPort: value('SMITLINE_DAEMON_PORT') || undefined };
 }
 
 // Helpers -------------------------------------------------------------------------
@@ -245,7 +246,7 @@ export function createConnector({
     throw new Error(`the owner passphrase must be at least ${CONNECTOR_PASSPHRASE_MIN} characters`);
   }
   const store = openConnectorStore(root, { now });
-  const calls = colleague || new Colleague({ root, codeRoot: DEFAULT_ROOT, host: '127.0.0.1', port: daemonPort || process.env.COLLEAGUE_DAEMON_PORT });
+  const calls = colleague || new Smitline({ root, codeRoot: DEFAULT_ROOT, host: '127.0.0.1', port: daemonPort || process.env.SMITLINE_DAEMON_PORT });
   const passphraseDigest = crypto.createHash('sha256').update(passphrase).digest();
   const formKey = crypto.randomBytes(32);
   const allowed = new Set(allowedOrigins);
@@ -670,7 +671,7 @@ export function startConnector(options = {}) {
 async function main() {
   let config;
   try {
-    config = loadConnectorConfig({ root: path.resolve(process.env.COLLEAGUE_ROOT || DEFAULT_ROOT) });
+    config = loadConnectorConfig({ root: path.resolve(process.env.SMITLINE_ROOT || DEFAULT_ROOT) });
   } catch (error) {
     process.stderr.write(`Smitline connector cannot start.\n${error.message}\nSee docs/agents.md, "Remote connector for cloud agents".\n`);
     process.exit(1);
