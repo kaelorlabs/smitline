@@ -1,12 +1,13 @@
 # MCP directories
 
-Smitline is listed as `io.github.kaelorlabs/smitline` so agents and developers can find it. The listing describes the self-hosted Docker image: the `smitline` container serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp` with a bearer token (`docker exec smitline smitline setup register --json` prints it). Nothing is hosted for you; your keys stay in your container.
+Smitline is listed so agents and developers can find it. Every listing describes the self-hosted Docker image: the `smitline` container serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp` with a bearer token (`docker exec smitline smitline setup register --json` prints it). Nothing is hosted for you; your keys stay in your container.
 
-| Directory | Listed from | Notes |
+| Directory | Listing | How it gets there |
 | --- | --- | --- |
-| [Official MCP Registry](https://registry.modelcontextprotocol.io) | `server.json` (OCI package `ghcr.io/kaelorlabs/smitline`) | PulseMCP and GitHub's MCP registry pick entries up from here. |
-| [Glama](https://glama.ai/mcp/servers) | The GitHub repository; `glama.json` names the maintainers | Glama's search also needs its build check to pass. |
-| [Smithery](https://smithery.ai) | The MCP bundle `smitline.mcpb` ([packages/mcpb](../packages/mcpb)) | Smithery lists local servers only as bundles. The bundle relays to the `smitline` container and asks for its token. |
+| [Official MCP Registry](https://registry.modelcontextprotocol.io) | [`io.github.kaelorlabs/smitline`](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) | `server.json` (OCI package `ghcr.io/kaelorlabs/smitline`), published by GitHub Actions on every release. |
+| [Smithery](https://smithery.ai/servers/kaelorlabs/smitline) | [`kaelorlabs/smitline`](https://smithery.ai/servers/kaelorlabs/smitline) | The MCP bundle `smitline-smithery.mcpb` ([packages/mcpb](../packages/mcpb)). Smithery lists local servers only as bundles; the bundle relays to the `smitline` container and asks for its token. |
+| PulseMCP, GitHub's MCP registry | Mirrored from the official registry | Nothing to do: they read the official registry. |
+| [Glama](https://glama.ai/mcp/servers) | Submitted, awaiting review | The GitHub repository; `glama.json` names the maintainers. Glama's search also needs its build check to pass. |
 
 ## Publishing a release to the official registry (maintainers)
 
