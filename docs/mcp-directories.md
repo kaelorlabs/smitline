@@ -10,19 +10,9 @@ Smitline is listed as `io.github.kaelorlabs/smitline` so agents and developers c
 
 ## Publishing a release to the official registry (maintainers)
 
-The registry checks that the image carries the label `io.modelcontextprotocol.server.name="io.github.kaelorlabs/smitline"` (set in the `Dockerfile`), so only images built after that label was added can be listed.
+The registry checks that the image carries the label `io.modelcontextprotocol.server.name="io.github.kaelorlabs/smitline"` (set in the `Dockerfile`).
 
-1. Push the release tag (for example `v0.2.0`) and wait for the image workflow to publish `ghcr.io/kaelorlabs/smitline:0.2.0`.
-2. Set `version` and the image tag in `server.json` to that version (both are `0.2.0` now).
-3. Install [`mcp-publisher`](https://github.com/modelcontextprotocol/registry/releases), then from the repository root:
-
-   ```bash
-   mcp-publisher validate
-   mcp-publisher login github
-   mcp-publisher publish
-   ```
-
-   `login github` opens GitHub's device sign-in. Publishing under `io.github.kaelorlabs/` needs an owner of the kaelorlabs organization. A new version is a new `publish`; earlier versions stay listed.
+Publishing is automatic: after a version tag's images are published, `.github/workflows/mcp-registry.yml` signs in with the workflow's GitHub OIDC token, which the registry accepts for `io.github.kaelorlabs/*`, and publishes `server.json`. Nobody signs in and no secret is stored. The release PR sets `version` and the image tag in `server.json` to the new version; the workflow stops if they don't match the tag. To publish again by hand, run the **MCP Registry** workflow from the Actions tab.
 
 ## Publishing the bundle to Smithery (maintainers)
 
