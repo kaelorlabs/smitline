@@ -29,9 +29,9 @@ The registry checks that the image carries the label `io.modelcontextprotocol.se
 ```bash
 node packages/mcpb/build.mjs
 npx -y smithery@latest auth login
-npx -y smithery@latest mcp publish packages/mcpb/dist/smitline.mcpb -n kaelorlabs/smitline
+npx -y smithery@latest mcp publish packages/mcpb/dist/smitline-smithery.mcpb -n kaelorlabs/smitline
 ```
 
-`auth login` opens Smithery's sign-in. Publish again after a release so the bundle carries the new version and tool list.
+`auth login` prints a sign-in link that works on any device. Smithery lists a bundle's tools from its manifest without running it, so it gets `smitline-smithery.mcpb`, which adds each tool's input schema (the standard MCPB manifest allows only names and descriptions). Publish again after a release so the bundle carries the new version and tool list.
 
 For Glama's build check, the image answers MCP over stdio with `docker run -i --rm ghcr.io/kaelorlabs/smitline mcp`, and lists its tools without any keys.
