@@ -4,7 +4,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "colleague-ai"
+name = "smitline"
 version = "0.1.1"
 description = "Local Smitline SDK for phone calls and Zoom, Teams, and Google Meet meetings through the runtime daemon."
 readme = "README.md"
@@ -18,4 +18,4 @@ Repository = "https://github.com/kaelorlabs/smitline"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["colleague_ai*"]
+include = ["smitline*"]

@@ -8,7 +8,7 @@ Any agent can ask Smitline to phone someone or join a meeting: it sends a [brief
 | Claude Desktop | Local MCP over stdio | `docker exec -i smitline smitline mcp`, from the same output |
 | OpenClaw, Hermes, other MCP clients | Local MCP over HTTP | The URL and `Authorization` header from the same output |
 | Agents that run shell commands | CLI | `docker exec smitline smitline call ... --wait` |
-| Your own code | REST API or SDKs | `/v1/calls`, `@colleague-ai/sdk`, `colleague_ai` |
+| Your own code | REST API or SDKs | `/v1/calls`, `smitline-sdk`, `smitline` (Python) |
 | ChatGPT, Claude on the web, other cloud agents | Remote connector | Server mode, below |
 
 The easiest path is to paste the setup prompt from the README into the agent; it follows [SETUP.md](../SETUP.md) and does the registration for you.
@@ -73,7 +73,7 @@ console.log(done.result.summary);
 ```
 
 ```python
-from colleague_ai import Colleague
+from smitline import Colleague
 colleague = Colleague(root='/path/to/smitline')
 call = await colleague.start_call({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Sam Rivera', 'objective': 'Book a table for 4 at 7pm'})
 done = await colleague.wait_for_call(call['id'], 120)
@@ -90,7 +90,7 @@ const colleague = new Colleague({ readAuth, autostart: false });
 
 ```python
 import subprocess
-from colleague_ai import Colleague
+from smitline import Colleague
 
 def read_auth():
     return subprocess.run(['docker', 'exec', '-u', 'app', 'smitline', 'cat', '/data/.colleague/daemon.auth'],
