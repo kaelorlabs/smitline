@@ -104,7 +104,7 @@ def host_user_env(environ=None):
     """
     env = os.environ if environ is None else environ
     ids = {}
-    for key, lookup in (('COLLEAGUE_UID', 'getuid'), ('COLLEAGUE_GID', 'getgid')):
+    for key, lookup in (('SMITLINE_UID', 'getuid'), ('SMITLINE_GID', 'getgid')):
         value = str(env.get(key) or '').strip()
         if not value and hasattr(os, lookup):
             value = str(getattr(os, lookup)())
@@ -116,11 +116,11 @@ def host_user_env(environ=None):
 def compose_command(environ=None):
     """The docker compose command for the meeting container, and how `up` gets its image.
 
-    The published image sets COLLEAGUE_MEETING_IMAGE: the meeting image is pulled and uses the
+    The published image sets SMITLINE_MEETING_IMAGE: the meeting image is pulled and uses the
     shared data volume. From a checkout it is built, with the code mounted.
     """
     env = os.environ if environ is None else environ
-    if str(env.get('COLLEAGUE_MEETING_IMAGE') or '').strip():
+    if str(env.get('SMITLINE_MEETING_IMAGE') or '').strip():
         return ['docker', 'compose', '-f', str(CODE_ROOT / IMAGE_COMPOSE_FILE)], ['--pull', 'missing']
     return ['docker', 'compose', '-f', COMPOSE_FILE], ['--build']
 
@@ -216,9 +216,9 @@ class ProductionMeetingSupervisor:
     def _container_env(self, session):
         state_path = meeting_state_path(self.runtime_root, session.id)
         return {
-            'COLLEAGUE_RUNTIME_STATE': '/meeting-runtime/run/meetings/' + session.id + '/runtime.json',
+            'SMITLINE_RUNTIME_STATE': '/meeting-runtime/run/meetings/' + session.id + '/runtime.json',
             'MEETING_URL': session.meeting_url,
-            'COLLEAGUE_HOST_RUNTIME_STATE': str(state_path),
+            'SMITLINE_HOST_RUNTIME_STATE': str(state_path),
         }
 
     def _prepare_mounts(self):

@@ -15,7 +15,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, {
       ...options,
-      headers: { 'X-Colleague-Token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'X-Smitline-Token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
     });
   } catch {
     throw Object.assign(new Error('The console is not responding.'), { code: 'console_offline' });

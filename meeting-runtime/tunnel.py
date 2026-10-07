@@ -1,7 +1,7 @@
 """A public HTTPS address for Twilio: configured, or a Cloudflare quick tunnel.
 
 Twilio must reach the phone gateway to deliver audio and call status. Server
-installs set COLLEAGUE_PUBLIC_URL behind their own TLS proxy. Laptop installs
+installs set SMITLINE_PUBLIC_URL behind their own TLS proxy. Laptop installs
 get a temporary trycloudflare.com address from `cloudflared`, run from the
 binary when installed or from the official Docker image otherwise. Only the
 phone gateway is exposed; the daemon API stays on loopback.
@@ -125,12 +125,12 @@ async def reachable(url, timeout, problems=None):
 
 
 def configured_url(environ):
-    value = (environ.get('COLLEAGUE_PUBLIC_URL') or '').strip().rstrip('/')
+    value = (environ.get('SMITLINE_PUBLIC_URL') or '').strip().rstrip('/')
     if not value:
         return None
     url = urlsplit(value)
     if url.scheme != 'https' or not url.hostname or url.path not in ('', '/'):
-        raise TunnelError('COLLEAGUE_PUBLIC_URL must be an https origin such as https://calls.example.com')
+        raise TunnelError('SMITLINE_PUBLIC_URL must be an https origin such as https://calls.example.com')
     return value
 
 
@@ -155,11 +155,11 @@ class PublicUrl:
     def command(self):
         env = self._environ()
         target = f'http://127.0.0.1:{self.local_port}'
-        binary = env.get('COLLEAGUE_CLOUDFLARED') or self._which('cloudflared')
+        binary = env.get('SMITLINE_CLOUDFLARED') or self._which('cloudflared')
         if binary:
             return [binary, 'tunnel', '--no-autoupdate', '--url', target]
         if self._which('docker'):
-            image = env.get('COLLEAGUE_CLOUDFLARED_IMAGE') or DEFAULT_IMAGE
+            image = env.get('SMITLINE_CLOUDFLARED_IMAGE') or DEFAULT_IMAGE
             return ['docker', 'run', '--rm', '--network', 'host', '--name', self.container(),
                     image, 'tunnel', '--no-autoupdate', '--url', target]
         return None
@@ -214,14 +214,14 @@ class PublicUrl:
                     return url
                 self._log(f'quick tunnel attempt {attempt} failed: {problem}', flush=True)
             raise TunnelError(f'The Cloudflare quick tunnel did not become reachable ({problem}); '
-                              'check the network, or set COLLEAGUE_PUBLIC_URL.')
+                              'check the network, or set SMITLINE_PUBLIC_URL.')
 
     async def _start_locked(self):
         """Start a fresh quick tunnel: (url, None) once reachable, else (None, why not)."""
         await self._stop_locked()
         command = self.command()
         if command is None:
-            raise TunnelError('Set COLLEAGUE_PUBLIC_URL, or install cloudflared or Docker, so '
+            raise TunnelError('Set SMITLINE_PUBLIC_URL, or install cloudflared or Docker, so '
                               'Twilio can reach this computer.')
         if command[0] == 'docker':
             await self._remove_stale_container()
@@ -260,7 +260,7 @@ class PublicUrl:
             text = line.decode('utf-8', 'replace')
             if 'failed' in text.lower() and 'trycloudflare' in text and url is None:
                 raise TunnelError('cloudflared could not create a quick tunnel; check the '
-                                  'network, or set COLLEAGUE_PUBLIC_URL.')
+                                  'network, or set SMITLINE_PUBLIC_URL.')
             match = QUICK_URL.search(text)
             if match and url is None:
                 url = match.group(0)

@@ -1,5 +1,5 @@
 import {
-  Colleague,
+  Smitline,
   ValidationError,
   StartupError,
   RuntimeError,
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const MCP_SERVER_VERSION = '0.1.0';
-const DEFAULT_COLLEAGUE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const DEFAULT_SMITLINE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };
 
@@ -308,12 +308,12 @@ export function createMcpSession(options = {}) {
   const log = options.log || ((line) => {
     process.stderr.write(`${redact(line)}\n`);
   });
-  const createColleague = options.createColleague || (() => new Colleague({
-    // Data (daemon.auth) under COLLEAGUE_ROOT; the daemon launcher stays with this code.
-    root: options.root || process.env.COLLEAGUE_ROOT || DEFAULT_COLLEAGUE_ROOT,
-    codeRoot: DEFAULT_COLLEAGUE_ROOT,
+  const createColleague = options.createColleague || (() => new Smitline({
+    // Data (daemon.auth) under SMITLINE_ROOT; the daemon launcher stays with this code.
+    root: options.root || process.env.SMITLINE_ROOT || DEFAULT_SMITLINE_ROOT,
+    codeRoot: DEFAULT_SMITLINE_ROOT,
     host: '127.0.0.1',
-    port: options.port || process.env.COLLEAGUE_DAEMON_PORT,
+    port: options.port || process.env.SMITLINE_DAEMON_PORT,
   }));
   const colleague = options.colleague || createColleague();
   const protocolVersions = options.protocolVersions || null;

@@ -49,15 +49,15 @@ test('serializes only runtime settings and preserves a hidden passcode', () => {
     participantName: 'Smitline', meetingInstructions: 'Focus on release readiness.',
   });
   assert.equal(/CODEX|WORKSPACE|ENABLE_/.test(text), false);
-  assert.equal(text.includes('COLLEAGUE_CAMERA'), false);
+  assert.equal(text.includes('SMITLINE_CAMERA'), false);
   assert.equal(text.includes('avatar'), false);
 });
 
 test('reads the owner name for onBehalfOf and drops unusable values', () => {
-  assert.equal(ownerName(parseEnv('COLLEAGUE_OWNER_NAME="Sam  Rivera"\n')), 'Sam Rivera');
+  assert.equal(ownerName(parseEnv('SMITLINE_OWNER_NAME="Sam  Rivera"\n')), 'Sam Rivera');
   assert.equal(ownerName({}), '');
-  assert.equal(ownerName({ COLLEAGUE_OWNER_NAME: '   ' }), '');
-  assert.equal(ownerName({ COLLEAGUE_OWNER_NAME: 'x'.repeat(81) }), '');
+  assert.equal(ownerName({ SMITLINE_OWNER_NAME: '   ' }), '');
+  assert.equal(ownerName({ SMITLINE_OWNER_NAME: 'x'.repeat(81) }), '');
 });
 
 test('Teams invites validate while lookalike hosts and credentials fail', () => {

@@ -4,13 +4,17 @@
 # restart policy starts it again.
 set -euo pipefail
 cd /app
-mkdir -p "$COLLEAGUE_ROOT/.colleague" "$COLLEAGUE_MEETING_DATA"
-chmod 700 "$COLLEAGUE_ROOT/.colleague" "$COLLEAGUE_MEETING_DATA"
-MODE=(--host "${COLLEAGUE_DAEMON_HOST:-127.0.0.1}")
-if [[ "${COLLEAGUE_SERVER_MODE:-}" == 1 ]]; then
+# COLLEAGUE_* settings from before the rename set their SMITLINE_* names.
+for old in ${!COLLEAGUE_@}; do export "SMITLINE_${old#COLLEAGUE_}=${!old}"; done
+# Rename old .env keys and the .colleague folder in the data volume first.
+python meeting-runtime/old_names.py "$SMITLINE_ROOT"
+mkdir -p "$SMITLINE_ROOT/.smitline" "$SMITLINE_MEETING_DATA"
+chmod 700 "$SMITLINE_ROOT/.smitline" "$SMITLINE_MEETING_DATA"
+MODE=(--host "${SMITLINE_DAEMON_HOST:-127.0.0.1}")
+if [[ "${SMITLINE_SERVER_MODE:-}" == 1 ]]; then
   MODE+=(--server)
 fi
-python -u meeting-runtime/daemon_main.py --port "${COLLEAGUE_DAEMON_PORT:-8765}" "${MODE[@]}" &
+python -u meeting-runtime/daemon_main.py --port "${SMITLINE_DAEMON_PORT:-8765}" "${MODE[@]}" &
 node control-panel/server.mjs &
 wait -n
 exit $?

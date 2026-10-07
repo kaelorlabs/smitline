@@ -38,6 +38,6 @@ RUN mkdir -p /data/meetings \
 # The release version (0.1.0); the workflow sets it, local builds say dev.
 ARG VERSION=dev
 LABEL org.opencontainers.image.version=${VERSION}
-ENV COLLEAGUE_VERSION=${VERSION}
+ENV SMITLINE_VERSION=${VERSION}
 USER app
 ENTRYPOINT ["/app/.venv/bin/python", "-u", "/meeting-runtime/bridge.py"]

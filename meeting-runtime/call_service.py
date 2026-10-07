@@ -140,7 +140,7 @@ class CallService:
 
     def _default_summarizer(self, owner):
         key = self.hooks.credentials(owner, 'openai')['apiKey']
-        model = self.environ.get('COLLEAGUE_SUMMARY_MODEL') or DEFAULT_SUMMARY_MODEL
+        model = self.environ.get('SMITLINE_SUMMARY_MODEL') or DEFAULT_SUMMARY_MODEL
         return ResponsesSummarizer(key, model=model)
 
     # Events and status ---------------------------------------------------

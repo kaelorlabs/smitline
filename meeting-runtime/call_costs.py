@@ -31,7 +31,7 @@ WEB_SEARCH_PER_CALL = 0.01
 # Only until the provider reports its price: USD per started minute, US rates, plus a fee
 # per answered call. SignalWire: $0.008 outbound plus $0.003 for the audio stream a minute,
 # and $0.006 a call (answering-machine detection); real SignalWire bills match this exactly.
-# COLLEAGUE_PHONE_PRICE_PER_MINUTE replaces the estimate with one all-in rate a minute.
+# SMITLINE_PHONE_PRICE_PER_MINUTE replaces the estimate with one all-in rate a minute.
 PHONE_PER_MINUTE = {'twilio': 0.014, 'signalwire': 0.011}
 PHONE_PER_CALL = {'signalwire': 0.006}
 DEFAULT_PHONE_PER_MINUTE = 0.014
@@ -75,7 +75,7 @@ def phone_provider(record):
 
 def _phone_rate(provider, environ):
     """USD per started minute and per call for the estimate."""
-    override = (environ or {}).get('COLLEAGUE_PHONE_PRICE_PER_MINUTE')
+    override = (environ or {}).get('SMITLINE_PHONE_PRICE_PER_MINUTE')
     if override:
         try:
             return float(override), 0.0
@@ -139,10 +139,10 @@ def call_cost(record, environ=None):
     if record.get('channel') == 'phone':
         items.append(_phone_item(record, environ))
     items.append(_voice_item(usage))
-    backend_model = usage.get('backendModel') or environ.get('COLLEAGUE_PHONE_BACKEND_MODEL') \
+    backend_model = usage.get('backendModel') or environ.get('SMITLINE_PHONE_BACKEND_MODEL') \
         or DEFAULT_BACKEND_MODEL
     items.append(_model_item('backend', usage.get('backendTokens'), backend_model))
-    summary_model = usage.get('summaryModel') or environ.get('COLLEAGUE_SUMMARY_MODEL') \
+    summary_model = usage.get('summaryModel') or environ.get('SMITLINE_SUMMARY_MODEL') \
         or DEFAULT_SUMMARY_MODEL
     items.append(_model_item('summary', usage.get('summaryTokens'), summary_model))
     items = [item for item in items if item is not None]

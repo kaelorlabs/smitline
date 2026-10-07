@@ -81,7 +81,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, {
       ...options,
-      headers: { 'x-colleague-token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'x-smitline-token': state.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
     });
   } catch {
     throw Object.assign(new Error('The console is not responding.'), { code: 'console_offline' });
@@ -1056,8 +1056,8 @@ function cancelConfirm() {
 }
 
 function actionError(error) {
-  if (/COLLEAGUE_OWNER_PHONE/.test(error.message)) {
-    return 'Smitline does not have your phone number yet. Ask your agent to set it (COLLEAGUE_OWNER_PHONE), then try again.';
+  if (/SMITLINE_OWNER_PHONE/.test(error.message)) {
+    return 'Smitline does not have your phone number yet. Ask your agent to set it (SMITLINE_OWNER_PHONE), then try again.';
   }
   if (error.status === 403) return 'This page is out of date. Reload it and try again.';
   if (error.code === 'console_offline') return 'The console is not responding. Reload the page and try again.';

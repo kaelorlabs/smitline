@@ -7,15 +7,15 @@ services:
     # Run as the host user: runtime files are private (0700/0600) to that user,
     # and the host reads what the container records. start-meeting-agent.sh and
     # the runtime daemon set both values automatically.
-    user: "${COLLEAGUE_UID:-1000}:${COLLEAGUE_GID:-1000}"
+    user: "${SMITLINE_UID:-1000}:${SMITLINE_GID:-1000}"
     env_file:
       - path: .env
       - path: .env.meeting
         required: false
     environment:
       HOME: /tmp
-      COLLEAGUE_AUTH_MODE: ${COLLEAGUE_AUTH_MODE:-}
-      COLLEAGUE_RUNTIME_STATE: ${COLLEAGUE_RUNTIME_STATE:-}
+      SMITLINE_AUTH_MODE: ${SMITLINE_AUTH_MODE:-}
+      SMITLINE_RUNTIME_STATE: ${SMITLINE_RUNTIME_STATE:-}
     shm_size: "2gb"
     ports:
       - "127.0.0.1:6082:6080"

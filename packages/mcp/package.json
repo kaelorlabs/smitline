@@ -13,8 +13,7 @@
     "directory": "packages/mcp"
   },
   "bin": {
-    "smitline-mcp": "./src/server.mjs",
-    "colleague-mcp": "./src/server.mjs"
+    "smitline-mcp": "./src/server.mjs"
   },
   "main": "./src/session.mjs",
   "files": [

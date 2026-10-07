@@ -11,14 +11,14 @@ logger = logging.getLogger('colleague.meeting')
 
 
 def _voice(env):
-    """COLLEAGUE_VOICE when it names a GPT-Live voice; anything else keeps the default."""
-    name = (env.get('COLLEAGUE_VOICE') or '').strip()
+    """SMITLINE_VOICE when it names a GPT-Live voice; anything else keeps the default."""
+    name = (env.get('SMITLINE_VOICE') or '').strip()
     if not name:
         return ''
     from call_brief import available_voices
     if name in available_voices(env):
         return name
-    logger.warning('Ignoring COLLEAGUE_VOICE=%r: not a GPT-Live voice', name[:40])
+    logger.warning('Ignoring SMITLINE_VOICE=%r: not a GPT-Live voice', name[:40])
     return ''
 
 
@@ -50,24 +50,24 @@ class RuntimeConfig:
     @classmethod
     def from_environ(cls, environ=None):
         env = dict(os.environ if environ is None else environ)
-        state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+        state_path = (env.get('SMITLINE_RUNTIME_STATE') or '').strip()
         state = {}
         if state_path:
             state = read_json(state_path) or {}
             overlay = environ_from_state(state)
             env.update(overlay)
-        name = env.get('COLLEAGUE_PARTICIPANT_NAME', 'Smitline').strip()
+        name = env.get('SMITLINE_PARTICIPANT_NAME', 'Smitline').strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
-            raise ValueError('COLLEAGUE_PARTICIPANT_NAME must contain 1–80 printable characters')
+            raise ValueError('SMITLINE_PARTICIPANT_NAME must contain 1–80 printable characters')
 
         from phone_prompts import DEFAULT_BACKEND_MODEL
-        backend_model = (env.get('COLLEAGUE_MEETING_BACKEND_MODEL') or '').strip()
+        backend_model = (env.get('SMITLINE_MEETING_BACKEND_MODEL') or '').strip()
         if len(backend_model) > 128 or any(ord(char) < 33 for char in backend_model):
-            raise ValueError('COLLEAGUE_MEETING_BACKEND_MODEL must be a model name')
-        web_search = (env.get('COLLEAGUE_MEETING_WEB_SEARCH') or '').strip() == '1'
-        meeting_instructions = env.get('COLLEAGUE_MEETING_INSTRUCTIONS', '').strip()
+            raise ValueError('SMITLINE_MEETING_BACKEND_MODEL must be a model name')
+        web_search = (env.get('SMITLINE_MEETING_WEB_SEARCH') or '').strip() == '1'
+        meeting_instructions = env.get('SMITLINE_MEETING_INSTRUCTIONS', '').strip()
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
-            raise ValueError('COLLEAGUE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
+            raise ValueError('SMITLINE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
         camera_enabled = True
         camera_default_on = True
         camera_logo = ''
@@ -89,7 +89,7 @@ class RuntimeConfig:
         return cls(name, meeting_instructions,
                    camera_enabled, camera_default_on, camera_logo,
                    voice=_voice(env),
-                   meeting_intro=_boolean(env.get('COLLEAGUE_MEETING_INTRO'), True),
+                   meeting_intro=_boolean(env.get('SMITLINE_MEETING_INTRO'), True),
                    owner_name=owner_name(state, env),
                    backend_model=backend_model or DEFAULT_BACKEND_MODEL,
                    web_search=web_search)
@@ -97,7 +97,7 @@ class RuntimeConfig:
 
 def meeting_state_from_environ(environ=None):
     env = dict(os.environ if environ is None else environ)
-    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    state_path = (env.get('SMITLINE_RUNTIME_STATE') or '').strip()
     if not state_path:
         return {}
     return read_json(state_path) or {}
@@ -105,7 +105,7 @@ def meeting_state_from_environ(environ=None):
 
 def resolve_meeting_url(environ=None):
     env = dict(os.environ if environ is None else environ)
-    state_path = (env.get('COLLEAGUE_RUNTIME_STATE') or '').strip()
+    state_path = (env.get('SMITLINE_RUNTIME_STATE') or '').strip()
     if state_path:
         overlay = environ_from_state(read_json(state_path) or {})
         if overlay.get('MEETING_URL'):

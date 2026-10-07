@@ -12,7 +12,7 @@ meeting-runtime/context/
 
 meeting-runtime/profiles/
 meeting-runtime/run/
-.colleague/
+.smitline/
 
 # Python package builds (packages/sdk-python)
 *.egg-info/

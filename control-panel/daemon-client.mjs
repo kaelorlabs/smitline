@@ -64,15 +64,15 @@ function parseDaemonBody(text) {
 export function createDaemonClient(options = {}) {
   const root = options.root;
   const codeRoot = options.codeRoot || CODE_ROOT;
-  // In the container (COLLEAGUE_MANAGED=1) the container runs the daemon; never start one here.
+  // In the container (SMITLINE_MANAGED=1) the container runs the daemon; never start one here.
   const managed = options.managed ?? isManaged();
-  const host = options.host || process.env.COLLEAGUE_DAEMON_HOST || DEFAULT_DAEMON_HOST;
-  const port = Number(options.port || process.env.COLLEAGUE_DAEMON_PORT || DEFAULT_DAEMON_PORT);
-  const tokenPath = options.tokenPath || path.join(root, '.colleague', 'daemon.auth');
+  const host = options.host || process.env.SMITLINE_DAEMON_HOST || DEFAULT_DAEMON_HOST;
+  const port = Number(options.port || process.env.SMITLINE_DAEMON_PORT || DEFAULT_DAEMON_PORT);
+  const tokenPath = options.tokenPath || path.join(root, '.smitline', 'daemon.auth');
   const fetchImpl = options.fetchImpl || fetch;
   const isPortOpen = options.isPortOpen || (() => portOpen(host, port));
   const spawnDaemon = options.spawnDaemon || (() => {
-    const logDir = path.join(root, '.colleague');
+    const logDir = path.join(root, '.smitline');
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const log = fs.openSync(path.join(logDir, 'daemon.log'), 'a');
     const child = spawn('/bin/bash', [path.join(codeRoot, 'start-runtime-daemon.sh')], {
@@ -103,7 +103,7 @@ export function createDaemonClient(options = {}) {
       const token = readTokenFile(tokenPath);
       if (token) return token;
       if (exitCode !== null) {
-        throw daemonError('Runtime daemon failed to start. Check .colleague/daemon.log.');
+        throw daemonError('Runtime daemon failed to start. Check .smitline/daemon.log.');
       }
       await wait(pollMs);
     }

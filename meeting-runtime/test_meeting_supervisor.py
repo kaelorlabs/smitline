@@ -147,7 +147,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored['onBehalfOf'], 'Jordan Lee')
         self.assertEqual(stored['voice'], 'cinder')
         config = RuntimeConfig.from_environ({
-            'COLLEAGUE_RUNTIME_STATE': str(meeting_state_path(self.runtime, meeting.id))})
+            'SMITLINE_RUNTIME_STATE': str(meeting_state_path(self.runtime, meeting.id))})
         self.assertEqual(config.owner_name, 'Jordan Lee')
         self.assertEqual(config.voice, 'cinder')
         await self.supervisor.cancel(meeting.id)
@@ -157,7 +157,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         await self.supervisor.start(meeting)
         self.assertEqual(len(self.launcher.ups), 1)
         self.assertIn('/meeting-runtime/run/meetings/' + meeting.id,
-                      self.launcher.ups[0]['COLLEAGUE_RUNTIME_STATE'])
+                      self.launcher.ups[0]['SMITLINE_RUNTIME_STATE'])
         stored = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(stored['meetingId'], meeting.id)
         self.assertEqual(stored['meetingUrl'], ZOOM_URL)
@@ -306,7 +306,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token, 'daemon-test-token')
         self.assertEqual(path, daemon_token_path(self.root))
         self.assertEqual(file_mode(path), 0o600)
-        self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
+        self.assertEqual(file_mode(self.root / '.smitline'), 0o700)
         self.assertEqual(path.read_text(encoding='utf-8').strip(), 'daemon-test-token')
         self.assertFalse((self.runtime / 'run' / 'daemon.auth').exists())
         from runtime_state import write_private_json
@@ -326,8 +326,8 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         token, token_path = write_auth_token(self.root, 'host-only-daemon-token')
         meeting = session()
         await self.supervisor.start(meeting)
-        self.assertEqual(token_path, self.root / '.colleague' / 'daemon.auth')
-        self.assertTrue((self.root / '.colleague' / 'active-meeting.json').is_file())
+        self.assertEqual(token_path, self.root / '.smitline' / 'daemon.auth')
+        self.assertTrue((self.root / '.smitline' / 'active-meeting.json').is_file())
         for path in self.runtime.rglob('*'):
             self.assertNotEqual(path.name, 'daemon.auth')
             self.assertNotEqual(path.name, 'daemon-data')
@@ -337,7 +337,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
                 text = path.read_text(encoding='utf-8', errors='replace')
                 self.assertNotIn('host-only-daemon-token', text)
         self.assertTrue((self.runtime / 'run' / 'meetings' / meeting.id / 'runtime.json').is_file())
-        self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
+        self.assertEqual(file_mode(self.root / '.smitline'), 0o700)
         self.assertEqual(file_mode(token_path), 0o600)
 
     def test_daemon_entrypoint_keeps_control_state_host_only(self):
@@ -354,7 +354,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((self.runtime / 'run' / 'daemon.auth').exists())
             self.assertFalse((self.runtime / 'run' / 'daemon-data').exists())
             self.assertFalse((self.runtime / 'codex-workspace').exists())
-            self.assertEqual(file_mode(self.root / '.colleague'), 0o700)
+            self.assertEqual(file_mode(self.root / '.smitline'), 0o700)
             self.assertEqual(file_mode(daemon_data_path(self.root)), 0o700)
         finally:
             app.runtime_daemon.close()
@@ -385,7 +385,7 @@ class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_published_image_pulls_the_meeting_image(self):
         from meeting_supervisor import CODE_ROOT, ComposeMeetingAgent
         runner = FakeRunner()
-        environ = {'COLLEAGUE_MEETING_IMAGE': 'ghcr.io/kaelorlabs/smitline-meeting:main'}
+        environ = {'SMITLINE_MEETING_IMAGE': 'ghcr.io/kaelorlabs/smitline-meeting:main'}
         agent = ComposeMeetingAgent(runner, environ=environ)
         await agent.up({})
         await agent.stop()
@@ -400,13 +400,13 @@ class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
         runner = FakeRunner()
         await ComposeMeetingAgent(runner, environ={}).up({'MEETING_URL': ZOOM_URL})
         env = runner.calls[-1][1]
-        self.assertEqual(env['COLLEAGUE_UID'], str(os.getuid()))
-        self.assertEqual(env['COLLEAGUE_GID'], str(os.getgid()))
+        self.assertEqual(env['SMITLINE_UID'], str(os.getuid()))
+        self.assertEqual(env['SMITLINE_GID'], str(os.getgid()))
         self.assertEqual(env['MEETING_URL'], ZOOM_URL)
         runner = FakeRunner()
-        await ComposeMeetingAgent(runner, environ={'COLLEAGUE_UID': '0', 'COLLEAGUE_GID': '0'}).up({})
-        self.assertEqual(runner.calls[-1][1]['COLLEAGUE_UID'], '0')
-        self.assertEqual(runner.calls[-1][1]['COLLEAGUE_GID'], '0')
+        await ComposeMeetingAgent(runner, environ={'SMITLINE_UID': '0', 'SMITLINE_GID': '0'}).up({})
+        self.assertEqual(runner.calls[-1][1]['SMITLINE_UID'], '0')
+        self.assertEqual(runner.calls[-1][1]['SMITLINE_GID'], '0')
 
 
 class MountPreparationTests(unittest.IsolatedAsyncioTestCase):
@@ -461,7 +461,7 @@ class RuntimeStateConfigTests(unittest.TestCase):
             'participantName': 'Runtime Colleague',
             'meetingInstructions': 'Stay brief.',
         })
-        env = {'COLLEAGUE_RUNTIME_STATE': str(self.path), 'MEETING_URL': 'https://example.com/old'}
+        env = {'SMITLINE_RUNTIME_STATE': str(self.path), 'MEETING_URL': 'https://example.com/old'}
         config = RuntimeConfig.from_environ(env)
         self.assertEqual(config.participant_name, 'Runtime Colleague')
         self.assertEqual(config.meeting_instructions, 'Stay brief.')

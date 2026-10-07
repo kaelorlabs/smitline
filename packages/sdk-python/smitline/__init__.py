@@ -3,6 +3,8 @@
 from .client import (
     SCHEMA_VERSION,
     SDK_VERSION,
+    Smitline,
+    SmitlineError,
     Colleague,
     ColleagueError,
     ValidationError,
@@ -17,6 +19,8 @@ from .client import (
 __all__ = [
     'SCHEMA_VERSION',
     'SDK_VERSION',
+    'Smitline',
+    'SmitlineError',
     'Colleague',
     'ColleagueError',
     'ValidationError',

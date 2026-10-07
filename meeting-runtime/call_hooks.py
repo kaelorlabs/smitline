@@ -2,7 +2,7 @@
 
 The defaults serve one local owner and read provider credentials from the
 environment. A managed deployment supplies its own hooks through
-COLLEAGUE_CALL_HOOKS=module:factory without changing the call service.
+SMITLINE_CALL_HOOKS=module:factory without changing the call service.
 """
 from datetime import datetime, timezone
 import importlib
@@ -28,13 +28,13 @@ def phone_audio(env):
     """How call audio travels: 'relay' (through this computer), 'sip' (OpenAI dials out
     through the provider's SIP trunk), or 'sip-webhook' (the provider dials and hands the
     call to OpenAI, which announces it with a webhook)."""
-    mode = str(env.get('COLLEAGUE_PHONE_AUDIO') or '').strip().lower()
+    mode = str(env.get('SMITLINE_PHONE_AUDIO') or '').strip().lower()
     return mode if mode in PHONE_AUDIO_MODES else 'relay'
 
 
 def phone_provider(env):
-    """'twilio' or 'signalwire': COLLEAGUE_PHONE_PROVIDER, else whichever account is set up."""
-    chosen = str(env.get('COLLEAGUE_PHONE_PROVIDER') or '').strip().lower()
+    """'twilio' or 'signalwire': SMITLINE_PHONE_PROVIDER, else whichever account is set up."""
+    chosen = str(env.get('SMITLINE_PHONE_PROVIDER') or '').strip().lower()
     if chosen in ('twilio', 'signalwire'):
         return chosen
     if _usable(env.get('SIGNALWIRE_PROJECT_ID')) and not _usable(env.get('TWILIO_ACCOUNT_SID')):
@@ -58,7 +58,7 @@ def _sip_credentials(env):
     mode = phone_audio(env)
     values = {'mode': mode}
     if mode == 'sip':
-        names = ('COLLEAGUE_SIP_TRUNK_URL', 'COLLEAGUE_SIP_USERNAME', 'COLLEAGUE_SIP_PASSWORD')
+        names = ('SMITLINE_SIP_TRUNK_URL', 'SMITLINE_SIP_USERNAME', 'SMITLINE_SIP_PASSWORD')
         keys = ('trunkUrl', 'username', 'password')
     elif mode == 'sip-webhook':
         names = ('OPENAI_PROJECT_ID', 'OPENAI_WEBHOOK_SECRET')
@@ -77,7 +77,7 @@ def _signalwire_credentials(env):
     """SignalWire's Compatibility API speaks Twilio's REST, webhook, and media-stream formats."""
     space = signalwire_space(env.get('SIGNALWIRE_SPACE'))
     number = _usable(env.get('SIGNALWIRE_FROM_NUMBER'))
-    caller_id = _usable(env.get('COLLEAGUE_CALLER_ID'))
+    caller_id = _usable(env.get('SMITLINE_CALLER_ID'))
     values = {
         'apiBase': f'https://{space}/api/laml/2010-04-01' if space else '',
         'accountSid': str(env.get('SIGNALWIRE_PROJECT_ID') or '').strip(),
@@ -85,7 +85,7 @@ def _signalwire_credentials(env):
         'fromNumber': caller_id or number,
     }
     names = ('SIGNALWIRE_SPACE', 'SIGNALWIRE_PROJECT_ID', 'SIGNALWIRE_API_TOKEN',
-             'SIGNALWIRE_FROM_NUMBER or COLLEAGUE_CALLER_ID')
+             'SIGNALWIRE_FROM_NUMBER or SMITLINE_CALLER_ID')
     missing = [name for name, value in zip(names, values.values()) if not _usable(value)]
     if missing:
         raise MissingCredentials('signalwire', missing)
@@ -110,7 +110,7 @@ def _country_prefixes(value):
             continue
         if not item.isdigit() or len(item) > 7:
             raise CallRefused('invalid_allow_list',
-                              f'COLLEAGUE_ALLOWED_CALLING_CODES has an entry that is not a calling '
+                              f'SMITLINE_ALLOWED_CALLING_CODES has an entry that is not a calling '
                               f'code: {item[:20]!r}. Use digits such as 1,44 or 1415.')
         prefixes.append('+' + item)
     return tuple(prefixes)
@@ -156,10 +156,10 @@ class DefaultCallHooks:
         self.notifier = notifier
         self.clock = clock
         self.do_not_call_list = DoNotCallList(
-            Path(env_file).parent / '.colleague' / 'do-not-call.json' if env_file else None)
+            Path(env_file).parent / '.smitline' / 'do-not-call.json' if env_file else None)
         from contacts import ContactBook
         self.contact_book = ContactBook(
-            Path(env_file).parent / '.colleague' / 'contacts.json' if env_file else None)
+            Path(env_file).parent / '.smitline' / 'contacts.json' if env_file else None)
 
     def now(self):
         return self.clock() if self.clock else datetime.now(timezone.utc)
@@ -176,9 +176,9 @@ class DefaultCallHooks:
 
     @property
     def profile_path(self):
-        """The owner's profile sits next to .env, in the private .colleague folder."""
+        """The owner's profile sits next to .env, in the private .smitline folder."""
         from pathlib import Path
-        return Path(self.env_file).parent / '.colleague' / 'profile.json' if self.env_file else None
+        return Path(self.env_file).parent / '.smitline' / 'profile.json' if self.env_file else None
 
     def profile(self, owner):
         from briefing import PROFILE_VERSION, load_profile
@@ -204,7 +204,7 @@ class DefaultCallHooks:
             # Outgoing calls need a number to show: a Twilio number, or the owner's
             # own mobile verified in Twilio. Incoming calls need the Twilio number.
             twilio_number = _usable(env.get('TWILIO_FROM_NUMBER'))
-            caller_id = _usable(env.get('COLLEAGUE_CALLER_ID'))
+            caller_id = _usable(env.get('SMITLINE_CALLER_ID'))
             names = ('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER')
             values = {
                 'accountSid': env.get('TWILIO_ACCOUNT_SID', '').strip(),
@@ -216,7 +216,7 @@ class DefaultCallHooks:
         missing = [name for name, value in zip(names, values.values()) if not _usable(value)]
         if missing:
             if provider == 'twilio' and missing[-1] == 'TWILIO_FROM_NUMBER':
-                missing[-1] = 'TWILIO_FROM_NUMBER or COLLEAGUE_CALLER_ID'
+                missing[-1] = 'TWILIO_FROM_NUMBER or SMITLINE_CALLER_ID'
             raise MissingCredentials(provider, missing)
         if provider == 'twilio':
             values['twilioNumber'] = twilio_number
@@ -226,11 +226,11 @@ class DefaultCallHooks:
         """Fill what setup already knows, so agents need not ask the user again."""
         env = self.environ
         defaults = {}
-        name = _usable(env.get('COLLEAGUE_OWNER_NAME'))
+        name = _usable(env.get('SMITLINE_OWNER_NAME'))
         if name:
             defaults['onBehalfOf'] = name
         if payload.get('rehearsal') is True:
-            phone = _usable(env.get('COLLEAGUE_OWNER_PHONE'))
+            phone = _usable(env.get('SMITLINE_OWNER_PHONE'))
             if phone:
                 defaults['to'] = phone
         return defaults
@@ -242,23 +242,23 @@ class DefaultCallHooks:
         if brief.rehearsal:
             # A rehearsal tells the voice the other side is the owner practicing;
             # it must never ring anyone else.
-            phone = _usable(env.get('COLLEAGUE_OWNER_PHONE'))
+            phone = _usable(env.get('SMITLINE_OWNER_PHONE'))
             if not phone:
                 raise CallRefused('owner_phone_missing', 'Rehearsals call your own phone. Set it '
-                                  'first: smitline setup set COLLEAGUE_OWNER_PHONE +1...')
+                                  'first: smitline setup set SMITLINE_OWNER_PHONE +1...')
             if brief.to != phone:
                 raise CallRefused('rehearsal_owner_only',
-                                  'A rehearsal can only call your own phone (COLLEAGUE_OWNER_PHONE).')
+                                  'A rehearsal can only call your own phone (SMITLINE_OWNER_PHONE).')
             return
-        allowed = _country_prefixes(env.get('COLLEAGUE_ALLOWED_CALLING_CODES'))
+        allowed = _country_prefixes(env.get('SMITLINE_ALLOWED_CALLING_CODES'))
         if allowed and not brief.to.startswith(allowed):
             raise CallRefused(
                 'destination_not_allowed',
-                'That country is not in COLLEAGUE_ALLOWED_CALLING_CODES for this installation.')
+                'That country is not in SMITLINE_ALLOWED_CALLING_CODES for this installation.')
         from call_policy import (
             PolicyProblem, check_cost, check_do_not_call, check_hours, check_repeats,
         )
-        own_number = brief.to == _usable(env.get('COLLEAGUE_OWNER_PHONE'))
+        own_number = brief.to == _usable(env.get('SMITLINE_OWNER_PHONE'))
         now = self.now()
         try:
             check_cost(brief.to, env)
@@ -304,7 +304,7 @@ def load_hooks(spec, **kwargs):
         return DefaultCallHooks(**kwargs)
     module_name, _, attribute = spec.partition(':')
     if not module_name or not attribute:
-        raise ValueError('COLLEAGUE_CALL_HOOKS must look like module:factory')
+        raise ValueError('SMITLINE_CALL_HOOKS must look like module:factory')
     factory = getattr(importlib.import_module(module_name), attribute)
     hooks = factory(**kwargs)
     for name in ('owner_for', 'credentials', 'precheck', 'record_usage', 'notify'):

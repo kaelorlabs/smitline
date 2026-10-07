@@ -90,7 +90,7 @@ test('bootstrap excludes API credentials and mutations require a session token',
 });
 
 test('adds private context without returning its extracted text in bootstrap', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-context-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-server-context-'));
   const contextIndex = path.join(directory, 'index.json');
   const server = createServer({
     root: directory,
@@ -114,7 +114,7 @@ test('adds private context without returning its extracted text in bootstrap', a
       headers: {
         'Content-Type': 'application/json',
         'Origin': 'http://127.0.0.1:8095',
-        'X-Colleague-Token': bootstrap.token,
+        'X-Smitline-Token': bootstrap.token,
       },
       body: JSON.stringify({ text: 'Private launch target is October 4.', files: [] }),
     });
@@ -277,7 +277,7 @@ function createFakeDaemon() {
 
 async function withPanel(run, extra = {}) {
   const { env = 'OPENAI_API_KEY=sk-test\n', ...options } = extra;
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-panel-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-panel-'));
   fs.writeFileSync(path.join(root, '.env'), env, { mode: 0o600 });
   const runtimeRoot = path.join(root, 'meeting-runtime');
   const daemon = extra.daemon || createFakeDaemon();
@@ -312,7 +312,7 @@ async function withPanel(run, extra = {}) {
         return {
           'Content-Type': 'application/json',
           Origin: 'http://127.0.0.1:8095',
-          'X-Colleague-Token': csrf,
+          'X-Smitline-Token': csrf,
         };
       },
       settings: {
@@ -351,7 +351,7 @@ test('start uses the daemon, keeps .env.meeting operator-managed, and hides daem
     assert.equal(body.callId, 'call-0000000000000001');
     assert.equal(body.meetingId, [...panel.daemon.meetings.keys()][0]);
     assert.equal(fs.existsSync(path.join(panel.root, '.env.meeting')), false);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(panel.root, '.colleague', 'portal-active.json'), 'utf8')),
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(panel.root, '.smitline', 'portal-active.json'), 'utf8')),
       { meetingId: body.meetingId, callId: body.callId, objective: 'Agree the launch date.', guidance: 'Stay brief.' });
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'portal-active.json')), false);
     assert.equal(fs.existsSync(path.join(panel.runtimeRoot, 'run', 'daemon.auth')), false);
@@ -379,7 +379,7 @@ test('start sends the owner name from .env as onBehalfOf', async () => {
     assert.equal(created.body.onBehalfOf, 'Sam Rivera');
     assert.deepEqual(Object.keys(created.body).sort(), ['camera', 'channel', 'context', 'objective', 'onBehalfOf', 'to']);
     assert.equal(JSON.stringify(await (await fetch(`${panel.base}/api/status`)).json()).includes('sk-test'), false);
-  }, { env: 'OPENAI_API_KEY=sk-test\nCOLLEAGUE_OWNER_NAME="Sam Rivera"\n' });
+  }, { env: 'OPENAI_API_KEY=sk-test\nSMITLINE_OWNER_NAME="Sam Rivera"\n' });
 });
 
 test('the meetings console has no coding-agent controls or routes', async () => {
@@ -559,8 +559,8 @@ test('context updates go to the daemon and are rejected after end', async () => 
     // Stop clears the active id; seed an ended meeting to assert the truthful reject.
     const endedId = [...panel.daemon.meetings.keys()][0];
     panel.daemon.meetings.get(endedId).state = 'ended';
-    fs.mkdirSync(path.join(panel.root, '.colleague'), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(panel.root, '.colleague', 'portal-active.json'), JSON.stringify({ meetingId: endedId }));
+    fs.mkdirSync(path.join(panel.root, '.smitline'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(panel.root, '.smitline', 'portal-active.json'), JSON.stringify({ meetingId: endedId }));
     const rejected = await fetch(`${panel.base}/api/context/add`, {
       method: 'POST',
       headers: panel.headers(bootstrap.token),
@@ -645,7 +645,7 @@ test('calls view reads calls openly and protects end and transfer', async () => 
   const actions = [];
   const callId = 'call-0123456789abcdef';
   const server = createServer({
-    root: fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-calls-')),
+    root: fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-server-calls-')),
     daemon: {
       async listCalls(limit, tzOffset) { actions.push(['list', limit, tzOffset]); return { calls: [{ id: callId, status: 'in_progress' }] }; },
       async getCall(id) { return { id, status: 'in_progress' }; },
@@ -669,7 +669,7 @@ test('calls view reads calls openly and protects end and transfer', async () => 
     const bootstrap = await (await fetch(`${base}/api/bootstrap`)).json();
     const ended = await fetch(`${base}/api/calls/${callId}/end`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:8095', 'X-Colleague-Token': bootstrap.token },
+      headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:8095', 'X-Smitline-Token': bootstrap.token },
       body: '{}',
     });
     assert.equal(ended.status, 200);
@@ -701,7 +701,7 @@ test('console only answers loopback host names', async () => {
   });
 });
 
-test('data paths follow COLLEAGUE_ROOT and COLLEAGUE_MEETING_DATA, and default to the checkout', async () => {
+test('data paths follow SMITLINE_ROOT and SMITLINE_MEETING_DATA, and default to the checkout', async () => {
   const { consolePaths } = await import('./server.mjs');
   const code = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
   const unset = consolePaths({ env: {} });
@@ -709,7 +709,7 @@ test('data paths follow COLLEAGUE_ROOT and COLLEAGUE_MEETING_DATA, and default t
   assert.equal(unset.runtimeRoot, path.join(code, 'meeting-runtime'));
   assert.equal(unset.contextIndex, path.join(code, 'meeting-runtime', 'context', 'index.json'));
   assert.equal(unset.meetingEnv, path.join(code, '.env.meeting'));
-  const image = consolePaths({ env: { COLLEAGUE_ROOT: '/data', COLLEAGUE_MEETING_DATA: '/data/meetings' } });
+  const image = consolePaths({ env: { SMITLINE_ROOT: '/data', SMITLINE_MEETING_DATA: '/data/meetings' } });
   assert.deepEqual(image, {
     codeRoot: code,
     root: '/data',
@@ -720,22 +720,22 @@ test('data paths follow COLLEAGUE_ROOT and COLLEAGUE_MEETING_DATA, and default t
     profileRoot: '/data/meetings/profiles',
   });
   // Only the data root moved: meeting data stays in the checkout.
-  assert.equal(consolePaths({ env: { COLLEAGUE_ROOT: '/data' } }).runtimeRoot, path.join(code, 'meeting-runtime'));
+  assert.equal(consolePaths({ env: { SMITLINE_ROOT: '/data' } }).runtimeRoot, path.join(code, 'meeting-runtime'));
   // An explicit root keeps its own meeting-runtime directory.
   assert.equal(consolePaths({ env: {}, root: '/tmp/x' }).runtimeRoot, '/tmp/x/meeting-runtime');
 });
 
 test('the console reads settings, recordings, and profiles from the data directories', async () => {
-  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-data-'));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-data-'));
   const meetings = path.join(data, 'meetings');
   fs.mkdirSync(path.join(meetings, 'profiles'), { recursive: true });
   fs.writeFileSync(path.join(meetings, 'profiles', 'teams-connected'), '');
   fs.mkdirSync(path.join(meetings, 'recordings', 'mtg-1'), { recursive: true });
   fs.writeFileSync(path.join(meetings, 'recordings', 'mtg-1', 'transcript.txt'), 'hello');
   fs.writeFileSync(path.join(data, '.env.meeting'), 'MEETING_URL=https://us05web.zoom.us/j/123456789\n');
-  const previous = { root: process.env.COLLEAGUE_ROOT, meetings: process.env.COLLEAGUE_MEETING_DATA };
-  process.env.COLLEAGUE_ROOT = data;
-  process.env.COLLEAGUE_MEETING_DATA = meetings;
+  const previous = { root: process.env.SMITLINE_ROOT, meetings: process.env.SMITLINE_MEETING_DATA };
+  process.env.SMITLINE_ROOT = data;
+  process.env.SMITLINE_MEETING_DATA = meetings;
   let server;
   try {
     server = createServer({
@@ -743,7 +743,7 @@ test('the console reads settings, recordings, and profiles from the data directo
       runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
     });
   } finally {
-    for (const [key, value] of [['COLLEAGUE_ROOT', previous.root], ['COLLEAGUE_MEETING_DATA', previous.meetings]]) {
+    for (const [key, value] of [['SMITLINE_ROOT', previous.root], ['SMITLINE_MEETING_DATA', previous.meetings]]) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -766,7 +766,7 @@ test('the console reads settings, recordings, and profiles from the data directo
 });
 
 test('/mcp is the local agents endpoint, behind its own token rather than the console session', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-console-mcp-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-console-mcp-'));
   const logs = [];
   const server = createServer({
     root,
@@ -795,10 +795,10 @@ test('/mcp is the local agents endpoint, behind its own token rather than the co
   try {
     // The console's session token is no use here, and browsers are refused.
     const bootstrap = await (await fetch(`http://127.0.0.1:${port}/api/bootstrap`)).json();
-    assert.equal((await post({ 'X-Colleague-Token': bootstrap.token }, initialize)).status, 401);
+    assert.equal((await post({ 'X-Smitline-Token': bootstrap.token }, initialize)).status, 401);
     assert.equal((await post({ Authorization: `Bearer ${bootstrap.token}` }, initialize)).status, 401);
-    const token = fs.readFileSync(path.join(root, '.colleague', 'mcp.token'), 'utf8').trim();
-    assert.equal(fs.statSync(path.join(root, '.colleague', 'mcp.token')).mode & 0o777, 0o600);
+    const token = fs.readFileSync(path.join(root, '.smitline', 'mcp.token'), 'utf8').trim();
+    assert.equal(fs.statSync(path.join(root, '.smitline', 'mcp.token')).mode & 0o777, 0o600);
     assert.equal((await post({ Authorization: `Bearer ${token}`, Origin: `http://127.0.0.1:${port}` }, initialize)).status, 403);
     assert.equal((await post({ Authorization: `Bearer ${token}`, Host: `evil.example:${port}` }, initialize)).status, 421);
     const opened = await post({ Authorization: `Bearer ${token}` }, initialize);
@@ -836,7 +836,7 @@ test('a manual meeting gets the saved reference context, and Stop ends its call'
     assert.equal(stopped.status, 200);
     assert.ok(panel.daemon.calls.some((item) => item.path === `/v1/calls/${started.callId}/end`));
     assert.equal(panel.daemon.calls.some((item) => item.path.endsWith('/cancel')), false);
-    assert.equal(fs.existsSync(path.join(panel.root, '.colleague', 'portal-active.json')), false);
+    assert.equal(fs.existsSync(path.join(panel.root, '.smitline', 'portal-active.json')), false);
   });
 });
 
@@ -873,21 +873,21 @@ test('the Account page shows saved fields and the checklist, never a key, and on
   await withPanel(async panel => {
     assert.equal((await fetch(`${panel.base}/api/setup`)).status, 403);
     const bootstrap = await panel.bootstrap();
-    const response = await fetch(`${panel.base}/api/setup`, { headers: { 'X-Colleague-Token': bootstrap.token } });
+    const response = await fetch(`${panel.base}/api/setup`, { headers: { 'X-Smitline-Token': bootstrap.token } });
     assert.equal(response.status, 200);
     const text = await response.text();
     assert.equal(text.includes(key), false);
     const view = JSON.parse(text);
     const openai = view.fields.find((field) => field.key === 'OPENAI_API_KEY');
     assert.deepEqual([openai.saved, openai.shown], [true, 'sk-proj-']);
-    assert.equal(view.fields.find((field) => field.key === 'COLLEAGUE_OWNER_NAME').shown, 'Robin');
+    assert.equal(view.fields.find((field) => field.key === 'SMITLINE_OWNER_NAME').shown, 'Robin');
     // The checklist as setup status reports it, without agent questions or the agents check.
     assert.deepEqual(view.status.checks.map((check) => check.id), ['openai_key', 'docker']);
     assert.equal(view.status.checks[0].detail, 'key works and has GPT-Live access');
     assert.equal('ask' in view.status.checks[0], false);
     assert.equal(view.status.checks[1].ok, true);
-    assert.equal(JSON.parse(await (await fetch(`${panel.base}/api/setup?verify=0`, { headers: { 'X-Colleague-Token': bootstrap.token } })).text()).status.checks[0].ok, null);
-  }, { env: `OPENAI_API_KEY=${key}\nCOLLEAGUE_OWNER_NAME=Robin\n`, checkSetup: setupReport, environment: {} });
+    assert.equal(JSON.parse(await (await fetch(`${panel.base}/api/setup?verify=0`, { headers: { 'X-Smitline-Token': bootstrap.token } })).text()).status.checks[0].ok, null);
+  }, { env: `OPENAI_API_KEY=${key}\nSMITLINE_OWNER_NAME=Robin\n`, checkSetup: setupReport, environment: {} });
 });
 
 test('saving and removing keys needs this console, checks what is saved, and never echoes a key', async () => {
@@ -902,22 +902,22 @@ test('saving and removing keys needs this console, checks what is saved, and nev
     assert.equal((await post('/api/setup/remove', { key: 'OPENAI_API_KEY' }, { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:8095' })).status, 403);
     assert.equal(envText().includes(key), false);
 
-    const saved = await post('/api/setup/save', { values: { OPENAI_API_KEY: ` ${key}\n`, COLLEAGUE_OWNER_PHONE: '+1 (415) 555-0142' } });
+    const saved = await post('/api/setup/save', { values: { OPENAI_API_KEY: ` ${key}\n`, SMITLINE_OWNER_PHONE: '+1 (415) 555-0142' } });
     assert.equal(saved.status, 200);
     const savedText = await saved.text();
     assert.equal(savedText.includes(key), false);
     const result = JSON.parse(savedText);
-    assert.deepEqual(result.saved.sort(), ['COLLEAGUE_OWNER_PHONE', 'OPENAI_API_KEY']);
+    assert.deepEqual(result.saved.sort(), ['OPENAI_API_KEY', 'SMITLINE_OWNER_PHONE']);
     assert.equal(result.status.checks[0].detail, 'key works and has GPT-Live access');
     assert.match(envText(), new RegExp(`^OPENAI_API_KEY=${key}$`, 'm'));
-    assert.match(envText(), /^COLLEAGUE_OWNER_PHONE=\+14155550142$/m);
+    assert.match(envText(), /^SMITLINE_OWNER_PHONE=\+14155550142$/m);
 
     // A bad value is named by its label; the good one beside it is still saved.
-    const mixed = await post('/api/setup/save', { values: { COLLEAGUE_OWNER_PHONE: '555', COLLEAGUE_OWNER_NAME: 'Robin' } });
+    const mixed = await post('/api/setup/save', { values: { SMITLINE_OWNER_PHONE: '555', SMITLINE_OWNER_NAME: 'Robin' } });
     assert.equal(mixed.status, 422);
     const fixes = await mixed.json();
-    assert.deepEqual(fixes.saved, ['COLLEAGUE_OWNER_NAME']);
-    assert.equal(fixes.errors[0].key, 'COLLEAGUE_OWNER_PHONE');
+    assert.deepEqual(fixes.saved, ['SMITLINE_OWNER_NAME']);
+    assert.equal(fixes.errors[0].key, 'SMITLINE_OWNER_PHONE');
     assert.match(fixes.errors[0].message, /^Your phone number must be/);
     assert.equal((await post('/api/setup/save', { values: { PATH: '/tmp' } })).status, 422);
     assert.equal((await post('/api/setup/save', { values: { OPENAI_API_KEY: 42 } })).status, 422);
@@ -938,7 +938,7 @@ test('saving and removing keys needs this console, checks what is saved, and nev
 test('the calls list passes the page channel on to the daemon', async () => {
   const asked = [];
   const server = createServer({
-    root: fs.mkdtempSync(path.join(os.tmpdir(), 'colleague-server-channel-')),
+    root: fs.mkdtempSync(path.join(os.tmpdir(), 'smitline-server-channel-')),
     daemon: { async listCalls(...args) { asked.push(args); return { calls: [], spend: { days: [] } }; } },
   });
   server.listen(0, '127.0.0.1');

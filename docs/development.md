@@ -32,8 +32,6 @@ Smitline runs as one container, `smitline`, which starts a second container for 
 | **MCP** | `packages/mcp`: the call tools over Streamable HTTP at `127.0.0.1:8095/mcp` with a local bearer token, or over stdio (`smitline mcp`; Claude Desktop runs `docker exec -i smitline smitline mcp`). |
 | **Remote connector** | `./start-connector.sh`, from a checkout (the image does not run it yet): the same call tools over HTTPS with OAuth sign-in, so cloud agents such as ChatGPT and Claude can place calls and join meetings while the daemon stays on loopback. See [agents](agents.md). |
 
-Smitline was first developed as Colleague AI. The SDK package names, the `COLLEAGUE_*` settings, and the `.colleague/` folder keep that name for now; they work the same.
-
 ## Project layout
 
 | Path | Responsibility |
@@ -50,7 +48,7 @@ Smitline was first developed as Colleague AI. The SDK package names, the `COLLEA
 
 ## Run from a checkout
 
-Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.colleague/` in the checkout:
+Contributors can run everything from a clone instead of the published images. That needs Node.js 22 and Docker; settings then live in `.env` and `.smitline/` in the checkout:
 
 ```bash
 git clone https://github.com/kaelorlabs/smitline.git ~/smitline

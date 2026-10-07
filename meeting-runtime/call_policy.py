@@ -45,8 +45,8 @@ def _parse(number):
 
 
 def check_cost(number, env):
-    """Refuse premium-rate and satellite numbers unless COLLEAGUE_ALLOW_PREMIUM_NUMBERS=1."""
-    if str(env.get('COLLEAGUE_ALLOW_PREMIUM_NUMBERS') or '').strip() == '1':
+    """Refuse premium-rate and satellite numbers unless SMITLINE_ALLOW_PREMIUM_NUMBERS=1."""
+    if str(env.get('SMITLINE_ALLOW_PREMIUM_NUMBERS') or '').strip() == '1':
         return
     parsed = _parse(number)
     if parsed is None:
@@ -59,12 +59,12 @@ def check_cost(number, env):
         return
     raise PolicyProblem('high_cost_number',
                         f'{number} is {kind}, which can cost several dollars a minute. To call such '
-                        'numbers anyway, set COLLEAGUE_ALLOW_PREMIUM_NUMBERS=1.')
+                        'numbers anyway, set SMITLINE_ALLOW_PREMIUM_NUMBERS=1.')
 
 
 def calling_hours(env):
-    """(start, end) from COLLEAGUE_CALLING_HOURS such as 08:00-21:00; None when it is off."""
-    raw = str(env.get('COLLEAGUE_CALLING_HOURS') or '').strip().lower()
+    """(start, end) from SMITLINE_CALLING_HOURS such as 08:00-21:00; None when it is off."""
+    raw = str(env.get('SMITLINE_CALLING_HOURS') or '').strip().lower()
     if not raw:
         return DEFAULT_HOURS
     if raw == 'off':
@@ -76,7 +76,7 @@ def calling_hours(env):
                 (start_h, start_m) < (end_h, end_m):
             return time(start_h, start_m), time(end_h, end_m)
     raise PolicyProblem('invalid_calling_hours',
-                        'COLLEAGUE_CALLING_HOURS must look like 08:00-21:00, or be off.')
+                        'SMITLINE_CALLING_HOURS must look like 08:00-21:00, or be off.')
 
 
 def _clock(moment):
@@ -150,8 +150,8 @@ def check_repeats(number, records, now, env, *, own_number=False):
     `records` are earlier calls; rehearsals and incoming calls do not count. The owner's own
     phone has no per-number limit.
     """
-    per_number = _limit(env, 'COLLEAGUE_MAX_CALLS_PER_NUMBER', DEFAULT_MAX_PER_NUMBER)
-    per_hour = _limit(env, 'COLLEAGUE_MAX_CALLS_PER_HOUR', DEFAULT_MAX_PER_HOUR)
+    per_number = _limit(env, 'SMITLINE_MAX_CALLS_PER_NUMBER', DEFAULT_MAX_PER_NUMBER)
+    per_hour = _limit(env, 'SMITLINE_MAX_CALLS_PER_HOUR', DEFAULT_MAX_PER_HOUR)
     day_ago, hour_ago = now - timedelta(days=1), now - timedelta(hours=1)
     to_number, last_hour = [], []
     for record in records:
@@ -169,12 +169,12 @@ def check_repeats(number, records, now, env, *, own_number=False):
     if per_number and not own_number and len(to_number) >= per_number:
         raise PolicyProblem('too_many_calls_to_number',
                             f'Smitline has called {number} {len(to_number)} times in the last 24 '
-                            'hours, the most COLLEAGUE_MAX_CALLS_PER_NUMBER allows. It can call '
+                            'hours, the most SMITLINE_MAX_CALLS_PER_NUMBER allows. It can call '
                             f'again {_in_hours(min(to_number) + timedelta(days=1) - now)}.')
     if per_hour and len(last_hour) >= per_hour:
         raise PolicyProblem('too_many_calls',
                             f'Smitline has placed {len(last_hour)} calls in the last hour, the most '
-                            'COLLEAGUE_MAX_CALLS_PER_HOUR allows. It can call again '
+                            'SMITLINE_MAX_CALLS_PER_HOUR allows. It can call again '
                             f'{_in_hours(min(last_hour) + timedelta(hours=1) - now)}.')
 
 
@@ -201,7 +201,7 @@ class DoNotCallList:
         except ValueError:
             # A damaged list must not quietly allow calls to the people on it.
             raise PolicyProblem('do_not_call_unreadable',
-                                'The do-not-call list (.colleague/do-not-call.json) cannot be '
+                                'The do-not-call list (.smitline/do-not-call.json) cannot be '
                                 'read; fix or remove it.')
         return [entry for entry in data.get('numbers') or [] if isinstance(entry, dict)]
 
