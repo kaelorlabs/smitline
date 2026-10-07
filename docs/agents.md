@@ -6,6 +6,7 @@ Any agent can ask Smitline to phone someone or join a meeting: it sends a [brief
 | --- | --- | --- |
 | Claude Code, Codex, Cursor | Local MCP over HTTP | `docker exec smitline smitline setup register` prints the command or config entry |
 | Claude Desktop | Local MCP over stdio | `docker exec -i smitline smitline mcp`, from the same output |
+| Clients that start their own container | Local MCP over stdio | `docker run -i --rm --network host -v smitline:/data ghcr.io/kaelorlabs/smitline mcp`: uses the running `smitline` container's daemon, keys, and calls |
 | OpenClaw, Hermes, other MCP clients | Local MCP over HTTP | The URL and `Authorization` header from the same output |
 | Agents that run shell commands | CLI | `docker exec smitline smitline call ... --wait` |
 | Your own code | REST API or SDKs | `/v1/calls`, `@colleague-ai/sdk`, `colleague_ai` |
