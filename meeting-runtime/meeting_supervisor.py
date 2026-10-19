@@ -94,13 +94,17 @@ class SubprocessCommandRunner:
         merged = os.environ.copy()
         if env:
             merged.update({key: str(value) for key, value in env.items() if value is not None})
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=self.cwd,
-            env=merged,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=self.cwd,
+                env=merged,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            # No Docker on this computer: phone calls still work, meetings report the failure.
+            return CommandResult(127, '', str(exc))
         stdout, stderr = await process.communicate()
         return CommandResult(
             process.returncode,

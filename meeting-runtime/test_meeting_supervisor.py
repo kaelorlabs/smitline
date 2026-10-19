@@ -374,6 +374,13 @@ class FakeRunner:
 
 
 class ComposeMeetingAgentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_missing_docker_reads_as_unknown(self):
+        from meeting_supervisor import ComposeMeetingAgent, SubprocessCommandRunner
+        runner = SubprocessCommandRunner(tempfile.gettempdir())
+        with tempfile.TemporaryDirectory() as empty, mock.patch.dict(os.environ, {'PATH': empty}):
+            status = await ComposeMeetingAgent(runner, environ={}).inspect()
+        self.assertEqual(status, {'running': False, 'unknown': True})
+
     async def test_up_builds_and_starts_the_one_meeting_image(self):
         from meeting_supervisor import ComposeMeetingAgent
         runner = FakeRunner()
