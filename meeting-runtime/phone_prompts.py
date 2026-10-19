@@ -234,12 +234,14 @@ AI_PHRASES = (
     '人工智能', '人工知能', '인공지능',
 )
 _WORD = re.compile(r"\w+(?:[.'’]\w+)*", re.UNICODE)
+# A leading French, Italian, or Catalan elision ("l'assistant", "un'IA", "dell'IA"); "i'm" stays whole.
+_ELISION = re.compile(r"^(?:[cdjlmnst]|qu|un|[a-z]*ll)['’](?=\w)")
 
 
 def _words(text):
-    """Casefolded text and its words, with a trailing possessive 's removed."""
+    """Casefolded text and its words, without a trailing possessive 's or a leading elision."""
     folded = unicodedata.normalize('NFKC', str(text or '')).casefold()
-    return folded, [re.sub(r"['’]s$", '', word) for word in _WORD.findall(folded)]
+    return folded, [_ELISION.sub('', re.sub(r"['’]s$", '', word)) for word in _WORD.findall(folded)]
 
 
 # A disclosure puts the AI word next to what the speaker is ("AI assistant", "asistente
@@ -248,7 +250,7 @@ ASSISTANT_WORDS = frozenset((
     'assistant', 'assistante', 'asistente', 'assistente', 'assistent', 'asystent', 'agent', 'agente',
     'bot', 'chatbot', 'robot', 'receptionist',
 ))
-SELF_WORDS = frozenset(("i'm", 'im', 'am', 'soy', 'suis', 'bin', 'sono', 'sou', 'jestem'))
+SELF_WORDS = frozenset(("i'm", 'im', 'am', 'soy', 'suis', 'bin', 'sono', 'sóc', 'sou', 'jestem'))
 FILLER_WORDS = frozenset(('a', 'an', 'just', 'only', 'un', 'una', 'une', 'ein', 'eine', 'um', 'uma'))
 
 

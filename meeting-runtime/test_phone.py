@@ -334,11 +334,22 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
             ('Robin is building an AI app that makes phone calls.', 'Robin', False),
             ("I'm calling about Robin's AI project.", 'Robin', False),
             ('Robin thinks AI is the future.', 'Robin', False),
+            ("Bonjour, je suis l'assistant IA de Robin.", 'Robin', True),
+            ("Au fait, je suis l’assistante IA de Robin.", 'Robin', True),
+            ("Ciao, sono l'assistente IA di Robin.", 'Robin', True),
+            ("Ciao, sono un'IA e chiamo per Robin.", 'Robin', True),
+            ("Robin travaille sur l'IA.", 'Robin', False),
+            ("C'est un projet d'IA de Robin.", 'Robin', False),
+            ("Robin lavora nel campo dell'IA.", 'Robin', False),
+            ("Hola, sóc l'assistent d'IA d'en Robin.", 'Robin', True),
+            ('Hola, sóc una IA i truco de part de Robin.', 'Robin', True),
+            ("En Robin treballa en un projecte d'IA.", 'Robin', False),
         ]
         for text, name, expected in said:
             with self.subTest(text=text):
                 self.assertIs(discloses(text, name), expected)
         self.assertFalse(mentions_ai('I said it again'))
+        self.assertTrue(mentions_ai("un progetto dell'IA"))
         rehearsal = CallBrief.from_dict(brief(language='es', rehearsal=True))
         backend = backend_instructions(rehearsal)
         self.assertIn('language with tag es', backend)
