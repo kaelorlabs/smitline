@@ -11,8 +11,8 @@
     "test": "node --test control-panel/*.test.mjs packages/sdk-typescript/test/*.test.mjs packages/cli/test/*.test.mjs packages/mcp/test/*.test.mjs packages/mcpb/test/*.test.mjs"
   },
   "dependencies": {
-    "mammoth": "1.12.3",
-    "pdfjs-dist": "6.3.289"
+    "mammoth": "1.13.0",
+    "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
     "jszip": "3.10.2"
