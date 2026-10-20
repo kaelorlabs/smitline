@@ -366,9 +366,17 @@ p.banner { display: block; }
   .actions .button { flex: 1 1 auto; }
   footer { padding: 0 16px 24px; flex-direction: column; gap: 4px; }
 }
+/* Phones: the bar must fit in the width it has. Account shrinks to its icon
+   (the label stays for screen readers), and the nav scrolls on its own rather
+   than pushing the page sideways on very small screens. */
 @media (max-width: 480px) {
+  .topbar { gap: 8px; }
   .brand-name { display: none; }
-  .connection { font-size: 11px; }
+  .topnav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .topnav a { padding: 0 8px; flex-shrink: 0; }
+  .topnav a:focus-visible { outline-offset: -2px; }
+  .connection { font-size: 11px; flex-shrink: 0; }
   .connection #connection-label { display: none; }
-  .account-link { padding: 0 6px; }
+  .account-link { flex-shrink: 0; justify-content: center; min-width: 36px; padding: 0 7px; }
+  .account-name { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 }

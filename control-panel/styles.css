@@ -148,12 +148,16 @@ footer { max-width:1280px; margin:auto; padding:0 40px 24px; display:flex; justi
 .tool-card span:last-child { display:flex; flex-wrap:wrap; gap:8px}
 }
 @media(max-width:480px) { .brand>span:last-child { display:none}
-.topnav { margin-left:12px}
+.topnav { margin-left:12px; min-width:0; overflow-x:auto; scrollbar-width:none}
+.topnav a { padding:0 8px; flex-shrink:0}
+.topnav a:focus-visible { outline-offset:-2px}
+.connection { flex-shrink:0}
+#connection-label { display:none}
 }
-@media(max-width:720px) { .topbar { padding:0 18px; height:60px}
+@media(max-width:720px) { .topbar { padding:0 16px; height:60px}
 .connection { font-size:11px}
 .brand { font-size:15px}
-main { padding:24px 18px 40px}
+main { padding:24px 16px 40px}
 .hero { margin-bottom:24px}
 .local-badge { display:none}
 h1 { font-size:25px}
@@ -169,7 +173,7 @@ h1 { font-size:25px}
 .transcript { padding:20px}
 .context-heading { align-items:flex-start; flex-direction:column; gap:8px}
 .source-row { flex-direction:column; gap:5px}
-footer { padding:0 18px 24px; flex-direction:column; gap:4px}
+footer { padding:0 16px 24px; flex-direction:column; gap:4px}
 }
 @media(prefers-reduced-motion:reduce) { * { transition:none!important; scroll-behavior:auto!important}
 }
