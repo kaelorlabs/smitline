@@ -790,13 +790,15 @@ class MeetingLineRequestTests(unittest.IsolatedAsyncioTestCase):
         messages = [{'seq': 0, 'type': 'ask', 'id': 'r1', 'kind': 'task', 'text': README},
                     {'seq': 1, 'type': 'add', 'id': 'r1', 'text': 'Nov 3'}]
         states = iter(['joining', 'live', 'live', 'live', 'ended'])
+        current = [None]
 
         async def control(meeting_id, message):
-            controls.append((meeting_id, message))
+            controls.append((current[0], message))
             return {'delivered': True}
 
         async def get_meeting(meeting_id, owner):
-            return SimpleNamespace(id=meeting_id, state=next(states), platform='zoom')
+            current[0] = next(states)
+            return SimpleNamespace(id=meeting_id, state=current[0], platform='zoom')
 
         async def get_handoff(meeting_id, owner):
             return {}
@@ -822,9 +824,10 @@ class MeetingLineRequestTests(unittest.IsolatedAsyncioTestCase):
         await line._follow(ctx, 'mtg-1')
         self.assertEqual(got, [{'type': 'ask', 'id': 'r1', 'kind': 'task', 'text': README},
                                {'type': 'add', 'id': 'r1', 'text': 'Nov 3'}])
-        # Told once while live that nobody follows, then once that the agent does.
-        self.assertEqual([m for _, m in controls], [{'type': 'following', 'value': False},
-                                                    {'type': 'following', 'value': True}])
+        # Told once while live that nobody follows, then once that the agent does; never while
+        # it is still joining.
+        self.assertEqual(controls, [('live', {'type': 'following', 'value': False}),
+                                    ('live', {'type': 'following', 'value': True})])
         self.assertEqual(finished, ['meeting_ended'])
 
     async def test_notes_and_instructions_go_into_the_meeting(self):
