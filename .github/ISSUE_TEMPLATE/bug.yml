@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in a call, a meeting, setup, or the console does not work.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [troubleshooting](https://github.com/kaelorlabs/smitline/blob/main/docs/troubleshooting.md) first.
+        Do not paste API keys, tokens, phone numbers, or transcripts you would not want public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options:
+        - Phone call (SignalWire)
+        - Phone call (Twilio)
+        - Zoom
+        - Microsoft Teams
+        - Google Meet
+        - Setup
+        - Console
+        - MCP / agent connection
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `smitline --version`, or the image tag.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log lines, with secrets and personal details removed.
+      render: text
