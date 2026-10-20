@@ -232,15 +232,13 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     speaker = await adapter.get_active_speaker()
                 except Exception:
                     speaker = None
-                said = [f'{caption["speaker"]}: {caption["text"]}'
-                        for caption in state.get('captions', [])[-call_requests.CONTEXT_LINES:]]
+                said = call_requests.context_lines(state.get('captions', []))
                 output = control.ask(call['arguments'], asked_by=speaker or '', context=said)
                 record.event('agent_request', status=output.get('status'),
                              request=output.get('requestId'))
                 try:
                     for payload in function_output_events(call['call_id'],
-                                                          call_requests.tool_output(output),
-                                                          call['delegation_id']):
+                                                          call_requests.tool_output(output)):
                         await ws.send_json(payload)
                 except Exception as error:
                     # The session is closing; the request itself already went out on /health.
@@ -360,10 +358,15 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('finished')
                         break
                     elif kind == 'error':
-                        state['api_error'] = event.get('error', {}).get('code') or 'live_error'
-                        stage('api_error')
+                        error = event.get('error') or {}
+                        state['api_error'] = error.get('code') or 'live_error'
+                        record.event('api_error', code=state['api_error'],
+                                     message=str(error.get('message') or '')[:300])
                         if not ready.is_set():
+                            stage('api_error')
                             raise RuntimeError('GPT-Live rejected session startup')
+                        # After start-up an error refuses one event (a tool result, a note),
+                        # and the session goes on: the meeting continues, as a phone call does.
                     # Unknown future events are ignored so audio and transcripts continue.
             finally:
                 control.send = None

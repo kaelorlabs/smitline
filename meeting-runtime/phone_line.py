@@ -777,8 +777,7 @@ class PhoneSession:
             message.pop('seq', None)
             self.ctx.request(message)
         if self.live is not None:
-            self._spawn(self.live.submit_function_output(
-                call['call_id'], tool_output(output), delegation_id=call['delegation_id']))
+            self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
 
     async def deliver(self, note):
         """A note about a request, for the voice (call_requests.appends)."""

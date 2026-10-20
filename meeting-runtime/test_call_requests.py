@@ -110,6 +110,18 @@ class RequestDeskTests(unittest.TestCase):
         self.assertIn("Robin's agent", tool['description'])
 
 
+class ContextTests(unittest.TestCase):
+    def test_caption_pieces_become_lines(self):
+        pieces = [{'speaker': 'meeting', 'text': ' Okay'}, {'speaker': 'meeting', 'text': ', so what'},
+                  {'speaker': 'meeting', 'text': ' changed?'}, {'speaker': 'agent', 'text': ' Checking.'},
+                  {'speaker': 'meeting', 'text': '  '}, 'junk']
+        self.assertEqual(call_requests.context_lines(pieces),
+                         ['meeting: Okay, so what changed?', 'agent: Checking.'])
+        many = [{'speaker': 'meeting' if n % 2 else 'agent', 'text': f'line {n}'} for n in range(10)]
+        self.assertEqual(call_requests.context_lines(many)[0], 'agent: line 4')
+        self.assertEqual(call_requests.context_lines(None), [])
+
+
 class NoteTests(unittest.TestCase):
     request = {'id': 'r1', 'text': README, 'askedBy': 'Priya'}
 
@@ -466,8 +478,8 @@ class PhoneRequestTests(unittest.IsolatedAsyncioTestCase):
         live.push(function_call('ask_agent', {'action': 'ask', 'requestId': '', 'kind': 'question',
                                               'text': 'When does the order ship?', 'askedBy': ''}))
         await until(lambda: live.outputs)
-        call_id, output, delegation = live.outputs[0]
-        self.assertEqual((call_id, delegation), ('fc-1', 'dlg-1'))
+        call_id, output = live.outputs[0]
+        self.assertEqual(call_id, 'fc-1')
         self.assertEqual((json.loads(output)['requestId'], json.loads(output)['status']), ('r1', 'noted'))
         stored = self.h.store.get(record['id'])['requests'][0]
         self.assertEqual((stored['id'], stored['askedBy'], stored['kind']), ('r1', 'Sam', 'question'))
@@ -656,11 +668,20 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
                     'askedBy': 'Priya'}))
                 await until(lambda: any(e['type'] == 'response.item.create' for e in socket.sent))
                 item = next(e for e in socket.sent if e['type'] == 'response.item.create')
-                self.assertEqual(item['delegation_id'], 'dlg-1')
+                more = next(e for e in socket.sent if e['type'] == 'response.create')
+                # GPT-Live refuses a delegation_id on either event (it ended the first live test).
+                self.assertNotIn('delegation_id', item)
+                self.assertNotIn('delegation_id', more)
+                self.assertEqual(item['item']['call_id'], 'fc-1')
                 self.assertEqual(json.loads(item['item']['output'])['requestId'], 'r1')
-                self.assertTrue(any(e['type'] == 'response.create' for e in socket.sent))
                 self.assertEqual(state['requests'][0]['id'], 'r1')
                 self.assertEqual(state['requests'][0]['askedBy'], 'Priya')
+                self.assertEqual(state['requests'][0]['context'], ['meeting: Can Robin add the launch date?'])
+                # An error after start-up refuses one event; the meeting goes on.
+                await socket.events.put({'type': 'error', 'error': {'code': 'invalid_event',
+                                                                    'message': 'Unknown field.'}})
+                await until(lambda: state.get('api_error') == 'invalid_event')
+                self.assertEqual(state['stage'], 'live')
                 status, body = await control.handle({'type': 'note', 'kind': 'instructions',
                                                      'text': 'Tell Priya it is done.'})
                 self.assertEqual(body['delivered'], True)

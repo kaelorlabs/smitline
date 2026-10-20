@@ -199,6 +199,21 @@ class RequestDesk:
         return message
 
 
+def context_lines(captions, limit=CONTEXT_LINES):
+    """The last lines said, from a meeting's caption pieces: pieces in a row from one side are
+    one line."""
+    lines = []
+    for caption in captions or ():
+        if not isinstance(caption, dict):
+            continue
+        speaker, text = caption.get('speaker'), str(caption.get('text') or '')
+        if lines and lines[-1][0] == speaker:
+            lines[-1][1] += text
+        else:
+            lines.append([speaker, text])
+    return [f'{speaker}: {" ".join(text.split())}' for speaker, text in lines if text.strip()][-limit:]
+
+
 def tool_output(result):
     return json.dumps(result, ensure_ascii=False)
 
