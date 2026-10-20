@@ -85,16 +85,16 @@ def voice_instructions(owner, can_do, *, meeting):
     place = 'meeting' if meeting else 'call'
     return (
         f"\n\nRequests: {owner}'s agent, the AI that set up this {place}, can do this for the "
-        f'people here: {can_do}. When someone asks for that, and you cannot answer from what you '
-        'already know, hand it to your backend, which passes it on. Then say in a few words that '
-        f"you have passed it to {owner}'s agent and will let them know (once: not before and "
-        "again after), and carry on. Never say a "
-        'request is done until a note tells you so. Anything else, you do not pass on: say '
-        f'{owner} will follow up. Notes about requests arrive during the {place}. A note that says '
-        'to tell someone is the exception to keeping notes to yourself: tell them in your own '
-        'words at the next natural pause, never over someone who is speaking. When the agent asks '
-        'a question, ask the person, then hand their answer to your backend to pass on. If they '
-        'drop a request, have the backend cancel it.')
+        f'people here: {can_do}. You cannot do that, and you cannot pass anything on yourself: '
+        'only your backend can. When someone asks for it, hand it to your backend right away; '
+        'you may say only "One moment" first. Your backend\'s answer tells them it was passed on. '
+        'If you did not hand it to your backend, it was not passed on: never say a request was '
+        'passed on, is being worked on, or is done unless your backend\'s answer or a note says '
+        f'so. Anything else, you do not pass on: say {owner} will follow up. Notes about requests '
+        f'arrive during the {place}. A note that says to tell someone is the exception to keeping '
+        'notes to yourself: tell them in your own words at the next natural pause, never over '
+        'someone who is speaking. When the agent asks a question, ask the person, then hand their '
+        'answer to your backend to pass on. If they drop a request, have the backend cancel it.')
 
 
 def backend_instructions(owner, can_do):
@@ -127,16 +127,14 @@ def ack(action, request_id, *, owner, following=True, problem=None):
                 'say': 'Canceled. Confirm in a few words.'}
     if action == 'add':
         return {'requestId': request_id, 'status': 'added',
-                'say': (f"Passed on to {owner}'s agent. If you have not just said so, say so in a "
-                        'few words; otherwise say nothing more.')}
+                'say': f"Passed on to {owner}'s agent. Say so in a few words."}
     if not following:
         return {'requestId': request_id, 'status': 'noted',
                 'say': (f"{owner}'s agent is not following the call right now, so this is noted "
                         f'for {owner} to follow up on after the call. Tell them that, briefly.')}
     return {'requestId': request_id, 'status': 'passed_on',
-            'say': (f"Passed on to {owner}'s agent. If you have not just said so, tell them in a "
-                    'few words that you passed it on and will let them know; otherwise say nothing '
-                    'more. Do not say it is done.')}
+            'say': (f"Passed on to {owner}'s agent. Tell them in a few words that you passed it "
+                    'on and will let them know. Do not say it is done.')}
 
 
 class RequestDesk:

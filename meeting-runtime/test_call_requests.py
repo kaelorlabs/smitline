@@ -102,6 +102,12 @@ class RequestDeskTests(unittest.TestCase):
         desk.close('r2')
         self.assertIsNone(desk.handle({'action': 'add', 'requestId': 'r2', 'text': 'x'})[0])
 
+    def test_the_voice_knows_only_the_backend_passes_requests_on(self):
+        text = call_requests.voice_instructions('Robin', 'look things up', meeting=True)
+        self.assertIn('you cannot pass anything on yourself: only your backend can', text)
+        self.assertIn('If you did not hand it to your backend, it was not passed on', text)
+        self.assertIn('you may say only "One moment" first', text)
+
     def test_tool_is_strict_and_complete(self):
         tool = call_requests.ask_agent_tool('Robin')
         self.assertTrue(tool['strict'])
