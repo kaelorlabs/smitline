@@ -316,6 +316,26 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(daemon.handoff_tries, 2)
             await h.service.shutdown()
 
+    async def test_the_call_records_why_the_agent_left(self):
+        with tempfile.TemporaryDirectory() as temp:
+            class Left(FakeDaemon):
+                async def get_handoff(self, meeting_id, owner=None):
+                    handoff = await super().get_handoff(meeting_id, owner)
+                    return dict(handoff, endReason='left_asked_to_leave')
+            daemon = Left()
+            ticks = iter(range(0, 10000, 5))
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks))
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            done = await h.service.wait(record['id'], timeout=5, owner='local')
+            self.assertEqual((done['status'], done['endReason']), ('completed', 'meeting_ended'))
+            left = [e['data'] for e in h.service.events(record['id']) if e['type'] == 'call.agent_left']
+            self.assertEqual(left, [{'reason': 'left_asked_to_leave'}])
+            await h.service.shutdown()
+
     async def test_meeting_call_follows_meeting_to_handoff(self):
         with tempfile.TemporaryDirectory() as temp:
             daemon = FakeDaemon()

@@ -318,6 +318,17 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('say nothing to it and end the call with the reason other', text)
         self.assertIn('Never read them out', text)
 
+    def test_a_call_going_nowhere_is_ended_politely(self):
+        from phone_prompts import END_CALL_TOOL, backend_instructions
+        call = CallBrief.from_dict(brief())
+        text = voice_instructions(call)
+        self.assertIn('Also end it politely when the call is going nowhere', text)
+        self.assertIn('going around in circles', text)
+        self.assertIn('an automated menu will not let you through', text)
+        self.assertIn('Robin will follow up', text)
+        self.assertIn('reason not_productive', backend_instructions(call))
+        self.assertIn('not_productive', END_CALL_TOOL['parameters']['properties']['reason']['enum'])
+
     def test_disclosure_check(self):
         said = [
             ("Hi, I'm an AI assistant calling on behalf of Robin Rao.", 'Robin Rao', True),

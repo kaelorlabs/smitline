@@ -135,6 +135,20 @@ class Participation:
         if self.on_presence:
             self.on_presence()
 
+    def speaking(self):
+        """Speech is still queued, being written, or was heard within quiet_seconds."""
+        return (not self.queue.empty() or not self.gate.queue.empty() or self.gate.writing
+                or self.clock() - self.last_output_audio <= self.quiet_seconds)
+
+    async def finish_speaking(self, timeout, settle=1.0):
+        """Wait for what the voice is saying (a goodbye) to be heard, at most `timeout` seconds.
+        `settle` gives a reply that is still being generated time to start arriving."""
+        await asyncio.sleep(settle)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, timeout - settle)
+        while self.speaking() and loop.time() < deadline:
+            await asyncio.sleep(.05)
+
     async def stop_output(self, mute_platform=False):
         async with self.lock:
             self._discard_pending()

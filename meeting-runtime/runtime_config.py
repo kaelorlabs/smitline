@@ -48,6 +48,8 @@ class RuntimeConfig:
     web_search: bool = False
     # 'still' (default): one picture per state, almost no CPU. 'animated': the 30 fps canvas.
     camera_style: str = 'still'
+    # Leave after this many seconds without anyone speaking; 0 never does.
+    idle_leave_seconds: int = 600
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -73,6 +75,7 @@ class RuntimeConfig:
         camera_style = (env.get('SMITLINE_MEETING_CAMERA_STYLE') or 'still').strip().lower()
         if camera_style not in ('still', 'animated'):
             raise ValueError("SMITLINE_MEETING_CAMERA_STYLE must be 'still' or 'animated'")
+        idle_leave_seconds = _idle_leave_seconds(env.get('SMITLINE_MEETING_IDLE_LEAVE_SECONDS'))
         camera_enabled = True
         camera_default_on = True
         camera_logo = ''
@@ -98,7 +101,18 @@ class RuntimeConfig:
                    owner_name=owner_name(state, env),
                    backend_model=backend_model or DEFAULT_BACKEND_MODEL,
                    web_search=web_search,
-                   camera_style=camera_style)
+                   camera_style=camera_style,
+                   idle_leave_seconds=idle_leave_seconds)
+
+
+def _idle_leave_seconds(value):
+    from meeting_lifecycle import DEFAULT_IDLE_LEAVE_SECONDS
+    value = (value or '').strip()
+    if not value:
+        return DEFAULT_IDLE_LEAVE_SECONDS
+    if not value.isdigit() or int(value) > 86400:
+        raise ValueError('SMITLINE_MEETING_IDLE_LEAVE_SECONDS must be 0 to 86400 seconds')
+    return int(value)
 
 
 def meeting_state_from_environ(environ=None):

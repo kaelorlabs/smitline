@@ -246,6 +246,19 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.daemon.handoffs[-1].partial)
         self.assertFalse(self.launcher.running)
 
+    async def test_the_agent_leaving_is_the_handoffs_end_reason(self):
+        await self.supervisor.start(session())
+        self.health.payload = {'stage': 'finished', 'endReason': 'left_asked_to_leave'}
+        await asyncio.sleep(0.08)
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'left_asked_to_leave')
+        self.assertFalse(self.daemon.handoffs[-1].partial)
+
+    async def test_other_end_reasons_from_the_container_are_not_trusted(self):
+        await self.supervisor.start(session())
+        self.health.payload = {'stage': 'meeting_ended', 'endReason': 'anything else'}
+        await asyncio.sleep(0.08)
+        self.assertEqual(self.daemon.handoffs[-1].end_reason, 'meeting_ended')
+
     async def test_natural_end_releases_agent_capacity(self):
         first = session()
         await self.supervisor.start(first)
