@@ -84,7 +84,7 @@ class SessionConfigTests(unittest.TestCase):
 
 
 class MeetingIntroTests(unittest.TestCase):
-    INTRO = "Hi everyone, I'm {}'s AI assistant. I'll mostly listen; say 'Smitline' if you need me."
+    INTRO = "Hi everyone, {}'s AI assistant here. Just say 'Smitline' if you need me."
 
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
@@ -107,7 +107,7 @@ class MeetingIntroTests(unittest.TestCase):
                 currentTask='Take part in this meeting on behalf of Jordan Lee.')})
             runtime = RuntimeConfig.from_environ(env)
         self.assertEqual(runtime.owner_name, 'Jordan Lee')
-        self.assertIn(self.INTRO.format('Jordan Lee'), intro_event(runtime)['content'])
+        self.assertIn(self.INTRO.format('Jordan'), intro_event(runtime)['content'])
 
     def test_explicit_field_wins_and_other_tasks_are_not_parsed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -124,6 +124,17 @@ class MeetingIntroTests(unittest.TestCase):
         runtime = RuntimeConfig.from_environ({})
         self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
                       intro_event(runtime)['content'])
+
+    def test_people_are_named_as_people_say_them(self):
+        from meeting_intro import spoken_name
+        self.assertEqual(spoken_name('Arun Raj'), 'Arun')
+        self.assertEqual(spoken_name('Dr. Lee'), 'Dr. Lee')
+        self.assertEqual(spoken_name('  '), '')
+
+    def test_the_voice_switches_language_and_stops_replying_to_thanks(self):
+        prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
+        self.assertIn('Hindi, Tamil, or Telugu, switch right away', prompt)
+        self.assertIn('do not reply to thanks', prompt)
 
     def test_people_can_address_it_as_smitline_or_as_heard(self):
         prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
@@ -168,6 +179,52 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await asyncio.wait_for(task, 1))
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]['type'], 'session.commentary.append')
+
+    async def test_cue_waits_for_a_pause_in_the_conversation(self):
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
+        ready, stop, sent = asyncio.Event(), asyncio.Event(), []
+        now, heard = [100.0], [None]
+
+        async def send(event):
+            sent.append(event)
+        ready.set()
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: heard[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
+        for _ in range(5):  # someone keeps talking: no intro over them
+            now[0] += 1.0
+            heard[0] = now[0]
+            await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] += 2.5  # a pause
+        self.assertTrue(await asyncio.wait_for(task, 1))
+        self.assertEqual(len(sent), 1)
+
+    async def test_a_meeting_that_never_pauses_still_hears_the_disclosure(self):
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
+        ready, stop, sent = asyncio.Event(), asyncio.Event(), []
+        now = [100.0]
+
+        async def send(event):
+            sent.append(event)
+        ready.set()
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: now[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
+        await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] += 46
+        self.assertTrue(await asyncio.wait_for(task, 1))
+        # Nobody heard yet: a quiet room gets it after the quiet time.
+        sent.clear()
+        now[0] = 0.0
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: None, clock=lambda: now[0], quiet=2.0))
+        await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] = 2.0
+        self.assertTrue(await asyncio.wait_for(task, 1))
 
     async def test_no_cue_when_disabled_or_stopped_first(self):
         ready, stop, sent = asyncio.Event(), asyncio.Event(), []

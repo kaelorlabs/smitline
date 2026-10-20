@@ -8,6 +8,7 @@ import contextlib
 import os
 import re
 import signal
+import time
 from contextlib import AsyncExitStack
 from urllib.parse import urlparse
 
@@ -181,8 +182,9 @@ def build_session_config(runtime, meeting_state=None):
     config = {'model': 'gpt-live-1', 'store': False,
               'audio': {'format': {'type': 'audio/pcm', 'rate': 24000}},
               'instructions': f'''You are {runtime.participant_name}, an AI participant in a real meeting. Follow the conversation continuously and retain the context needed to help.
-Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor.
-Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.''',
+Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor. After you have answered or helped, go back to listening: do not reply to thanks, "okay", "go ahead", laughter, or other remarks that need no answer, and keep small talk aimed at you to a few words.
+Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.
+Languages: speak the language of the person talking to you. When someone asks you to speak another language, such as Hindi, Tamil, or Telugu, switch right away and keep using it until they ask otherwise; do not decline. Notes and instructions reach you in English: say what they tell you in the language you are speaking.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
     config['instructions'] += addressing_instructions(runtime.participant_name)
     if meeting_state.get('canDo'):
@@ -216,6 +218,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            heard = [None]  # when someone in the meeting was last heard; the intro waits for a pause
             requests = []
 
             async def send_note(kind, text):
@@ -266,7 +269,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     await gate.platform_microphone_changed(actual)
 
             async def introduce_once():
-                if await introduce(ws.send_json, runtime, participation, ready, stop):
+                if await introduce(ws.send_json, runtime, participation, ready, stop,
+                                   heard_at=lambda: heard[0]):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 
@@ -338,6 +342,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         # Fail rather than silently accumulate seconds of stale speech.
                         gate.offer(data)
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
+                        if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
+                            heard[0] = time.monotonic()
                         transcript.note(event)
                     elif kind == 'response.event':
                         before = state.get('backend_status')

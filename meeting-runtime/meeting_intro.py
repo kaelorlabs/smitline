@@ -1,6 +1,7 @@
 """The short AI disclosure a meeting session speaks once it is admitted and live."""
 import asyncio
 import re
+import time
 
 from voice_core import append_event
 
@@ -13,6 +14,11 @@ CALL_NAME_HEARD_AS = ('smit line', 'Smith line', 'Smithline', 'Smitlin')
 # meeting_line.context_from_brief writes this task for meetings started through /v1/calls.
 CALL_TASK = re.compile(r'^Take part in this meeting on behalf of (.+?)\.?$')
 MAX_NAME = 120
+# The intro waits for a pause: this long with nobody heard speaking. If the meeting never
+# pauses, it is said anyway after INTRO_MAX_WAIT, since the disclosure must be made.
+INTRO_QUIET_SECONDS = 2.0
+INTRO_MAX_WAIT = 45.0
+TITLES = ('dr', 'mr', 'mrs', 'ms', 'prof')
 
 
 def _clean_name(value):
@@ -35,9 +41,19 @@ def owner_name(state=None, environ=None):
     return _clean_name((environ or {}).get('SMITLINE_OWNER_NAME'))
 
 
+def spoken_name(owner):
+    """What people call the owner: the first name, or the full name after a title."""
+    words = str(owner or '').split()
+    if not words:
+        return ''
+    return ' '.join(words) if words[0].rstrip('.').casefold() in TITLES else words[0]
+
+
 def intro_line(owner):
-    who = f"{owner}'s AI assistant" if owner else f'an AI assistant for {FALLBACK_OWNER}'
-    return f"Hi everyone, I'm {who}. I'll mostly listen; say '{CALL_NAME}' if you need me."
+    if not owner:
+        return (f"Hi everyone, I'm an AI assistant for {FALLBACK_OWNER}. "
+                f"Just say '{CALL_NAME}' if you need me.")
+    return f"Hi everyone, {spoken_name(owner)}'s AI assistant here. Just say '{CALL_NAME}' if you need me."
 
 
 def addressing_instructions(participant_name=''):
@@ -68,8 +84,12 @@ def intro_event(runtime):
         f'"{intro_line(runtime.owner_name)}" Then stay silent and keep listening.')
 
 
-async def introduce(send, runtime, participation, ready, stop, poll=0.2):
-    """Send the cue once the session is live and the meeting microphone can carry speech."""
+async def introduce(send, runtime, participation, ready, stop, poll=0.2, heard_at=None,
+                    clock=time.monotonic, quiet=None, max_wait=None):
+    """Send the cue once the session is live, the meeting microphone can carry speech, and
+    nobody is talking: heard_at() is when someone in the meeting was last heard (None: not yet).
+    Joining in the middle of a sentence and talking over it is rude; after max_wait it is said
+    at the next chance anyway, since the disclosure must be made."""
     event = intro_event(runtime)
     if event is None:
         return False
@@ -77,6 +97,16 @@ async def introduce(send, runtime, participation, ready, stop, poll=0.2):
     while not participation.platform_ready:
         if stop.is_set():
             return False
+        await asyncio.sleep(poll)
+    quiet = INTRO_QUIET_SECONDS if quiet is None else quiet
+    max_wait = INTRO_MAX_WAIT if max_wait is None else max_wait
+    started = clock()
+    while heard_at is not None and clock() - started < max_wait:
+        if stop.is_set():
+            return False
+        last = heard_at()
+        if clock() - max(started, last or started) >= quiet:
+            break
         await asyncio.sleep(poll)
     await send(event)
     return True

@@ -87,7 +87,8 @@ def voice_instructions(owner, can_do, *, meeting):
         f"\n\nRequests: {owner}'s agent, the AI that set up this {place}, can do this for the "
         f'people here: {can_do}. When someone asks for that, and you cannot answer from what you '
         'already know, hand it to your backend, which passes it on. Then say in a few words that '
-        f"you have passed it to {owner}'s agent and will let them know, and carry on. Never say a "
+        f"you have passed it to {owner}'s agent and will let them know (once: not before and "
+        "again after), and carry on. Never say a "
         'request is done until a note tells you so. Anything else, you do not pass on: say '
         f'{owner} will follow up. Notes about requests arrive during the {place}. A note that says '
         'to tell someone is the exception to keeping notes to yourself: tell them in your own '
@@ -126,14 +127,16 @@ def ack(action, request_id, *, owner, following=True, problem=None):
                 'say': 'Canceled. Confirm in a few words.'}
     if action == 'add':
         return {'requestId': request_id, 'status': 'added',
-                'say': f"Passed on to {owner}'s agent. Say so in a few words if it fits."}
+                'say': (f"Passed on to {owner}'s agent. If you have not just said so, say so in a "
+                        'few words; otherwise say nothing more.')}
     if not following:
         return {'requestId': request_id, 'status': 'noted',
                 'say': (f"{owner}'s agent is not following the call right now, so this is noted "
                         f'for {owner} to follow up on after the call. Tell them that, briefly.')}
     return {'requestId': request_id, 'status': 'passed_on',
-            'say': (f"Passed on to {owner}'s agent. Tell them in a few words that you have passed "
-                    "it on and will let them know. Do not say it is done.")}
+            'say': (f"Passed on to {owner}'s agent. If you have not just said so, tell them in a "
+                    'few words that you passed it on and will let them know; otherwise say nothing '
+                    'more. Do not say it is done.')}
 
 
 class RequestDesk:
