@@ -245,6 +245,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     record.event('agent_request_unanswered', error=type(error).__name__)
 
             control.adapter = adapter
+            control.record = record.event
             control.send = send_note
 
             async def send_audio():

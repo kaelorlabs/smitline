@@ -21,6 +21,8 @@ class MeetingControl:
         # send(kind, text): append to the GPT-Live session; set while the voice is live.
         self.send = None
         self.adapter = None
+        # record(kind, **data): the meeting archive's event log, when there is one.
+        self.record = None
         # Until the daemon says otherwise, nobody is known to be following the meeting.
         self.following = False
         self.desk = RequestDesk(owner, limit=MAX_REQUESTS['meeting']) if can_do else None
@@ -62,8 +64,10 @@ class MeetingControl:
             try:
                 await self.adapter.send_chat_message(note['chat'])
                 chat_posted = True
-            except Exception:
-                chat_posted = False
+            except Exception as error:
+                # The voice gets the details instead; say why, so the adapter can be fixed.
+                if self.record is not None:
+                    self.record('chat_failed', error=f'{type(error).__name__}: {str(error)[:200]}')
         delivered = True
         for append_kind, append_text in appends(note, chat_posted=chat_posted):
             delivered = bool(await self.send(append_kind, append_text)) and delivered

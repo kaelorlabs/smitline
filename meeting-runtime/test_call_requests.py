@@ -566,9 +566,13 @@ class MeetingControlTests(unittest.IsolatedAsyncioTestCase):
                                ({'chatAvailable': True}, ChatAdapter(fail=True))):
             control = self.control(**state)
             control.adapter = adapter
+            logged = []
+            control.record = lambda kind, **data: logged.append((kind, data))
             status, body = await control.handle(note)
             self.assertEqual(body, {'delivered': True, 'chat': False})
             self.assertEqual([kind for kind, _ in self.sent], ['thinking', 'instructions'])
+            self.assertEqual(logged, [('chat_failed', {'error': 'RuntimeError: chat is closed'})]
+                             if adapter.fail else [])
 
     async def test_done_closes_the_request_on_the_voice_side(self):
         control = self.control()
