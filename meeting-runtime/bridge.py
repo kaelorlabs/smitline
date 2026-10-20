@@ -22,7 +22,8 @@ from voice_core import append_event, backend_usage_from, function_call_from, fun
 import call_requests
 from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
-from meeting_intro import addressing_instructions, introduce, intro_instructions
+from meeting_intro import (
+    addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions)
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
@@ -187,6 +188,7 @@ Capability policy: Help with any meeting task you can handle reliably, including
 Languages: speak the language of the person talking to you. When someone asks you to speak another language, such as Hindi, Tamil, or Telugu, switch right away and keep using it until they ask otherwise; do not decline. Notes and instructions reach you in English: say what they tell you in the language you are speaking.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
     config['instructions'] += addressing_instructions(runtime.participant_name)
+    config['instructions'] += identity_instructions(runtime.owner_name)
     if meeting_state.get('canDo'):
         config['instructions'] += call_requests.voice_instructions(
             runtime.owner_name or 'the person who invited them', meeting_state['canDo'],
@@ -442,6 +444,7 @@ async def main():
             enabled=runtime.camera_enabled,
             logo_src=runtime.camera_logo_data_uri or None,
             style=runtime.camera_style,
+            caption=camera_caption(runtime.owner_name),
         )
         presence = Presence(state, camera_feed)
         presence.sync()

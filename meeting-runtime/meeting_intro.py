@@ -1,4 +1,9 @@
-"""The short AI disclosure a meeting session speaks once it is admitted and live."""
+"""Who the meeting voice is: its name, the caption on its camera tile, and the optional hello.
+
+Meetings join quietly. The bot's name ("Smitline AI") and the caption on its tile ("Arun's AI
+assistant") say it is an AI for as long as it is there, also to people who join later; a spoken
+hello is opt-in (SMITLINE_MEETING_INTRO=1). Phone calls, which have no screen, say it aloud.
+"""
 import asyncio
 import re
 import time
@@ -49,11 +54,32 @@ def spoken_name(owner):
     return ' '.join(words) if words[0].rstrip('.').casefold() in TITLES else words[0]
 
 
+def assistant_of(owner):
+    """ "Arun's AI assistant", or "an AI assistant for the person who invited me". """
+    return f"{spoken_name(owner)}'s AI assistant" if owner else f'an AI assistant for {FALLBACK_OWNER}'
+
+
 def intro_line(owner):
     if not owner:
-        return (f"Hi everyone, I'm an AI assistant for {FALLBACK_OWNER}. "
-                f"Just say '{CALL_NAME}' if you need me.")
-    return f"Hi everyone, {spoken_name(owner)}'s AI assistant here. Just say '{CALL_NAME}' if you need me."
+        return f"Hi everyone, I'm {assistant_of(owner)}."
+    return f"Hi everyone, {assistant_of(owner)} here."
+
+
+MAX_CAPTION = 40
+
+
+def camera_caption(owner):
+    """The one line the camera tile shows, under the mark: never task text."""
+    caption = f"{spoken_name(owner)}'s AI assistant" if owner else 'AI assistant'
+    return caption if len(caption) <= MAX_CAPTION else 'AI assistant'
+
+
+def identity_instructions(owner):
+    """Who the voice is, for when someone greets it or asks; it does not announce itself."""
+    who = assistant_of(owner).replace('invited me', 'invited you')
+    return (f'\nWho you are: {who}. Your name and your camera tile show the meeting that you are '
+            'an AI. Do not introduce yourself unprompted; if someone greets you or asks who you '
+            'are, say so in a few natural words, and that you are listening in and can help.')
 
 
 def addressing_instructions(participant_name=''):

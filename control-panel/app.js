@@ -317,7 +317,7 @@ async function startColleague(event) {
     await request('/api/start', { method: 'POST', body: JSON.stringify(payload()) });
     savedPasscode = savedPasscode || Boolean($('#passcode').value);
     $('#passcode').value = '';
-    announce('Smitline is starting. Admit it when it reaches the meeting lobby. It is listed on the Meetings page with its result.');
+    announce('Smitline is starting. Admit "Smitline AI" when it reaches the meeting lobby. It is listed on the Meetings page with its result.');
     await refresh();
   } catch (error) { showErrors(error.result?.errors); announce(error.message, true); }
   finally {

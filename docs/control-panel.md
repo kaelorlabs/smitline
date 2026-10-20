@@ -62,7 +62,7 @@ Use **Clear saved context** when the material should no longer be available. Thi
 
 ### Operate the meeting
 
-The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Smitline** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
+The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Smitline AI** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
 
 The platform may display Smitline as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Smitline in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Smitline's tile; it accepts that explicit request.
 

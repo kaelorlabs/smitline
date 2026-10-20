@@ -96,6 +96,10 @@ def file_mode(path):
     return stat.S_IMODE(Path(path).stat().st_mode)
 
 
+# The name a meeting shows for the bot: it says it is an AI, and people still call it Smitline.
+DEFAULT_PARTICIPANT_NAME = 'Smitline AI'
+
+
 def state_from_session(session):
     context = session.context.to_dict() if hasattr(session.context, 'to_dict') else session.context
     payload = {
@@ -103,7 +107,7 @@ def state_from_session(session):
         'meetingId': session.id,
         'platform': session.platform,
         'meetingUrl': session.meeting_url,
-        'participantName': 'Smitline',
+        'participantName': DEFAULT_PARTICIPANT_NAME,
         'meetingInstructions': '',
         'context': context,
     }

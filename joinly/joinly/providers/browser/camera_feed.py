@@ -446,6 +446,7 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
                         ctx.restore();
                     }}
                 }}
+                {caption_draw}
             }}
             requestAnimationFrame(draw);
         }}
@@ -457,6 +458,18 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
 
     {device_patch}
 }})();"""
+
+# The one line of text a tile may show: a fixed caption under the mark ("Arun's AI assistant"),
+# made by the caller from the owner's name, never task text. Inserted through str.format, so its
+# braces are single; __CAPTION__ becomes a JSON string.
+_CAPTION_DRAW = """ctx.save();
+            ctx.globalAlpha = 0.85;
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '600 ' + Math.round(H * 0.06) + 'px "DejaVu Sans", Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(__CAPTION__, W / 2, H * 0.9);
+            ctx.restore();"""
 
 # Routes camera requests to the canvas track from _initCanvas(); shared by both
 # styles. Inserted through str.format, so its braces are single.
@@ -571,6 +584,7 @@ _STILL_CAMERA_TEMPLATE = """\
                     ctx.fill();
                 }}
             }}
+            {caption_draw}
             ctx.globalAlpha = 1;
         }}
 
@@ -601,9 +615,10 @@ _STILL_REPAINT_MS = 400
 
 
 def build_camera_override_script(
-    *, logo_src: str | None = None, style: str = "animated"
+    *, logo_src: str | None = None, style: str = "animated", caption: str | None = None
 ) -> str:
     """Build the getUserMedia override script without interpolating untrusted braces."""
+    caption_draw = _CAPTION_DRAW if caption else ""
     if style == "still":
         script = _STILL_CAMERA_TEMPLATE.format(
             w=_STILL_WIDTH,
@@ -611,6 +626,7 @@ def build_camera_override_script(
             fps=_STILL_FPS,
             repaint_ms=_STILL_REPAINT_MS,
             device_patch=_DEVICE_PATCH,
+            caption_draw=caption_draw,
         )
     elif style == "animated":
         script = _CAMERA_OVERRIDE_TEMPLATE.format(
@@ -626,12 +642,14 @@ def build_camera_override_script(
             fx_busy=_FX_BUSY,
             fx_listening=_FX_LISTENING,
             device_patch=_DEVICE_PATCH,
+            caption_draw=caption_draw,
         )
     else:
         raise ValueError(f"Unknown camera style {style!r}")
     return (
         script.replace("__LOGO_SRC__", json.dumps(logo_src or _LOGO_SVG))
         .replace("__VISUAL_STATES__", json.dumps(list(_VISUAL_STATES)))
+        .replace("__CAPTION__", json.dumps(caption or ""))
     )
 
 
@@ -651,12 +669,14 @@ class CameraFeed:
         enabled: bool = True,
         logo_src: str | None = None,
         style: str = "animated",
+        caption: str | None = None,
     ) -> None:
         """Initialize with the underlying audio writer."""
         if style not in CAMERA_STYLES:
             raise ValueError(f"Unknown camera style {style!r}")
         self.enabled = enabled
         self.style = style
+        self.caption = caption
         self._logo_src = logo_src or _LOGO_SVG
         self._meeting_page: Page | None = None
         self._last_band_time: float = 0
@@ -672,7 +692,9 @@ class CameraFeed:
         if not self.enabled:
             return
         await meeting_page.add_init_script(
-            build_camera_override_script(logo_src=self._logo_src, style=self.style)
+            build_camera_override_script(
+                logo_src=self._logo_src, style=self.style, caption=self.caption
+            )
         )
 
     def set_visual_state(self, name: str | None) -> None:
