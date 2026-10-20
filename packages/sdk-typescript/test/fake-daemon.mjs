@@ -30,6 +30,7 @@ export async function startFakeDaemon(options = {}) {
     created: 0,
     calls: new Map(),
     instructions: [],
+    replies: [],
     profile: { version: 1 },
     requireAuth: options.requireAuth !== false,
     // Wait requests answered before a call completes; 0 completes on the first wait.
@@ -104,6 +105,12 @@ export async function startFakeDaemon(options = {}) {
     if (request.method === 'GET' && url.pathname === '/v1/calls') {
       const limit = Number(url.searchParams.get('limit') || 20);
       json(response, 200, { calls: [...state.calls.values()].reverse().slice(0, limit) });
+      return;
+    }
+    const reply = url.pathname.match(/^\/v1\/calls\/([^/]+)\/requests\/([^/]+)\/reply$/);
+    if (reply && request.method === 'POST') {
+      state.replies.push({ callId: decodeURIComponent(reply[1]), requestId: decodeURIComponent(reply[2]), ...body });
+      json(response, 200, { request: { id: decodeURIComponent(reply[2]), state: body.type === 'done' ? 'done' : 'working' }, delivered: true });
       return;
     }
     const match = url.pathname.match(/^\/v1\/calls\/([^/]+)(?:\/(wait|end|transfer|instructions))?$/);

@@ -84,8 +84,8 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(methods, [
             'check_call', 'end_call', 'forget_contact', 'get_call', 'get_contact', 'get_do_not_call',
             'get_profile', 'instruct_call', 'list_calls', 'list_contacts', 'list_voices',
-            'save_call_note', 'start_call', 'transfer_call', 'update_contact', 'update_do_not_call',
-            'update_profile', 'wait_for_call',
+            'reply_to_request', 'save_call_note', 'start_call', 'transfer_call', 'update_contact',
+            'update_do_not_call', 'update_profile', 'wait_for_call',
         ])
 
     async def test_contacts_notes_and_list_filters(self):
@@ -154,9 +154,20 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[8], ('PATCH', '/v1/do-not-call', {'remove': ['+14155550142']}))
         await client.wait_for_call('call-0123456789abcdef', 20, since='')
         await client.wait_for_call('call-0123456789abcdef', 20, since='14')
+        await client.wait_for_call('call-0123456789abcdef', 20, since='14', only='requests')
         self.assertEqual([path for _, path, _ in seen[9:]], [
             '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=',
-            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14'])
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14',
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14&only=requests'])
+        await client.reply_to_request('call-0123456789abcdef', 'r1', type='status', text='Picked up.',
+                                      announce=True)
+        await client.reply_to_request('call-0123456789abcdef', 'r1', type='done', text='No access.',
+                                      ok=False)
+        self.assertEqual(seen[12:], [
+            ('POST', '/v1/calls/call-0123456789abcdef/requests/r1/reply',
+             {'type': 'status', 'text': 'Picked up.', 'announce': True}),
+            ('POST', '/v1/calls/call-0123456789abcdef/requests/r1/reply',
+             {'type': 'done', 'text': 'No access.', 'ok': False})])
 
     async def test_a_meeting_is_joined_with_start_call(self):
         seen = []

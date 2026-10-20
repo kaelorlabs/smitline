@@ -68,7 +68,7 @@
       "get": {
         "summary": "Wait until the call finishes or the timeout passes; with since, also until something new is said",
         "operationId": "waitForCall",
-        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange) and carries live.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }],
+        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange), at once for a request from the call, and carries live. While an agent follows a call this way it can answer requests.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }, { "name": "only", "in": "query", "description": "requests: wake only for requests from the call, and leave live.transcript out; for long meetings. Implies since (empty) when since is not given.", "schema": { "type": "string", "enum": ["requests"] } }],
         "responses": {
           "200": { "description": "The call, terminal or not", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
           "404": { "$ref": "#/components/responses/Error" }
@@ -92,6 +92,27 @@
         "responses": {
           "200": { "description": "Whether the line accepted the guidance", "content": { "application/json": { "schema": { "type": "object", "properties": { "delivered": { "type": "boolean" } }, "required": ["delivered"] } } } },
           "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/calls/{callId}/requests/{requestId}/reply": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }, { "$ref": "#/components/parameters/Owner" }, { "name": "requestId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^r[1-9][0-9]{0,2}$" } }],
+      "post": {
+        "summary": "Answer a request from the people on the call: status any number of times, then done once",
+        "operationId": "replyToRequest",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["type", "text"], "properties": {
+          "type": { "type": "string", "enum": ["status", "done"], "description": "status: progress; the first says it was picked up. done: the answer; closes the request." },
+          "text": { "type": "string", "maxLength": 600, "description": "What the voice says or knows, in a sentence or two." },
+          "announce": { "type": "boolean", "default": false, "description": "status only: the voice says it now (at the next natural pause) instead of keeping it as context." },
+          "ok": { "type": "boolean", "default": true, "description": "done only: false when it could not be done." },
+          "details": { "type": "string", "maxLength": 2000, "description": "Links, code, numbers: a meeting posts them in its chat; on a phone call the voice reads them only if asked." }
+        } } } } },
+        "responses": {
+          "200": { "description": "The request after the reply, and whether the voice got it (false once the call has ended)", "content": { "application/json": { "schema": { "type": "object", "required": ["request", "delivered"], "properties": { "request": { "$ref": "#/components/schemas/Request" }, "delivered": { "type": "boolean" } } } } } },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "429": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -315,7 +336,35 @@
               "contact": { "type": "boolean", "description": "Phone only: earlier calls to or from the same number. false overrides the contact's automatic context for this call." },
               "calls": { "type": "array", "maxItems": 10, "items": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" } }
             }
-          }
+          },
+          "canDo": { "type": "string", "maxLength": 500, "description": "What the calling agent does for the people on the call when they ask, such as \"look things up in the repo and edit the docs\". With it, the voice passes their requests to the agent (wait's live.requests; answer with replyToRequest) and declines anything else. Requests are off without it." }
+        }
+      },
+      "Request": {
+        "type": "object",
+        "description": "Something a person on the call asked the calling agent for.",
+        "required": ["id", "kind", "text", "state", "openedAt", "updatedAt", "thread"],
+        "properties": {
+          "id": { "type": "string", "examples": ["r1"] },
+          "kind": { "type": "string", "enum": ["question", "task"] },
+          "text": { "type": "string" },
+          "askedBy": { "type": "string", "description": "Who asked, as the voice heard or the meeting showed; not verified." },
+          "context": { "type": "array", "items": { "type": "string" }, "description": "The last lines said before it was asked." },
+          "state": { "type": "string", "enum": ["open", "working", "done", "canceled"] },
+          "ok": { "type": "boolean" },
+          "answer": { "type": "string" },
+          "openedAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "thread": { "type": "array", "items": { "type": "object", "required": ["from", "type", "at"], "properties": {
+            "from": { "type": "string", "enum": ["call", "agent"] },
+            "type": { "type": "string", "enum": ["ask", "add", "cancel", "status", "done"] },
+            "text": { "type": "string" },
+            "at": { "type": "string", "format": "date-time" },
+            "announce": { "type": "boolean" },
+            "ok": { "type": "boolean" },
+            "details": { "type": "string" },
+            "delivered": { "type": "boolean" }
+          } } }
         }
       },
       "SessionContext": {
@@ -485,7 +534,8 @@
           "carried": { "type": "array", "description": "The notes of earlier calls this call started with.", "items": { "$ref": "#/components/schemas/CarriedNote" } },
           "carryNote": { "type": "object", "description": "A note saved on this finished call for later calls.", "properties": { "text": { "type": "string" }, "by": { "type": "string", "enum": ["agent"] }, "at": { "type": "string", "format": "date-time" } } },
           "error": { "type": "string" },
-          "live": { "type": "object", "description": "Only when waiting with since: what was said after the cursor.", "required": ["cursor", "transcript"], "properties": { "cursor": { "type": "string", "description": "Pass as since next time." }, "transcript": { "type": "array", "items": { "type": "object", "properties": { "speaker": { "type": "string", "description": "agent, other (phone), or meeting" }, "text": { "type": "string" }, "at": { "type": "string", "format": "date-time" } } } } } }
+          "requests": { "type": "array", "description": "Requests from the people on the call (brief canDo).", "items": { "$ref": "#/components/schemas/Request" } },
+          "live": { "type": "object", "description": "Only when waiting with since or only: what was said and asked after the cursor.", "required": ["cursor", "requests"], "properties": { "cursor": { "type": "string", "description": "Pass as since next time." }, "transcript": { "type": "array", "description": "Left out with only=requests.", "items": { "type": "object", "properties": { "speaker": { "type": "string", "description": "agent, other (phone), or meeting" }, "text": { "type": "string" }, "at": { "type": "string", "format": "date-time" } } } }, "requests": { "type": "array", "description": "Request messages from the call: ask (a new request, with kind, text, askedBy, context), add (an answer or detail for id), cancel.", "items": { "type": "object", "required": ["type", "id"], "properties": { "type": { "type": "string", "enum": ["ask", "add", "cancel"] }, "id": { "type": "string" }, "kind": { "type": "string", "enum": ["question", "task"] }, "text": { "type": "string" }, "askedBy": { "type": "string" }, "context": { "type": "array", "items": { "type": "string" } }, "at": { "type": "string", "format": "date-time" } } } } } }
         }
       },
       "Cost": {
@@ -546,7 +596,8 @@
           "durationSeconds": { "type": "integer" },
           "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
           "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the agent was heard during the call saying it is an AI calling for onBehalfOf; false when the call ended without it; null when the agent never spoke." },
-          "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." }
+          "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." },
+          "openRequests": { "type": "array", "description": "Requests nobody finished during the call: follow-ups. replyToRequest with done still records an answer.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "kind": { "type": "string" }, "text": { "type": "string" }, "askedBy": { "type": "string" } } } }
         }
       },
       "Error": {
