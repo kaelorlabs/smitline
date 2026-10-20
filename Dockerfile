@@ -7,16 +7,16 @@
 #     ghcr.io/kaelorlabs/smitline
 #
 # Settings and records live in the volume. Everything else: docker exec smitline smitline ...
-FROM node:22-bookworm-slim AS node
+FROM node:26-bookworm-slim AS node
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
 
 # Pinned so a rebuild of the same release gets the same binaries.
-FROM docker:29.8.1-cli AS docker-cli
-FROM cloudflare/cloudflared:2026.9.3 AS cloudflared
+FROM docker:29.9.1-cli AS docker-cli
+FROM cloudflare/cloudflared:2026.10.1 AS cloudflared
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 # The meeting image this build goes with; the workflow sets the published tag.
 ARG MEETING_IMAGE=smitline-meeting:local
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
