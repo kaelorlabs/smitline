@@ -420,6 +420,7 @@ class ProductionMeetingSupervisor:
                 await self._stop_container()
                 self._active_id = None
                 self._active_session = None
+                self._control_token = None
                 if self._claim:
                     self._claim['path'].unlink(missing_ok=True)
                 raise
