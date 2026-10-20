@@ -15,7 +15,7 @@ CHANNELS = ('phone', 'meeting')
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom',
+    'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom', 'canDo',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 # A task ties calls toward one goal together, such as "roof repair quotes"; the agent names it.
@@ -146,6 +146,9 @@ class CallBrief:
     # The earlier calls' notes this call starts with, resolved by the call service; never stored
     # in the brief (the call record keeps them as `carried`).
     carried: tuple = field(default=(), compare=False)
+    # What the calling agent will do for the people on the call when they ask ("look things up
+    # in the repo and edit docs"). Requests are off without it. See call_requests.py.
+    can_do: str = None
 
     @property
     def session_context(self):
@@ -186,6 +189,7 @@ class CallBrief:
                        if self.camera else None),
             'task': self.task,
             'carryFrom': self.carry_from,
+            'canDo': self.can_do,
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -287,6 +291,11 @@ class CallBrief:
                 parsed['calls'] = list(dict.fromkeys(calls))
             carry_from = parsed or None
         tone = _optional_text(data, 'tone', 200)
+        can_do = optional_field(data, 'canDo')
+        if can_do is not None:
+            from call_requests import MAX_CAN_DO
+            can_do = ' '.join(require_string(can_do, 'canDo', allow_newlines=True,
+                                             max_length=MAX_CAN_DO).split()) or None
         return cls(
             channel=channel,
             to=to,
@@ -310,6 +319,7 @@ class CallBrief:
             camera=camera,
             task=task,
             carry_from=carry_from,
+            can_do=can_do,
         )
 
 

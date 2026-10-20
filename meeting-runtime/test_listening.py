@@ -159,8 +159,11 @@ class MeetingListenTests(unittest.IsolatedAsyncioTestCase):
         supervisor = ProductionMeetingSupervisor.__new__(ProductionMeetingSupervisor)
         supervisor.health = UrlHealthClient('http://127.0.0.1:18101/health')
         supervisor._active_id = 'mtg-a'
+        supervisor._control_token = 'tok-a'
         self.assertEqual(supervisor.listen_url('mtg-a'), 'http://127.0.0.1:18101/listen')
+        self.assertEqual(supervisor.control_headers('mtg-a'), {'Authorization': 'Bearer tok-a'})
         self.assertIsNone(supervisor.listen_url('mtg-b'))
+        self.assertIsNone(supervisor.control_headers('mtg-b'))
         supervisor.health = SimpleNamespace()
         self.assertIsNone(supervisor.listen_url('mtg-a'))
         pool = MeetingPool.__new__(MeetingPool)
@@ -170,6 +173,8 @@ class MeetingListenTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_meeting_line_relays_the_container(self):
         async def listen(request):
+            if request.headers.get('Authorization') != 'Bearer tok-1':
+                return web.json_response({'error': 'forbidden'}, status=403)
             response = web.StreamResponse(headers={'Content-Type': 'application/x-ndjson'})
             await response.prepare(request)
             for item in ({'type': 'format', 'codec': 'pcm16', 'rate': 24000},
@@ -183,8 +188,10 @@ class MeetingListenTests(unittest.IsolatedAsyncioTestCase):
         server = TestServer(app)
         await server.start_server()
         try:
+            headers = {'mtg-1': {'Authorization': 'Bearer tok-1'}}
             daemon = SimpleNamespace(supervisor=SimpleNamespace(
-                listen_url=lambda mid: str(server.make_url('/listen')) if mid == 'mtg-1' else None))
+                listen_url=lambda mid: str(server.make_url('/listen')) if mid == 'mtg-1' else None,
+                control_headers=headers.get))
             line = MeetingLine(daemon)
             self.assertIsNone(line.listen('call-unknown'))
             line._meetings['call-1'] = 'mtg-1'
@@ -194,6 +201,9 @@ class MeetingListenTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(got, [{'type': 'format', 'codec': 'pcm16', 'rate': 24000},
                                    {'side': 'meeting', 'audio': 'AAAA'},
                                    {'side': 'agent', 'audio': 'AQAB'}])
+            # Without the meeting's token (adopted after a restart) there is nothing to relay.
+            headers.clear()
+            self.assertIsNone(line.listen('call-1'))
         finally:
             await server.close()
 

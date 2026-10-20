@@ -3,6 +3,7 @@ from pathlib import Path
 import asyncio
 import json
 import os
+import secrets
 
 from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization
 from runtime_state import (
@@ -111,6 +112,20 @@ class SubprocessCommandRunner:
             stdout.decode('utf-8', errors='replace'),
             stderr.decode('utf-8', errors='replace'),
         )
+
+
+async def post_control(url, message, headers, timeout=5.0):
+    """POST one control message to a meeting container; its JSON answer when it took it."""
+    from aiohttp import ClientError, ClientSession, ClientTimeout
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=timeout)) as session:
+            async with session.post(url, json=message, headers=headers) as response:
+                if response.status != 200:
+                    return None
+                body = await response.json()
+                return body if isinstance(body, dict) else None
+    except (ClientError, asyncio.TimeoutError, ValueError):
+        return None
 
 
 class UrlHealthClient:
@@ -284,6 +299,9 @@ class ProductionMeetingSupervisor:
         self._active_session = None
         self._watch_task = None
         self._finalize_inflight = {}
+        # The running meeting's own token for /control and /listen, kept in memory only: a
+        # meeting adopted after a restart has none, so it runs on without either.
+        self._control_token = None
 
     def bind_daemon(self, daemon):
         self.daemon = daemon
@@ -311,6 +329,8 @@ class ProductionMeetingSupervisor:
             'MEETING_URL': session.meeting_url,
             'SMITLINE_HOST_RUNTIME_STATE': str(state_path),
         }
+        if self._control_token:
+            env['SMITLINE_CONTROL_TOKEN'] = self._control_token
         if owner_env is not None:
             # A pool meeting's compose file reads only this file for the container's settings.
             env['SMITLINE_MEETING_ENV_FILE'] = str(owner_env)
@@ -383,6 +403,7 @@ class ProductionMeetingSupervisor:
             if status.get('running') or (self._active_id not in (None, session.id)):
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
             values = self._owner_values(session)
+            self._control_token = secrets.token_urlsafe(32)
             self._write_session_files(session, camera_settings=camera_settings, owner_values=values)
             try:
                 self._prepare_mounts()
@@ -567,6 +588,12 @@ class ProductionMeetingSupervisor:
                 note_captions(session.id, health['captions'])
             except Exception:
                 pass
+        note_requests = getattr(self.daemon, 'note_requests', None)
+        if note_requests is not None and 'requests' in health:
+            try:
+                note_requests(session.id, health['requests'])
+            except Exception:
+                pass
         if self.daemon is not None and hasattr(self.daemon, 'apply_presence'):
             from visual_presence import map_visual_state
             fields = {}
@@ -585,12 +612,30 @@ class ProductionMeetingSupervisor:
             return True
         return False
 
-    def listen_url(self, meeting_id):
-        """The running meeting container's /listen, or None."""
+    def _container_url(self, meeting_id, path):
         url = getattr(self.health, 'url', None)
         if self._active_id != meeting_id or not isinstance(url, str) or not url.endswith('/health'):
             return None
-        return url[:-len('/health')] + '/listen'
+        return url[:-len('/health')] + path
+
+    def listen_url(self, meeting_id):
+        """The running meeting container's /listen, or None."""
+        return self._container_url(meeting_id, '/listen')
+
+    def control_headers(self, meeting_id):
+        """What /listen and /control need from the daemon: the meeting's token."""
+        if self._active_id != meeting_id or not self._control_token:
+            return None
+        return {'Authorization': 'Bearer ' + self._control_token}
+
+    async def control(self, meeting_id, message):
+        """Send the running meeting a control message (meeting_control.py); its answer, or None
+        when it is not running, has no token, or did not take it."""
+        url = self._container_url(meeting_id, '/control')
+        headers = self.control_headers(meeting_id)
+        if url is None or headers is None:
+            return None
+        return await post_control(url, message, headers)
 
     def _handoff_ready(self, meeting_id):
         if self.daemon is None:
@@ -668,6 +713,7 @@ class ProductionMeetingSupervisor:
         if self._active_id == meeting_id:
             self._active_id = None
             self._active_session = None
+            self._control_token = None
         if self._claimed_id() != meeting_id:
             return
         if self._claim:
@@ -878,6 +924,14 @@ class MeetingPool:
         for meeting_id, meeting in list(self._meetings.items()):
             if meeting_id not in self._starting and meeting['supervisor']._active_id is None:
                 self._meetings.pop(meeting_id, None)
+
+    def control_headers(self, meeting_id):
+        entry = self._meetings.get(meeting_id)
+        return entry['supervisor'].control_headers(meeting_id) if entry else None
+
+    async def control(self, meeting_id, message):
+        entry = self._meetings.get(meeting_id)
+        return await entry['supervisor'].control(meeting_id, message) if entry else None
 
     def listen_url(self, meeting_id):
         entry = self._meetings.get(meeting_id)

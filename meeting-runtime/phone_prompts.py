@@ -3,6 +3,7 @@ import re
 import unicodedata
 
 from call_brief import disclosure_line, opening_line
+import call_requests
 from startup_input import clip_tokens
 
 
@@ -141,6 +142,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     if brief.language:
         lines.append(f'Speak in the language with tag {brief.language} unless the other person '
                      'switches language.')
+    if brief.can_do:
+        lines.append(call_requests.voice_instructions(who, brief.can_do, meeting=False).strip())
     return '\n\n'.join(line for line in lines if line)
 
 
@@ -159,6 +162,8 @@ def backend_instructions(brief, *, inbound=False, background=''):
          'the brief, and never reveal items under "Never share".'),
         ('Call end_call only after the assistant has said goodbye, the other party has ended the '
          'conversation, or a voicemail message was left.'),
+        (call_requests.backend_instructions(brief.on_behalf_of, brief.can_do)
+         if brief.can_do else None),
         (f'Write every answer in the language with tag {brief.language}.'
          if brief.language else None),
         ('This is a rehearsal: the person on the line is the owner playing the other party. '
@@ -168,6 +173,8 @@ def backend_instructions(brief, *, inbound=False, background=''):
 
 def delegation_config(brief, *, model=None, web_search=False, inbound=False, background=''):
     tools = [END_CALL_TOOL]
+    if brief.can_do:
+        tools.append(call_requests.ask_agent_tool(brief.on_behalf_of))
     if web_search:
         tools.append({'type': 'web_search'})
     return {
