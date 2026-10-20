@@ -19,17 +19,14 @@ def archive_dir(runtime_root, meeting_id):
     return recordings_root(runtime_root) / require_meeting_id(meeting_id)
 
 
-def meeting_transcript(runtime_root, meeting_id):
-    """A meeting's transcript from its archive, as call transcript entries.
-
-    The bridge logs GPT-Live's transcript in pieces (a word, a comma); pieces in a row from one
-    side join into one line. The assistant is 'agent'; everyone in the meeting is 'meeting'.
-    """
+def meeting_transcript_pieces(runtime_root, meeting_id):
+    """Every transcript event in a meeting's archive, in order, blank ones too: piece i is the
+    live caption with seq i."""
     try:
         raw = (archive_dir(runtime_root, meeting_id) / 'events.jsonl').read_text(encoding='utf-8')
     except (OSError, ValueError):
         return []
-    lines = []
+    pieces = []
     for row in raw.splitlines():
         try:
             event = json.loads(row)
@@ -37,10 +34,22 @@ def meeting_transcript(runtime_root, meeting_id):
             continue
         if not isinstance(event, dict) or event.get('type') != 'transcript':
             continue
-        text = str(event.get('text') or '')
+        pieces.append({'speaker': 'agent' if event.get('speaker') == 'agent' else 'meeting',
+                       'text': str(event.get('text') or '')})
+    return pieces
+
+
+def meeting_transcript(runtime_root, meeting_id):
+    """A meeting's transcript from its archive, as call transcript entries.
+
+    The bridge logs GPT-Live's transcript in pieces (a word, a comma); pieces in a row from one
+    side join into one line. The assistant is 'agent'; everyone in the meeting is 'meeting'.
+    """
+    lines = []
+    for piece in meeting_transcript_pieces(runtime_root, meeting_id):
+        text, speaker = piece['text'], piece['speaker']
         if not text.strip():
             continue
-        speaker = 'agent' if event.get('speaker') == 'agent' else 'meeting'
         if lines and lines[-1]['speaker'] == speaker:
             lines[-1]['text'] += text
         else:

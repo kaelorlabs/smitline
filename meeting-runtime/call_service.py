@@ -16,6 +16,11 @@ from call_store import TERMINAL, CallNotFound, new_call_id
 
 
 MAX_WAIT_SECONDS = 300
+# Following a call live: once something new is said, wait this long for more before answering,
+# so one answer carries a whole exchange rather than a line.
+LIVE_SETTLE_SECONDS = 2.0
+# Events that wake a live wait: what was said, and status changes.
+LIVE_EVENTS = frozenset({'call.transcript', 'call.status'})
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -712,20 +717,38 @@ class CallService:
     def events(self, call_id, *, after=None):
         return self.store.events(call_id, after=after)
 
-    async def wait(self, call_id, *, owner, timeout=60):
+    async def wait(self, call_id, *, owner, timeout=60, since=None):
+        """The call once it is terminal or the timeout passes. With `since` (an event cursor,
+        '' for the start), it also comes back once something new was said, with `live`: the
+        transcript lines after the cursor and the cursor to pass next time."""
         timeout = max(0.0, min(float(timeout), MAX_WAIT_SECONDS))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        settle_until = None
         while True:
             record = self.get(call_id, owner=owner)
             remaining = deadline - loop.time()
+            if since is not None and settle_until is None and record['status'] not in TERMINAL:
+                if any(event['type'] in LIVE_EVENTS for event in self.events(call_id, after=since or None)):
+                    settle_until = min(deadline, loop.time() + LIVE_SETTLE_SECONDS)
+            if settle_until is not None:
+                remaining = min(remaining, settle_until - loop.time())
             if record['status'] in TERMINAL or remaining <= 0:
-                return record
+                return record if since is None else dict(record, live=self._live(call_id, since))
             changed = self._changed.setdefault(call_id, asyncio.Event())
             try:
                 await asyncio.wait_for(changed.wait(), remaining)
             except asyncio.TimeoutError:
                 pass
+
+    def _live(self, call_id, since):
+        """What was said after the cursor `since`, and the cursor for next time."""
+        events = self.events(call_id, after=since or None)
+        cursor = events[-1]['id'] if events else (since or '0')
+        transcript = [{'speaker': event['data'].get('speaker'), 'text': event['data'].get('text'),
+                       'at': event.get('at')}
+                      for event in events if event['type'] == 'call.transcript']
+        return {'cursor': cursor, 'transcript': transcript}
 
     async def wait_for_change(self, call_id, timeout):
         changed = self._changed.setdefault(call_id, asyncio.Event())

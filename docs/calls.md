@@ -157,8 +157,8 @@ Every finished call carries `cost`, in US dollars:
 | Method | Use |
 | --- | --- |
 | `GET /v1/calls/{id}` | Poll the call. |
-| `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. |
-| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
+| `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. Add `since` (empty at first, then the last answer's `live.cursor`) to follow the call live: the answer also comes about 2 seconds after something new is said, with `live.transcript` holding the lines said after the cursor. |
+| `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume; `call.transcript` events carry each line as it is said, for phone calls and meetings. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
 
 Webhook bodies are signed: `X-Smitline-Signature: sha256=<hex HMAC of the raw body>` with the per-installation secret in `.smitline/daemon-data/webhook.secret` (an owner other than the local one has its own, in `.smitline/owners/<owner>/webhook.secret`; see [owners](#owners)). Only `https://` URLs are accepted, plus `http://127.0.0.1` and `http://localhost` for local agents; an https URL may not name a private, loopback, or link-local IP address, and a host name that resolves to one is refused at delivery (`rejected`, with no request sent) unless `SMITLINE_WEBHOOK_ALLOW_PRIVATE=1`. Delivery is retried three times with backoff. The outcome is recorded as a `call.webhook` event with `delivered`, `attempts`, and a coarse `error` (`rejected`, `failed`, or `unreachable`), never the receiver's exact response.

@@ -99,7 +99,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'start_call',
     title: "Start a phone call or join a meeting",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    description: "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call.",
+    description: "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call with since: \"\" to follow the call live and supervise it.",
     inputSchema: BRIEF_SCHEMA,
   },
   {
@@ -113,7 +113,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'wait_for_call',
     title: "Wait for a call to finish",
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: 'Wait for a call to finish and return it with its result: outcome, summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. If status is not completed, failed, or canceled, call again. Tell the user the outcome in plain words.',
+    description: "Wait for a call to finish and return it with its result: outcome, summary, details such as confirmation numbers, decisions, action items, open questions, and the transcript. If status is not completed, failed, or canceled, call again. Tell the user the outcome in plain words. To follow the call while it happens, pass since: \"\" the first time, then live.cursor from the last answer. It then also returns as soon as something new is said, with live.transcript holding the new lines (speaker agent is Smitline; other or meeting is the people on the call). Step in with send_call_instruction only when you know something the call needs, or end_call if it goes wrong; otherwise keep waiting.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -121,6 +121,7 @@ export const CALL_TOOL_DEFINITIONS = [
       properties: {
         callId: CALL_ID_SCHEMA,
         timeoutSeconds: { type: 'integer', minimum: 0, maximum: 280, description: 'How long to wait in this request. Default 50.' },
+        since: { type: 'string', pattern: '^[0-9]{0,12}$', description: 'Follow the call live: "" the first time, then live.cursor from the last answer.' },
       },
     },
   },
@@ -243,7 +244,7 @@ export const TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS;
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
-export const CALLS_INSTRUCTIONS = "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then wait_for_call until the call finishes, and report the outcome. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to.";
+export const CALLS_INSTRUCTIONS = "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to.";
 
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {
@@ -259,7 +260,10 @@ export async function callToolFor(colleague, name, args) {
   if (name === 'check_call_brief') return colleague.checkCall(args);
   if (name === 'wait_for_call') {
     const timeout = args.timeoutSeconds === undefined ? 50 : args.timeoutSeconds;
-    return colleague.waitForCall(requireCallId(args), timeout);
+    if (args.since !== undefined && (typeof args.since !== 'string' || !/^[0-9]{0,12}$/.test(args.since))) {
+      throw new ValidationError('since must be "" or live.cursor from the last answer');
+    }
+    return colleague.waitForCall(requireCallId(args), timeout, args.since === undefined ? {} : { since: args.since });
   }
   if (name === 'get_call') return colleague.getCall(requireCallId(args));
   if (name === 'list_calls') {

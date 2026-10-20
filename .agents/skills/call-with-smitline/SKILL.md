@@ -42,9 +42,20 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 2. Tell the user in one line: "Calling Luigi's now. I'll tell you when it's done." (or "Joining the meeting now.")
 3. `wait_for_call` until the status is `completed`, `failed`, or `canceled`, calling again while it is still running.
 
-While the call runs, `send_call_instruction` passes on new guidance from the user (with `silent: true` for a fact the assistant should know without acting on it right away), `transfer_call_to_me` hands a phone call to the user's phone, and `end_call` wraps up politely.
+## 4. Supervise the call live
 
-## 4. Report the result
+You know more than the brief: the user's preferences, the documents, what was decided earlier. Follow the call and bring that in when it matters.
+
+- Pass `since: ""` to the first `wait_for_call`, then `since` = the `live.cursor` of the last answer. Each answer comes as soon as something new is said, with the new lines in `live.transcript` (`agent` is Smitline; `other`, or `meeting` in a meeting, is the people on the call).
+- Step in with `send_call_instruction` only when it helps:
+  - the other side asks something the brief does not cover and you know the answer;
+  - the conversation drifts from the goal;
+  - the user tells you something new.
+  Keep it short and concrete, such as "Thursday 3 pm works; Friday does not." Use `silent: true` for a fact Smitline should know without acting on it at once.
+- `end_call` if it goes wrong: the wrong person, a hostile call, or a goal that is clearly not reachable. `transfer_call_to_me` hands a phone call to the user's phone when they want to take over.
+- Otherwise just keep waiting; Smitline runs the conversation. Don't narrate every line to the user. Tell them about moments that matter, or follow along word by word if they ask to.
+
+## 5. Report the result
 
 Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say.
 

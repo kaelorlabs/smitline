@@ -74,6 +74,9 @@ class MeetingTranscript:
         self.record = record
         self.state = state
         self.assembler = assembler or TranscriptAssembler()
+        # Each caption's seq is its place among the archive's transcript events, so the daemon
+        # can follow the meeting live and later take the rest from the archive without repeats.
+        self.count = 0
 
     def note(self, event):
         entry = self.assembler.add_delta(event)
@@ -92,12 +95,14 @@ class MeetingTranscript:
             )
         captions = self.state.setdefault('captions', [])
         captions.append({
+            'seq': self.count,
             'speaker': speaker,
             'text': entry.text,
             'start_ms': entry.start_offset_ms,
             'end_ms': entry.end_offset_ms,
         })
         self.state['captions'] = captions[-200:]
+        self.count += 1
         return entry
 
 

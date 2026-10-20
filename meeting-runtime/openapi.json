@@ -66,9 +66,9 @@
     "/v1/calls/{callId}/wait": {
       "parameters": [{ "$ref": "#/components/parameters/CallId" }, { "$ref": "#/components/parameters/Owner" }],
       "get": {
-        "summary": "Wait until the call finishes or the timeout passes",
+        "summary": "Wait until the call finishes or the timeout passes; with since, also until something new is said",
         "operationId": "waitForCall",
-        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }],
+        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange) and carries live.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }],
         "responses": {
           "200": { "description": "The call, terminal or not", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
           "404": { "$ref": "#/components/responses/Error" }
@@ -471,7 +471,8 @@
           "cost": { "$ref": "#/components/schemas/Cost" },
           "carried": { "type": "array", "description": "The notes of earlier calls this call started with.", "items": { "$ref": "#/components/schemas/CarriedNote" } },
           "carryNote": { "type": "object", "description": "A note saved on this finished call for later calls.", "properties": { "text": { "type": "string" }, "by": { "type": "string", "enum": ["agent"] }, "at": { "type": "string", "format": "date-time" } } },
-          "error": { "type": "string" }
+          "error": { "type": "string" },
+          "live": { "type": "object", "description": "Only when waiting with since: what was said after the cursor.", "required": ["cursor", "transcript"], "properties": { "cursor": { "type": "string", "description": "Pass as since next time." }, "transcript": { "type": "array", "items": { "type": "object", "properties": { "speaker": { "type": "string", "description": "agent, other (phone), or meeting" }, "text": { "type": "string" }, "at": { "type": "string", "format": "date-time" } } } } } }
         }
       },
       "Cost": {

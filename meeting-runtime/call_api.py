@@ -94,8 +94,11 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             timeout = float(request.query.get('timeout', '60'))
         except ValueError:
             return _error(422, 'invalid_request', 'timeout must be a number of seconds')
+        since = request.query.get('since')
+        if since is not None and since != '' and not (since.isdigit() and len(since) <= 12):
+            return _error(422, 'invalid_request', 'since must be a cursor from an earlier answer')
         record = await service.wait(request.match_info['callId'], timeout=timeout,
-                                    owner=await owner(request))
+                                    owner=await owner(request), since=since)
         return public_json(record)
 
     @handle

@@ -561,6 +561,12 @@ class ProductionMeetingSupervisor:
                 self.daemon.transition(session.id, mapped)
             except DaemonError:
                 pass
+        note_captions = getattr(self.daemon, 'note_captions', None)
+        if note_captions is not None and 'captions' in health:
+            try:
+                note_captions(session.id, health['captions'])
+            except Exception:
+                pass
         if self.daemon is not None and hasattr(self.daemon, 'apply_presence'):
             from visual_presence import map_visual_state
             fields = {}
