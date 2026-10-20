@@ -16,6 +16,7 @@ from call_record import CallRecord
 from startup_input import clip_tokens, context_text, handoff_from_state, handoff_to_session_input
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
 from transcript_assembler import TranscriptAssembler
+from listening import AudioTap, ndjson
 from voice_core import backend_usage_from
 from meeting_connection import joined_meeting
 from meeting_intro import addressing_instructions, introduce, intro_instructions
@@ -39,6 +40,8 @@ state.update(cameraEnabled=True, cameraState='starting', visualState='joining')
 stop = asyncio.Event()
 record = None
 presence = None
+# Both sides of the meeting as GPT-Live hears and speaks them, for the owner listening in.
+listening = AudioTap('pcm16', 24000)
 
 
 def _sync_presence():
@@ -202,7 +205,9 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 while not stop.is_set():
                     chunk = await speaker.read()
                     state['input_bytes'] += len(chunk.data)
-                    await ws.send_json({'type': 'session.input_audio.append', 'audio': base64.b64encode(chunk.data).decode()})
+                    audio = base64.b64encode(chunk.data).decode()
+                    await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
+                    listening.push('meeting', audio)
 
             async def watch_microphone():
                 # Also accepts a host's explicit request to unmute (Participation.accept_host_unmute).
@@ -280,6 +285,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         state['listening'] = True
                         stage('live')
                     elif kind == 'session.output_audio.delta':
+                        listening.push('agent', event['delta'])
                         data = base64.b64decode(event['delta'])
                         # Fail rather than silently accumulate seconds of stale speech.
                         gate.offer(data)
@@ -351,6 +357,15 @@ async def main():
         payload.update(presence_public_fields(state))
         return web.json_response(payload, headers={'Cache-Control': 'no-store'})
     app.router.add_get('/health', status)
+
+    async def listen(request):
+        response = web.StreamResponse(headers={'Content-Type': 'application/x-ndjson',
+                                               'Cache-Control': 'no-store'})
+        await response.prepare(request)
+        async for chunk in listening.chunks():
+            await response.write(ndjson(chunk))
+        return response
+    app.router.add_get('/listen', listen)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
@@ -397,6 +412,7 @@ async def main():
             print(state['error'], flush=True)
             await stop.wait()
         finally:
+            listening.close()
             drain_task.cancel()
             viewer.terminate()
             await viewer.wait()

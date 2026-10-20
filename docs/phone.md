@@ -127,6 +127,7 @@ Set `SMITLINE_ACCEPT_INBOUND=1`, `SMITLINE_OWNER_NAME`, and optionally `SMITLINE
 | `SMITLINE_PHONE_WEB_SEARCH` | off | `1` adds web search to the backend. |
 | `SMITLINE_SUMMARY_MODEL` | `gpt-5.6-luna` | Model that writes the call result. |
 | `SMITLINE_RECORD_CALLS` | off | `1` records every call and adds a recording notice; without it, only briefs with `record: true` are recorded. |
+| `SMITLINE_LISTEN` | off | `1` lets you listen in on calls and meetings while they run, from the console's **Listen in** button or `GET /v1/calls/{id}/listen`. The people on the call are not told; turn it on only where they agree or the law allows it. Not for direct SIP calls, whose audio never passes through Smitline. |
 | `SMITLINE_ALLOWED_CALLING_CODES` | any | Comma-separated country calling codes that may be dialed. |
 | `SMITLINE_CALLING_HOURS` | `08:00-21:00` | Hours, in the recipient's time, when calls may ring; `off` turns the check off. |
 | `SMITLINE_MAX_CALLS_PER_NUMBER` | `5` | Calls to one number per 24 hours; `0` turns the limit off. |

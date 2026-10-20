@@ -54,6 +54,31 @@ class LiveTranscript:
         self.text = ''
 
 
+class RemoteTap:
+    """A meeting container's /listen, relayed: the same chunks() as a phone call's tap."""
+
+    def __init__(self, url, session_factory=None):
+        self.url = url
+        self._session_factory = session_factory
+
+    async def chunks(self):
+        import json
+        from aiohttp import ClientSession, ClientTimeout
+        factory = self._session_factory or (lambda: ClientSession(
+            timeout=ClientTimeout(total=None, sock_connect=5)))
+        async with factory() as session:
+            async with session.get(self.url) as response:
+                if response.status != 200:
+                    return
+                async for line in response.content:
+                    try:
+                        chunk = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(chunk, dict):
+                        yield chunk
+
+
 MEETING_STATUS = {
     'joining': 'connecting',
     'waiting_for_admission': 'waiting',
@@ -251,6 +276,12 @@ class MeetingLine:
                 continue
             return handoff.to_dict() if hasattr(handoff, 'to_dict') else dict(handoff)
         return None
+
+    def listen(self, call_id):
+        meeting_id = self._meetings.get(call_id)
+        locate = getattr(getattr(self.daemon, 'supervisor', None), 'listen_url', None)
+        url = locate(meeting_id) if meeting_id and callable(locate) else None
+        return RemoteTap(url) if url else None
 
     async def instruct(self, call_id, text, *, silent=False):
         # Meetings take guidance through the meeting context and the portal; a

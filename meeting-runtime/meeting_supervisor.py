@@ -585,6 +585,13 @@ class ProductionMeetingSupervisor:
             return True
         return False
 
+    def listen_url(self, meeting_id):
+        """The running meeting container's /listen, or None."""
+        url = getattr(self.health, 'url', None)
+        if self._active_id != meeting_id or not isinstance(url, str) or not url.endswith('/health'):
+            return None
+        return url[:-len('/health')] + '/listen'
+
     def _handoff_ready(self, meeting_id):
         if self.daemon is None:
             return False
@@ -871,6 +878,10 @@ class MeetingPool:
         for meeting_id, meeting in list(self._meetings.items()):
             if meeting_id not in self._starting and meeting['supervisor']._active_id is None:
                 self._meetings.pop(meeting_id, None)
+
+    def listen_url(self, meeting_id):
+        entry = self._meetings.get(meeting_id)
+        return entry['supervisor'].listen_url(meeting_id) if entry else None
 
     def active_ids(self):
         self._prune()

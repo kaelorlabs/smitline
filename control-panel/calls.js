@@ -1,5 +1,7 @@
 // Follow calls live from the local console: brief, status, transcript, result, cost, join, and end.
 // The Calls page (/calls) shows phone calls and the Meetings page (/) meetings: <body data-channel>.
+import { ListenPlayer } from './listen-audio.mjs';
+
 const CHANNEL = document.body.dataset.channel === 'meeting' ? 'meeting' : 'phone';
 const MEETINGS = CHANNEL === 'meeting';
 const WORDS = MEETINGS
@@ -48,6 +50,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   token: '',
   tokenReady: null,
+  listening: null, // { callId, player } while listening in
   calls: [],
   spend: null,
   filter: 'all',
@@ -573,6 +576,7 @@ function renderMeta(call) {
 function renderActions(call) {
   const live = !TERMINAL.has(call.status) && call.status !== 'summarizing';
   $('live-panel').hidden = !live;
+  if (!live && state.listening?.callId === call.id) stopListening();
   if (!live) { cancelConfirm(); return; }
   const canJoin = call.channel === 'phone' && call.status === 'in_progress';
   const join = $('join-button');
@@ -586,6 +590,12 @@ function renderActions(call) {
   } else {
     cancelConfirm();
   }
+  const canListen = call.status === 'in_progress';
+  const listen = $('listen-button');
+  listen.hidden = !canListen;
+  const listening = state.listening?.callId === call.id;
+  listen.textContent = listening ? 'Stop listening' : 'Listen in';
+  listen.setAttribute('aria-pressed', String(listening));
   const end = $('end-button');
   const ending = state.endRequested.has(call.id);
   end.disabled = ending;
@@ -1097,6 +1107,44 @@ $('join-button').addEventListener('click', async () => {
 
 $('join-button').addEventListener('keydown', (event) => {
   if (event.key === 'Escape') cancelConfirm();
+});
+
+function stopListening() {
+  state.listening?.player.stop();
+  state.listening = null;
+}
+
+// Listening in: both sides of the call, live, in this browser. The daemon refuses unless the
+// owner turned it on (SMITLINE_LISTEN=1); the message says so.
+$('listen-button').addEventListener('click', async () => {
+  const callId = state.selected;
+  if (!callId || !state.call) return;
+  if (state.listening) {
+    const wasThis = state.listening.callId === callId;
+    stopListening();
+    renderActions(state.call);
+    if (wasThis) return;
+  }
+  const player = new ListenPlayer();
+  state.listening = { callId, player };
+  renderActions(state.call);
+  note('Listening in. The people on the call do not hear you.');
+  try {
+    await withToken();
+    const response = await fetch(`/api/calls/${callId}/listen`, { headers: { 'x-smitline-token': state.token } });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(String(payload.error?.message || payload.error || `Request failed (${response.status})`)),
+        { status: response.status, code: payload.code });
+    }
+    await player.listen(response);
+    if (state.listening?.player === player) note('The call ended.');
+  } catch (error) {
+    if (state.listening?.player === player) note(actionError(error), true);
+  } finally {
+    if (state.listening?.player === player) state.listening = null;
+    if (state.call?.id === callId) renderActions(state.call);
+  }
 });
 
 $('end-button').addEventListener('click', async () => {

@@ -70,6 +70,8 @@ The platform may display Smitline as unmuted because the runtime keeps the brows
 
 ### Review local records
 
+While a call or meeting runs, **Listen in** plays both sides in the browser, live. It needs `SMITLINE_LISTEN=1` (`docker exec smitline smitline setup set SMITLINE_LISTEN 1`); the people on the call are not told, so turn it on only where they agree or the law allows it. **Stop listening** ends it; the call goes on.
+
 Each meeting creates a directory under `recordings/` in the meeting data (`/data/meetings` in the volume, `meeting-runtime/` in a checkout) containing the incremental transcript and event trace. The Meetings page shows each meeting's transcript and handoff. The **Transcripts** tab of the manual page still lists every recording there, including meetings started by hand before they went through the calls API, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
 
 The transcript records recognized and generated text. It is not a raw-audio archive and may include a generated response that was muted or interrupted before participants heard it.

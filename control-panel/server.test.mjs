@@ -652,6 +652,10 @@ test('calls view reads calls openly and protects end and transfer', async () => 
       async callEvents(id, after) { actions.push(['events', id, after]); return { events: [] }; },
       async endCall(id) { actions.push(['end', id]); return { id, status: 'summarizing' }; },
       async transferCall(id) { actions.push(['transfer', id]); return { transferred: true }; },
+      async listen(id) {
+        actions.push(['listen', id]);
+        return new Response('{"type":"format","codec":"mulaw","rate":8000}\n{"side":"other","audio":"f39/"}\n');
+      },
     },
   });
   server.listen(0, '127.0.0.1');
@@ -674,6 +678,14 @@ test('calls view reads calls openly and protects end and transfer', async () => 
     });
     assert.equal(ended.status, 200);
     assert.deepEqual(actions.at(-1), ['end', callId]);
+    // Listening in streams live audio, so it needs the console's token even to read.
+    assert.equal((await fetch(`${base}/api/calls/${callId}/listen`)).status, 403);
+    assert.equal(actions.at(-1)[0], 'end');
+    const listened = await fetch(`${base}/api/calls/${callId}/listen`, { headers: { 'X-Smitline-Token': bootstrap.token } });
+    assert.equal(listened.status, 200);
+    assert.equal(listened.headers.get('content-type'), 'application/x-ndjson');
+    assert.deepEqual((await listened.text()).trim().split('\n').map((line) => JSON.parse(line).codec || JSON.parse(line).side), ['mulaw', 'other']);
+    assert.deepEqual(actions.pop(), ['listen', callId]);
     // Malformed call ids never reach the daemon; unmatched API paths fall to the auth check.
     assert.equal((await fetch(`${base}/api/calls/call-XYZ`)).status, 403);
     assert.equal(actions.length, 2);

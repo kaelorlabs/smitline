@@ -757,6 +757,27 @@ class CallService:
         except asyncio.TimeoutError:
             pass
 
+    def listen(self, call_id, *, owner):
+        """What to stream to the owner listening in: an object whose chunks() yields the
+        format, then each side's audio until the call ends. Off unless the owner's
+        SMITLINE_LISTEN=1, because people on the call may need to agree to being heard."""
+        record = self.get(call_id, owner=owner)
+        if owner_settings(self.hooks, owner).get('SMITLINE_LISTEN') != '1':
+            raise CallError(403, 'listening_off',
+                            'Listening in is off. Set SMITLINE_LISTEN=1 where the people you call '
+                            'agree to it, or local law allows it.')
+        if record['status'] in TERMINAL:
+            raise CallError(409, 'call_ended', 'The call has ended.')
+        line = self.lines.get(record['channel'])
+        source = getattr(line, 'listen', None)
+        tap = source(call_id) if source is not None else None
+        if tap is None:
+            raise CallError(409, 'listen_unavailable',
+                            'This call cannot be heard yet: it has not connected, or its audio '
+                            'does not pass through Smitline (direct SIP).')
+        self._event(call_id, 'call.listening')
+        return tap
+
     async def instruct(self, call_id, text, *, owner, silent=False):
         record = self.get(call_id, owner=owner)
         if record['status'] in TERMINAL or record['status'] == 'summarizing':

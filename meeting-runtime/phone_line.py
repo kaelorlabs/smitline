@@ -24,6 +24,7 @@ from phone_prompts import (
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
+from listening import AudioTap
 from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
 from twilio_client import client_for, dial_twiml, sip_dial_twiml, stream_twiml
 from voice_core import (
@@ -418,6 +419,8 @@ class PhoneSession:
         self.from_number = from_number
         self.token = token
         self.inbound = inbound
+        # Both sides of the call as they pass, for the owner listening in (G.711 mu-law, 8 kHz).
+        self.tap = AudioTap('mulaw', 8000)
         self.recording = recording
         self.owner_phone = owner_phone
         self.call_sid = None
@@ -520,6 +523,8 @@ class PhoneSession:
         if self.ws is None or self._closing_stream:
             return
         message = dict(message, streamSid=self.stream_sid)
+        if message.get('event') == 'media':
+            self.tap.push('agent', (message.get('media') or {}).get('payload'))
         try:
             await self.ws.send_str(json.dumps(message))
         except Exception:
@@ -553,6 +558,7 @@ class PhoneSession:
                 await manager.__aexit__(None, None, None)
         finally:
             self.stream_ended_at = time.monotonic()
+            self.tap.close()
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
                 if speaker == 'agent':
@@ -623,6 +629,7 @@ class PhoneSession:
                     if self._trace is not None:
                         self._note('in', ts=media.get('timestamp'), seq=data.get('sequenceNumber'))
                     await self.live.send_audio(media['payload'])
+                    self.tap.push('other', media['payload'])
                     await self._hear(media['payload'])
             elif event == 'mark':
                 self.pacer.mark_played((data.get('mark') or {}).get('name'))
@@ -1035,6 +1042,8 @@ class SipPhoneSession(PhoneSession):
                          token=secrets.token_urlsafe(24), recording=False, owner_phone=owner_phone)
         self.client = client
         self.bridged = bridged
+        # The audio flows between the provider and OpenAI, never through here.
+        self.tap = None
         self.session_id = None
         self.answered_at = None
         self.incoming = asyncio.get_running_loop().create_future()
@@ -1450,6 +1459,8 @@ class PhoneLine:
             pass
 
     async def _finish(self, ctx, session):
+        if session.tap is not None:
+            session.tap.close()
         # The provider reports an outbound call's connected time in its status callback; an
         # incoming call gets no status callback, so it is not waited for.
         if session.phone_seconds is None and session.connected.is_set() and not session.inbound:
@@ -1561,6 +1572,12 @@ class PhoneLine:
     async def instruct(self, call_id, text, *, silent=False):
         session = self.sessions.get(call_id)
         return bool(session and await session.instruct(text, silent=silent))
+
+    def listen(self, call_id):
+        """The call's audio tap; None for direct SIP, whose audio never passes through here."""
+        session = self.sessions.get(call_id)
+        tap = session.tap if session is not None else None
+        return tap if tap is not None and not tap.closed else None
 
     async def end(self, call_id):
         session = self.sessions.get(call_id)

@@ -114,6 +114,19 @@
         }
       }
     },
+    "/v1/calls/{callId}/listen": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }, { "$ref": "#/components/parameters/Owner" }],
+      "get": {
+        "summary": "Listen in: both sides of a call in progress, live. Off unless the owner sets SMITLINE_LISTEN=1.",
+        "operationId": "listenToCall",
+        "responses": {
+          "200": { "description": "NDJSON until the call ends: {type: format, codec: mulaw (phone, 8000 Hz) or pcm16 (meeting, 24000 Hz), rate} first, then {side: agent | other | meeting, audio: base64} chunks", "content": { "application/x-ndjson": { "schema": { "type": "string" } } } },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/v1/calls/{callId}/recording": {
       "parameters": [{ "$ref": "#/components/parameters/Owner" }],
       "get": {
