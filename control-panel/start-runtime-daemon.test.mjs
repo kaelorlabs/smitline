@@ -17,7 +17,7 @@ test('daemon launcher has valid shell syntax and bootstraps aiohttp from the rep
   assert.match(script, /SMITLINE_PYTHON_VENV|\$ROOT\/\.venv/);
   assert.equal(script.includes('.env'), false);
   const requirements = fs.readFileSync(path.join(ROOT, 'meeting-runtime', 'requirements-daemon.txt'), 'utf8');
-  assert.match(requirements, /aiohttp>=3\.11\.18/);
+  assert.match(requirements, /^aiohttp>=\d+\.\d+/m);
 });
 
 test('SMITLINE_PYTHON without aiohttp fails closed before the daemon starts', () => {

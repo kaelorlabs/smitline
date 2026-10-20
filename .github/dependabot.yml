@@ -33,3 +33,10 @@ updates:
     groups:
       docker:
         patterns: ['*']
+    # Moving to a new Node major or Python minor is a deliberate change, not a weekly bump:
+    # node:26 needs libatomic, which the Python base image does not have.
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+      - dependency-name: python
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
