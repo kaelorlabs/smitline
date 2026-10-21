@@ -58,6 +58,30 @@ class PacerSpeechTests(unittest.IsolatedAsyncioTestCase):
             runner.cancel()
             await asyncio.gather(runner, return_exceptions=True)
 
+    async def test_speech_is_still_playing_after_it_was_all_sent(self):
+        from phone_line import OutputPacer
+        now = [0.0]
+
+        async def sleep(seconds):
+            now[0] += seconds
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        pacer = OutputPacer(send, clock=lambda: now[0], sleep=sleep, cushion=0)
+        runner = asyncio.create_task(pacer.run())
+        try:
+            pacer.offer(base64.b64encode(bytes([0x2a]) * 8000).decode())  # one second of speech
+            await until(lambda: not pacer.queue and pacer._next is None)
+            # All of it went out, up to the lead ahead of playback: the provider still plays it.
+            self.assertTrue(pacer.speech_pending())
+            self.assertGreater(pacer.speech_until, now[0] + 0.3)
+            now[0] = pacer.speech_until + 0.01
+            self.assertFalse(pacer.speech_pending())
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
 
 class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -107,6 +131,26 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         # A later goodbye, with nothing after it, ends it.
         self.say(live, 'Sure, I will tell Robin. Bye now!')
         await until(lambda: ws.closed, 5)
+        await asyncio.wait_for(task, 3)
+
+    async def test_it_never_hangs_up_on_someone_still_talking(self):
+        record, session, ws, live, task = await self.connected()
+        self.say(live, "I'm Robin's AI assistant. Okay, bye!")
+        # They start talking at once; no transcript of it has arrived yet, only their voice.
+        loud = base64.b64encode(bytes([0x2a]) * 160).decode()
+        quiet = base64.b64encode(bytes([0xff]) * 160).decode()
+        for _ in range(150):  # three seconds
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': loud}})
+            await asyncio.sleep(0.02)
+        self.assertFalse(ws.closed)
+        self.assertNotIn('call.goodbye_hangup',
+                         [e['type'] for e in self.h.service.events(record['id'])])
+        # They finish with a goodbye of their own, then quiet: now it hangs up.
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay, thanks, bye!'})
+        for _ in range(40):
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': quiet}})
+            await asyncio.sleep(0.02)
+        await until(lambda: ws.closed, 6)
         await asyncio.wait_for(task, 3)
 
     async def test_it_waits_for_the_goodbye_to_be_heard(self):
