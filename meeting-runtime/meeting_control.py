@@ -7,7 +7,7 @@ Requests the voice passes on leave through /health, numbered by seq, as captions
 """
 import hmac
 
-from call_requests import MAX_REQUESTS, NOTE_KINDS, RequestDesk, appends
+from call_requests import MAX_REQUESTS, NOTE_KINDS, ClaimWatch, RequestDesk, appends
 
 MAX_NOTE_TEXT = 4000
 # Requests /health carries; the daemon reads it every second, so it never falls this far behind.
@@ -26,6 +26,8 @@ class MeetingControl:
         # Until the daemon says otherwise, nobody is known to be following the meeting.
         self.following = False
         self.desk = RequestDesk(owner, limit=MAX_REQUESTS['meeting']) if can_do else None
+        # Requests the voice says it passed on without asking its backend (call_requests.py).
+        self.claims = ClaimWatch(self.desk) if self.desk is not None else None
 
     def authorized(self, header):
         """Only the daemon that started this meeting holds its token."""
@@ -35,11 +37,30 @@ class MeetingControl:
 
     def ask(self, arguments, *, asked_by='', context=()):
         """An ask_agent call from the backend: the tool result; the message goes out on /health."""
+        if self.claims is not None:
+            self.claims.tool_called()
         message, output = self.desk.handle(arguments, asked_by=asked_by or '', context=context,
                                            following=self.following)
         if message is not None:
             self.state['requests'] = self.desk.messages[-HEALTH_REQUESTS:]
         return output
+
+    def heard(self, speaker, delta):
+        """What was said, for the safety net (speaker: 'agent', or anyone in the meeting)."""
+        if self.claims is not None:
+            self.claims.heard(speaker, delta)
+
+    def claim_pending(self):
+        return self.claims is not None and self.claims.claimed_at is not None
+
+    def claims_due(self, *, asked_by=''):
+        """A request the voice said it passed on, when its backend never did; out on /health."""
+        if self.claims is None:
+            return None
+        message = self.claims.due(asked_by=asked_by, following=self.following)
+        if message is not None:
+            self.state['requests'] = self.desk.messages[-HEALTH_REQUESTS:]
+        return message
 
     async def handle(self, payload):
         """One message from the daemon: (HTTP status, body)."""
@@ -73,6 +94,8 @@ class MeetingControl:
             delivered = bool(await self.send(append_kind, append_text)) and delivered
         if payload.get('closes') and self.desk is not None:
             self.desk.close(payload.get('request'))
+        elif kind == 'instructions' and self.claims is not None and payload.get('request'):
+            self.claims.awaiting = payload.get('request')  # their answer belongs to this request
         return 200, {'delivered': delivered, 'chat': chat_posted}
 
 

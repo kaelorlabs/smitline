@@ -4,8 +4,10 @@ The voice passes a request on with the ask_agent tool; the agent answers with st
 and, once, done. Phone calls and meetings share this module: the phone line runs it in the
 daemon, a meeting container runs it next to its GPT-Live session. See docs/agents.md.
 """
+import collections
 import json
 import re
+import time
 
 # Requests one call or meeting may make; a meeting runs longer, so it may make more.
 MAX_REQUESTS = {'phone': 20, 'meeting': 50}
@@ -85,15 +87,16 @@ def voice_instructions(owner, can_do, *, meeting):
     place = 'meeting' if meeting else 'call'
     return (
         f"\n\nRequests: {owner}'s agent, the AI that set up this {place}, can do this for the "
-        f'people here: {can_do}. When someone asks for that, and you cannot answer from what you '
-        'already know, hand it to your backend, which passes it on. Then say in a few words that '
-        f"you have passed it to {owner}'s agent and will let them know, and carry on. Never say a "
-        'request is done until a note tells you so. Anything else, you do not pass on: say '
-        f'{owner} will follow up. Notes about requests arrive during the {place}. A note that says '
-        'to tell someone is the exception to keeping notes to yourself: tell them in your own '
-        'words at the next natural pause, never over someone who is speaking. When the agent asks '
-        'a question, ask the person, then hand their answer to your backend to pass on. If they '
-        'drop a request, have the backend cancel it.')
+        f'people here: {can_do}. You cannot do that, and you cannot pass anything on yourself: '
+        'only your backend can. When someone asks for it, hand it to your backend right away; '
+        'you may say only "One moment" first. Your backend\'s answer tells them it was passed on. '
+        'If you did not hand it to your backend, it was not passed on: never say a request was '
+        'passed on, is being worked on, or is done unless your backend\'s answer or a note says '
+        f'so. Anything else, you do not pass on: say {owner} will follow up. Notes about requests '
+        f'arrive during the {place}. A note that says to tell someone is the exception to keeping '
+        'notes to yourself: tell them in your own words at the next natural pause, never over '
+        'someone who is speaking. When the agent asks a question, ask the person, then hand their '
+        'answer to your backend to pass on. If they drop a request, have the backend cancel it.')
 
 
 def backend_instructions(owner, can_do):
@@ -126,14 +129,14 @@ def ack(action, request_id, *, owner, following=True, problem=None):
                 'say': 'Canceled. Confirm in a few words.'}
     if action == 'add':
         return {'requestId': request_id, 'status': 'added',
-                'say': f"Passed on to {owner}'s agent. Say so in a few words if it fits."}
+                'say': f"Passed on to {owner}'s agent. Say so in a few words."}
     if not following:
         return {'requestId': request_id, 'status': 'noted',
                 'say': (f"{owner}'s agent is not following the call right now, so this is noted "
                         f'for {owner} to follow up on after the call. Tell them that, briefly.')}
     return {'requestId': request_id, 'status': 'passed_on',
-            'say': (f"Passed on to {owner}'s agent. Tell them in a few words that you have passed "
-                    "it on and will let them know. Do not say it is done.")}
+            'say': (f"Passed on to {owner}'s agent. Tell them in a few words that you passed it "
+                    'on and will let them know. Do not say it is done.')}
 
 
 class RequestDesk:
@@ -214,6 +217,113 @@ def context_lines(captions, limit=CONTEXT_LINES):
     return [f'{speaker}: {" ".join(text.split())}' for speaker, text in lines if text.strip()][-limit:]
 
 
+_SELF = r"(?:i|i'm|i've|i'll|i am|i have|i will|let me)"
+_LEADING = r"(?:(?:just|already|now|also|quickly|go ahead and|went ahead and|going to|gonna|will|have)\s+){0,2}"
+_PASS = r"(?:pass(?:ed|ing)?|sen[dt]|sending|forward(?:ed|ing)?|hand(?:ed|ing)?|relay(?:ed|ing)?)"
+_ASK = r"(?:ask(?:ed|ing)?|check(?:ed|ing)? with|get(?:ting)?|got)"
+_AGENT = r"(?:your|the|his|her|their|[\w-]+(?: [\w-]+)?'s) (?:agent|assistant)"
+PASSED_ON = re.compile(
+    rf"\b{_SELF}\s+{_LEADING}{_PASS}\b[^.?!]{{0,50}}?(?:\b(?:on|along|over)\b|\b(?:to|with) {_AGENT}\b)"
+    rf"|\b{_SELF}\s+{_LEADING}{_ASK} {_AGENT}\b", re.I)
+REFUSAL = re.compile(r"\b(?:can't|cannot|can not|won't|couldn't|unable|not able|don't|didn't|not)\b"
+                     rf"[^.?!]{{0,30}}\b(?:{_PASS}|{_ASK})\b", re.I)
+_SENTENCES = re.compile(r'(?<=[.!?])\s+')
+
+
+def claims_passed_on(text):
+    """The voice says it passed something on (or is asking the agent), not that it cannot."""
+    return any(PASSED_ON.search(sentence) and not REFUSAL.search(sentence)
+               for sentence in _SENTENCES.split(str(text or '')))
+
+
+def refuses_to_pass(text):
+    return bool(REFUSAL.search(str(text or '')))
+
+
+class ClaimWatch:
+    """A safety net for requests the voice says it passed on without asking its backend.
+
+    GPT-Live alone decides when to hand something to its backend. In a live meeting it told
+    people "I've passed it to your agent" while its backend was never called. When the voice
+    says so and no ask_agent call follows within GRACE seconds, the line passes on what the
+    person said (source "speech"), so the claim comes true; if the voice asked them a question
+    for a request, their answer goes to that request.
+    """
+
+    GRACE = 10.0
+    RECENT_TOOL = 25.0
+
+    def __init__(self, desk, clock=time.monotonic):
+        self.desk = desk
+        self.clock = clock
+        self.turns = {'agent': '', 'other': ''}
+        self.last = None
+        self.said = collections.deque(maxlen=CONTEXT_LINES)  # finished turns, for context
+        self.asked = collections.deque(maxlen=3)  # the other side's last turns
+        self.claimed_at = None
+        self.tool_at = None
+        self.refused = False
+        self.awaiting = None  # a request whose question the voice was asked to put to them
+
+    def heard(self, speaker, delta):
+        speaker = 'agent' if speaker == 'agent' else 'other'
+        if not str(delta or '').strip():
+            return
+        if self.last != speaker:
+            if self.last is not None:
+                self._finish_turn(self.last)
+            self.turns[speaker] = ''
+            if speaker == 'agent':
+                self.refused = False
+        self.turns[speaker] += delta
+        self.last = speaker
+        if speaker != 'agent':
+            return
+        turn = self.turns['agent']
+        if refuses_to_pass(turn):
+            self.refused, self.claimed_at = True, None
+        elif (not self.refused and self.claimed_at is None and claims_passed_on(turn)
+              and not self._tool_recent()):
+            self.claimed_at = self.clock()
+
+    def _finish_turn(self, speaker):
+        text = ' '.join(self.turns[speaker].split())
+        if not text:
+            return
+        self.said.append(f'{"agent" if speaker == "agent" else "other"}: {text}')
+        if speaker == 'other':
+            self.asked.append(text)
+
+    def tool_called(self):
+        self.tool_at = self.clock()
+        self.claimed_at = None
+
+    def _tool_recent(self):
+        return self.tool_at is not None and self.clock() - self.tool_at < self.RECENT_TOOL
+
+    def due(self, *, asked_by='', following=True):
+        """A request message when the voice claimed one its backend never made; else None."""
+        if self.claimed_at is None or self.clock() - self.claimed_at < self.GRACE:
+            return None
+        self.claimed_at = None
+        if self._tool_recent() or not self.asked:
+            return None
+        text = self.asked[-1]
+        if len(text.split()) < 6 and len(self.asked) > 1:
+            text = f'{self.asked[-2]} {text}'  # the request may have come in two pieces
+        if self.awaiting is not None and self.desk.is_open(self.awaiting):
+            message, _ = self.desk.handle({'action': 'add', 'requestId': self.awaiting, 'text': text})
+            self.awaiting = None
+        else:
+            message, _ = self.desk.handle({'action': 'ask', 'kind': 'question', 'text': text,
+                                           'requestId': '', 'askedBy': ''},
+                                          asked_by=asked_by, context=list(self.said),
+                                          following=following)
+        if message is not None:
+            message['source'] = 'speech'
+        return message
+
+
 def tool_output(result):
     return json.dumps(result, ensure_ascii=False)
 
@@ -229,15 +339,24 @@ def _about(request):
     return text if len(text) <= 120 else text[:117] + '...'
 
 
+# How an answer is given: at a good moment, naturally, and not lost when someone cuts in.
+WHEN_TO_TELL = (
+    'If they are waiting for it or it matters now, tell them at the next natural pause; '
+    'otherwise, first thing the next time you speak. Finish what you are saying first: never '
+    'cut yourself off in the middle of something important. Say it in your own words, as a '
+    'person would. If someone interrupts you before you have told them, tell them the next '
+    'time you speak.')
+
+
 def status_note(request, text, *, owner, announce):
     """A status update for the voice: quiet context unless the agent wants it said now."""
     rid = request['id']
     if announce:
         return {'kind': 'instructions', 'request': rid, 'text': (
             f"{owner}'s agent has an update on request {rid} ({_who(request)} asked: "
-            f'"{_about(request)}"): {text} Tell {_who(request)} briefly at the next natural pause, '
-            'never over someone speaking. If it is a question, ask it, then hand the answer to '
-            f'your backend to pass on for request {rid}.')}
+            f'"{_about(request)}"): {text} Tell {_who(request)} briefly. {WHEN_TO_TELL} If it '
+            f'is a question, ask it, then hand the answer to your backend to pass on for '
+            f'request {rid}.')}
     return {'kind': 'thinking', 'request': rid, 'text': (
         f"Progress from {owner}'s agent on request {rid} ({_who(request)} asked: "
         f'"{_about(request)}"): {text} Do not announce this; use it if someone asks how it is '
@@ -253,8 +372,51 @@ def done_note(request, text, *, owner, ok):
         said = (f"{owner}'s agent could not complete request {rid} ({_who(request)} asked: "
                 f'"{_about(request)}"): {text} Say {owner} will follow up if it is still needed.')
     return {'kind': 'instructions', 'request': rid, 'closes': True, 'text': (
-        f'{said} Tell {_who(request)} in a sentence or two at the next natural pause, never over '
-        'someone speaking.')}
+        f'{said} Tell {_who(request)} in a sentence or two. {WHEN_TO_TELL}')}
+
+
+def retell_note(request, text, *, owner):
+    """The answer was delivered but not heard on the call (cut off, or never said): once more."""
+    return {'kind': 'instructions', 'request': request['id'], 'text': (
+        f"{_who(request).capitalize()} has not heard what {owner}'s agent said yet "
+        f'(you may have been cut off): {text} Tell them first thing the next time you speak, '
+        'or now at a natural pause if they are waiting. If you have already told them, ignore '
+        'this.')}
+
+
+_STOPWORDS = frozenset((
+    'the a an and or but for to of in on at is are was were be been it its this that these those '
+    'with from by as your you they them their there here what which who when where how have has '
+    'had will would can could should not no yes about into than then so just also our we us '
+    'he she his her him i me my').split())
+
+
+def _words(text):
+    return re.findall(r"[\w']+", str(text or '').casefold())
+
+
+def _heard(text):
+    """The spoken words, with ordinals as their numbers ("6th" is heard as "6")."""
+    return {re.sub(r'^(\d+)(?:st|nd|rd|th)$', r'\1', word) for word in _words(text)}
+
+
+def told(answer, said):
+    """Whether what the voice said carries the answer: its numbers and most of its key words.
+
+    The voice paraphrases ("the next one after that" for "number 77", "October 6th" for
+    "October 6"), so all the numbers are enough, and so are most of them together with
+    most of the key words. An answer cut off before its numbers is not told.
+    """
+    words = _words(answer)
+    heard = _heard(said)
+    numbers = list(dict.fromkeys(word for word in words if word.isdigit()))
+    key = list(dict.fromkeys(word for word in words
+                             if len(word) >= 4 and not word.isdigit() and word not in _STOPWORDS))[:8]
+    key_heard = sum(word in heard for word in key) >= max(1, len(key) // 2) if key else bool(heard)
+    if not numbers:
+        return key_heard
+    found = sum(number in heard for number in numbers)
+    return found == len(numbers) or (found * 2 >= len(numbers) and key_heard)
 
 
 def late_note(request, *, owner):

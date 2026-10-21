@@ -77,6 +77,10 @@ The agent answers with `reply_to_call_request`, of two types:
 
 A small question gets `done` straight away. A bigger task gets a `status` first, then `done`; meanwhile the agent keeps following the call (a subagent can do the work). The voice can also cancel a request when they drop it (`cancel`). For a long meeting, `only: "requests"` wakes the agent only for requests, and each request carries who asked and the last lines said, so the agent need not read the whole meeting.
 
+The voice gives an answer at a good moment, as a person would: at the next natural pause when the person is waiting for it, otherwise first thing the next time it speaks, and never by cutting itself off in the middle of something important. If it is interrupted before it has said it, it says it the next time it speaks; and if 35 seconds after an answer reached the voice nothing it said carried the answer (its numbers, or most of its key words), the answer is given to it once more.
+
+GPT-Live alone decides when to hand something to its backend, and sometimes says "I've passed that to your agent" without doing it. When it says so and no `ask_agent` call follows within 10 seconds, Smitline passes on what the person said itself: the request has `source: "speech"`, and its text is their words, not a tidied request.
+
 Nobody is left waiting:
 
 - If no agent is following the call (no live wait in the last 90 seconds), the voice says so at once and that the user will follow up.

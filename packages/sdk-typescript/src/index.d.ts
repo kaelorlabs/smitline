@@ -65,6 +65,8 @@ export interface CallRequest {
   kind: 'question' | 'task';
   text: string;
   askedBy?: string;
+  /** 'speech': the voice said it passed this on without asking its backend; text is what they said. */
+  source?: 'speech';
   /** The last lines said before it was asked. */
   context?: string[];
   state: 'open' | 'working' | 'done' | 'canceled';

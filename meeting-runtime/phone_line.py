@@ -24,7 +24,7 @@ from phone_prompts import (
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
-from call_requests import MAX_REQUESTS, RequestDesk, appends, tool_output
+from call_requests import MAX_REQUESTS, ClaimWatch, RequestDesk, appends, tool_output
 from listening import AudioTap
 from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
 from twilio_client import client_for, dial_twiml, sip_dial_twiml, stream_twiml
@@ -403,6 +403,16 @@ class OutputPacer:
                 await self._send_mark()
 
 
+def _same_number(a, b):
+    """Two phone numbers are the same, however they were written."""
+    if not a or not b:
+        return False
+    try:
+        return normalize_phone(str(a)) == normalize_phone(str(b))
+    except ValueError:
+        return False
+
+
 def _error_code(error):
     return getattr(error, 'code', None) or type(error).__name__
 
@@ -425,6 +435,10 @@ class PhoneSession:
         # Requests to the agent that started the call, when its brief says what it can do.
         self.desk = (RequestDesk(self.brief.on_behalf_of, limit=MAX_REQUESTS['phone'])
                      if getattr(self.brief, 'can_do', None) else None)
+        # Requests the voice says it passed on without asking its backend (call_requests.py).
+        self.claims = ClaimWatch(self.desk) if self.desk is not None else None
+        # Calling the owner's own phone: their assistant, so no introduction or disclosure.
+        self.calling_owner = False
         self.recording = recording
         self.owner_phone = owner_phone
         self.call_sid = None
@@ -483,13 +497,20 @@ class PhoneSession:
         self.greet_name = greeting_name(contact)
         session = self.brief.session_context
         owner = self.brief.on_behalf_of
+        self.calling_owner = (not self.inbound and not self.brief.rehearsal and _same_number(
+            owner_settings(self.ctx, env).get('SMITLINE_OWNER_PHONE'), self.brief.to))
+        if self.calling_owner:
+            self.greet_name = greeting_name({'name': owner})
+            # They know who is calling: there is no disclosure to check, remind, or report.
+            self.disclosed.set()
         notes = voice_notes(profile, contact, session, owner)
         self.backend_model = env.get('SMITLINE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
         return session_config(
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording, contact=contact,
                                             has_notes=bool(notes),
-                                            boundaries=(profile or {}).get('boundaries') or ()),
+                                            boundaries=(profile or {}).get('boundaries') or (),
+                                            calling_owner=self.calling_owner),
             audio_format=PCMU8,
             voice=self.brief.voice or default_voice(owner_settings(self.ctx, env)),
             delegation=delegation_config(
@@ -771,6 +792,8 @@ class PhoneSession:
 
     def _ask_agent(self, call):
         """The backend passes a request to the agent; it gets the tool result straight back."""
+        if self.claims is not None:
+            self.claims.tool_called()
         message, output = self.desk.handle(call['arguments'], asked_by=self.greet_name or '',
                                            following=self.ctx.agent_following())
         if message is not None:
@@ -788,7 +811,19 @@ class PhoneSession:
             sent = await self.live.append(f'session.{kind}.append', text) and sent
         if note.get('closes') and self.desk is not None:
             self.desk.close(note.get('request'))
+        elif note.get('kind') == 'instructions' and self.claims is not None:
+            self.claims.awaiting = note.get('request')  # their answer belongs to this request
         return bool(sent)
+
+    def _claims_due(self):
+        """Pass on a request the voice said it passed on, when its backend never did."""
+        if self.claims is None:
+            return
+        message = self.claims.due(asked_by=self.greet_name or '',
+                                  following=self.ctx.agent_following())
+        if message is not None:
+            message.pop('seq', None)
+            self.ctx.request(message)
 
     def _live_ended(self):
         if self.end_reason is None:
@@ -811,6 +846,8 @@ class PhoneSession:
         if source == 'agent':
             self._agent_said += delta
             self._agent_turn += delta
+        if self.claims is not None:
+            self.claims.heard(source, delta)
         for speaker, text in self.joiner.add(source, delta, event.get('start_ms'), event.get('end_ms')):
             self.ctx.add_transcript(speaker, text)
             if speaker == 'agent':
@@ -924,7 +961,8 @@ class PhoneSession:
         await self.live.started.wait()
         await self.live.append('session.commentary.append',
                                opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
-                                           recording=self.recording))
+                                           recording=self.recording,
+                                           calling_owner=self.calling_owner))
         self._note('opening_cue')
         await asyncio.Event().wait()
 
@@ -933,6 +971,7 @@ class PhoneSession:
         warned = prompted = False
         while True:
             await asyncio.sleep(1)
+            self._claims_due()
             now = time.monotonic()
             elapsed = now - self.started_at
             if not warned and elapsed >= max(limit - WRAP_UP_SECONDS, limit * 0.8):

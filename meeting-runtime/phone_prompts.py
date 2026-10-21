@@ -66,7 +66,7 @@ def _who_line(brief, contact, *, inbound):
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
-                       boundaries=()):
+                       boundaries=(), calling_owner=False):
     who = brief.on_behalf_of
     # Who and why come first, so the call sounds genuine; the AI part comes later in the call.
     steps = ('Open the way a person does on the phone: a short hello that says who you are calling '
@@ -86,6 +86,13 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     elif brief.rehearsal:
         opening = (f'This is a rehearsal. The person on the phone is {who} practicing the other '
                    f'side of the call. Run the call exactly as you would for real. {steps}')
+    elif calling_owner:
+        # Their own assistant calling them: no introduction, no disclosure, no "on behalf of".
+        opening = (f'You are calling {who}, the person you work for, on their own phone, as '
+                   'their assistant. Talk with them the way a trusted assistant would: greet them '
+                   'by first name, say in a few words why you are calling, and get on with it. '
+                   'They know exactly who you are: do not introduce yourself, do not say that you '
+                   'are their assistant or an AI, and do not say who you are calling for.')
     else:
         opening = f"You are {who}'s AI assistant, making a phone call for them. {steps}"
     if recording:
@@ -128,7 +135,10 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them. If they ask not to be called again, apologize, say they will not be called again, '
          'say goodbye, and end the call.'),
-        ('Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
+        ('Voicemail: if their voicemail answers, wait for the beep, then leave a short message '
+         'saying why you called, and end the call with the reason voicemail_left.'
+         if calling_owner else
+         'Voicemail: if a voicemail greeting answers, wait for the beep, then leave a short message: '
          f"who you are calling for and why, that you are {who}'s AI assistant, and that they can "
          f'reply to {who} directly. Never ask them to call this number back, and share no private '
          'details. If a person picks up while you '
@@ -188,9 +198,14 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
     }
 
 
-def opening_cue(brief, *, inbound=False, name=None, recording=False):
+def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_owner=False):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
     who = brief.on_behalf_of
+    if calling_owner:
+        recorded = ' Say that the call is recorded.' if recording else ''
+        return ('The call just connected. Say a short, relaxed hello to them by first name'
+                f'{f" ({name})" if name else ""}, then say in a few words why you are calling. Do '
+                f'not introduce yourself.{recorded}')
     if inbound:
         recorded = ' Say that the call is recorded.' if recording else ''
         return f"Greet the caller: say they have reached {who}'s AI assistant.{recorded}"

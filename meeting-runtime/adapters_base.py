@@ -56,6 +56,10 @@ class MeetingPlatformAdapter(ABC):
         """Confirmed in-call count including self, or None when unavailable."""
         return None
 
+    async def get_participant_names(self):
+        """The display names of everyone in the meeting, the bot included; [] when unknown."""
+        return []
+
     async def get_camera_state(self):
         """Return on, off, blocked, or unknown without raising."""
         return 'unknown'

@@ -8,6 +8,7 @@ import contextlib
 import os
 import re
 import signal
+import time
 from contextlib import AsyncExitStack
 from urllib.parse import urlparse
 
@@ -21,11 +22,13 @@ from voice_core import append_event, backend_usage_from, function_call_from, fun
 import call_requests
 from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
-from meeting_intro import addressing_instructions, introduce, intro_instructions
+from meeting_intro import (
+    addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
+    others_in, participants_note)
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
-from meeting_lifecycle import should_leave_alone
+from meeting_lifecycle import AloneWatch
 from pathlib import Path
 from joinly.providers.browser.browser_session import BrowserSession
 from joinly.providers.browser.devices.pulse_server import PulseServer
@@ -42,6 +45,8 @@ state.update(cameraEnabled=True, cameraState='starting', visualState='joining')
 stop = asyncio.Event()
 record = None
 presence = None
+# How often the participant list is read; a change is told to the voice as quiet context.
+PARTICIPANTS_EVERY = 20.0
 # Both sides of the meeting as GPT-Live hears and speaks them, for the owner listening in.
 listening = AudioTap('pcm16', 24000)
 # The daemon's way in (/control) and the voice's requests out; main() sets it up.
@@ -181,10 +186,12 @@ def build_session_config(runtime, meeting_state=None):
     config = {'model': 'gpt-live-1', 'store': False,
               'audio': {'format': {'type': 'audio/pcm', 'rate': 24000}},
               'instructions': f'''You are {runtime.participant_name}, an AI participant in a real meeting. Follow the conversation continuously and retain the context needed to help.
-Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor.
-Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.''',
+Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor. After you have answered or helped, go back to listening: do not reply to thanks, "okay", "go ahead", laughter, or other remarks that need no answer, and keep small talk aimed at you to a few words.
+Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.
+Languages: speak the language of the person talking to you. When someone asks you to speak another language, such as Hindi, Tamil, or Telugu, switch right away and keep using it until they ask otherwise; do not decline. Notes and instructions reach you in English: say what they tell you in the language you are speaking.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
     config['instructions'] += addressing_instructions(runtime.participant_name)
+    config['instructions'] += identity_instructions(runtime.owner_name)
     if meeting_state.get('canDo'):
         config['instructions'] += call_requests.voice_instructions(
             runtime.owner_name or 'the person who invited them', meeting_state['canDo'],
@@ -216,6 +223,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            heard = [None]  # when someone in the meeting was last heard; the intro waits for a pause
             requests = []
 
             async def send_note(kind, text):
@@ -244,6 +252,21 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     # The session is closing; the request itself already went out on /health.
                     record.event('agent_request_unanswered', error=type(error).__name__)
 
+            async def pass_on_claims():
+                """The safety net: a request the voice said it passed on, without its backend."""
+                await ready.wait()
+                while not stop.is_set():
+                    await asyncio.sleep(1)
+                    if not control.claim_pending():
+                        continue
+                    try:
+                        speaker = await adapter.get_active_speaker()
+                    except Exception:
+                        speaker = None
+                    message = control.claims_due(asked_by=speaker or '')
+                    if message is not None:
+                        record.event('agent_request', status='from_speech', request=message['id'])
+
             control.adapter = adapter
             control.record = record.event
             control.send = send_note
@@ -266,12 +289,35 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     await gate.platform_microphone_changed(actual)
 
             async def introduce_once():
-                if await introduce(ws.send_json, runtime, participation, ready, stop):
+                if await introduce(ws.send_json, runtime, participation, ready, stop,
+                                   heard_at=lambda: heard[0]):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 
+            participants = {'names': None, 'read_at': None, 'said_none': False}
+
+            async def tell_who_is_here():
+                """Read who is in the meeting now and then; tell the voice when it changes."""
+                now = time.monotonic()
+                if participants['read_at'] is not None and now - participants['read_at'] < PARTICIPANTS_EVERY:
+                    return
+                participants['read_at'] = now
+                try:
+                    names = others_in(await adapter.get_participant_names(), runtime.participant_name)
+                except Exception:
+                    names = []
+                if not names and not participants['said_none']:
+                    participants['said_none'] = True  # once: the list could not be read here
+                    record.event('participants_unavailable', platform=state.get('platform'))
+                if names and names != participants['names']:
+                    participants['names'] = names
+                    if await send_note('thinking', participants_note(
+                            names, runtime.owner_name, runtime.participant_name)):
+                        record.event('participants', count=len(names))
+
             async def watch_meeting():
                 await ready.wait()
+                alone = AloneWatch()
                 while not stop.is_set():
                     await asyncio.sleep(3)
                     state['microphoneState'] = await adapter.get_microphone_state()
@@ -280,12 +326,13 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('meeting_ended')
                         stop.set()
                         return
+                    await tell_who_is_here()
                     try:
                         count = await adapter.get_participant_count()
                     except Exception:
                         count = None
                     state['participantCount'] = count
-                    if should_leave_alone(count):
+                    if alone.update(count):
                         state['endReason'] = 'alone_in_meeting'
                         record.event('auto_leave', reason='alone_in_meeting')
                         try:
@@ -312,6 +359,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('microphone_monitor', watch_microphone),
                 ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
+                ('request_safety_net', pass_on_claims),
                 ('session_closer', closer),
             ]
             tasks = [asyncio.create_task(fn(), name=name) for name, fn in task_specs]
@@ -338,6 +386,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         # Fail rather than silently accumulate seconds of stale speech.
                         gate.offer(data)
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
+                        if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
+                            heard[0] = time.monotonic()
+                        control.heard('agent' if kind == 'session.output_transcript.delta' else 'meeting',
+                                      event.get('delta') or '')
                         transcript.note(event)
                     elif kind == 'response.event':
                         before = state.get('backend_status')
@@ -436,6 +488,7 @@ async def main():
             enabled=runtime.camera_enabled,
             logo_src=runtime.camera_logo_data_uri or None,
             style=runtime.camera_style,
+            caption=camera_caption(runtime.owner_name),
         )
         presence = Presence(state, camera_feed)
         presence.sync()
