@@ -817,7 +817,7 @@ test('/mcp is the local agents endpoint, behind its own token rather than the co
     assert.equal(opened.status, 200);
     const listed = await post({ Authorization: `Bearer ${token}`, 'Mcp-Session-Id': opened.headers['mcp-session-id'] },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.equal(listed.body.result.tools.length, 13);
+    assert.equal(listed.body.result.tools.length, 14);
     assert.ok(logs.some((line) => /session opened/.test(line)));
     assert.ok(!logs.join('\n').includes(token));
   } finally {

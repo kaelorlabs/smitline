@@ -16,8 +16,10 @@ from call_record import CallRecord
 from startup_input import clip_tokens, context_text, handoff_from_state, handoff_to_session_input
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
 from transcript_assembler import TranscriptAssembler
-from listening import AudioTap, ndjson
-from voice_core import backend_usage_from
+from listening import AudioTap
+from voice_core import append_event, backend_usage_from, function_call_from, function_output_events
+import call_requests
+from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
 from meeting_intro import addressing_instructions, introduce, intro_instructions
 from adapters_base import AuthenticationRequired
@@ -42,6 +44,8 @@ record = None
 presence = None
 # Both sides of the meeting as GPT-Live hears and speaks them, for the owner listening in.
 listening = AudioTap('pcm16', 24000)
+# The daemon's way in (/control) and the voice's requests out; main() sets it up.
+control = MeetingControl('', state, owner='')
 
 
 def _sync_presence():
@@ -145,6 +149,9 @@ def backend_instructions(runtime, meeting_state=None):
     ]
     if runtime.meeting_instructions:
         parts.append('Organizer-provided meeting guidance: ' + runtime.meeting_instructions)
+    can_do = (meeting_state or {}).get('canDo')
+    if can_do:
+        parts.append(call_requests.backend_instructions(owner, can_do))
     context = context_text(handoff_from_state(meeting_state))
     if context:
         parts.append('Meeting context:\n' + clip_tokens(context, 4000))
@@ -158,8 +165,14 @@ def meeting_delegation_config(runtime, meeting_state=None):
         'instructions': backend_instructions(runtime, meeting_state),
         'tool_choice': 'auto',
     }
+    tools = []
+    if (meeting_state or {}).get('canDo'):
+        tools.append(call_requests.ask_agent_tool(
+            runtime.owner_name or 'the person who invited them'))
     if runtime.web_search:
-        responses['tools'] = [{'type': 'web_search'}]
+        tools.append({'type': 'web_search'})
+    if tools:
+        responses['tools'] = tools
     return {'type': 'responses', 'responses': responses}
 
 
@@ -172,6 +185,10 @@ Participation policy: Default to listening silently. Respond when someone direct
 Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
     config['instructions'] += addressing_instructions(runtime.participant_name)
+    if meeting_state.get('canDo'):
+        config['instructions'] += call_requests.voice_instructions(
+            runtime.owner_name or 'the person who invited them', meeting_state['canDo'],
+            meeting=True)
     if runtime.voice:
         config['audio']['output'] = {'voice': runtime.voice}
     if runtime.meeting_intro:
@@ -199,6 +216,37 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            requests = []
+
+            async def send_note(kind, text):
+                payload = append_event(f'session.{kind}.append', text)
+                if payload is None or not ready.is_set() or stop.is_set():
+                    return False
+                await ws.send_json(payload)
+                record.event('control_note', note=kind)
+                return True
+
+            async def answer_request(call):
+                # Who asked: the backend's name for them, else whoever the meeting shows speaking.
+                try:
+                    speaker = await adapter.get_active_speaker()
+                except Exception:
+                    speaker = None
+                said = call_requests.context_lines(state.get('captions', []))
+                output = control.ask(call['arguments'], asked_by=speaker or '', context=said)
+                record.event('agent_request', status=output.get('status'),
+                             request=output.get('requestId'))
+                try:
+                    for payload in function_output_events(call['call_id'],
+                                                          call_requests.tool_output(output)):
+                        await ws.send_json(payload)
+                except Exception as error:
+                    # The session is closing; the request itself already went out on /health.
+                    record.event('agent_request_unanswered', error=type(error).__name__)
+
+            control.adapter = adapter
+            control.record = record.event
+            control.send = send_note
 
             async def send_audio():
                 await ready.wait()
@@ -294,6 +342,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     elif kind == 'response.event':
                         before = state.get('backend_status')
                         note_backend_event(event, state)
+                        call = function_call_from(event)
+                        if call and call['name'] == 'ask_agent' and control.desk is not None:
+                            requests.append(asyncio.create_task(
+                                answer_request(call), name='agent_request'))
                         if state.get('backend_status') != before:
                             _sync_presence()
                     elif kind == 'session.usage.updated':
@@ -307,19 +359,25 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('finished')
                         break
                     elif kind == 'error':
-                        state['api_error'] = event.get('error', {}).get('code') or 'live_error'
-                        stage('api_error')
+                        error = event.get('error') or {}
+                        state['api_error'] = error.get('code') or 'live_error'
+                        record.event('api_error', code=state['api_error'],
+                                     message=str(error.get('message') or '')[:300])
                         if not ready.is_set():
+                            stage('api_error')
                             raise RuntimeError('GPT-Live rejected session startup')
+                        # After start-up an error refuses one event (a tool result, a note),
+                        # and the session goes on: the meeting continues, as a phone call does.
                     # Unknown future events are ignored so audio and transcripts continue.
             finally:
-                for task in tasks:
+                control.send = None
+                for task in tasks + requests:
                     task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*tasks, *requests, return_exceptions=True)
 
 
 async def main():
-    global record, presence
+    global record, presence, control
     runtime = RuntimeConfig.from_environ()
     # Meet and Teams find the active speaker by skipping the bot's own tile, by this name.
     os.environ['JOINLY_NAME'] = runtime.participant_name
@@ -331,6 +389,9 @@ async def main():
     state['visualState'] = 'joining'
     state['backend'] = {'type': 'responses', 'model': runtime.backend_model,
                         'web_search': runtime.web_search}
+    control = MeetingControl(os.environ.get('SMITLINE_CONTROL_TOKEN'), state,
+                             owner=runtime.owner_name or 'the person who invited them',
+                             can_do=meeting_state.get('canDo'))
     meeting_id = meeting_state.get('meetingId')
     try:
         record = CallRecord(
@@ -358,14 +419,8 @@ async def main():
         return web.json_response(payload, headers={'Cache-Control': 'no-store'})
     app.router.add_get('/health', status)
 
-    async def listen(request):
-        response = web.StreamResponse(headers={'Content-Type': 'application/x-ndjson',
-                                               'Cache-Control': 'no-store'})
-        await response.prepare(request)
-        async for chunk in listening.chunks():
-            await response.write(ndjson(chunk))
-        return response
-    app.router.add_get('/listen', listen)
+    # /listen and /control: for the daemon that started this meeting alone (meeting_control.py).
+    add_routes(app, control, listening)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()

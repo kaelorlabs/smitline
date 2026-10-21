@@ -24,6 +24,7 @@ from phone_prompts import (
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
+from call_requests import MAX_REQUESTS, RequestDesk, appends, tool_output
 from listening import AudioTap
 from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
 from twilio_client import client_for, dial_twiml, sip_dial_twiml, stream_twiml
@@ -421,6 +422,9 @@ class PhoneSession:
         self.inbound = inbound
         # Both sides of the call as they pass, for the owner listening in (G.711 mu-law, 8 kHz).
         self.tap = AudioTap('mulaw', 8000)
+        # Requests to the agent that started the call, when its brief says what it can do.
+        self.desk = (RequestDesk(self.brief.on_behalf_of, limit=MAX_REQUESTS['phone'])
+                     if getattr(self.brief, 'can_do', None) else None)
         self.recording = recording
         self.owner_phone = owner_phone
         self.call_sid = None
@@ -743,7 +747,9 @@ class PhoneSession:
                 for key, value in usage.items():
                     self.backend_tokens[key] = self.backend_tokens.get(key, 0) + value
             call = function_call_from(event)
-            if call and call['name'] == 'end_call':
+            if call and call['name'] == 'ask_agent' and self.desk is not None:
+                self._ask_agent(call)
+            elif call and call['name'] == 'end_call':
                 # Hanging up needs no tool result or further backend turn.
                 reason = call['arguments'].get('reason')
                 self.ctx.event('call.end_requested', reason=reason or 'completed')
@@ -762,6 +768,27 @@ class PhoneSession:
                 self.end_reason = 'hangup'
             return True
         return False
+
+    def _ask_agent(self, call):
+        """The backend passes a request to the agent; it gets the tool result straight back."""
+        message, output = self.desk.handle(call['arguments'], asked_by=self.greet_name or '',
+                                           following=self.ctx.agent_following())
+        if message is not None:
+            message.pop('seq', None)
+            self.ctx.request(message)
+        if self.live is not None:
+            self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
+
+    async def deliver(self, note):
+        """A note about a request, for the voice (call_requests.appends)."""
+        if self.live is None:
+            return False
+        sent = True
+        for kind, text in appends(note):
+            sent = await self.live.append(f'session.{kind}.append', text) and sent
+        if note.get('closes') and self.desk is not None:
+            self.desk.close(note.get('request'))
+        return bool(sent)
 
     def _live_ended(self):
         if self.end_reason is None:
@@ -1572,6 +1599,10 @@ class PhoneLine:
     async def instruct(self, call_id, text, *, silent=False):
         session = self.sessions.get(call_id)
         return bool(session and await session.instruct(text, silent=silent))
+
+    async def deliver(self, call_id, note):
+        session = self.sessions.get(call_id)
+        return bool(session and await session.deliver(note))
 
     def listen(self, call_id):
         """The call's audio tap; None for direct SIP, whose audio never passes through here."""

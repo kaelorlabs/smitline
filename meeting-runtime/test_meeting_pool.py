@@ -586,7 +586,7 @@ class PoolEnvironmentTests(unittest.IsolatedAsyncioTestCase):
 
 # What the meeting container sets for itself (or compose sets), and what only a meeting
 # started by hand or a sign-in reads: none of it comes from the installation's settings.
-MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
+MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'SMITLINE_CONTROL_TOKEN', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
                           'PULSE_SOURCE', 'PULSE_SERVER', 'JOINLY_BROWSER_PROFILE_DIR', 'JOINLY_NAME'}
 MEETING_ENV_NOT_IN_THE_POOL = {
     'MEETING_URL', 'MEETING_PASSCODE',  # a meeting started by hand (.env.meeting); calls use the runtime state

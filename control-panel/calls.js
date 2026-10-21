@@ -706,6 +706,52 @@ function renderCarried(call) {
   }
 }
 
+// What the people on the call asked your agent for, and how it answered (brief canDo).
+const REQUEST_STATES = {
+  open: ['Waiting for your agent', 'warn'],
+  working: ['Your agent is on it', 'progress'],
+  done: ['Done', 'good'],
+  canceled: ['Canceled', 'neutral'],
+};
+
+function threadLabel(entry) {
+  if (entry.from === 'call') return { ask: 'Asked', add: 'Added', cancel: 'Canceled it' }[entry.type] || 'Asked';
+  if (entry.type === 'done') return entry.ok === false ? 'Could not do it' : 'Done';
+  return entry.announce ? 'Update, said aloud' : 'Update';
+}
+
+function renderRequests(call) {
+  const section = $('requests');
+  if (!section) return;
+  const requests = Array.isArray(call.requests) ? call.requests : [];
+  section.hidden = requests.length === 0;
+  $('requests-list').replaceChildren(...requests.map((request) => {
+    const item = document.createElement('li');
+    const head = Object.assign(document.createElement('p'), { className: 'request-head' });
+    const ended = TERMINAL.has(call.status) || call.status === 'summarizing';
+    let [label, tone] = REQUEST_STATES[request.state] || [String(request.state), 'neutral'];
+    if (request.state === 'done' && request.ok === false) [label, tone] = ['Could not do it', 'bad'];
+    else if (ended && (request.state === 'open' || request.state === 'working')) [label, tone] = ['Still open', 'warn'];
+    const chip = document.createElement('span');
+    setChip(chip, { text: label, tone, live: request.state === 'working' && !ended });
+    const who = [request.askedBy ? `${request.askedBy} asked` : 'Asked', request.kind === 'task' ? 'a task' : 'a question']
+      .join(' ');
+    head.append(Object.assign(document.createElement('strong'), { textContent: who }), chip);
+    const thread = Object.assign(document.createElement('ol'), { className: 'request-thread' });
+    thread.append(...(request.thread || []).map((entry) => {
+      const line = Object.assign(document.createElement('li'), { className: `from-${entry.from === 'agent' ? 'agent' : 'call'}` });
+      const meta = [threadLabel(entry), entry.at ? when(entry.at) : ''];
+      if (entry.from === 'agent' && entry.delivered === false) meta.push('after the call, not spoken');
+      line.append(Object.assign(document.createElement('span'), { className: 'muted small', textContent: meta.filter(Boolean).join(' · ') }));
+      if (entry.text) line.append(Object.assign(document.createElement('span'), { textContent: entry.text }));
+      if (entry.details) line.append(Object.assign(document.createElement('pre'), { className: 'request-details', textContent: entry.details }));
+      return line;
+    }));
+    item.append(head, thread);
+    return item;
+  }));
+}
+
 function renderBrief(call) {
   const section = $('brief');
   if (section.dataset.for === call.id) return;
@@ -730,6 +776,7 @@ function renderBrief(call) {
   const limits = [b.maxMinutes ? `${b.maxMinutes} min at most` : '', b.voice ? `voice ${b.voice}` : '', b.language ? `language ${b.language}` : ''].filter(Boolean);
   if (limits.length) add('Call settings', textBlock(capitalize(limits.join(' · '))));
   if (b.rehearsal) add('Practice', textBlock('A rehearsal: it called your own phone.'));
+  if (b.canDo) add('Your agent can', textBlock(sentence(b.canDo)));
   $('brief-fields').replaceChildren(...rows.flatMap(([label, nodes]) => {
     const dd = document.createElement('dd');
     dd.append(...nodes);
@@ -926,6 +973,7 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('result-pending').hidden = call.status !== 'summarizing';
   renderTags(call);
   renderCarried(call);
+  renderRequests(call);
   renderBrief(call);
   renderResult(call);
   renderCost(call);
@@ -969,6 +1017,10 @@ async function refreshDetail(options) {
     if (fromList && fromList.carryNote?.text !== state.call.carryNote?.text) {
       state.call = { ...state.call, carryNote: fromList.carryNote };
       renderCarried(state.call);
+    }
+    if (fromList && JSON.stringify(fromList.requests || []) !== JSON.stringify(state.call.requests || [])) {
+      state.call = { ...state.call, requests: fromList.requests };
+      renderRequests(state.call);
     }
     renderMeta(state.call);
     return;

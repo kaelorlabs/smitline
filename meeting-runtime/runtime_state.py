@@ -112,6 +112,9 @@ def state_from_session(session):
         payload['onBehalfOf'] = session.on_behalf_of
     if session.voice:
         payload['voice'] = session.voice
+    if getattr(session, 'can_do', None):
+        # Requests to the agent that started the meeting (call_requests.py).
+        payload['canDo'] = session.can_do
     if session.camera_enabled is not None:
         payload['cameraEnabled'] = bool(session.camera_enabled)
     return payload

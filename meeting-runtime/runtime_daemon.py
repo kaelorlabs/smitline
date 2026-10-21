@@ -14,7 +14,7 @@ import warnings
 
 from aiohttp import web
 
-from agent_sessions import MeetingSession, optional_on_behalf_of, optional_voice
+from agent_sessions import MeetingSession, optional_can_do, optional_on_behalf_of, optional_voice
 from call_hooks import LOCAL_OWNER, CallRefused, maybe_await, owner_required
 from context_handoff import ContextHandoff
 from event_store import JsonlEventStore
@@ -25,7 +25,8 @@ from schema_validation import reject_secrets, reject_unknown_fields, require_enu
 
 
 # onBehalfOf names the owner in the spoken AI disclosure; voice picks a GPT-Live voice.
-CREATE_FIELDS = ('meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice')
+# canDo: what the agent that started the meeting does when people ask (call_requests.py).
+CREATE_FIELDS = ('meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice', 'canDo')
 LIFECYCLE_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 FORWARD_TRANSITIONS = {
     'joining': frozenset({'waiting_for_admission', 'live', 'ended'}),
@@ -115,6 +116,7 @@ def _new_id(prefix):
 
 # Live captions kept per meeting, and meetings kept, before the oldest are dropped.
 MAX_LIVE_CAPTIONS = 2000
+MAX_LIVE_REQUESTS = 200
 MAX_LIVE_MEETINGS = 32
 
 
@@ -157,6 +159,7 @@ class RuntimeDaemon:
         self._async_locks = {}
         self._write_locks = {}
         self._captions = {}
+        self._requests = {}
 
     def close(self):
         for store in (self.meetings, self.events):
@@ -299,6 +302,7 @@ class RuntimeDaemon:
                 'cameraState': 'off' if not camera['enabled'] else 'starting',
                 'visualState': 'joining',
                 'owner': owner,
+                'canDo': optional_can_do(payload.get('canDo')),
             })
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
@@ -430,6 +434,28 @@ class RuntimeDaemon:
     def forget_captions(self, meeting_id):
         with self._lock_guard:
             self._captions.pop(meeting_id, None)
+            self._requests.pop(meeting_id, None)
+
+    def note_requests(self, meeting_id, messages):
+        """Request messages from a meeting's /health (meeting_control.py), numbered by seq."""
+        if not isinstance(messages, list):
+            return
+        with self._lock_guard:
+            kept = self._requests.setdefault(meeting_id, [])
+            last = kept[-1]['seq'] if kept else -1
+            for message in messages:
+                seq = message.get('seq') if isinstance(message, dict) else None
+                if isinstance(seq, int) and not isinstance(seq, bool) and seq > last:
+                    kept.append(dict(message))
+                    last = seq
+            del kept[:-MAX_LIVE_REQUESTS]
+            while len(self._requests) > MAX_LIVE_MEETINGS:
+                self._requests.pop(next(iter(self._requests)))
+
+    def requests_after(self, meeting_id, seq):
+        with self._lock_guard:
+            return [dict(message) for message in self._requests.get(meeting_id, ())
+                    if message['seq'] > seq]
 
     def apply_presence(self, meeting_id, **fields):
         from schema_validation import omit_none

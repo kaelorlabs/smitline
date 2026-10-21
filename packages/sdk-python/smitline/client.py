@@ -220,11 +220,17 @@ class LoopbackTransport:
     def get_call(self, call_id):
         return self._http('GET', f'/v1/calls/{quote(call_id)}')
 
-    def wait_for_call(self, call_id, timeout_seconds=60, since=None):
+    def wait_for_call(self, call_id, timeout_seconds=60, since=None, only=None):
         timeout = max(0, min(float(timeout_seconds or 0), 300))
         follow = '' if since is None else f'&since={quote(str(since))}'
+        if only:
+            follow += f'&only={quote(str(only))}'
         return self._http('GET', f'/v1/calls/{quote(call_id)}/wait?timeout={timeout:g}{follow}',
                           timeout=timeout + 15)
+
+    def reply_to_request(self, call_id, request_id, reply):
+        return self._http('POST', f'/v1/calls/{quote(call_id)}/requests/{quote(request_id)}/reply',
+                          reply)
 
     def list_calls(self, limit=20, *, channel=None, contact=None, task=None):
         query = {'limit': max(1, min(int(limit or 20), 100))}
@@ -293,12 +299,23 @@ class Smitline:
     async def get_call(self, call_id):
         return self._transport.get_call(call_id)
 
-    async def wait_for_call(self, call_id, timeout_seconds=60, *, since=None):
+    async def wait_for_call(self, call_id, timeout_seconds=60, *, since=None, only=None):
         """Wait until the call is terminal or the timeout (at most 300 s) passes. With `since`
         ('' at first, then the last answer's live['cursor']) it follows the call live: the answer
-        also comes once something new is said, with live['transcript'] holding the new lines."""
+        also comes once something new is said, with live['transcript'] holding the new lines, and
+        at once for a request (live['requests']). only='requests' wakes for requests alone."""
         import asyncio
-        return await asyncio.to_thread(self._transport.wait_for_call, call_id, timeout_seconds, since)
+        return await asyncio.to_thread(self._transport.wait_for_call, call_id, timeout_seconds,
+                                       since, only)
+
+    async def reply_to_request(self, call_id, request_id, *, type, text, announce=None, ok=None,
+                               details=None):
+        """Answer a request from the call: type 'status' (any number of times; announce=True has
+        the voice say it now) or 'done' (once; ok=False when it could not be done)."""
+        reply = {'type': type, 'text': text}
+        reply.update({key: value for key, value in (('announce', announce), ('ok', ok),
+                                                    ('details', details)) if value is not None})
+        return self._transport.reply_to_request(call_id, request_id, reply)
 
     async def list_calls(self, limit=20, *, channel=None, contact=None, task=None):
         """Newest first; only phone calls or meetings, one number's calls, or one task's."""

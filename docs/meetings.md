@@ -35,6 +35,8 @@ The console talks to the **loopback daemon** in the same container. API keys are
 
 A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
 
+While a meeting runs, the daemon reaches it through `POST /control` on the same port, with a token made for that meeting alone (`SMITLINE_CONTROL_TOKEN`, in the container's environment and the daemon's memory, never on disk): `send_call_instruction` guidance, and answers to [requests](agents.md#requests-from-the-call) from the people in the meeting. Listening in (`/listen`) needs the same token. Requests leave the meeting through `/health`, as its captions do. A meeting the daemon adopted after a restart has no token, so it runs on without either until it ends.
+
 ## Appearing in the meeting
 
 A virtual camera shows Smitline listening, working, or speaking, and never displays task text. Turn it off in the console to join audio-only. By default the camera is a still picture that changes with the state, which costs almost no CPU. `SMITLINE_MEETING_CAMERA_STYLE=animated` switches to the animated camera, which redraws at 30 frames a second and needs about a full CPU core more. Private context added in the console reaches the voice and its backend as background.
