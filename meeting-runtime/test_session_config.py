@@ -58,12 +58,12 @@ class SessionConfigTests(unittest.TestCase):
     def test_the_agent_is_told_when_to_leave(self):
         config = build_session_config(RuntimeConfig.from_environ({}))
         prompt = config['instructions']
-        self.assertIn('asks you to leave or drop off, say one short goodbye', prompt)
-        self.assertIn('the meeting is clearly over', prompt)
-        self.assertIn('nobody needs you', prompt)
-        self.assertIn('Never leave in the middle of what you are saying', prompt)
+        self.assertIn('leave the meeting when a person in your place would', prompt)
+        self.assertIn('when someone asks you to go (however they put it)', prompt)
+        self.assertIn('when everyone else has left', prompt)
+        self.assertIn('Finish what you are saying first', prompt)
         backend = config['delegation']['responses']['instructions']
-        self.assertIn('Call leave_meeting only after the voice assistant has said goodbye', backend)
+        self.assertIn('Decide for yourself, the way a person would', backend)
         tool = config['delegation']['responses']['tools'][0]
         self.assertEqual(tool['parameters']['properties']['reason']['enum'],
                          ['completed', 'asked_to_leave', 'not_productive', 'other'])

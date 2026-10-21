@@ -52,6 +52,36 @@ class WordsTests(unittest.TestCase):
             self.assertFalse(asks_to_leave(text), text)
 
 
+class LeaveJudgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_model_decides_and_failures_stay(self):
+        from meeting_lifecycle import LEAVE_JUDGE_LINES, LeaveJudge
+        sent = []
+
+        def answer(body):
+            async def post(payload):
+                sent.append(payload)
+                if isinstance(body, Exception):
+                    raise body
+                return {'output': [{'type': 'message', 'content': [
+                    {'type': 'output_text', 'text': body}]}]}
+            return post
+
+        captions = [{'speaker': 'meeting', 'text': f'line {n}'} for n in range(40)]
+        captions.append({'speaker': 'agent', 'text': 'Bye everyone!'})
+        judge = LeaveJudge('key', post=answer('{"leave": true, "reason": "completed"}'))
+        self.assertEqual(await judge.decide(captions, 'Smitline AI'), (True, 'completed'))
+        request = sent[-1]
+        self.assertEqual(request['text']['format']['name'], 'leave_decision')
+        self.assertTrue(request['input'].endswith('Smitline AI: Bye everyone!'))
+        self.assertNotIn('line 0', request['input'])  # only the last LEAVE_JUDGE_LINES lines
+        self.assertEqual(request['input'].count('Participant: '), LEAVE_JUDGE_LINES - 1)
+        for body in ('{"leave": "yes", "reason": "completed"}', 'not json', RuntimeError('down')):
+            judge = LeaveJudge('key', post=answer(body))
+            self.assertEqual(await judge.decide(captions, 'Smitline AI'), (False, 'completed' if '{' in str(body) else 'other'))
+        judge = LeaveJudge('key', post=answer('{"leave": true, "reason": "bored"}'))
+        self.assertEqual(await judge.decide(captions, 'Smitline AI'), (True, 'other'))
+
+
 class PacerSpeechTests(unittest.IsolatedAsyncioTestCase):
     async def test_streamed_silence_is_not_speech(self):
         from phone_line import OutputPacer
@@ -214,6 +244,22 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
+    decision = (False, 'other')
+
+    def fake_judge(self):
+        """The leave check, answering self.decision and noting what it was shown."""
+        test = self
+        test.judged = []
+
+        class FakeJudge:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def decide(self, captions, name):
+                test.judged.append((list(captions), name))
+                return test.decision
+        return FakeJudge
+
     async def run_meeting(self, script):
         import copy
         import bridge
@@ -224,7 +270,8 @@ class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         record = RecordingArchive()
         state = copy.deepcopy(bridge.state)
         stop = asyncio.Event()
-        with patch.object(bridge, 'ClientSession', socket.client), \
+        with patch.object(bridge, 'LeaveJudge', self.fake_judge()), \
+                patch.object(bridge, 'ClientSession', socket.client), \
                 patch.object(bridge, 'record', record), \
                 patch.object(bridge, 'state', state), \
                 patch.object(bridge, 'stop', stop), \
@@ -267,6 +314,36 @@ class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         state, record = await self.run_meeting(script)
         self.assertEqual(state['endReason'], 'left_asked_to_leave')
         self.assertIn('goodbye_leave', [kind for kind, _ in record.events])
+
+    async def test_it_leaves_by_its_own_judgment(self):
+        self.decision = (True, 'completed')
+
+        async def script(socket, _stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': "That's everything for today, thanks Smitline."})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Glad I could help. Bye everyone!'})
+        state, record = await self.run_meeting(script)
+        self.assertEqual(state['endReason'], 'left_completed')
+        kinds = [kind for kind, _ in record.events]
+        self.assertIn('leave_judged', kinds)
+        self.assertIn('goodbye_leave', kinds)
+        self.assertEqual(len(self.judged), 1)
+
+    async def test_its_judgment_can_keep_it_in_the_meeting(self):
+        async def script(socket, stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Thanks for that. Over to Priya now.'})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Sure. Bye for now, Priya, talk soon!'})
+            await asyncio.sleep(1.5)
+            self.assertFalse(stop.is_set())
+            stop.set()
+        state, record = await self.run_meeting(script)
+        self.assertNotIn('goodbye_leave', [kind for kind, _ in record.events])
+        self.assertEqual(len(self.judged), 1)  # asked once for this goodbye, not every moment
 
     async def test_a_goodbye_to_someone_else_does_not_leave(self):
         async def script(socket, stop):
