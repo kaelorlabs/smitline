@@ -8,6 +8,7 @@ from aiohttp import web
 from call_brief import CHANNELS, TASK_ID, BriefIncomplete, available_voices, normalize_phone
 from call_service import CallError
 from call_store import TERMINAL, CallNotFound
+from listening import ndjson
 
 
 OPENAPI_PATH = Path(__file__).with_name('openapi.json')
@@ -94,8 +95,11 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             timeout = float(request.query.get('timeout', '60'))
         except ValueError:
             return _error(422, 'invalid_request', 'timeout must be a number of seconds')
+        since = request.query.get('since')
+        if since is not None and since != '' and not (since.isdigit() and len(since) <= 12):
+            return _error(422, 'invalid_request', 'since must be a cursor from an earlier answer')
         record = await service.wait(request.match_info['callId'], timeout=timeout,
-                                    owner=await owner(request))
+                                    owner=await owner(request), since=since)
         return public_json(record)
 
     @handle
@@ -181,6 +185,24 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         })
 
     @handle
+    async def listen_call(request):
+        """Both sides of a call in progress, as NDJSON: the format line first, then
+        {"side", "audio"} chunks (base64) until the call ends."""
+        tap = service.listen(request.match_info['callId'], owner=await owner(request))
+        response = web.StreamResponse(status=200, headers={
+            'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff'})
+        await response.prepare(request)
+        try:
+            async for chunk in tap.chunks():
+                await response.write(ndjson(chunk))
+        except (ConnectionResetError, asyncio.CancelledError):
+            raise
+        except Exception:
+            pass
+        return response
+
+    @handle
     async def save_note(request):
         payload = await read_json(request)
         if not isinstance(payload, dict) or set(payload) - {'text'}:
@@ -234,6 +256,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_post('/v1/calls/{callId}/end', end_call)
     app.router.add_post('/v1/calls/{callId}/transfer', transfer_call)
     app.router.add_get('/v1/calls/{callId}/recording', call_recording)
+    app.router.add_get('/v1/calls/{callId}/listen', listen_call)
     app.router.add_post('/v1/calls/{callId}/note', save_note)
     app.router.add_get('/v1/contacts', list_contacts)
     app.router.add_get('/v1/contacts/{number}', get_contact)

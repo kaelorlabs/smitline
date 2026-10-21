@@ -561,6 +561,12 @@ class ProductionMeetingSupervisor:
                 self.daemon.transition(session.id, mapped)
             except DaemonError:
                 pass
+        note_captions = getattr(self.daemon, 'note_captions', None)
+        if note_captions is not None and 'captions' in health:
+            try:
+                note_captions(session.id, health['captions'])
+            except Exception:
+                pass
         if self.daemon is not None and hasattr(self.daemon, 'apply_presence'):
             from visual_presence import map_visual_state
             fields = {}
@@ -578,6 +584,13 @@ class ProductionMeetingSupervisor:
                 session, stage, partial=stage not in COMPLETE_REASONS)
             return True
         return False
+
+    def listen_url(self, meeting_id):
+        """The running meeting container's /listen, or None."""
+        url = getattr(self.health, 'url', None)
+        if self._active_id != meeting_id or not isinstance(url, str) or not url.endswith('/health'):
+            return None
+        return url[:-len('/health')] + '/listen'
 
     def _handoff_ready(self, meeting_id):
         if self.daemon is None:
@@ -865,6 +878,10 @@ class MeetingPool:
         for meeting_id, meeting in list(self._meetings.items()):
             if meeting_id not in self._starting and meeting['supervisor']._active_id is None:
                 self._meetings.pop(meeting_id, None)
+
+    def listen_url(self, meeting_id):
+        entry = self._meetings.get(meeting_id)
+        return entry['supervisor'].listen_url(meeting_id) if entry else None
 
     def active_ids(self):
         self._prune()

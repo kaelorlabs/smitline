@@ -28,7 +28,7 @@ Both go through `start_call`:
 - Phone: `{ "channel": "phone", "to": "+14155550142", "objective": "..." }`
 - Meeting: `{ "channel": "meeting", "to": "https://zoom.us/j/...", "objective": "..." }` joins that Zoom, Teams, or Google Meet invite.
 
-Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome.
+Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome. To supervise the call while it runs, pass `since` (`""` first, then `live.cursor`): each answer then also comes once something new is said, with the new lines in `live.transcript`, and the agent can step in with `send_call_instruction`.
 
 ## Connecting an agent
 

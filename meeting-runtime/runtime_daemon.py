@@ -113,6 +113,11 @@ def _new_id(prefix):
     return prefix + secrets.token_hex(8)
 
 
+# Live captions kept per meeting, and meetings kept, before the oldest are dropped.
+MAX_LIVE_CAPTIONS = 2000
+MAX_LIVE_MEETINGS = 32
+
+
 class RuntimeDaemon:
     """Meeting daemon.
 
@@ -151,6 +156,7 @@ class RuntimeDaemon:
         self._lock_guard = threading.Lock()
         self._async_locks = {}
         self._write_locks = {}
+        self._captions = {}
 
     def close(self):
         for store in (self.meetings, self.events):
@@ -395,6 +401,35 @@ class RuntimeDaemon:
                 extra['reason'] = reason or 'ended'
             self._append_once(meeting_id, event_type, **extra)
             return updated
+
+    # Live captions: what the meeting container heard and said so far, for following the meeting
+    # as a call while it runs. In memory only; the archive keeps the transcript.
+    def note_captions(self, meeting_id, captions):
+        if not isinstance(captions, list):
+            return
+        with self._lock_guard:
+            kept = self._captions.setdefault(meeting_id, [])
+            last = kept[-1]['seq'] if kept else -1
+            for caption in captions:
+                if not isinstance(caption, dict):
+                    continue
+                seq, speaker, text = caption.get('seq'), caption.get('speaker'), caption.get('text')
+                if (isinstance(seq, int) and not isinstance(seq, bool) and seq > last
+                        and speaker in ('agent', 'meeting') and isinstance(text, str)):
+                    kept.append({'seq': seq, 'speaker': speaker, 'text': text[:4000]})
+                    last = seq
+            del kept[:-MAX_LIVE_CAPTIONS]
+            while len(self._captions) > MAX_LIVE_MEETINGS:
+                self._captions.pop(next(iter(self._captions)))
+
+    def captions_after(self, meeting_id, seq):
+        with self._lock_guard:
+            return [dict(caption) for caption in self._captions.get(meeting_id, ())
+                    if caption['seq'] > seq]
+
+    def forget_captions(self, meeting_id):
+        with self._lock_guard:
+            self._captions.pop(meeting_id, None)
 
     def apply_presence(self, meeting_id, **fields):
         from schema_validation import omit_none

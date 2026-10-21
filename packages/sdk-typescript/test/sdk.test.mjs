@@ -57,6 +57,10 @@ test('a meeting is joined with startCall and followed to its result', async (t) 
     assert.equal(done.result.outcome, 'achieved');
     const wait = daemon.state.requests.find((item) => item.path.endsWith('/wait'));
     assert.equal(wait.search, '?timeout=5');
+    await colleague.waitForCall(call.id, 5, { since: '' });
+    await colleague.waitForCall(call.id, 5, { since: '12' });
+    const follows = daemon.state.requests.filter((item) => item.path.endsWith('/wait')).slice(-2);
+    assert.deepEqual(follows.map((item) => item.search), ['?timeout=5&since=', '?timeout=5&since=12']);
   });
 });
 

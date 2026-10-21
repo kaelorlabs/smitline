@@ -22,7 +22,7 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | --- | --- |
 | `start_call` | Start a phone call or meeting from a brief. Returns at once. |
 | `check_call_brief` | Validate a brief without calling. Missing fields come with the question to ask the user. |
-| `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. |
+| `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. With `since`, follow it live: it also returns once something new is said (see [following a call live](#following-a-call-live)). |
 | `get_call`, `list_calls` | Read calls without waiting. `list_calls` can show only phone calls or meetings, one number's calls, or one task's. |
 | `save_call_note` | After a call, save a short note that later calls can start with (see [earlier calls](calls.md#earlier-calls)). |
 | `list_contacts` | The people and businesses Smitline has called or been called by. |
@@ -37,6 +37,18 @@ In the image, `docker exec smitline smitline setup register --json` prints the U
 From a checkout, `smitline setup register` adds the server to Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`), and Cursor (`~/.cursor/mcp.json`) when they are installed, and installs the `call-with-smitline` skill into `~/.claude/skills` and `~/.codex/skills`. Run from WSL, it also registers Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`), Cursor, and Claude Code on the Windows side, with a command that starts the server inside WSL (`wsl.exe -d <distro> --exec node .../server.mjs`). For another client, add a stdio server that runs `node <repo>/packages/mcp/src/server.mjs`.
 
 The skill in `.agents/skills/call-with-smitline` teaches agents to write a complete brief with the context of what they and the user are working on, keep the user's profile current, offer a rehearsal on the user's own phone, wait for the result, and report it plainly.
+
+## Following a call live
+
+The agent that placed a call can supervise it while it runs. It passes `since: ""` to `wait_for_call`, then the `live.cursor` of each answer. Each answer comes about 2 seconds after something new is said, so it holds the whole exchange, with the new lines in `live.transcript`:
+
+```json
+{ "status": "in_progress", "live": { "cursor": "14", "transcript": [
+  { "speaker": "other", "text": "We only have Friday at 10, would that work?", "at": "2026-10-21T15:02:11Z" }
+] } }
+```
+
+When the agent knows something the call needs, such as the user's calendar, a document, or a decision made earlier, it steps in with `send_call_instruction` ("Friday at 10 works"), and the voice uses it straight away. If the call goes wrong, `end_call`. Otherwise it keeps waiting and Smitline runs the conversation. This works for phone calls and meetings, in every MCP client, because it is ordinary tool calls. The skill and the server's MCP instructions teach agents to do this.
 
 ## CLI
 

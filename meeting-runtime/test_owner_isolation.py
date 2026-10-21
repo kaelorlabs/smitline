@@ -225,6 +225,7 @@ ROUTES = {
     ('POST', '/v1/calls/{callId}/end'): 'end_hidden',
     ('POST', '/v1/calls/{callId}/transfer'): 'transfer_hidden',
     ('GET', '/v1/calls/{callId}/recording'): 'recording_hidden',
+    ('GET', '/v1/calls/{callId}/listen'): 'listen_hidden',
     ('POST', '/v1/calls/{callId}/note'): 'note_hidden',
     ('GET', '/v1/contacts'): 'contacts_are_own',
     ('GET', '/v1/contacts/{number}'): 'contact_hidden',
@@ -402,6 +403,9 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
                                          headers=self.d.as_owner(A))
         self.assertEqual(response.status, 200)
         self.d.line.downloads.pop()
+
+    async def listen_hidden(self):
+        await self.assert_not_found('GET', f'/v1/calls/{self.seeded.live}/listen')
 
     async def note_hidden(self):
         await self.assert_not_found('POST', f'/v1/calls/{self.seeded.done}/note', {'text': 'Mine now.'})

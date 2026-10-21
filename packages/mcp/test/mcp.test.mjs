@@ -153,8 +153,8 @@ test('call tools map to the SDK and surface brief questions', async () => {
   const colleague = {
     async startCall(brief) { calls.push(['start', brief]); return { id: callId, status: 'queued' }; },
     async checkCall(brief) { calls.push(['check', brief]); return { ok: true, problems: [] }; },
-    async waitForCall(id, timeout) {
-      calls.push(['wait', id, timeout]);
+    async waitForCall(id, timeout, options) {
+      calls.push(['wait', id, timeout, options]);
       return { id, status: 'completed', result: { outcome: 'achieved' } };
     },
     async getCall(id) { return { id, status: 'ringing' }; },
@@ -172,7 +172,14 @@ test('call tools map to the SDK and surface brief questions', async () => {
   assert.equal(JSON.parse(started.result.content[0].text).id, callId);
   const waited = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId } });
   assert.equal(JSON.parse(waited.result.content[0].text).result.outcome, 'achieved');
-  assert.deepEqual(calls[1], ['wait', callId, 50]);
+  assert.deepEqual(calls[1], ['wait', callId, 50, {}]);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '', timeoutSeconds: 20 } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 20, { since: '' }]);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '14' } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '14' }]);
+  const badSince = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: 'x' } });
+  assert.equal(badSince.result.isError, true);
+  calls.splice(2);
   await call(session, 'tools/call', {
     name: 'send_call_instruction', arguments: { callId, text: 'Ask about parking' },
   });

@@ -74,9 +74,10 @@ def build_call_service(project_root, data_root, daemon, lines=None, gateway_port
     port = gateway_port or int(startup_env.get('SMITLINE_GATEWAY_PORT') or GATEWAY_PORT)
     public = PublicUrl(environ, port)
     phone = PhoneLine(public_url=public.get, public_available=public.available, environ=environ)
-    from meeting_finalizer import meeting_transcript
+    from meeting_finalizer import meeting_transcript, meeting_transcript_pieces
     recordings = Path(runtime_root or (Path(project_root) / 'meeting-runtime'))
-    meeting = MeetingLine(daemon, transcript=lambda meeting_id: meeting_transcript(recordings, meeting_id))
+    meeting = MeetingLine(daemon, transcript=lambda meeting_id: meeting_transcript(recordings, meeting_id),
+                          pieces=lambda meeting_id: meeting_transcript_pieces(recordings, meeting_id))
     available = {'meeting': meeting, 'phone': phone}
     available.update(lines or {})
     service = CallService(store, hooks=hooks, lines=available, shutdown_grace=shutdown_grace(startup_env))

@@ -152,6 +152,11 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         await client.update_do_not_call({'remove': ['+14155550142']})
         self.assertEqual(seen[7][:2], ('GET', '/v1/do-not-call'))
         self.assertEqual(seen[8], ('PATCH', '/v1/do-not-call', {'remove': ['+14155550142']}))
+        await client.wait_for_call('call-0123456789abcdef', 20, since='')
+        await client.wait_for_call('call-0123456789abcdef', 20, since='14')
+        self.assertEqual([path for _, path, _ in seen[9:]], [
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=',
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14'])
 
     async def test_a_meeting_is_joined_with_start_call(self):
         seen = []
