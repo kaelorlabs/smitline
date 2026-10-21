@@ -4,8 +4,10 @@ The voice passes a request on with the ask_agent tool; the agent answers with st
 and, once, done. Phone calls and meetings share this module: the phone line runs it in the
 daemon, a meeting container runs it next to its GPT-Live session. See docs/agents.md.
 """
+import collections
 import json
 import re
+import time
 
 # Requests one call or meeting may make; a meeting runs longer, so it may make more.
 MAX_REQUESTS = {'phone': 20, 'meeting': 50}
@@ -215,6 +217,113 @@ def context_lines(captions, limit=CONTEXT_LINES):
     return [f'{speaker}: {" ".join(text.split())}' for speaker, text in lines if text.strip()][-limit:]
 
 
+_SELF = r"(?:i|i'm|i've|i'll|i am|i have|i will|let me)"
+_LEADING = r"(?:(?:just|already|now|also|quickly|go ahead and|went ahead and|going to|gonna|will|have)\s+){0,2}"
+_PASS = r"(?:pass(?:ed|ing)?|sen[dt]|sending|forward(?:ed|ing)?|hand(?:ed|ing)?|relay(?:ed|ing)?)"
+_ASK = r"(?:ask(?:ed|ing)?|check(?:ed|ing)? with|get(?:ting)?|got)"
+_AGENT = r"(?:your|the|his|her|their|[\w-]+(?: [\w-]+)?'s) (?:agent|assistant)"
+PASSED_ON = re.compile(
+    rf"\b{_SELF}\s+{_LEADING}{_PASS}\b[^.?!]{{0,50}}?(?:\b(?:on|along|over)\b|\b(?:to|with) {_AGENT}\b)"
+    rf"|\b{_SELF}\s+{_LEADING}{_ASK} {_AGENT}\b", re.I)
+REFUSAL = re.compile(r"\b(?:can't|cannot|can not|won't|couldn't|unable|not able|don't|didn't|not)\b"
+                     rf"[^.?!]{{0,30}}\b(?:{_PASS}|{_ASK})\b", re.I)
+_SENTENCES = re.compile(r'(?<=[.!?])\s+')
+
+
+def claims_passed_on(text):
+    """The voice says it passed something on (or is asking the agent), not that it cannot."""
+    return any(PASSED_ON.search(sentence) and not REFUSAL.search(sentence)
+               for sentence in _SENTENCES.split(str(text or '')))
+
+
+def refuses_to_pass(text):
+    return bool(REFUSAL.search(str(text or '')))
+
+
+class ClaimWatch:
+    """A safety net for requests the voice says it passed on without asking its backend.
+
+    GPT-Live alone decides when to hand something to its backend. In a live meeting it told
+    people "I've passed it to your agent" while its backend was never called. When the voice
+    says so and no ask_agent call follows within GRACE seconds, the line passes on what the
+    person said (source "speech"), so the claim comes true; if the voice asked them a question
+    for a request, their answer goes to that request.
+    """
+
+    GRACE = 10.0
+    RECENT_TOOL = 25.0
+
+    def __init__(self, desk, clock=time.monotonic):
+        self.desk = desk
+        self.clock = clock
+        self.turns = {'agent': '', 'other': ''}
+        self.last = None
+        self.said = collections.deque(maxlen=CONTEXT_LINES)  # finished turns, for context
+        self.asked = collections.deque(maxlen=3)  # the other side's last turns
+        self.claimed_at = None
+        self.tool_at = None
+        self.refused = False
+        self.awaiting = None  # a request whose question the voice was asked to put to them
+
+    def heard(self, speaker, delta):
+        speaker = 'agent' if speaker == 'agent' else 'other'
+        if not str(delta or '').strip():
+            return
+        if self.last != speaker:
+            if self.last is not None:
+                self._finish_turn(self.last)
+            self.turns[speaker] = ''
+            if speaker == 'agent':
+                self.refused = False
+        self.turns[speaker] += delta
+        self.last = speaker
+        if speaker != 'agent':
+            return
+        turn = self.turns['agent']
+        if refuses_to_pass(turn):
+            self.refused, self.claimed_at = True, None
+        elif (not self.refused and self.claimed_at is None and claims_passed_on(turn)
+              and not self._tool_recent()):
+            self.claimed_at = self.clock()
+
+    def _finish_turn(self, speaker):
+        text = ' '.join(self.turns[speaker].split())
+        if not text:
+            return
+        self.said.append(f'{"agent" if speaker == "agent" else "other"}: {text}')
+        if speaker == 'other':
+            self.asked.append(text)
+
+    def tool_called(self):
+        self.tool_at = self.clock()
+        self.claimed_at = None
+
+    def _tool_recent(self):
+        return self.tool_at is not None and self.clock() - self.tool_at < self.RECENT_TOOL
+
+    def due(self, *, asked_by='', following=True):
+        """A request message when the voice claimed one its backend never made; else None."""
+        if self.claimed_at is None or self.clock() - self.claimed_at < self.GRACE:
+            return None
+        self.claimed_at = None
+        if self._tool_recent() or not self.asked:
+            return None
+        text = self.asked[-1]
+        if len(text.split()) < 6 and len(self.asked) > 1:
+            text = f'{self.asked[-2]} {text}'  # the request may have come in two pieces
+        if self.awaiting is not None and self.desk.is_open(self.awaiting):
+            message, _ = self.desk.handle({'action': 'add', 'requestId': self.awaiting, 'text': text})
+            self.awaiting = None
+        else:
+            message, _ = self.desk.handle({'action': 'ask', 'kind': 'question', 'text': text,
+                                           'requestId': '', 'askedBy': ''},
+                                          asked_by=asked_by, context=list(self.said),
+                                          following=following)
+        if message is not None:
+            message['source'] = 'speech'
+        return message
+
+
 def tool_output(result):
     return json.dumps(result, ensure_ascii=False)
 
@@ -230,15 +339,24 @@ def _about(request):
     return text if len(text) <= 120 else text[:117] + '...'
 
 
+# How an answer is given: at a good moment, naturally, and not lost when someone cuts in.
+WHEN_TO_TELL = (
+    'If they are waiting for it or it matters now, tell them at the next natural pause; '
+    'otherwise, first thing the next time you speak. Finish what you are saying first: never '
+    'cut yourself off in the middle of something important. Say it in your own words, as a '
+    'person would. If someone interrupts you before you have told them, tell them the next '
+    'time you speak.')
+
+
 def status_note(request, text, *, owner, announce):
     """A status update for the voice: quiet context unless the agent wants it said now."""
     rid = request['id']
     if announce:
         return {'kind': 'instructions', 'request': rid, 'text': (
             f"{owner}'s agent has an update on request {rid} ({_who(request)} asked: "
-            f'"{_about(request)}"): {text} Tell {_who(request)} briefly at the next natural pause, '
-            'never over someone speaking. If it is a question, ask it, then hand the answer to '
-            f'your backend to pass on for request {rid}.')}
+            f'"{_about(request)}"): {text} Tell {_who(request)} briefly. {WHEN_TO_TELL} If it '
+            f'is a question, ask it, then hand the answer to your backend to pass on for '
+            f'request {rid}.')}
     return {'kind': 'thinking', 'request': rid, 'text': (
         f"Progress from {owner}'s agent on request {rid} ({_who(request)} asked: "
         f'"{_about(request)}"): {text} Do not announce this; use it if someone asks how it is '
@@ -254,8 +372,40 @@ def done_note(request, text, *, owner, ok):
         said = (f"{owner}'s agent could not complete request {rid} ({_who(request)} asked: "
                 f'"{_about(request)}"): {text} Say {owner} will follow up if it is still needed.')
     return {'kind': 'instructions', 'request': rid, 'closes': True, 'text': (
-        f'{said} Tell {_who(request)} in a sentence or two at the next natural pause, never over '
-        'someone speaking.')}
+        f'{said} Tell {_who(request)} in a sentence or two. {WHEN_TO_TELL}')}
+
+
+def retell_note(request, text, *, owner):
+    """The answer was delivered but not heard on the call (cut off, or never said): once more."""
+    return {'kind': 'instructions', 'request': request['id'], 'text': (
+        f"{_who(request).capitalize()} has not heard the answer from {owner}'s agent yet "
+        f'(you may have been cut off): {text} Tell them first thing the next time you speak, '
+        'or now at a natural pause if they are waiting. If you have already told them, ignore '
+        'this.')}
+
+
+_STOPWORDS = frozenset((
+    'the a an and or but for to of in on at is are was were be been it its this that these those '
+    'with from by as your you they them their there here what which who when where how have has '
+    'had will would can could should not no yes about into than then so just also our we us '
+    'he she his her him i me my').split())
+
+
+def _words(text):
+    return re.findall(r"[\w']+", str(text or '').casefold())
+
+
+def told(answer, said):
+    """Whether what the voice said carries the answer: its numbers, or most of its key words."""
+    words = _words(answer)
+    heard = set(_words(said))
+    numbers = [word for word in words if word.isdigit()]
+    if numbers:
+        return all(number in heard for number in numbers)
+    key = list(dict.fromkeys(word for word in words if len(word) >= 4 and word not in _STOPWORDS))[:8]
+    if not key:
+        return bool(heard)
+    return sum(word in heard for word in key) >= max(1, len(key) // 2)
 
 
 def late_note(request, *, owner):

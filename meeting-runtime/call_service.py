@@ -1,5 +1,6 @@
 """Calls: accept a brief, run it on a line (phone or meeting), and publish the result."""
 import asyncio
+import collections
 import dataclasses
 import os
 import time
@@ -16,7 +17,7 @@ from call_result import (
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
     MAX_REQUEST_TEXT, MAX_REQUESTS, MAX_STATUSES, OPEN_STATES, REQUEST_ID, chat_message, clean,
-    clean_block, done_note, late_note, status_note,
+    clean_block, done_note, late_note, retell_note, status_note, told,
 )
 from call_store import TERMINAL, CallNotFound, new_call_id
 
@@ -34,6 +35,9 @@ REQUEST_EVENTS = frozenset({'call.request'})
 FOLLOW_GRACE = 90.0
 # Seconds a request may wait to be picked up before the voice is told it has not been.
 PICKUP_SECONDS = 30.0
+# Seconds after an answer reached the voice by which it should have been said on the call; if
+# it was not (the voice was cut off, or moved on), it is given to the voice once more.
+RETELL_AFTER = 35.0
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -74,6 +78,8 @@ class CallContext:
         self.brief = brief
         self.owner = owner
         self.transcript = []
+        # The agent's recent lines, with when they arrived: did it say what it was told to?
+        self.agent_lines = collections.deque(maxlen=80)
         self.ended = False
         # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
         self.disclosure = None
@@ -120,6 +126,8 @@ class CallContext:
         if not text:
             return
         entry = {'speaker': speaker, 'text': text}
+        if speaker == 'agent':
+            self.agent_lines.append((time.monotonic(), text))
         self.transcript.append(entry)
         if len(self.transcript) > TRANSCRIPT_HEAD + TRANSCRIPT_TAIL:
             del self.transcript[TRANSCRIPT_HEAD]
@@ -156,8 +164,10 @@ def note_line(item):
 class CallService:
     def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None,
                  price_check_delays=PRICE_CHECK_DELAYS, shutdown_grace=SHUTDOWN_GRACE,
-                 follow_grace=FOLLOW_GRACE, pickup_seconds=PICKUP_SECONDS, clock=time.monotonic):
+                 follow_grace=FOLLOW_GRACE, pickup_seconds=PICKUP_SECONDS, clock=time.monotonic,
+                 retell_after=RETELL_AFTER):
         self.store = store
+        self.retell_after = retell_after
         self.follow_grace = follow_grace
         self.pickup_seconds = pickup_seconds
         self._clock = clock
@@ -885,6 +895,9 @@ class CallService:
             asked_by = clean(message.get('askedBy'), MAX_ASKED_BY)
             if asked_by:
                 request['askedBy'] = asked_by
+            if message.get('source') == 'speech':
+                # The voice said it passed this on without asking its backend: what they said.
+                request['source'] = 'speech'
             context = message.get('context')
             if not isinstance(context, list):
                 # The phone line sends none: the call's own last lines.
@@ -897,8 +910,8 @@ class CallService:
             request['thread'] = [{'from': 'call', 'type': 'ask', 'text': text, 'at': now}]
             self.store.update(call_id, requests=list(requests) + [request])
             self._event(call_id, 'call.request', type='ask',
-                        **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context')
-                           if key in request})
+                        **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context',
+                                                         'source') if key in request})
             if self.agent_following(call_id):
                 self._spawn(self._check_pickup(call_id, request_id))
             return request
@@ -930,6 +943,25 @@ class CallService:
             return
         self._event(call_id, 'call.request_late', id=request_id)
         await self._deliver(record, late_note(request, owner=record['brief'].get('onBehalfOf')))
+
+    async def _check_told(self, call_id, request_id, text, sent_at):
+        """Retell an answer once when, RETELL_AFTER seconds after the voice got it, nothing it
+        said carried it: it was cut off, or never said it."""
+        await asyncio.sleep(self.retell_after)
+        context = self._contexts.get(call_id)
+        record = self.store.get(call_id)
+        if context is None or record['status'] != 'in_progress':
+            return
+        said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
+        if told(text, said):
+            return
+        request = next((item for item in record.get('requests') or ()
+                        if item['id'] == request_id), None)
+        if request is None:
+            return
+        delivered = await self._deliver(record, retell_note(
+            request, text, owner=record['brief'].get('onBehalfOf')))
+        self._event(call_id, 'call.request_retold', id=request_id, delivered=delivered)
 
     async def _deliver(self, record, note):
         """Give the voice a note; False when the line could not (the call ended, no channel)."""
@@ -997,7 +1029,11 @@ class CallService:
                 request['ok'] = bool(ok)
                 request['answer'] = text
         self._change_request(call_id, request_id, change)
+        sent_at = time.monotonic()
         delivered = False if ended else await self._deliver(record, note)
+        if delivered and note['kind'] == 'instructions':
+            # Something to tell them: check that it was said.
+            self._spawn(self._check_told(call_id, request_id, text, sent_at))
 
         def mark(request):
             request['thread'][position[0]] = dict(request['thread'][position[0]], delivered=delivered)

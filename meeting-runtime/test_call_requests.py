@@ -128,6 +128,67 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(call_requests.context_lines(None), [])
 
 
+class ClaimWatchTests(unittest.TestCase):
+    def watch(self):
+        now = [100.0]
+        watch = call_requests.ClaimWatch(RequestDesk('Robin', limit=5), clock=lambda: now[0])
+        return watch, now
+
+    def test_a_claim_the_backend_never_made_is_passed_on(self):
+        watch, now = self.watch()
+        watch.heard('other', 'Hmm. Okay. So, could you ask my')
+        watch.heard('other', ' agent to tell me the full PR link')
+        watch.heard('agent', "Sure, I'll get Robin's agent to check it and let you know.")
+        self.assertIsNone(watch.due(asked_by='Priya'))  # the backend may still call ask_agent
+        now[0] += 11
+        message = watch.due(asked_by='Priya')
+        self.assertEqual((message['type'], message['id'], message['source']), ('ask', 'r1', 'speech'))
+        self.assertEqual(message['text'], 'Hmm. Okay. So, could you ask my agent to tell me the full PR link')
+        self.assertEqual(message['askedBy'], 'Priya')
+        self.assertIn('other: Hmm. Okay. So, could you ask my agent to tell me the full PR link',
+                      message['context'])
+        self.assertIsNone(watch.due())  # once
+
+    def test_the_backend_asking_or_a_refusal_calls_it_off(self):
+        watch, now = self.watch()
+        watch.heard('other', 'Can you ask my agent for the invoice number?')
+        watch.heard('agent', "One moment, I'll pass that on.")
+        watch.tool_called()
+        now[0] += 30
+        self.assertIsNone(watch.due())
+        watch, now = self.watch()
+        watch.heard('other', 'Tell my agent to send the money.')
+        watch.heard('agent', "I'll pass that on. Actually, I can't pass that along: Robin will follow up.")
+        now[0] += 30
+        self.assertIsNone(watch.due())
+        # Words that only sound like it are not a claim.
+        watch, now = self.watch()
+        watch.heard('other', 'What can you do?')
+        watch.heard('agent', 'If you want, I can pass it on.')
+        now[0] += 30
+        self.assertIsNone(watch.due())
+
+    def test_an_answer_to_the_agents_question_goes_to_that_request(self):
+        watch, now = self.watch()
+        watch.desk.handle({'action': 'ask', 'text': 'Add the launch date to the README'})
+        watch.awaiting = 'r1'
+        watch.heard('agent', 'Is it November third or tenth?')
+        watch.heard('other', 'November third, please.')
+        watch.heard('agent', "Okay, I'll pass that on.")
+        now[0] += 11
+        message = watch.due()
+        self.assertEqual((message['type'], message['id'], message['text']),
+                         ('add', 'r1', 'November third, please.'))
+
+    def test_told_looks_for_the_answer(self):
+        answer = 'The latest changes are in pull request 75, requests from calls.'
+        self.assertFalse(call_requests.told(answer, "Arun, here's what your agent says about that."))
+        self.assertTrue(call_requests.told(answer, 'Stopping the story here. The latest changes are in pull request 75.'))
+        self.assertTrue(call_requests.told('Added the launch date to the README.',
+                                           'Done: I added the launch date to the README.'))
+        self.assertFalse(call_requests.told('Added the launch date to the README.', 'Okay.'))
+
+
 class NoteTests(unittest.TestCase):
     request = {'id': 'r1', 'text': README, 'askedBy': 'Priya'}
 
@@ -138,7 +199,8 @@ class NoteTests(unittest.TestCase):
         said = status_note(self.request, 'Nov 3 or Nov 10?', owner='Robin', announce=True)
         self.assertEqual(said['kind'], 'instructions')
         self.assertIn('Tell Priya', said['text'])
-        self.assertIn('never over someone speaking', said['text'])
+        self.assertIn('Finish what you are saying first', said['text'])
+        self.assertIn('If someone interrupts you before you have told them', said['text'])
         self.assertNotIn('closes', said)
 
     def test_done_closes_and_says_whether_it_worked(self):
@@ -368,6 +430,32 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((caught.exception.status, caught.exception.code), (429, 'too_many_updates'))
         await self.service.reply(call_id, 'r1', owner='local', type='done', text='Done.')
 
+    async def test_an_answer_not_heard_on_the_call_is_told_once_more(self):
+        self.service.retell_after = 0.1
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.add_transcript('agent', "Here's what Robin's agent says about that.")  # cut off
+        await until(lambda: any('has not heard the answer' in n['text'] for n in self.line.notes))
+        retell = self.line.notes[-1]
+        self.assertIn('pull request 81', retell['text'])
+        self.assertIn('If you have already told them, ignore this', retell['text'])
+        self.assertEqual([e['data'] for e in self.service.events(call_id)
+                          if e['type'] == 'call.request_retold'], [{'id': 'r1', 'delivered': True}])
+
+    async def test_an_answer_heard_on_the_call_is_not_told_again(self):
+        self.service.retell_after = 0.1
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        ctx.request(ask('r2', 'Is the status update quiet?'))
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        await self.service.reply(call_id, 'r2', owner='local', type='status', text='Picked up.')
+        ctx.add_transcript('agent', 'Priya, that is done: pull request 81 has it.')
+        await asyncio.sleep(0.3)
+        self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
+
     async def test_a_line_that_cannot_deliver_says_so(self):
         call_id, ctx = await self.start()
         ctx.request(ask())
@@ -508,6 +596,26 @@ class PhoneRequestTests(unittest.IsolatedAsyncioTestCase):
         await ws.close()
         await asyncio.wait_for(task, 3)
 
+    async def test_a_request_the_voice_only_claims_is_passed_on_from_speech(self):
+        from call_requests import ClaimWatch
+        record, session = await self.h.dial(canDo=CAN_DO, contact={'name': 'Sam Rivera'})
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
+        with patch.object(ClaimWatch, 'GRACE', 0.2):
+            live.push({'type': 'session.input_transcript.delta',
+                       'delta': 'Could you ask my agent for the PR link?'})
+            live.push({'type': 'session.output_transcript.delta',
+                       'delta': "Sure, I'll pass that on to your agent."})
+            # No ask_agent from the backend: the line passes it on within a couple of seconds.
+            await until(lambda: self.h.store.get(record['id']).get('requests'), 4)
+        request = self.h.store.get(record['id'])['requests'][0]
+        self.assertEqual((request['text'], request['source'], request['askedBy']),
+                         ('Could you ask my agent for the PR link?', 'speech', 'Sam'))
+        events = self.h.service.events(record['id'])
+        self.assertEqual(next(e for e in events if e['type'] == 'call.request')['data']['source'], 'speech')
+        await ws.close()
+        await asyncio.wait_for(task, 3)
+
     async def test_no_can_do_no_tool(self):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
@@ -519,6 +627,68 @@ class PhoneRequestTests(unittest.IsolatedAsyncioTestCase):
         live.push(function_call('ask_agent', {'action': 'ask', 'text': 'Anything'}))
         await asyncio.sleep(0.1)
         self.assertEqual(live.outputs, [])
+        await ws.close()
+        await asyncio.wait_for(task, 3)
+
+
+class OwnerCallTests(unittest.IsolatedAsyncioTestCase):
+    """Calling the owner's own phone: their assistant, so no introduction or AI disclosure."""
+
+    async def asyncSetUp(self):
+        from test_phone import ENV
+        FakeLive.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name, env=dict(ENV, SMITLINE_OWNER_PHONE='+14155550142',
+                                                        SMITLINE_OWNER_NAME='Robin Rivera'))
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def test_the_owner_is_greeted_like_by_their_assistant(self):
+        record, session = await self.h.dial(onBehalfOf='Robin Rivera')
+        ws, live, task = await self.h.connect(record, session)
+        self.assertTrue(session.calling_owner)
+        self.assertEqual(session.greet_name, 'Robin')
+        prompt = live.config['instructions']
+        self.assertIn('on their own phone, as their assistant', prompt)
+        self.assertIn('do not say that you are their assistant or an AI', prompt)
+        self.assertNotIn("making a phone call for them", prompt)
+        live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?'})
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends))
+        cue = next(text for kind, text in live.appends if kind == 'session.commentary.append')
+        self.assertIn('hello to them by first name (Robin)', cue)
+        self.assertIn('Do not introduce yourself', cue)
+        live.push({'type': 'session.output_transcript.delta', 'delta': 'Hey Robin! Quick one about the roof quote.'})
+        await ws.close()
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        # No disclosure was due, so none is reported missing, and none was asked for.
+        self.assertIsNone(done['result'].get('disclosureVerified'))
+        self.assertFalse(any('AI assistant' in text for kind, text in live.appends
+                             if kind == 'session.instructions.append'))
+
+    def test_the_same_number_however_written(self):
+        from phone_line import _same_number
+        self.assertTrue(_same_number('+1 (415) 555-0142', '+14155550142'))
+        self.assertFalse(_same_number('+14155550143', '+14155550142'))
+        self.assertFalse(_same_number('', '+14155550142'))
+        self.assertFalse(_same_number('not a number', '+14155550142'))
+
+    async def test_anyone_else_still_hears_the_disclosure_rules(self):
+        record, session = await self.h.dial(to='+14155550143')
+        ws, live, task = await self.h.connect(record, session)
+        self.assertFalse(session.calling_owner)
+        self.assertIn("making a phone call for them", live.config['instructions'])
+        await ws.close()
+        await asyncio.wait_for(task, 3)
+
+    async def test_a_rehearsal_is_not_an_owner_call(self):
+        record, session = await self.h.dial(rehearsal=True, to='+14155550142')
+        ws, live, task = await self.h.connect(record, session)
+        self.assertFalse(session.calling_owner)
+        self.assertIn('This is a rehearsal', live.config['instructions'])
         await ws.close()
         await asyncio.wait_for(task, 3)
 
