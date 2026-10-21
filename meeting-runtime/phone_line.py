@@ -17,7 +17,7 @@ import time
 from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
 from barge_in import SpeechDetector, frame_level_db
 from call_costs import provider_price_from
-from meeting_lifecycle import GOODBYE_QUIET_SECONDS, only_closing, says_goodbye
+from meeting_lifecycle import GOODBYE_QUIET_SECONDS, only_closing, says_goodbye, voicemail_prompt
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
@@ -508,6 +508,9 @@ class PhoneSession:
         self._last_speaker = None
         self._goodbye_watch = None
         self._said_after_goodbye = ''
+        # The other side's recent words, across the agent's, and whether they were a voicemail.
+        self._other_recent = ''
+        self.voicemail_heard = False
 
     # Configuration -------------------------------------------------------
 
@@ -545,8 +548,9 @@ class PhoneSession:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    def _start_hangup(self, reason, *, yield_to_speech=False):
-        task = asyncio.create_task(self.hangup(reason, yield_to_speech=yield_to_speech))
+    def _start_hangup(self, reason, *, yield_to_speech=False, disclose=True):
+        task = asyncio.create_task(self.hangup(reason, yield_to_speech=yield_to_speech,
+                                               disclose=disclose))
         self._hangups.add(task)
         task.add_done_callback(self._hangups.discard)
         return task
@@ -826,8 +830,14 @@ class PhoneSession:
             if source == 'agent':
                 self._agent_latest = (self._agent_latest + delta if self._last_speaker == 'agent'
                                       else delta)
-            elif self._goodbye_watch is not None:
-                self._said_after_goodbye += delta
+            else:
+                gap = '' if self._last_speaker == 'other' else ' '
+                self._other_recent = (self._other_recent + gap + delta)[-200:]
+                if not self.voicemail_heard and voicemail_prompt(self._other_recent):
+                    self.voicemail_heard = True
+                    self.ctx.event('call.voicemail_heard')
+                if self._goodbye_watch is not None:
+                    self._said_after_goodbye += delta
             self._last_speaker = source
             if source == 'agent' and says_goodbye(self._agent_latest):
                 self._watch_goodbye()
@@ -1076,6 +1086,12 @@ class PhoneSession:
     async def wrap_up(self):
         if self.live is None:
             return False
+        if self.voicemail_heard:
+            # A voicemail is recording: there is nobody to thank, and a goodbye would only leave a
+            # vague message ("just calling about a couple of things"). What is playing finishes.
+            self.ctx.event('call.voicemail_hangup')
+            self._start_hangup('hangup', disclose=False)
+            return True
         await self.live.append('session.commentary.append', self._goodbye_cue(
             'You need to end the call now. Thank them and say goodbye.'))
         if self._pending_hangup is None:

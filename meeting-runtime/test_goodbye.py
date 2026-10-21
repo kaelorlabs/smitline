@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from meeting_lifecycle import asks_to_leave, only_closing, says_goodbye
+from meeting_lifecycle import asks_to_leave, only_closing, says_goodbye, voicemail_prompt
 from test_phone import FakeLive, PhoneHarness, until
 
 
@@ -25,6 +25,18 @@ class WordsTests(unittest.TestCase):
         for text in ('Wait, one more thing', 'Bye, and can you send the invoice?', 'Hello?',
                      'You there'):
             self.assertFalse(only_closing(text), text)
+
+    def test_voicemail_prompts(self):
+        for text in ("We've sent your call to our voice message system.",
+                     "Robin isn't available right now. When you hear the beep, record your message.",
+                     'Please leave a message after the tone.', 'At the tone, please record your message.',
+                     'The mailbox is full and cannot accept any new messages.',
+                     'You have reached the voicemail box of Robin Lee.'):
+            self.assertTrue(voicemail_prompt(text), text)
+        for text in ('Can I take a message?', 'I got your voicemail yesterday, thanks.',
+                     'Sorry, she is not available right now.', 'I left it in your mailbox.',
+                     'Beep me when you get here.', 'Let me record that for you.'):
+            self.assertFalse(voicemail_prompt(text), text)
 
     def test_asked_to_leave(self):
         for text in ('Smitline, you can leave now.', 'Thanks, you can drop off now', 'Please leave',
@@ -151,6 +163,39 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
             ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': quiet}})
             await asyncio.sleep(0.02)
         await until(lambda: ws.closed, 6)
+        await asyncio.wait_for(task, 3)
+
+    async def test_ending_at_a_voicemail_hangs_up_without_a_message(self):
+        record, session, ws, live, task = await self.connected()
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello,'})
+        self.say(live, 'Hey, hi!')  # it talks over the greeting before it knows
+        # The words arrive in pieces, none of them a voicemail prompt on its own.
+        for piece in ("Robin isn't available right now. Please record your", ' message after the', ' tone.'):
+            live.push({'type': 'session.input_transcript.delta', 'delta': piece})
+        await until(lambda: session.voicemail_heard)
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: ws.closed, 3)
+        # No goodbye cue and no disclosure reminder: nothing more is said onto the recording.
+        sent = ' '.join(str(content) for _kind, content in live.appends)
+        self.assertNotIn('end the call now', sent)
+        self.assertNotIn('Before the call ends', sent)
+        events = [e['type'] for e in self.h.service.events(record['id'])]
+        self.assertIn('call.voicemail_hangup', events)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_ending_with_a_person_still_says_goodbye(self):
+        record, session, ws, live, task = await self.connected()
+        live.push({'type': 'session.input_transcript.delta',
+                   'delta': "Sorry, she's not available. Can I take a message? I did get your voicemail."})
+        await asyncio.sleep(0.2)
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends), 3)
+        self.assertFalse(session.voicemail_heard)
+        self.assertFalse(ws.closed)
+        self.say(live, "I'm Robin's AI assistant, by the way. Thanks so much, goodbye!")
+        await until(lambda: ws.closed, 5)
         await asyncio.wait_for(task, 3)
 
     async def test_it_waits_for_the_goodbye_to_be_heard(self):

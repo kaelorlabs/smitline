@@ -54,6 +54,12 @@ LEAVE_ASK = re.compile(
     r"\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|log off|sign off|exit)\b"
     r"|\bsmit\w*\b[^.?!]{0,40}?\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|exit)\b",
     re.I)
+# Words only a voicemail recording says: "record your message", "after the beep", "voice message
+# system". Never what a person says ("can I take a message?", "I got your voicemail").
+VOICEMAIL_PROMPT = re.compile(
+    r"\b(?:record your message|voice ?(?:mail|message) ?(?:box|system)|"
+    r"(?:after|at|when you hear) the (?:tone|beep)|mailbox (?:is full|is not set up|has not been set up))\b",
+    re.I)
 # Quiet after the goodbye has been heard before a call hangs up, or a meeting is left.
 GOODBYE_QUIET_SECONDS = 1.5
 LEAVE_QUIET_SECONDS = 2.0
@@ -74,6 +80,11 @@ def only_closing(text):
 
 def asks_to_leave(text):
     return bool(LEAVE_ASK.search(str(text or '')))
+
+
+def voicemail_prompt(text):
+    """A voicemail greeting or a carrier's mailbox message, from the other side's words."""
+    return bool(VOICEMAIL_PROMPT.search(' '.join(str(text or '').split())))
 
 
 def should_leave_alone(participant_count):
