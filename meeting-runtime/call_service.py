@@ -38,6 +38,9 @@ PICKUP_SECONDS = 30.0
 # Seconds after an answer reached the voice by which it should have been said on the call; if
 # it was not (the voice was cut off, or moved on), it is given to the voice once more.
 RETELL_AFTER = 35.0
+# Extra seconds after that for an answer the voice is still in the middle of saying: the
+# transcript has a sentence only once it is finished.
+RETELL_GRACE = 10.0
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -165,9 +168,10 @@ class CallService:
     def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None,
                  price_check_delays=PRICE_CHECK_DELAYS, shutdown_grace=SHUTDOWN_GRACE,
                  follow_grace=FOLLOW_GRACE, pickup_seconds=PICKUP_SECONDS, clock=time.monotonic,
-                 retell_after=RETELL_AFTER):
+                 retell_after=RETELL_AFTER, retell_grace=RETELL_GRACE):
         self.store = store
         self.retell_after = retell_after
+        self.retell_grace = retell_grace
         self.follow_grace = follow_grace
         self.pickup_seconds = pickup_seconds
         self._clock = clock
@@ -946,15 +950,23 @@ class CallService:
 
     async def _check_told(self, call_id, request_id, text, sent_at):
         """Retell an answer once when, RETELL_AFTER seconds after the voice got it, nothing it
-        said carried it: it was cut off, or never said it."""
+        said carried it: it was cut off, or never said it. A sentence still being said then
+        gets up to RETELL_GRACE seconds to finish."""
         await asyncio.sleep(self.retell_after)
-        context = self._contexts.get(call_id)
-        record = self.store.get(call_id)
-        if context is None or record['status'] != 'in_progress':
-            return
-        said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
-        if told(text, said):
-            return
+        waited = 0.0
+        while True:
+            context = self._contexts.get(call_id)
+            record = self.store.get(call_id)
+            if context is None or record['status'] != 'in_progress':
+                return
+            said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
+            if told(text, said):
+                return
+            if waited >= self.retell_grace:
+                break
+            step = min(0.5, self.retell_grace - waited)
+            await asyncio.sleep(step)
+            waited += step
         request = next((item for item in record.get('requests') or ()
                         if item['id'] == request_id), None)
         if request is None:

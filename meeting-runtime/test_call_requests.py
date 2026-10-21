@@ -188,6 +188,20 @@ class ClaimWatchTests(unittest.TestCase):
                                            'Done: I added the launch date to the README.'))
         self.assertFalse(call_requests.told('Added the launch date to the README.', 'Okay.'))
 
+    def test_told_allows_for_paraphrase(self):
+        # From the live test on 2026-10-21: both answers were said, and both were retold.
+        answer = ('The newest pull request is number 76, Console: fit the header on phones. The most '
+                  'recent push was to number 66. Number 77 is just a Dependabot update.')
+        said = ('The newest pull request is number 76, which is about fitting the console header on '
+                'phones. And the most recent push was to number 66. The next one after that is just a '
+                'dependabot update.')
+        self.assertTrue(call_requests.told(answer, said))
+        self.assertTrue(call_requests.told('That came from pull request 41, merged October 6.',
+                                           'That AI line came from pull request 41, merged October 6th.'))
+        # Cut off before the rest of the answer: still not told.
+        self.assertFalse(call_requests.told('Your table is at 7 for 4 people, under Arun.',
+                                            'Your table is at 7'))
+
 
 class NoteTests(unittest.TestCase):
     request = {'id': 'r1', 'text': README, 'askedBy': 'Priya'}
@@ -445,6 +459,7 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_answer_not_heard_on_the_call_is_told_once_more(self):
         self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
         call_id, ctx = await self.start()
         ctx.request(ask())
         await self.service.reply(call_id, 'r1', owner='local', type='done',
@@ -457,8 +472,23 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e['data'] for e in self.service.events(call_id)
                           if e['type'] == 'call.request_retold'], [{'id': 'r1', 'delivered': True}])
 
+    async def test_an_answer_still_being_said_is_not_told_again(self):
+        self.service.retell_after = 0.1
+        self.service.retell_grace = 1.0
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.add_transcript('agent', 'Priya, that is done:')  # still saying it at the deadline
+        await asyncio.sleep(0.3)
+        ctx.add_transcript('agent', 'pull request 81 has it.')
+        await asyncio.sleep(1.3)
+        self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
+        self.assertFalse(any(e['type'] == 'call.request_retold' for e in self.service.events(call_id)))
+
     async def test_an_answer_heard_on_the_call_is_not_told_again(self):
         self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
         call_id, ctx = await self.start()
         ctx.request(ask())
         ctx.request(ask('r2', 'Is the status update quiet?'))

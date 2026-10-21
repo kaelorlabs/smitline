@@ -395,17 +395,28 @@ def _words(text):
     return re.findall(r"[\w']+", str(text or '').casefold())
 
 
+def _heard(text):
+    """The spoken words, with ordinals as their numbers ("6th" is heard as "6")."""
+    return {re.sub(r'^(\d+)(?:st|nd|rd|th)$', r'\1', word) for word in _words(text)}
+
+
 def told(answer, said):
-    """Whether what the voice said carries the answer: its numbers, or most of its key words."""
+    """Whether what the voice said carries the answer: its numbers and most of its key words.
+
+    The voice paraphrases ("the next one after that" for "number 77", "October 6th" for
+    "October 6"), so all the numbers are enough, and so are most of them together with
+    most of the key words. An answer cut off before its numbers is not told.
+    """
     words = _words(answer)
-    heard = set(_words(said))
-    numbers = [word for word in words if word.isdigit()]
-    if numbers:
-        return all(number in heard for number in numbers)
-    key = list(dict.fromkeys(word for word in words if len(word) >= 4 and word not in _STOPWORDS))[:8]
-    if not key:
-        return bool(heard)
-    return sum(word in heard for word in key) >= max(1, len(key) // 2)
+    heard = _heard(said)
+    numbers = list(dict.fromkeys(word for word in words if word.isdigit()))
+    key = list(dict.fromkeys(word for word in words
+                             if len(word) >= 4 and not word.isdigit() and word not in _STOPWORDS))[:8]
+    key_heard = sum(word in heard for word in key) >= max(1, len(key) // 2) if key else bool(heard)
+    if not numbers:
+        return key_heard
+    found = sum(number in heard for number in numbers)
+    return found == len(numbers) or (found * 2 >= len(numbers) and key_heard)
 
 
 def late_note(request, *, owner):
