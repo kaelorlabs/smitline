@@ -14,6 +14,17 @@ async def visible(locator):
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
     capabilities = Capabilities(participant_discovery=True, camera=True)
+    async def get_participant_count(self):
+        """Everyone in the meeting, the bot included: the participants button says it
+        ("open the participants list pane,[3] particpants"), else the open panel's list."""
+        button = self.page.get_by_role(
+            'button', name=re.compile(r'^open the participants list', re.I), include_hidden=True).first
+        with contextlib.suppress(Exception):
+            match = re.search(r'\[(\d+)\]', await button.get_attribute('aria-label', timeout=1000) or '')
+            if match and int(match[1]) >= 1:
+                return int(match[1])
+        listed = await self.page.locator('.participants-item__display-name').count()
+        return listed or None
     async def get_participant_names(self):
         """Display names in Zoom's participants panel, opened once when it is not showing.
         (Zoom web client markup as Recall.ai's Zoom bot guide reads it, June 2026.)"""

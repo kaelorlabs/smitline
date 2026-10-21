@@ -28,7 +28,7 @@ from meeting_intro import (
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
-from meeting_lifecycle import should_leave_alone
+from meeting_lifecycle import AloneWatch
 from pathlib import Path
 from joinly.providers.browser.browser_session import BrowserSession
 from joinly.providers.browser.devices.pulse_server import PulseServer
@@ -317,6 +317,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
             async def watch_meeting():
                 await ready.wait()
+                alone = AloneWatch()
                 while not stop.is_set():
                     await asyncio.sleep(3)
                     state['microphoneState'] = await adapter.get_microphone_state()
@@ -331,7 +332,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     except Exception:
                         count = None
                     state['participantCount'] = count
-                    if should_leave_alone(count):
+                    if alone.update(count):
                         state['endReason'] = 'alone_in_meeting'
                         record.event('auto_leave', reason='alone_in_meeting')
                         try:

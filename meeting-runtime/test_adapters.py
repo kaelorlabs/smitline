@@ -114,11 +114,14 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
                   '<div class=participants-item__item-layout><span class=participants-item__display-name>Priya  Shah</span></div>'">Participants</button>
             <div id="panel"></div>''')
         a = self.adapter(False)
+        # The count comes from the button's label, without opening the panel.
+        self.assertEqual(await a.get_participant_count(), 3)
         self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
         # Open already: read without clicking again (a second click would close it).
         self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
         await self.page.set_content('<p>No participants button here</p>')
         self.assertEqual(await a.get_participant_names(), [])
+        self.assertIsNone(await a.get_participant_count())
 
     async def test_a_failed_zoom_chat_post_says_what_zoom_showed(self):
         await self.page.set_content('''
