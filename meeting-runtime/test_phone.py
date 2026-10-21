@@ -562,8 +562,9 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 800).decode()})
-        await until(lambda: any(m['event'] == 'mark' for m in ws.sent))
+        # A goodbye that takes four seconds to play.
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 32000).decode()})
+        await until(lambda: any(m['event'] == 'media' for m in ws.sent))
         live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
             'type': 'response.output_item.done', 'item': {
                 'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
@@ -573,9 +574,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Wait, one more thing',
                    'start_ms': 5000, 'end_ms': 5800})
         await until(lambda: session._other_spoke_at is not None)
-        mark = next(m for m in ws.sent if m['event'] == 'mark')
-        ws.push({'event': 'mark', 'mark': mark['mark']})
-        await until(lambda: any(e['type'] == 'call.hangup_yielded' for e in self.h.service.events(record['id'])))
+        await until(lambda: any(e['type'] == 'call.hangup_yielded' for e in self.h.service.events(record['id'])), 8)
         self.assertFalse(ws.closed)
         self.assertIsNone(session.end_reason)
         self.assertTrue(any('spoke after you said goodbye' in text for _kind, text in live.appends))

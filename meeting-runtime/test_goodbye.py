@@ -1,0 +1,196 @@
+"""A goodbye ends a phone call, and a meeting once asked to leave, as soon as it has been heard."""
+import asyncio
+import base64
+import struct
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from meeting_lifecycle import asks_to_leave, only_closing, says_goodbye
+from test_phone import FakeLive, PhoneHarness, until
+
+
+class WordsTests(unittest.TestCase):
+    def test_goodbyes(self):
+        for text in ('Sure thing. Talk soon, goodbye.', 'Thanks. Bye.', 'Okay, hanging up.',
+                     'Take care!', 'Have a great evening.', 'bye-bye'):
+            self.assertTrue(says_goodbye(text), text)
+        for text in ('Hi, how can I help?', 'I will pass that on.', 'Goodbye is a song. Anyway, '
+                     'the quote for the roof is four thousand dollars, and they can start Monday.'):
+            self.assertFalse(says_goodbye(text), text)
+
+    def test_what_people_say_back_to_a_goodbye(self):
+        for text in ('', 'Bye', 'Okay, thanks, bye!', 'Yeah, you too.', 'Okay hang up', 'Cheers'):
+            self.assertTrue(only_closing(text), text)
+        for text in ('Wait, one more thing', 'Bye, and can you send the invoice?', 'Hello?',
+                     'You there'):
+            self.assertFalse(only_closing(text), text)
+
+    def test_asked_to_leave(self):
+        for text in ('Smitline, you can leave now.', 'Thanks, you can drop off now', 'Please leave',
+                     'Smit line, go now', 'Okay Smitline, time to hang up'):
+            self.assertTrue(asks_to_leave(text), text)
+        for text in ('I have to leave early today.', 'Can you leave a note in the doc?',
+                     'Priya is dropping off at five.', 'Smitline, what is the PR link?'):
+            self.assertFalse(asks_to_leave(text), text)
+
+
+class PacerSpeechTests(unittest.IsolatedAsyncioTestCase):
+    async def test_streamed_silence_is_not_speech(self):
+        from phone_line import OutputPacer
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+        pacer = OutputPacer(send)
+        runner = asyncio.create_task(pacer.run())
+        try:
+            self.assertFalse(pacer.speech_pending())
+            pacer.offer(base64.b64encode(b'\x2a' * 1600).decode())  # 0.2 s of speech
+            self.assertTrue(pacer.speech_pending())
+            # GPT-Live keeps streaming silence after it: the queue never empties for long.
+            for _ in range(15):
+                pacer.offer(base64.b64encode(b'\xff' * 160).decode())
+                await asyncio.sleep(0.02)
+            self.assertTrue(await pacer.speech_finished(timeout=2))
+            self.assertFalse(pacer.speech_pending())
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+
+class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name)
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def connected(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        return record, session, ws, live, task
+
+    def say(self, live, text, *, audio_bytes=1600):
+        live.push({'type': 'session.output_transcript.delta', 'delta': text})
+        live.push({'type': 'session.output_audio.delta',
+                   'delta': base64.b64encode(b'\x2a' * audio_bytes).decode()})
+
+    async def test_a_goodbye_hangs_up_once_heard_without_the_backend(self):
+        record, session, ws, live, task = await self.connected()
+        self.say(live, "I'm Robin's AI assistant, by the way. Great, talk soon. Bye!")
+        await until(lambda: ws.closed, 5)
+        events = [e['type'] for e in self.h.service.events(record['id'])]
+        self.assertIn('call.goodbye_hangup', events)
+        self.assertNotIn('call.end_requested', events)  # no end_call from the backend
+        await asyncio.wait_for(task, 3)
+
+    async def test_their_bye_back_still_hangs_up(self):
+        record, session, ws, live, task = await self.connected()
+        self.say(live, "I'm Robin's AI assistant. Thanks, bye!")
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Okay, bye!'})
+        await until(lambda: ws.closed, 5)
+        await asyncio.wait_for(task, 3)
+
+    async def test_carrying_on_after_the_goodbye_keeps_the_call(self):
+        record, session, ws, live, task = await self.connected()
+        self.say(live, "I'm Robin's AI assistant. Okay, bye!")
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Wait, one more thing'})
+        await asyncio.sleep(3)
+        self.assertFalse(ws.closed)
+        self.assertNotIn('call.goodbye_hangup',
+                         [e['type'] for e in self.h.service.events(record['id'])])
+        # A later goodbye, with nothing after it, ends it.
+        self.say(live, 'Sure, I will tell Robin. Bye now!')
+        await until(lambda: ws.closed, 5)
+        await asyncio.wait_for(task, 3)
+
+    async def test_it_waits_for_the_goodbye_to_be_heard(self):
+        record, session, ws, live, task = await self.connected()
+        # Three seconds of goodbye: the line stays up until it has played.
+        self.say(live, "I'm Robin's AI assistant. Talk soon, goodbye.", audio_bytes=24000)
+        await asyncio.sleep(1.5)
+        self.assertFalse(ws.closed)
+        await until(lambda: ws.closed, 6)
+        await asyncio.wait_for(task, 3)
+
+
+class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
+    async def run_meeting(self, script):
+        import copy
+        import bridge
+        import meeting_lifecycle
+        from runtime_config import RuntimeConfig
+        from test_participation import Adapter, FakeLiveSocket, IdleSpeaker, Mic, RecordingArchive
+        socket = FakeLiveSocket(bridge)
+        record = RecordingArchive()
+        state = copy.deepcopy(bridge.state)
+        stop = asyncio.Event()
+        with patch.object(bridge, 'ClientSession', socket.client), \
+                patch.object(bridge, 'record', record), \
+                patch.object(bridge, 'state', state), \
+                patch.object(bridge, 'stop', stop), \
+                patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0), \
+                patch.object(meeting_lifecycle, 'LEAVE_QUIET_SECONDS', 0.3):
+            task = asyncio.create_task(bridge.run_voice(
+                IdleSpeaker(), Mic(), None, 'test-only',
+                RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'}), Adapter()))
+            try:
+                await socket.events.put({'type': 'session.started'})
+                await script(socket, stop)
+                await until(lambda: any(e['type'] == 'session.close' for e in socket.sent), 10)
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 9}})
+                await asyncio.wait_for(task, 3)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        return state, record
+
+    async def test_asked_to_leave_and_said_goodbye_it_leaves(self):
+        async def script(socket, _stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Thanks Smitline, you can leave now.'})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Okay, goodbye everyone!'})
+            # No leave_meeting from the backend.
+        state, record = await self.run_meeting(script)
+        self.assertEqual(state['endReason'], 'left_asked_to_leave')
+        self.assertIn('goodbye_leave', [kind for kind, _ in record.events])
+
+    async def test_a_goodbye_to_someone_else_does_not_leave(self):
+        async def script(socket, stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'I have to leave early today, bye all.'})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Bye, Priya!'})
+            await asyncio.sleep(1.5)
+            self.assertFalse(stop.is_set())
+            stop.set()
+        state, record = await self.run_meeting(script)
+        self.assertNotIn('goodbye_leave', [kind for kind, _ in record.events])
+        self.assertNotEqual(state.get('endReason'), 'left_asked_to_leave')
+
+    async def test_carrying_on_after_the_goodbye_keeps_it_in_the_meeting(self):
+        async def script(socket, stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Smitline, you can drop off now.'})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Sure, bye!'})
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Actually wait, what was the PR number?'})
+            await asyncio.sleep(1.5)
+            self.assertFalse(stop.is_set())
+            stop.set()
+        state, record = await self.run_meeting(script)
+        self.assertNotIn('goodbye_leave', [kind for kind, _ in record.events])
+
+
+if __name__ == '__main__':
+    unittest.main()

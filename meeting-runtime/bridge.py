@@ -24,8 +24,9 @@ from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
 from meeting_lifecycle import (
-    BACKEND_LEAVING, LEAVE_MEETING_TOOL, LEAVING_INSTRUCTIONS, is_idle, leave_end_reason,
-    should_leave_alone)
+    BACKEND_LEAVING, LEAVE_ASK_SECONDS, LEAVE_MEETING_TOOL, LEAVING_INSTRUCTIONS, asks_to_leave,
+    is_idle, leave_end_reason, only_closing, says_goodbye, should_leave_alone)
+import meeting_lifecycle
 from pathlib import Path
 from joinly.providers.browser.browser_session import BrowserSession
 from joinly.providers.browser.devices.pulse_server import PulseServer
@@ -203,6 +204,12 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
             transcript = MeetingTranscript(record, state)
             last_speech = [time.monotonic()]
             leaving = []
+            # Asked to leave, then a goodbye: the meeting is left once that has been heard.
+            turns = {'meeting': '', 'agent': '', 'last': None}
+            asked_to_leave = [None]  # when someone asked the agent to leave
+            goodbye = [None]  # when the agent said goodbye after that
+            said_after_goodbye = ['']
+            heard_at = [None]  # when the meeting was last heard
 
             async def leave(reason, why):
                 # Every way out goes through stop: GPT-Live closes (final usage) and the bot leaves.
@@ -261,6 +268,53 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         await leave(None, 'idle')
                         return
 
+            def note_turn(kind, delta):
+                """Follow who said what, for leaving once asked and after the goodbye."""
+                if not delta.strip():
+                    return
+                now = time.monotonic()
+                side = 'meeting' if kind == 'session.input_transcript.delta' else 'agent'
+                if turns['last'] != side:
+                    turns[side] = ''
+                turns[side] += delta
+                turns['last'] = side
+                if side == 'meeting':
+                    heard_at[0] = now
+                    if asks_to_leave(turns['meeting'][-240:]):
+                        asked_to_leave[0], goodbye[0] = now, None
+                    elif goodbye[0] is not None:
+                        said_after_goodbye[0] += delta
+                elif (asked_to_leave[0] is not None and goodbye[0] is None
+                      and says_goodbye(turns['agent'])):
+                    goodbye[0], said_after_goodbye[0] = now, ''
+
+            async def leave_after_goodbye():
+                """Asked to leave, it said goodbye: once that has been heard and the meeting is
+                quiet for a moment, leave, without waiting for the backend's leave_meeting."""
+                await ready.wait()
+                quiet_since = None
+                while not stop.is_set() and not leaving:
+                    await asyncio.sleep(.2)
+                    now = time.monotonic()
+                    if asked_to_leave[0] is not None and now - asked_to_leave[0] > LEAVE_ASK_SECONDS:
+                        asked_to_leave[0] = goodbye[0] = None
+                    if goodbye[0] is None:
+                        quiet_since = None
+                        continue
+                    if not says_goodbye(turns['agent']) or not only_closing(said_after_goodbye[0]):
+                        goodbye[0], quiet_since = None, None  # it said more, or they carried on
+                        continue
+                    if participation.speaking() or (heard_at[0] is not None and now - heard_at[0] < 1.0):
+                        quiet_since = None
+                        continue
+                    quiet_since = quiet_since or now
+                    if now - quiet_since >= meeting_lifecycle.LEAVE_QUIET_SECONDS:
+                        record.event('goodbye_leave')
+                        leaving.append(asyncio.create_task(
+                            leave('asked_to_leave', leave_end_reason('asked_to_leave')),
+                            name='agent_leave'))
+                        return
+
             async def closer():
                 await stop.wait()
                 state['finalizing'] = True
@@ -278,6 +332,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('microphone_monitor', watch_microphone),
                 ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
+                ('leave_after_goodbye', leave_after_goodbye),
                 ('session_closer', closer),
             ]
             tasks = [asyncio.create_task(fn(), name=name) for name, fn in task_specs]
@@ -304,6 +359,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         # Fail rather than silently accumulate seconds of stale speech.
                         gate.offer(data)
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
+                        note_turn(kind, event.get('delta') or '')
                         if (event.get('delta') or '').strip():
                             last_speech[0] = time.monotonic()
                         transcript.note(event)

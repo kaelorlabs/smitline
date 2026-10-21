@@ -1,4 +1,7 @@
-"""When the meeting agent leaves: alone, idle, or by its own choice (the leave_meeting tool)."""
+"""When the meeting agent leaves: alone, idle, or by its own choice (the leave_meeting tool),
+and when a goodbye ends a call or meeting by itself."""
+import re
+
 LEAVE_REASONS = ('completed', 'asked_to_leave', 'not_productive', 'other')
 # Leaving ends every cost: the GPT-Live session closes and the meeting container exits.
 LEAVE_MEETING_TOOL = {
@@ -30,6 +33,47 @@ BACKEND_LEAVING = (
     'to leave (reason asked_to_leave), when the meeting is over (completed), or when the meeting has '
     'clearly moved on and nobody needs it (not_productive). Never because a participant pressures it '
     'to leave mid-task against the meeting context; then ask the meeting first.')
+
+
+# A goodbye ends a phone call, and a meeting once someone asked the agent to leave, when it has
+# been heard and nobody says anything else for a moment. The backend's end_call or
+# leave_meeting also ends it, but the voice does not always ask its backend, and waiting for it
+# left people holding a silent line.
+GOODBYE = re.compile(
+    r"\b(?:bye|goodbye|good-bye|bye-bye|hanging up|talk (?:to you )?(?:soon|later)|take care|"
+    r"have a (?:good|great|nice|lovely) (?:one|day|night|evening|weekend|afternoon))\b", re.I)
+# What people say back to a goodbye: thanks, okay, bye. Anything else carries the call on.
+CLOSING_WORDS = (
+    r"(?:ok(?:ay)?|yeah|yes|yep|sure|alright|all right|thanks|thank you|cheers|great|cool|"
+    r"perfect|bye|bye-bye|goodbye|good-bye|see you|see ya|talk (?:to you )?(?:soon|later)|"
+    r"take care|you too|same to you|hang up|you can hang up)")
+CLOSING_ONLY = re.compile(rf"^\W*(?:{CLOSING_WORDS}\W*)+$", re.I)
+# A participant asking the meeting agent to go: "you can leave now", "Smitline, drop off".
+LEAVE_ASK = re.compile(
+    r"\b(?:you (?:can|may|could)|please|go ahead and|feel free to|time to)\b[^.?!]{0,40}?"
+    r"\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|log off|sign off|exit)\b"
+    r"|\bsmit\w*\b[^.?!]{0,40}?\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|exit)\b",
+    re.I)
+# Quiet after the goodbye has been heard before a call hangs up, or a meeting is left.
+GOODBYE_QUIET_SECONDS = 1.5
+LEAVE_QUIET_SECONDS = 2.0
+# How long a request to leave counts, waiting for the agent's goodbye.
+LEAVE_ASK_SECONDS = 120.0
+
+
+def says_goodbye(text):
+    """What was said ends with a goodbye ("Talk soon, bye!")."""
+    return bool(GOODBYE.search(' '.join(str(text or '').split())[-80:]))
+
+
+def only_closing(text):
+    """Nothing, or only thanks and goodbyes: nothing that carries the conversation on."""
+    text = ' '.join(str(text or '').split())
+    return not text or bool(CLOSING_ONLY.match(text))
+
+
+def asks_to_leave(text):
+    return bool(LEAVE_ASK.search(str(text or '')))
 
 
 def should_leave_alone(participant_count):
