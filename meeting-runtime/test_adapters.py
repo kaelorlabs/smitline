@@ -107,19 +107,41 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         # Zoom's web client markup as Recall.ai's Zoom bot guide reads it (June 2026): the toolbar
         # button opens the panel, which lists display names; labels such as (Host, me) are apart.
         await self.page.set_content('''
-            <button aria-label="open the participants list pane,[3] particpants"
-                    onclick="document.getElementById('panel').hidden=false">Participants</button>
-            <div id="panel" hidden>
-              <div class="participants-item__item-layout"><span class="participants-item__display-name">Smitline AI</span><span class="participants-item__name-label">(me)</span></div>
-              <div class="participants-item__item-layout"><span class="participants-item__display-name">Arun Raj</span><span class="participants-item__name-label">(Host)</span></div>
-              <div class="participants-item__item-layout"><span class="participants-item__display-name">Priya  Shah</span></div>
-            </div>''')
+            <button aria-label="open the participants list pane,[3] particpants" onclick="
+                document.getElementById('panel').innerHTML =
+                  '<div class=participants-item__item-layout><span class=participants-item__display-name>Smitline AI</span><span class=participants-item__name-label>(me)</span></div>' +
+                  '<div class=participants-item__item-layout><span class=participants-item__display-name>Arun Raj</span><span class=participants-item__name-label>(Host)</span></div>' +
+                  '<div class=participants-item__item-layout><span class=participants-item__display-name>Priya  Shah</span></div>'">Participants</button>
+            <div id="panel"></div>''')
         a = self.adapter(False)
         self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
         # Open already: read without clicking again (a second click would close it).
         self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
         await self.page.set_content('<p>No participants button here</p>')
         self.assertEqual(await a.get_participant_names(), [])
+
+    async def test_a_failed_zoom_chat_post_says_what_zoom_showed(self):
+        await self.page.set_content('''
+            <button aria-label="open the chat pane">Chat</button>
+            <button aria-label="Send chat to Everyone">To: Everyone</button>
+            <div contenteditable="true" role="textbox" aria-label="Type message here"></div>''')
+        a = self.adapter(False)
+        with self.assertRaises(RuntimeError) as caught:
+            await a.send_chat_message('From the agent:\nhttps://example.com/pr/75')
+        self.assertIn('chat controls seen', str(caught.exception))
+        self.assertIn('open the chat pane', str(caught.exception))
+        self.assertIn('Send chat to Everyone', str(caught.exception))
+
+    async def test_zoom_chat_posts_one_line(self):
+        await self.page.set_content('''
+            <button aria-label="close the chat panel">Chat</button>
+            <button aria-label="Send chat to Everyone please select a receiver">Everyone</button>
+            <div contenteditable="true" role="textbox" id="box"
+                 onkeydown="if (event.key === 'Enter') { window.sent = this.innerText; this.innerText = ''; }"></div>''')
+        a = self.adapter(False)
+        await a.send_chat_message("From Arun's agent, request r1 for Priya:\nhttps://example.com/pr/75")
+        self.assertEqual(await self.page.evaluate('window.sent'),
+                         "From Arun's agent, request r1 for Priya: | https://example.com/pr/75")
 
     async def test_zoom_controls_and_end(self):
         await self.page.set_content('''<button aria-label="Unmute my microphone" onclick="this.setAttribute('aria-label',this.getAttribute('aria-label').startsWith('Unmute')?'Mute my microphone':'Unmute my microphone')">mic</button>''')

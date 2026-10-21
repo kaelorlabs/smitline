@@ -450,7 +450,7 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         await self.service.reply(call_id, 'r1', owner='local', type='done',
                                  text='Added it in pull request 81.')
         ctx.add_transcript('agent', "Here's what Robin's agent says about that.")  # cut off
-        await until(lambda: any('has not heard the answer' in n['text'] for n in self.line.notes))
+        await until(lambda: any('has not heard what' in n['text'] for n in self.line.notes))
         retell = self.line.notes[-1]
         self.assertIn('pull request 81', retell['text'])
         self.assertIn('If you have already told them, ignore this', retell['text'])

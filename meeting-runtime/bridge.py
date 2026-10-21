@@ -294,7 +294,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 
-            participants = {'names': None, 'read_at': None}
+            participants = {'names': None, 'read_at': None, 'said_none': False}
 
             async def tell_who_is_here():
                 """Read who is in the meeting now and then; tell the voice when it changes."""
@@ -306,6 +306,9 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     names = others_in(await adapter.get_participant_names(), runtime.participant_name)
                 except Exception:
                     names = []
+                if not names and not participants['said_none']:
+                    participants['said_none'] = True  # once: the list could not be read here
+                    record.event('participants_unavailable', platform=state.get('platform'))
                 if names and names != participants['names']:
                     participants['names'] = names
                     if await send_note('thinking', participants_note(

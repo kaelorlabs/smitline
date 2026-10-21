@@ -378,7 +378,7 @@ def done_note(request, text, *, owner, ok):
 def retell_note(request, text, *, owner):
     """The answer was delivered but not heard on the call (cut off, or never said): once more."""
     return {'kind': 'instructions', 'request': request['id'], 'text': (
-        f"{_who(request).capitalize()} has not heard the answer from {owner}'s agent yet "
+        f"{_who(request).capitalize()} has not heard what {owner}'s agent said yet "
         f'(you may have been cut off): {text} Tell them first thing the next time you speak, '
         'or now at a natural pause if they are waiting. If you have already told them, ignore '
         'this.')}

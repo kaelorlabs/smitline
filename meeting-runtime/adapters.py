@@ -114,15 +114,35 @@ class ZoomAdapter(MeetingPlatformAdapter):
     async def chat_available(self):
         return await self.page.get_by_role('button', name=re.compile(r'^(open|close) the chat panel$', re.I)).count() > 0
     async def send_chat_message(self, text):
-        if not await visible(self.page.get_by_role('button', name='close the chat panel', exact=True)):
-            await self.page.get_by_role('button', name='open the chat panel', exact=True).click(timeout=3000)
-        recipient = self.page.get_by_role('button', name=re.compile(r'^Send chat to (Everyone|Meeting Group Chat) please select a receiver$', re.I))
-        if not await visible(recipient):
-            raise RuntimeError('Cannot confirm meeting-wide chat recipient')
-        box = self.page.locator('[contenteditable="true"][role="textbox"], textarea[placeholder*="message" i]').first
-        await box.fill(text, timeout=3000)
-        await box.press('Enter')
+        try:
+            if not await visible(self.page.get_by_role('button', name='close the chat panel', exact=True)):
+                await self.page.get_by_role('button', name='open the chat panel', exact=True).click(timeout=3000)
+            recipient = self.page.get_by_role('button', name=re.compile(r'^Send chat to (Everyone|Meeting Group Chat) please select a receiver$', re.I))
+            if not await visible(recipient):
+                raise RuntimeError('Cannot confirm meeting-wide chat recipient')
+            box = self.page.locator('[contenteditable="true"][role="textbox"], textarea[placeholder*="message" i]').first
+            # One line: Enter sends, so a line break could send half a message.
+            await box.fill(' | '.join(line.strip() for line in str(text).splitlines() if line.strip()), timeout=3000)
+            await box.press('Enter')
+        except Exception as error:
+            reason = (str(error).splitlines() or [type(error).__name__])[0][:120]
+            raise RuntimeError(f'{reason}; chat controls seen: {await self._chat_controls()}') from error
         return {'status': 'submitted', 'delivery_confirmed': False}
+    async def _chat_controls(self):
+        """Labels of the chat controls on the page, so a failed post says what Zoom showed."""
+        seen = []
+        for role in ('button', 'textbox', 'combobox'):
+            with contextlib.suppress(Exception):
+                for item in (await self.page.get_by_role(role).all())[:200]:
+                    with contextlib.suppress(Exception):
+                        label = await item.get_attribute('aria-label') or await item.inner_text(timeout=200)
+                        label = ' '.join(str(label or '').split())[:60]
+                        if label and re.search(r'chat|send|everyone|receiver|message|\bto\b', label, re.I) \
+                                and label not in seen:
+                            seen.append(label)
+                    if len(seen) >= 12:
+                        return seen
+        return seen
     async def has_ended(self):
         body = (await self.page.locator('body').inner_text()).lower()
         return any(x in body for x in ('meeting has been ended', 'meeting has ended', 'removed by the host', 'you have been removed'))
