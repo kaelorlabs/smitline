@@ -225,6 +225,19 @@ class NoteTests(unittest.TestCase):
         self.assertIn('only if someone asks', spoken[0][1])
 
 
+class ParticipantTests(unittest.TestCase):
+    def test_the_list_without_the_bot_and_with_the_owner_marked(self):
+        from meeting_intro import others_in, participants_note
+        names = others_in(['Smitline AI (me)', 'Arun Raj (Host, me)', ' Priya  Shah ', 'Priya Shah',
+                           '', 'Dev (Guest)'], 'Smitline AI')
+        self.assertEqual(names, ['Arun Raj', 'Priya Shah', 'Dev'])
+        note = participants_note(names, 'Arun Raj', 'Smitline AI')
+        self.assertIn('Arun Raj (probably Arun, the person you work for)', note)
+        self.assertIn('You are listed as Smitline AI', note)
+        self.assertNotIn('probably', participants_note(['Priya Shah'], 'Arun Raj', 'Smitline AI'))
+        self.assertEqual(others_in(None, 'Smitline AI'), [])
+
+
 class BriefTests(unittest.TestCase):
     def test_can_do_is_optional_and_tidied(self):
         self.assertIsNone(CallBrief.from_dict(brief()).can_do)
@@ -775,6 +788,30 @@ class MeetingControlTests(unittest.IsolatedAsyncioTestCase):
         status, _ = await control.handle({'type': 'note', 'kind': 'thinking', 'text': 'Hi'})
         self.assertEqual(status, 409)
 
+    async def test_the_safety_net_inside_a_meeting(self):
+        control = self.control()
+        now = [100.0]
+        control.claims.clock = lambda: now[0]
+        control.heard('meeting', 'Could you ask my agent for the full PR link?')
+        control.heard('agent', "Sure, I'll get Robin's agent to check it.")
+        self.assertTrue(control.claim_pending())
+        self.assertIsNone(control.claims_due(asked_by='Priya'))
+        now[0] += 11
+        message = control.claims_due(asked_by='Priya')
+        self.assertEqual((message['id'], message['source'], message['askedBy']), ('r1', 'speech', 'Priya'))
+        self.assertEqual(control.state['requests'][-1]['text'], 'Could you ask my agent for the full PR link?')
+        self.assertEqual(control.state['requests'][-1]['source'], 'speech')
+        # When the backend does ask, there is nothing to make up for.
+        control.heard('meeting', 'And the date of the demo?')
+        control.heard('agent', "I'll pass that on.")
+        control.ask({'action': 'ask', 'text': 'When is the demo?'})
+        now[0] += 30
+        self.assertIsNone(control.claims_due())
+        # An announced question makes their answer belong to its request.
+        await control.handle({'type': 'note', 'kind': 'instructions', 'request': 'r2',
+                              'text': 'Ask them: Thursday or Friday?'})
+        self.assertEqual(control.claims.awaiting, 'r2')
+
     async def test_the_routes_want_the_token(self):
         from listening import AudioTap
         control = self.control()
@@ -817,6 +854,55 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
         without = self.config({})
         self.assertNotIn('tools', without['delegation']['responses'])
         self.assertNotIn('Requests:', without['instructions'])
+
+    async def test_who_is_here_reaches_the_voice_and_the_safety_net_runs(self):
+        import bridge
+        from call_requests import ClaimWatch
+        from runtime_config import RuntimeConfig
+        from test_participation import Adapter, FakeLiveSocket, IdleSpeaker, Mic, RecordingArchive
+
+        class People(Adapter):
+            names = ['Smitline AI (me)', 'Arun Raj (Host)', 'Priya Shah']
+
+            async def get_participant_names(self):
+                return list(self.names)
+        socket = FakeLiveSocket(bridge)
+        state = copy.deepcopy(bridge.state)
+        control = MeetingControl('tok-1', state, owner='Arun Raj', can_do=CAN_DO)
+        people = People()
+        with patch.object(bridge, 'ClientSession', socket.client), \
+                patch.object(bridge, 'record', RecordingArchive()), \
+                patch.object(bridge, 'state', state), \
+                patch.object(bridge, 'control', control), \
+                patch.object(bridge, 'stop', asyncio.Event()), \
+                patch.object(ClaimWatch, 'GRACE', 0.2):
+            task = asyncio.create_task(bridge.run_voice(
+                IdleSpeaker(), Mic(), None, 'test-only',
+                RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0', 'SMITLINE_OWNER_NAME': 'Arun Raj'}),
+                people, {'canDo': CAN_DO}))
+            try:
+                await socket.events.put({'type': 'session.started'})
+
+                def notes():
+                    return [e['content'] for e in socket.sent if e['type'] == 'session.thinking.append']
+                await until(lambda: any('People in the meeting now' in n for n in notes()), 6)
+                note = next(n for n in notes() if 'People in the meeting now' in n)
+                self.assertIn('Arun Raj (probably Arun, the person you work for)', note)
+                self.assertIn('Priya Shah', note)
+                self.assertNotIn('Smitline AI (me)', note)
+                # The voice says it passed something on; its backend never asks.
+                await socket.events.put({'type': 'session.input_transcript.delta',
+                                         'delta': 'Could you ask my agent for the full PR link?'})
+                await socket.events.put({'type': 'session.output_transcript.delta',
+                                         'delta': "Sure, I'll get Arun's agent to check it."})
+                await until(lambda: state.get('requests'), 4)
+                self.assertEqual(state['requests'][0]['source'], 'speech')
+                self.assertEqual(state['requests'][0]['text'], 'Could you ask my agent for the full PR link?')
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 1}})
+                await asyncio.wait_for(task, 3)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     async def test_a_request_goes_out_on_health_and_a_note_comes_back_in(self):
         import bridge

@@ -74,6 +74,39 @@ def camera_caption(owner):
     return caption if len(caption) <= MAX_CAPTION else 'AI assistant'
 
 
+# Platform labels a participant list puts after a name: "Arun Raj (Host, me)".
+_LABELS = re.compile(r'\s*\((?:host|co-host|me|you|guest|organizer|presenter)\b[^)]*\)\s*$', re.I)
+MAX_PARTICIPANTS = 30
+
+
+def others_in(names, own_name):
+    """The meeting's participants without the bot itself: tidied, in order, without repeats."""
+    own = ' '.join(str(own_name or '').split()).casefold()
+    out = []
+    for name in names or ():
+        name = _LABELS.sub('', ' '.join(str(name or '').split())).strip()
+        if not name or len(name) > MAX_NAME or name in out:
+            continue
+        if own and (name.casefold() == own or name.casefold().startswith(own + ' ')):
+            continue
+        out.append(name)
+    return out[:MAX_PARTICIPANTS]
+
+
+def participants_note(names, owner, own_name):
+    """Quiet context: who is in the meeting, and which of them is probably the owner."""
+    first = spoken_name(owner).casefold() if owner else ''
+    listed = []
+    for name in names:
+        words = name.casefold().replace(',', ' ').split()
+        if first and first in words:
+            listed.append(f'{name} (probably {spoken_name(owner)}, the person you work for)')
+        else:
+            listed.append(name)
+    return ('People in the meeting now: ' + ', '.join(listed) + f'. You are listed as {own_name}. '
+            'Use their names when it helps. Do not announce this list.')
+
+
 def identity_instructions(owner):
     """Who the voice is, for when someone greets it or asks; it does not announce itself."""
     who = assistant_of(owner).replace('invited me', 'invited you')

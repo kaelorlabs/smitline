@@ -13,7 +13,32 @@ async def visible(locator):
 
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
-    capabilities = Capabilities(camera=True)
+    capabilities = Capabilities(participant_discovery=True, camera=True)
+    async def get_participant_names(self):
+        """Display names in Zoom's participants panel, opened once when it is not showing.
+        (Zoom web client markup as Recall.ai's Zoom bot guide reads it, June 2026.)"""
+        names = self.page.locator('.participants-item__display-name')
+        if not await names.count():
+            # Zoom hides its toolbar when idle; pointer movement brings it back.
+            viewport = self.page.viewport_size or {'width': 1280, 'height': 720}
+            await self.page.mouse.move(viewport['width'] / 2, max(1, viewport['height'] - 8))
+            button = self.page.get_by_role(
+                'button', name=re.compile(r'^open the participants list', re.I), include_hidden=True).first
+            try:
+                await button.click(timeout=1500)
+            except Exception:
+                return []
+            for _ in range(20):
+                if await names.count():
+                    break
+                await asyncio.sleep(.1)
+        found = []
+        for item in await names.all():
+            with contextlib.suppress(Exception):
+                text = ' '.join((await item.inner_text()).split())
+                if text:
+                    found.append(text)
+        return found
     async def join(self, url, name, passcode=''):
         await join_zoom(self.page, self.normalize_url(url), passcode, self.stop, self.stage, name)
     async def connect_audio(self):
@@ -239,6 +264,8 @@ class TeamsAdapter(MeetingPlatformAdapter):
         return None
     async def leave(self): await self.controller.leave(self.page)
     async def get_active_speaker(self): return self.controller.active_speaker
+    async def get_participant_names(self):
+        return [participant.name for participant in await self.controller.get_participants(self.page)]
 
 class MeetAdapter(MeetingPlatformAdapter):
     platform_id = 'meet'
@@ -436,6 +463,8 @@ class MeetAdapter(MeetingPlatformAdapter):
             await button.click(timeout=2000)
     async def get_active_speaker(self):
         return self.controller.active_speaker
+    async def get_participant_names(self):
+        return [participant.name for participant in await self.controller.get_participants(self.page)]
 
 REGISTRY = {'zoom': ZoomAdapter, 'teams': TeamsAdapter, 'meet': MeetAdapter}
 

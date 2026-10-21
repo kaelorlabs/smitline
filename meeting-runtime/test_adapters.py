@@ -103,6 +103,24 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await a.chat_available())
         await self.page.set_content('<p>You were removed from the meeting</p>')
         self.assertTrue(await a.has_ended())
+    async def test_zoom_reads_its_participants_panel(self):
+        # Zoom's web client markup as Recall.ai's Zoom bot guide reads it (June 2026): the toolbar
+        # button opens the panel, which lists display names; labels such as (Host, me) are apart.
+        await self.page.set_content('''
+            <button aria-label="open the participants list pane,[3] particpants"
+                    onclick="document.getElementById('panel').hidden=false">Participants</button>
+            <div id="panel" hidden>
+              <div class="participants-item__item-layout"><span class="participants-item__display-name">Smitline AI</span><span class="participants-item__name-label">(me)</span></div>
+              <div class="participants-item__item-layout"><span class="participants-item__display-name">Arun Raj</span><span class="participants-item__name-label">(Host)</span></div>
+              <div class="participants-item__item-layout"><span class="participants-item__display-name">Priya  Shah</span></div>
+            </div>''')
+        a = self.adapter(False)
+        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
+        # Open already: read without clicking again (a second click would close it).
+        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
+        await self.page.set_content('<p>No participants button here</p>')
+        self.assertEqual(await a.get_participant_names(), [])
+
     async def test_zoom_controls_and_end(self):
         await self.page.set_content('''<button aria-label="Unmute my microphone" onclick="this.setAttribute('aria-label',this.getAttribute('aria-label').startsWith('Unmute')?'Mute my microphone':'Unmute my microphone')">mic</button>''')
         a = self.adapter(False)

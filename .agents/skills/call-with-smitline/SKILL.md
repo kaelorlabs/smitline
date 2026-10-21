@@ -58,7 +58,7 @@ You know more than the brief: the user's preferences, the documents, what was de
 
 ## 5. Answer requests from the call
 
-With `canDo` in the brief, people on the call can ask you for things through the voice. Follow the call live (step 4); for a long meeting, `only: "requests"` wakes you only for requests. A request arrives in `live.requests` at once: `id` (r1, r2, ...), `kind` (`question` or `task`), `text`, `askedBy`, and the last lines said (`context`).
+With `canDo` in the brief, people on the call can ask you for things through the voice. Follow the call live (step 4); for a long meeting, `only: "requests"` wakes you only for requests. A request arrives in `live.requests` at once: `id` (r1, r2, ...), `kind` (`question` or `task`), `text`, `askedBy`, and the last lines said (`context`). With `source: "speech"`, the text is the person's own words, passed on because the voice said it would: read it with the context.
 
 Answer each one with `reply_to_call_request`:
 

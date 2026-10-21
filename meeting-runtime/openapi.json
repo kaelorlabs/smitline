@@ -349,6 +349,7 @@
           "kind": { "type": "string", "enum": ["question", "task"] },
           "text": { "type": "string" },
           "askedBy": { "type": "string", "description": "Who asked, as the voice heard or the meeting showed; not verified." },
+          "source": { "type": "string", "enum": ["speech"], "description": "Present when the voice said it passed this on without asking its backend: text is what the person said." },
           "context": { "type": "array", "items": { "type": "string" }, "description": "The last lines said before it was asked." },
           "state": { "type": "string", "enum": ["open", "working", "done", "canceled"] },
           "ok": { "type": "boolean" },

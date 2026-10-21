@@ -23,7 +23,8 @@ import call_requests
 from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
 from meeting_intro import (
-    addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions)
+    addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
+    others_in, participants_note)
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
@@ -44,6 +45,8 @@ state.update(cameraEnabled=True, cameraState='starting', visualState='joining')
 stop = asyncio.Event()
 record = None
 presence = None
+# How often the participant list is read; a change is told to the voice as quiet context.
+PARTICIPANTS_EVERY = 20.0
 # Both sides of the meeting as GPT-Live hears and speaks them, for the owner listening in.
 listening = AudioTap('pcm16', 24000)
 # The daemon's way in (/control) and the voice's requests out; main() sets it up.
@@ -249,6 +252,21 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     # The session is closing; the request itself already went out on /health.
                     record.event('agent_request_unanswered', error=type(error).__name__)
 
+            async def pass_on_claims():
+                """The safety net: a request the voice said it passed on, without its backend."""
+                await ready.wait()
+                while not stop.is_set():
+                    await asyncio.sleep(1)
+                    if not control.claim_pending():
+                        continue
+                    try:
+                        speaker = await adapter.get_active_speaker()
+                    except Exception:
+                        speaker = None
+                    message = control.claims_due(asked_by=speaker or '')
+                    if message is not None:
+                        record.event('agent_request', status='from_speech', request=message['id'])
+
             control.adapter = adapter
             control.record = record.event
             control.send = send_note
@@ -276,6 +294,24 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 
+            participants = {'names': None, 'read_at': None}
+
+            async def tell_who_is_here():
+                """Read who is in the meeting now and then; tell the voice when it changes."""
+                now = time.monotonic()
+                if participants['read_at'] is not None and now - participants['read_at'] < PARTICIPANTS_EVERY:
+                    return
+                participants['read_at'] = now
+                try:
+                    names = others_in(await adapter.get_participant_names(), runtime.participant_name)
+                except Exception:
+                    names = []
+                if names and names != participants['names']:
+                    participants['names'] = names
+                    if await send_note('thinking', participants_note(
+                            names, runtime.owner_name, runtime.participant_name)):
+                        record.event('participants', count=len(names))
+
             async def watch_meeting():
                 await ready.wait()
                 while not stop.is_set():
@@ -286,6 +322,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('meeting_ended')
                         stop.set()
                         return
+                    await tell_who_is_here()
                     try:
                         count = await adapter.get_participant_count()
                     except Exception:
@@ -318,6 +355,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('microphone_monitor', watch_microphone),
                 ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
+                ('request_safety_net', pass_on_claims),
                 ('session_closer', closer),
             ]
             tasks = [asyncio.create_task(fn(), name=name) for name, fn in task_specs]
@@ -346,6 +384,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
                         if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
                             heard[0] = time.monotonic()
+                        control.heard('agent' if kind == 'session.output_transcript.delta' else 'meeting',
+                                      event.get('delta') or '')
                         transcript.note(event)
                     elif kind == 'response.event':
                         before = state.get('backend_status')
