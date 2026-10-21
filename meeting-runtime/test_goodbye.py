@@ -40,10 +40,15 @@ class WordsTests(unittest.TestCase):
 
     def test_asked_to_leave(self):
         for text in ('Smitline, you can leave now.', 'Thanks, you can drop off now', 'Please leave',
-                     'Smit line, go now', 'Okay Smitline, time to hang up'):
+                     'Smit line, go now', 'Okay Smitline, time to hang up',
+                     # From the Zoom test on 2026-10-21: neither was taken as a request to leave.
+                     'Mm. Okay, fine, I think it... looks overall fine. Um, hang up now, then',
+                     '- Okay bye, hang up', 'Hang up.', 'You should leave now.', 'Smitline, end the call.'):
             self.assertTrue(asks_to_leave(text), text)
         for text in ('I have to leave early today.', 'Can you leave a note in the doc?',
-                     'Priya is dropping off at five.', 'Smitline, what is the PR link?'):
+                     'Priya is dropping off at five.', 'Smitline, what is the PR link?',
+                     'I need to hang up in five minutes.', "Don't hang up yet.",
+                     "We'll hang up after this.", 'Let me hang up and call back.'):
             self.assertFalse(asks_to_leave(text), text)
 
 
@@ -246,6 +251,18 @@ class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.1)
             await socket.events.put({'type': 'session.output_transcript.delta',
                                      'delta': 'Okay, goodbye everyone!'})
+            # No leave_meeting from the backend.
+        state, record = await self.run_meeting(script)
+        self.assertEqual(state['endReason'], 'left_asked_to_leave')
+        self.assertIn('goodbye_leave', [kind for kind, _ in record.events])
+
+    async def test_a_bare_hang_up_and_a_goodbye_leaves(self):
+        async def script(socket, _stop):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Okay, fine, it looks overall fine. Um, hang up now, then'})
+            await asyncio.sleep(.1)
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Alright, bye.'})
             # No leave_meeting from the backend.
         state, record = await self.run_meeting(script)
         self.assertEqual(state['endReason'], 'left_asked_to_leave')

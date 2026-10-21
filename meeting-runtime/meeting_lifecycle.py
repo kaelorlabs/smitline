@@ -50,10 +50,18 @@ CLOSING_WORDS = (
 CLOSING_ONLY = re.compile(rf"^\W*(?:{CLOSING_WORDS}\W*)+$", re.I)
 # A participant asking the meeting agent to go: "you can leave now", "Smitline, drop off".
 LEAVE_ASK = re.compile(
-    r"\b(?:you (?:can|may|could)|please|go ahead and|feel free to|time to)\b[^.?!]{0,40}?"
-    r"\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|log off|sign off|exit)\b"
-    r"|\bsmit\w*\b[^.?!]{0,40}?\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|exit)\b",
+    r"\b(?:you (?:can|may|could|should|need to|have to)|please|go ahead and|feel free to|time to)\b"
+    r"[^.?!]{0,40}?\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|log off|sign off|exit|"
+    r"end (?:the|this) call)\b"
+    r"|\bsmit\w*\b[^.?!]{0,40}?\b(?:leave|drop(?: off| out)?|go now|hang up|disconnect|exit|"
+    r"end (?:the|this) call)\b",
     re.I)
+# "Hang up" on its own is said to the agent ("um, hang up now", "okay bye, hang up"), unless the
+# speaker means themselves or the opposite ("I have to hang up", "don't hang up").
+HANG_UP = re.compile(r"\bhang up\b", re.I)
+NOT_TO_THE_AGENT = re.compile(
+    r"\b(?:i|i'm|i'll|im|we|we're|we'll|let me|gotta|have to|need to|going to|gonna|don't|do not|"
+    r"not|never)\b", re.I)
 # Words only a voicemail recording says: "record your message", "after the beep", "voice message
 # system". Never what a person says ("can I take a message?", "I got your voicemail").
 VOICEMAIL_PROMPT = re.compile(
@@ -79,7 +87,15 @@ def only_closing(text):
 
 
 def asks_to_leave(text):
-    return bool(LEAVE_ASK.search(str(text or '')))
+    """Someone asks the meeting agent to go: "you can leave now", "Smitline, drop off", "hang up"."""
+    text = str(text or '')
+    if LEAVE_ASK.search(text):
+        return True
+    for match in HANG_UP.finditer(text):
+        sentence = re.split(r'[.?!]', text[:match.start()])[-1]
+        if not NOT_TO_THE_AGENT.search(sentence[-40:]):
+            return True
+    return False
 
 
 def voicemail_prompt(text):
