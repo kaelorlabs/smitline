@@ -8,7 +8,7 @@
     },
     "serverInfo": {
       "name": "smitline",
-      "version": "0.2.1"
+      "version": "0.3.0"
     },
     "instructions": "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. With canDo in the brief, people on the call can ask you for things: they arrive in live.requests and you answer each with reply_to_call_request (status as you work, then done); keep following the call while you work, for example with a subagent. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to."
   },
