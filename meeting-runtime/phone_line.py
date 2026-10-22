@@ -1399,6 +1399,19 @@ class PhoneLine:
                               'SMITLINE_PUBLIC_URL, or install cloudflared or Docker for a '
                               'quick tunnel.')
 
+    async def preflight(self, hooks, owner, brief):
+        """For a brief check: whether the provider can reach this computer right now, in words
+        (None when it can). Starts the quick tunnel if none is running, so it also warms it up
+        for the call. Only for a brief that ready() accepts."""
+        from tunnel import TunnelError
+        if hooks.credentials(owner, 'sip')['mode'] == 'sip':
+            return None
+        try:
+            await self._public_url()
+        except TunnelError as error:
+            return str(error)
+        return None
+
     def _recording(self, ctx):
         """Record this call: the brief asked for it, or the owner's SMITLINE_RECORD_CALLS=1
         records every call."""

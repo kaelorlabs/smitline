@@ -26,10 +26,26 @@ QUICK_TUNNEL_ATTEMPTS = 2
 REUSE_PROBE_TIMEOUT = 6.0
 # Public DNS over HTTPS (JSON form), asked in order: Cloudflare, then Google.
 PUBLIC_DNS = ('https://1.1.1.1/dns-query', 'https://dns.google/resolve')
+# cloudflared checks the network as it starts. When TCP to Cloudflare fails too, no tunnel
+# can connect; QUIC (UDP) alone failing is fine, since cloudflared falls back to HTTP/2 over TCP.
+PRECHECK_FAILED = 'precheck complete hard_fail=true'
+TCP_CHECK = 'component="TCP Connectivity"'
+# The line cloudflared logs each time an HTTP/2 (TCP) connection to Cloudflare fails.
+TCP_FAILURE = 'Unable to establish connection with Cloudflare edge'
+# This many failed TCP connections before one registers means the network blocks Cloudflare
+# (older cloudflared versions do not log the precheck).
+TCP_FAILURES_BLOCKED = 4
+BLOCKED = ('This network blocks Cloudflare tunnels (outbound port 7844), so the phone provider '
+           'cannot reach this computer and phone calls cannot connect. Switch networks (a phone '
+           'hotspot works) or set SMITLINE_PUBLIC_URL. Meetings are not affected.')
 
 
 class TunnelError(RuntimeError):
     pass
+
+
+class TunnelBlocked(TunnelError):
+    """The network does not let cloudflared reach Cloudflare: retrying here will not help."""
 
 
 def dns_answers(data):
@@ -151,6 +167,7 @@ class PublicUrl:
         self._process = None
         self._url = None
         self._reader = None
+        self._last_error = None
 
     def command(self):
         env = self._environ()
@@ -227,11 +244,16 @@ class PublicUrl:
             await self._remove_stale_container()
         self._process = await self._spawn(
             *command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        self._last_error = None
         try:
             url = await asyncio.wait_for(self._read_url(), self.timeout)
         except asyncio.TimeoutError as error:
             await self._stop_locked()
-            raise TunnelError('The Cloudflare quick tunnel did not start in time.') from error
+            why = f' Last cloudflared error: {self._last_error}' if self._last_error else ''
+            raise TunnelError(f'The Cloudflare quick tunnel did not start in time.{why}') from error
+        except TunnelError:
+            await self._stop_locked()
+            raise
         self._reader = asyncio.create_task(self._drain())
         problems = []
         if await self._probe(url + '/healthz', self.probe_timeout, problems):
@@ -251,8 +273,14 @@ class PublicUrl:
             pass
 
     async def _read_url(self):
-        """Return the tunnel address once cloudflared reports a registered connection."""
+        """Return the tunnel address once cloudflared reports a registered connection.
+
+        Fails at once, with TunnelBlocked, when cloudflared shows the network blocks Cloudflare,
+        instead of waiting out the start timeout.
+        """
         url = None
+        tcp_failures = 0
+        tcp_blocked = False
         while True:
             line = await self._process.stderr.readline()
             if not line:
@@ -261,6 +289,14 @@ class PublicUrl:
             if 'failed' in text.lower() and 'trycloudflare' in text and url is None:
                 raise TunnelError('cloudflared could not create a quick tunnel; check the '
                                   'network, or set SMITLINE_PUBLIC_URL.')
+            if ' ERR ' in f' {text}':
+                self._last_error = text.split(' ERR ', 1)[-1].strip()[:200]
+            if TCP_CHECK in text and 'status=fail' in text:
+                tcp_blocked = True
+            if TCP_FAILURE in text:
+                tcp_failures += 1
+            if (PRECHECK_FAILED in text and tcp_blocked) or tcp_failures >= TCP_FAILURES_BLOCKED:
+                raise TunnelBlocked(BLOCKED)
             match = QUICK_URL.search(text)
             if match and url is None:
                 url = match.group(0)

@@ -23,7 +23,7 @@ from phone_prompts import (
     backend_instructions, delegation_config, discloses, goodbye_cue, mentions_ai, opening_cue,
     voice_instructions,
 )
-from tunnel import PublicUrl, TunnelError, configured_url
+from tunnel import PublicUrl, TunnelBlocked, TunnelError, configured_url
 from twilio_client import (
     TwilioClient, compute_signature, dial_twiml, stream_twiml, valid_signature,
 )
@@ -1362,6 +1362,106 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(processes[0].returncode, 0)  # the stale cloudflared was stopped
         self.assertIn('stopped answering (HTTP 530); starting a fresh one', logged[1])
         await tunnel.close()
+
+    async def blocked_tunnel(self, output, timeout=5.0):
+        """Run a quick tunnel whose cloudflared prints `output` and then waits forever:
+        (the error it raised, the processes spawned)."""
+        class Stream:
+            def __init__(self):
+                self.lines = list(output)
+
+            async def readline(self):
+                if self.lines:
+                    return self.lines.pop(0)
+                await asyncio.Event().wait()
+
+        class Process:
+            def __init__(self):
+                self.returncode = None
+                self.stderr = Stream()
+
+            def terminate(self):
+                self.returncode = 0
+
+            async def wait(self):
+                return 0
+        processes = []
+
+        async def spawn(*command, **kwargs):
+            processes.append(Process())
+            return processes[-1]
+        tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=lambda name: '/usr/bin/cloudflared',
+                           timeout=timeout)
+        with self.assertRaises(TunnelError) as caught:
+            await tunnel.get()
+        return caught.exception, processes
+
+    async def test_a_network_that_blocks_cloudflare_fails_at_once_and_says_so(self):
+        # cloudflared 2026.x checks the network as it starts and reports a hard failure.
+        error, processes = await self.blocked_tunnel([
+            b'2026-10-22T22:54:03Z INF Requesting new quick Tunnel on trycloudflare.com...\n',
+            b'2026-10-22T22:54:06Z INF |  https://pour-rotary-rentals-attacked.trycloudflare.com  |\n',
+            b'2026-10-22T22:54:11Z ERR Failed to dial a quic connection error="failed to dial to edge '
+            b'with quic: timeout: no recent network activity" connIndex=0\n',
+            b'2026-10-22T22:54:16Z INF |  ERROR: Allow outbound TCP on port 7844.  |\n',
+            b'2026-10-22T22:54:16Z INF precheck component="UDP Connectivity" details="QUIC connection '
+            b'failed" status=fail target=region1.v2.argotunnel.com\n',
+            b'2026-10-22T22:54:16Z INF precheck component="TCP Connectivity" details="HTTP/2 connection '
+            b'is blocked or unreachable" status=fail target=region1.v2.argotunnel.com\n',
+            b'2026-10-22T22:54:16Z INF precheck complete hard_fail=true run_id=4517701d\n'])
+        self.assertIsInstance(error, TunnelBlocked)
+        self.assertIn('This network blocks Cloudflare tunnels', str(error))
+        self.assertIn('hotspot', str(error))
+        # A blocked network is not retried with a fresh tunnel, and cloudflared is stopped.
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].returncode, 0)
+
+    async def test_repeated_failures_to_reach_cloudflare_mean_the_network_blocks_it(self):
+        # Older cloudflared versions do not log the precheck: repeated edge failures say the same.
+        failure = (b'ERR Unable to establish connection with Cloudflare edge error="TLS handshake '
+                   b'with edge error: read tcp 172.25.36.88:61888->198.41.200.53:7844: read: '
+                   b'connection reset by peer" connIndex=0\n')
+        error, processes = await self.blocked_tunnel(
+            [b'INF |  https://brave-fox-12.trycloudflare.com  |\n'] + [failure] * 4)
+        self.assertIsInstance(error, TunnelBlocked)
+        self.assertEqual(processes[0].returncode, 0)
+
+    async def test_a_network_that_blocks_only_quic_is_left_to_fall_back_to_http2(self):
+        quic = (b'ERR Failed to dial a quic connection error="failed to dial to edge with quic: '
+                b'timeout: no recent network activity" connIndex=0\n')
+        error, _ = await self.blocked_tunnel(
+            [b'INF |  https://brave-fox-12.trycloudflare.com  |\n'] + [quic] * 6 + [
+                b'INF precheck component="UDP Connectivity" details="QUIC connection failed" status=fail\n',
+                b'INF precheck component="TCP Connectivity" details="ok" status=pass\n',
+                b'INF precheck complete hard_fail=true run_id=4517701d\n'],
+            timeout=0.05)
+        self.assertNotIsInstance(error, TunnelBlocked)
+
+    async def test_a_tunnel_that_does_not_start_in_time_says_what_cloudflared_last_reported(self):
+        error, processes = await self.blocked_tunnel([
+            b'INF |  https://brave-fox-12.trycloudflare.com  |\n',
+            b'2026-10-22T22:54:11Z ERR Serve tunnel error error="context canceled" connIndex=0\n'],
+            timeout=0.05)
+        self.assertNotIsInstance(error, TunnelBlocked)
+        self.assertIn('did not start in time', str(error))
+        self.assertIn('Serve tunnel error', str(error))
+
+    async def test_preflight_reports_a_tunnel_that_cannot_start(self):
+        async def blocked():
+            raise TunnelBlocked('This network blocks Cloudflare tunnels')
+        hooks = DefaultCallHooks(environ=dict(ENV))
+        line = PhoneLine(public_url=blocked, environ=lambda: dict(ENV))
+        call = CallBrief.from_dict({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Robin',
+                                     'objective': 'Ask.'})
+        self.assertIn('blocks Cloudflare', await line.preflight(hooks, 'local', call))
+        reached = []
+
+        async def reachable():
+            reached.append(True)
+            return PUBLIC
+        line = PhoneLine(public_url=reachable, environ=lambda: dict(ENV))
+        self.assertIsNone(await line.preflight(hooks, 'local', call))
+        self.assertEqual(reached, [True])  # it starts (warms up) the tunnel for the call
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
