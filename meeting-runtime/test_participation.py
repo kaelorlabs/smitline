@@ -562,3 +562,150 @@ class BridgeNameTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(Stop):
                     await bridge.main()
                 self.assertEqual(get_settings().name, "Ana's assistant")
+
+
+class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
+    """The meeting agent leaves by itself; leaving closes GPT-Live, so its costs stop."""
+
+    async def _run(self, runtime, script):
+        import copy
+        import bridge
+        socket = FakeLiveSocket(bridge)
+        record = RecordingArchive()
+        state = copy.deepcopy(bridge.state)
+        stop = asyncio.Event()
+        stages = []
+
+        def stage(value):
+            stages.append(value)
+            state['stage'] = value
+
+        async def wait_until(check, seconds=2):
+            for _ in range(int(seconds * 100)):
+                if check():
+                    return
+                await asyncio.sleep(.01)
+            self.fail('Timed out waiting for bridge event')
+
+        with patch.object(bridge, 'ClientSession', socket.client), \
+                patch.object(bridge, 'record', record), \
+                patch.object(bridge, 'state', state), \
+                patch.object(bridge, 'stage', stage), \
+                patch.object(bridge, 'stop', stop):
+            task = asyncio.create_task(bridge.run_voice(
+                IdleSpeaker(), Mic(), None, 'test-only', runtime, Adapter()))
+            try:
+                await socket.events.put({'type': 'session.started'})
+                await script(socket, wait_until)
+                await wait_until(lambda: any(e['type'] == 'session.close' for e in socket.sent), 15)
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 42}})
+                await asyncio.wait_for(task, 3)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        return SimpleNamespace(socket=socket, record=record, state=state, stop=stop, stages=stages)
+
+    @staticmethod
+    def leave_call(reason):
+        import json
+        return {'type': 'response.event', 'delegation_id': 'dlg-9', 'event': {
+            'type': 'response.output_item.done', 'item': {
+                'type': 'function_call', 'call_id': 'fc-9', 'name': 'leave_meeting',
+                'arguments': json.dumps({'reason': reason})}}}
+
+    async def test_asked_to_leave_says_goodbye_then_leaves_and_closes_the_session(self):
+        from runtime_config import RuntimeConfig
+        import bridge
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
+        goodbye = base64.b64encode(struct.pack('<480h', *([900] * 480))).decode()
+        closed_while_speaking = []
+
+        async def script(socket, _wait_until):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Thanks Smitline, you can drop off now.',
+                                     'start_ms': 0, 'end_ms': 900, 'event_id': 'in-1'})
+            await socket.events.put(self.leave_call('asked_to_leave'))
+            # The goodbye keeps arriving for two seconds after the tool call; the agent
+            # stays until it has been heard.
+            for _ in range(8):
+                await socket.events.put({'type': 'session.output_audio.delta', 'delta': goodbye})
+                await asyncio.sleep(.25)
+                closed_while_speaking.append(
+                    any(e['type'] == 'session.close' for e in socket.sent))
+
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 10.0):
+            run = await self._run(runtime, script)
+        self.assertEqual(set(closed_while_speaking), {False})
+        self.assertEqual(run.state['endReason'], 'left_asked_to_leave')
+        self.assertIn(('agent_left', {'reason': 'asked_to_leave'}), run.record.events)
+        self.assertEqual(run.stages[-2:], ['meeting_ended', 'finished'])
+        self.assertTrue(run.stop.is_set())
+        # Leaving needs no tool result, so no further backend turn is asked for.
+        self.assertFalse([e for e in run.socket.sent if 'function_call_output' in str(e)])
+        # The session reported its final usage: the meeting is billed up to here.
+        self.assertTrue(run.state['finalized'])
+        self.assertEqual(run.state['usage_seconds'], 42)
+        self.assertEqual(sum(e['type'] == 'session.close' for e in run.socket.sent), 1)
+
+    async def test_a_second_leave_call_is_ignored_and_unknown_reasons_are_other(self):
+        from runtime_config import RuntimeConfig
+        import bridge
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
+
+        async def script(socket, _wait_until):
+            await socket.events.put(self.leave_call('made_up'))
+            await socket.events.put(self.leave_call('completed'))
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0):
+            run = await self._run(runtime, script)
+        self.assertEqual(run.state['endReason'], 'left_other')
+        self.assertEqual([kind for kind, _ in run.record.events].count('agent_left'), 1)
+
+    async def test_waits_for_speech_before_leaving_but_not_forever(self):
+        from participation import Participation
+        state = {}
+        clock = [0.0]
+        participation = Participation(Adapter(), Mic(), state, quiet_seconds=.5,
+                                      clock=lambda: clock[0])
+        participation.last_output_audio = 0.0
+        self.assertTrue(participation.speaking())
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await participation.finish_speaking(.3, settle=.05)  # still "speaking": gives up
+        self.assertGreaterEqual(loop.time() - started, .29)
+        clock[0] = 10.0
+        self.assertFalse(participation.speaking())
+        started = loop.time()
+        await participation.finish_speaking(5, settle=.05)
+        self.assertLess(loop.time() - started, 1)
+
+    async def test_leaves_when_nobody_has_spoken_for_the_idle_limit(self):
+        import dataclasses
+        from runtime_config import RuntimeConfig
+        runtime = dataclasses.replace(
+            RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'}), idle_leave_seconds=1)
+
+        async def script(_socket, _wait_until):
+            pass
+        run = await self._run(runtime, script)
+        self.assertEqual(run.state['endReason'], 'idle')
+        self.assertIn(('auto_leave', {'reason': 'idle'}), run.record.events)
+        self.assertTrue(run.state['finalized'])
+
+    async def test_speech_keeps_an_idle_meeting_open(self):
+        import dataclasses
+        import bridge
+        from runtime_config import RuntimeConfig
+        runtime = dataclasses.replace(
+            RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'}), idle_leave_seconds=4)
+
+        async def script(socket, _wait_until):
+            for second in range(5):
+                await asyncio.sleep(1)
+                await socket.events.put({'type': 'session.input_transcript.delta',
+                                         'delta': f'still talking {second}', 'start_ms': 0,
+                                         'end_ms': 10, 'event_id': f'talk-{second}'})
+            self.assertFalse(any(e['type'] == 'session.close' for e in socket.sent))
+            await socket.events.put(self.leave_call('completed'))
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0):
+            run = await self._run(runtime, script)
+        self.assertEqual(run.state['endReason'], 'left_completed')

@@ -6,6 +6,7 @@ import os
 import secrets
 
 from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization
+from meeting_lifecycle import AGENT_ENDINGS
 from runtime_state import (
     POOL_ACTIVE_DIR, active_meeting_path, control_root, ensure_private_dir, meeting_state_path,
     pool_claim_path, read_json, state_from_session, write_private_file, write_private_json,
@@ -608,8 +609,11 @@ class ProductionMeetingSupervisor:
             except Exception:
                 pass
         if stage in TERMINAL_STAGES:
+            reason = stage
+            if stage in COMPLETE_REASONS and health.get('endReason') in AGENT_ENDINGS:
+                reason = health['endReason']  # the agent left: why, not just that it ended
             await self._complete_handoff(
-                session, stage, partial=stage not in COMPLETE_REASONS)
+                session, reason, partial=stage not in COMPLETE_REASONS)
             return True
         return False
 

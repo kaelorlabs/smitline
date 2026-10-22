@@ -17,6 +17,7 @@ import time
 from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
 from barge_in import SpeechDetector, frame_level_db
 from call_costs import provider_price_from
+from meeting_lifecycle import GOODBYE_QUIET_SECONDS, only_closing, says_goodbye, voicemail_prompt
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
@@ -86,6 +87,10 @@ INTERRUPT_MIN_QUEUED = 0.25
 INTERRUPT_SETTLE = 0.35
 # How many times a hang-up may give way to the other person still talking.
 MAX_HANGUP_YIELDS = 2
+# After a goodbye: how often to look, and how recent a line from them still counts as talking
+# (transcripts arrive a little after the audio the detector hears).
+GOODBYE_POLL = 0.1
+GOODBYE_HEARD_SECONDS = 0.8
 # On direct SIP the model's speech plays at OpenAI; its reflected copy going quiet for
 # this long means the goodbye has finished.
 SIP_SPEECH_TAIL = 1.2
@@ -226,6 +231,9 @@ class OutputPacer:
         self._continuous = False  # the next frame continues speech already playing
         self._drained = asyncio.Event()
         self._drained.set()
+        # When the last frame of speech sent finishes playing. GPT-Live streams silence between
+        # turns, so the queue is rarely empty: speech, not the queue, says when a goodbye ended.
+        self.speech_until = 0.0
 
     def offer(self, payload):
         self._drained.clear()
@@ -270,6 +278,7 @@ class OutputPacer:
         self._sent.clear()
         self._trace('pause', unheard=len(unheard))
         self.play_until = now
+        self.speech_until = min(self.speech_until, now)
         self.paused = True
         self._continuous = False
         self._ready.clear()
@@ -290,6 +299,7 @@ class OutputPacer:
         self._mark_owed = False
         self.queued_bytes = 0
         self.play_until = self.clock()
+        self.speech_until = min(self.speech_until, self.play_until)
         self.played_marks = self.sent_marks
         self.paused = False
         self._continuous = False
@@ -311,6 +321,26 @@ class OutputPacer:
             return True
         except asyncio.TimeoutError:
             return False
+
+    def speech_pending(self):
+        """Speech not heard yet: queued here, held, or sent and still playing. Silence is not."""
+        if self.clock() < self.speech_until:
+            return True
+        if self._next is not None and _is_speech(self._next[0]):
+            return True
+        if self._tail and frame_level_db(self._tail) >= SILENT_FRAME_DB:
+            return True
+        return any(_is_speech(payload) for payload, _last in self.queue)
+
+    async def speech_finished(self, timeout=DRAIN_TIMEOUT, poll=0.05):
+        """Wait until what the assistant said has been heard (or everything sent has played)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self.speech_pending() and not self._drained.is_set():
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(poll)
+        return True
 
     async def _send_mark(self):
         """Ask the provider to say when everything sent so far has played."""
@@ -391,6 +421,8 @@ class OutputPacer:
             while self._sent and self._sent[0][2] + 0.02 < now:
                 self._sent.popleft()
             self.play_until = starts + seconds
+            if not silent:
+                self.speech_until = self.play_until
             self._continuous = True
             self._mark_owed = True
             if silent and not self.paused and self.play_until - now < self.target:
@@ -401,6 +433,14 @@ class OutputPacer:
             elif (silent and not self.queue and not self._tail
                   and (self._last_mark is None or now - self._last_mark >= self.MARK_EVERY)):
                 await self._send_mark()
+
+
+def _is_speech(payload):
+    """A queued frame (base64 mu-law) is speech rather than a pause."""
+    try:
+        return frame_level_db(base64.b64decode(payload)) >= SILENT_FRAME_DB
+    except ValueError:
+        return False
 
 
 def _same_number(a, b):
@@ -484,6 +524,14 @@ class PhoneSession:
         self._pending_hangup = None
         self._accept_done = asyncio.Event()
         self._accepted = None
+        # The agent's latest turn, and what they said after its goodbye (see _after_goodbye).
+        self._agent_latest = ''
+        self._last_speaker = None
+        self._goodbye_watch = None
+        self._said_after_goodbye = ''
+        # The other side's recent words, across the agent's, and whether they were a voicemail.
+        self._other_recent = ''
+        self.voicemail_heard = False
 
     # Configuration -------------------------------------------------------
 
@@ -528,8 +576,9 @@ class PhoneSession:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    def _start_hangup(self, reason, *, yield_to_speech=False):
-        task = asyncio.create_task(self.hangup(reason, yield_to_speech=yield_to_speech))
+    def _start_hangup(self, reason, *, yield_to_speech=False, disclose=True):
+        task = asyncio.create_task(self.hangup(reason, yield_to_speech=yield_to_speech,
+                                               disclose=disclose))
         self._hangups.add(task)
         task.add_done_callback(self._hangups.discard)
         return task
@@ -846,6 +895,21 @@ class PhoneSession:
         if source == 'agent':
             self._agent_said += delta
             self._agent_turn += delta
+        if delta.strip():
+            if source == 'agent':
+                self._agent_latest = (self._agent_latest + delta if self._last_speaker == 'agent'
+                                      else delta)
+            else:
+                gap = '' if self._last_speaker == 'other' else ' '
+                self._other_recent = (self._other_recent + gap + delta)[-200:]
+                if not self.voicemail_heard and voicemail_prompt(self._other_recent):
+                    self.voicemail_heard = True
+                    self.ctx.event('call.voicemail_heard')
+                if self._goodbye_watch is not None:
+                    self._said_after_goodbye += delta
+            self._last_speaker = source
+            if source == 'agent' and says_goodbye(self._agent_latest):
+                self._watch_goodbye()
         if self.claims is not None:
             self.claims.heard(source, delta)
         for speaker, text in self.joiner.add(source, delta, event.get('start_ms'), event.get('end_ms')):
@@ -992,6 +1056,42 @@ class PhoneSession:
                 await self.hangup('hangup', disclose=False)  # nobody is there to hear it
                 return
 
+    def _watch_goodbye(self):
+        if self._hanging_up or (self._goodbye_watch is not None and not self._goodbye_watch.done()):
+            return
+        self._said_after_goodbye = ''
+        self._goodbye_watch = self._spawn(self._after_goodbye())
+
+    def _agent_speaking(self):
+        if self.pacer is not None:
+            return self.pacer.speech_pending()
+        return (self.last_output_at is not None
+                and time.monotonic() - self.last_output_at < SIP_SPEECH_TAIL)
+
+    def _other_speaking(self):
+        recently = (self._other_spoke_at is not None
+                    and time.monotonic() - self._other_spoke_at < GOODBYE_HEARD_SECONDS)
+        return self.detector.speaking or recently
+
+    async def _after_goodbye(self):
+        """The agent said goodbye: once that has been heard and nobody has said anything for
+        GOODBYE_QUIET_SECONDS, hang up, without waiting for the backend's end_call. They can
+        say thanks or bye back; anything else carries the call on, and the model answers."""
+        quiet_since = None
+        while not self.finished.is_set() and not self._hanging_up:
+            await asyncio.sleep(GOODBYE_POLL)
+            if not says_goodbye(self._agent_latest) or not only_closing(self._said_after_goodbye):
+                return  # it said more, or they did: the next goodbye starts this again
+            if self._agent_speaking() or self._other_speaking():
+                quiet_since = None
+                continue
+            now = time.monotonic()
+            quiet_since = quiet_since or now
+            if now - quiet_since >= GOODBYE_QUIET_SECONDS:
+                self.ctx.event('call.goodbye_hangup')
+                self._start_hangup('hangup')
+                return
+
     # Actions -------------------------------------------------------------
 
     async def hangup(self, reason, *, yield_to_speech=False, disclose=True):
@@ -1022,7 +1122,7 @@ class PhoneSession:
 
     async def _let_speech_finish(self):
         if self.pacer is not None:
-            await self.pacer.drained()
+            await self.pacer.speech_finished()
 
     async def _end_call(self):
         await self._close_stream()
@@ -1059,6 +1159,12 @@ class PhoneSession:
     async def wrap_up(self):
         if self.live is None:
             return False
+        if self.voicemail_heard:
+            # A voicemail is recording: there is nobody to thank, and a goodbye would only leave a
+            # vague message ("just calling about a couple of things"). What is playing finishes.
+            self.ctx.event('call.voicemail_hangup')
+            self._start_hangup('hangup', disclose=False)
+            return True
         await self.live.append('session.commentary.append', self._goodbye_cue(
             'You need to end the call now. Thank them and say goodbye.'))
         if self._pending_hangup is None:

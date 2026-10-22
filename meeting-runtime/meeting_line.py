@@ -3,6 +3,7 @@ import asyncio
 
 from briefing import EARLIER_CALLS_HEADING
 from call_hooks import LOCAL_OWNER, CallRefused, owner_settings, read_env_file
+from meeting_lifecycle import AGENT_ENDINGS
 
 # What an owner's settings give its meeting container, over the shared .env.
 MEETING_SETTINGS = ('SMITLINE_VOICE', 'SMITLINE_PARTICIPANT_NAME', 'SMITLINE_OWNER_NAME')
@@ -12,7 +13,7 @@ MEETING_SETTINGS = ('SMITLINE_VOICE', 'SMITLINE_PARTICIPANT_NAME', 'SMITLINE_OWN
 POOL_OWNER_SETTINGS = MEETING_SETTINGS + ('SMITLINE_EXTRA_VOICES',)
 POOL_MEETING_SETTINGS = POOL_OWNER_SETTINGS + (
     'SMITLINE_MEETING_BACKEND_MODEL', 'SMITLINE_MEETING_WEB_SEARCH', 'SMITLINE_MEETING_INSTRUCTIONS',
-    'SMITLINE_MEETING_INTRO', 'SMITLINE_MEETING_CAMERA_STYLE',
+    'SMITLINE_MEETING_INTRO', 'SMITLINE_MEETING_CAMERA_STYLE', 'SMITLINE_MEETING_IDLE_LEAVE_SECONDS',
 )
 # Seconds without a new caption piece that end a line of the live transcript.
 LIVE_PAUSE = 2.5
@@ -271,6 +272,9 @@ class MeetingLine:
         if forget is not None:
             forget(meeting_id)
         seconds = int(ended - started) if started is not None else 0
+        left = (handoff or {}).get('endReason')
+        if left in AGENT_ENDINGS:
+            ctx.event('call.agent_left', reason=left)
         if ctx.call_id in self._over_time:
             reason = 'max_duration'
         elif ctx.call_id in self._canceled:

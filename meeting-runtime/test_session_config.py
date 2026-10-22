@@ -46,12 +46,28 @@ class SessionConfigTests(unittest.TestCase):
         responses = delegation['responses']
         self.assertEqual(responses['model'], DEFAULT_BACKEND_MODEL)
         self.assertEqual(responses['tool_choice'], 'auto')
-        self.assertNotIn('tools', responses)
+        self.assertEqual([tool['name'] for tool in responses['tools']], ['leave_meeting'])
         self.assertIn('on behalf of Robin', responses['instructions'])
         searching = build_session_config(RuntimeConfig.from_environ({
             'SMITLINE_MEETING_BACKEND_MODEL': 'gpt-5.6-mini', 'SMITLINE_MEETING_WEB_SEARCH': '1'}))
         self.assertEqual(searching['delegation']['responses']['model'], 'gpt-5.6-mini')
-        self.assertEqual(searching['delegation']['responses']['tools'], [{'type': 'web_search'}])
+        self.assertEqual([tool.get('name', tool['type'])
+                          for tool in searching['delegation']['responses']['tools']],
+                         ['leave_meeting', 'web_search'])
+
+    def test_the_agent_is_told_when_to_leave(self):
+        config = build_session_config(RuntimeConfig.from_environ({}))
+        prompt = config['instructions']
+        self.assertIn('leave the meeting when a person in your place would', prompt)
+        self.assertIn('when someone asks you to go (however they put it)', prompt)
+        self.assertIn('when everyone else has left', prompt)
+        self.assertIn('Finish what you are saying first', prompt)
+        backend = config['delegation']['responses']['instructions']
+        self.assertIn('Decide for yourself, the way a person would', backend)
+        tool = config['delegation']['responses']['tools'][0]
+        self.assertEqual(tool['parameters']['properties']['reason']['enum'],
+                         ['completed', 'asked_to_leave', 'not_productive', 'other'])
+        self.assertTrue(tool['strict'])
 
     def test_operator_guidance_and_handoff_input_are_applied(self):
         runtime = RuntimeConfig.from_environ({

@@ -874,15 +874,16 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
     def test_the_session_has_the_tool_only_with_can_do(self):
         with_requests = self.config({'canDo': CAN_DO})
         responses = with_requests['delegation']['responses']
-        self.assertEqual([tool['name'] for tool in responses['tools']], ['ask_agent'])
+        self.assertEqual([tool['name'] for tool in responses['tools']], ['leave_meeting', 'ask_agent'])
         self.assertIn('ask_agent', responses['instructions'])
         self.assertIn(CAN_DO, with_requests['instructions'])
         self.assertIn("Robin's agent, the AI that set up this meeting", with_requests['instructions'])
         both = self.config({'canDo': CAN_DO}, SMITLINE_MEETING_WEB_SEARCH='1')
         self.assertEqual([tool.get('name', tool['type']) for tool in both['delegation']['responses']['tools']],
-                         ['ask_agent', 'web_search'])
+                         ['leave_meeting', 'ask_agent', 'web_search'])
         without = self.config({})
-        self.assertNotIn('tools', without['delegation']['responses'])
+        self.assertEqual([tool['name'] for tool in without['delegation']['responses']['tools']],
+                         ['leave_meeting'])
         self.assertNotIn('Requests:', without['instructions'])
 
     async def test_who_is_here_reaches_the_voice_and_the_safety_net_runs(self):

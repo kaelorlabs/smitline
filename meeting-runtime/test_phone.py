@@ -318,6 +318,17 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('say nothing to it and end the call with the reason other', text)
         self.assertIn('Never read them out', text)
 
+    def test_a_call_going_nowhere_is_ended_politely(self):
+        from phone_prompts import END_CALL_TOOL, backend_instructions
+        call = CallBrief.from_dict(brief())
+        text = voice_instructions(call)
+        self.assertIn('Also end it politely when the call is going nowhere', text)
+        self.assertIn('going around in circles', text)
+        self.assertIn('an automated menu will not let you through', text)
+        self.assertIn('Robin will follow up', text)
+        self.assertIn('reason not_productive', backend_instructions(call))
+        self.assertIn('not_productive', END_CALL_TOOL['parameters']['properties']['reason']['enum'])
+
     def test_disclosure_check(self):
         said = [
             ("Hi, I'm an AI assistant calling on behalf of Robin Rao.", 'Robin Rao', True),
@@ -551,8 +562,9 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
-        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 800).decode()})
-        await until(lambda: any(m['event'] == 'mark' for m in ws.sent))
+        # A goodbye that takes four seconds to play.
+        live.push({'type': 'session.output_audio.delta', 'delta': base64.b64encode(b'\x2a' * 32000).decode()})
+        await until(lambda: any(m['event'] == 'media' for m in ws.sent))
         live.push({'type': 'response.event', 'delegation_id': 'd1', 'event': {
             'type': 'response.output_item.done', 'item': {
                 'type': 'function_call', 'call_id': 'fc1', 'name': 'end_call',
@@ -562,9 +574,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Wait, one more thing',
                    'start_ms': 5000, 'end_ms': 5800})
         await until(lambda: session._other_spoke_at is not None)
-        mark = next(m for m in ws.sent if m['event'] == 'mark')
-        ws.push({'event': 'mark', 'mark': mark['mark']})
-        await until(lambda: any(e['type'] == 'call.hangup_yielded' for e in self.h.service.events(record['id'])))
+        await until(lambda: any(e['type'] == 'call.hangup_yielded' for e in self.h.service.events(record['id'])), 8)
         self.assertFalse(ws.closed)
         self.assertIsNone(session.end_reason)
         self.assertTrue(any('spoke after you said goodbye' in text for _kind, text in live.appends))
