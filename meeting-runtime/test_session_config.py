@@ -84,15 +84,29 @@ class SessionConfigTests(unittest.TestCase):
 
 
 class MeetingIntroTests(unittest.TestCase):
-    INTRO = "Hi everyone, I'm {}'s AI assistant. I'll mostly listen; say 'Smitline' if you need me."
+    INTRO = "Hi everyone, {}'s AI assistant here."
 
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
         write_private_json(path, {'version': 1, 'meetingId': 'mtg-intro0000001', **payload})
         return {'SMITLINE_RUNTIME_STATE': str(path), 'SMITLINE_OWNER_NAME': 'Owner Setting'}
 
-    def test_intro_is_on_by_default_and_names_the_owner_setting(self):
+    def test_meetings_join_quietly_and_know_who_they_are(self):
         runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
+        self.assertFalse(runtime.meeting_intro)
+        self.assertEqual(runtime.participant_name, 'Smitline AI')
+        self.assertIsNone(intro_event(runtime))
+        prompt = build_session_config(runtime)['instructions']
+        self.assertNotIn('Opening disclosure', prompt)
+        self.assertIn("Who you are: Robin's AI assistant.", prompt)
+        self.assertIn('Do not introduce yourself unprompted', prompt)
+        from meeting_intro import camera_caption
+        self.assertEqual(camera_caption('Robin Rivera'), "Robin's AI assistant")
+        self.assertEqual(camera_caption(''), 'AI assistant')
+        self.assertEqual(camera_caption('A' * 60), 'AI assistant')
+
+    def test_the_spoken_hello_is_opt_in_and_names_the_owner_setting(self):
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
         config = build_session_config(runtime)
         self.assertIn(self.INTRO.format('Robin'), config['instructions'])
         self.assertIn('default to listening silently', config['instructions'].lower())
@@ -105,9 +119,9 @@ class MeetingIntroTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             env = self.write_state(directory, {'context': context_payload(
                 currentTask='Take part in this meeting on behalf of Jordan Lee.')})
-            runtime = RuntimeConfig.from_environ(env)
+            runtime = RuntimeConfig.from_environ(dict(env, SMITLINE_MEETING_INTRO='1'))
         self.assertEqual(runtime.owner_name, 'Jordan Lee')
-        self.assertIn(self.INTRO.format('Jordan Lee'), intro_event(runtime)['content'])
+        self.assertIn(self.INTRO.format('Jordan'), intro_event(runtime)['content'])
 
     def test_explicit_field_wins_and_other_tasks_are_not_parsed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -121,13 +135,24 @@ class MeetingIntroTests(unittest.TestCase):
             self.assertEqual(RuntimeConfig.from_environ(env).owner_name, 'Owner Setting')
 
     def test_missing_name_uses_the_person_who_invited_me(self):
-        runtime = RuntimeConfig.from_environ({})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': 'on'})
         self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
                       intro_event(runtime)['content'])
 
+    def test_people_are_named_as_people_say_them(self):
+        from meeting_intro import spoken_name
+        self.assertEqual(spoken_name('Arun Raj'), 'Arun')
+        self.assertEqual(spoken_name('Dr. Lee'), 'Dr. Lee')
+        self.assertEqual(spoken_name('  '), '')
+
+    def test_the_voice_switches_language_and_stops_replying_to_thanks(self):
+        prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
+        self.assertIn('Hindi, Tamil, or Telugu, switch right away', prompt)
+        self.assertIn('do not reply to thanks', prompt)
+
     def test_people_can_address_it_as_smitline_or_as_heard(self):
         prompt = build_session_config(RuntimeConfig.from_environ({}))['instructions']
-        self.assertIn('people address you as "Smitline".', prompt)
+        self.assertIn('people address you as "Smitline AI" or "Smitline".', prompt)
         for heard in ('"smit line"', '"Smith line"', '"Smithline"', '"Smitlin"'):
             self.assertIn(heard, prompt)
         self.assertNotIn('Colleague', prompt)
@@ -147,13 +172,12 @@ class MeetingIntroTests(unittest.TestCase):
         runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0',
                                               'SMITLINE_OWNER_NAME': 'Robin'})
         self.assertIsNone(intro_event(runtime))
-        self.assertNotIn('Robin', build_session_config(runtime)['instructions'])
         self.assertNotIn('Opening disclosure', build_session_config(runtime)['instructions'])
 
 
 class IntroduceTests(unittest.IsolatedAsyncioTestCase):
     async def test_cue_waits_for_the_meeting_microphone_and_is_sent_once(self):
-        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
         participation = SimpleNamespace(platform_ready=False)
         ready, stop, sent = asyncio.Event(), asyncio.Event(), []
 
@@ -169,6 +193,52 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]['type'], 'session.commentary.append')
 
+    async def test_cue_waits_for_a_pause_in_the_conversation(self):
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
+        ready, stop, sent = asyncio.Event(), asyncio.Event(), []
+        now, heard = [100.0], [None]
+
+        async def send(event):
+            sent.append(event)
+        ready.set()
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: heard[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
+        for _ in range(5):  # someone keeps talking: no intro over them
+            now[0] += 1.0
+            heard[0] = now[0]
+            await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] += 2.5  # a pause
+        self.assertTrue(await asyncio.wait_for(task, 1))
+        self.assertEqual(len(sent), 1)
+
+    async def test_a_meeting_that_never_pauses_still_hears_the_disclosure(self):
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
+        ready, stop, sent = asyncio.Event(), asyncio.Event(), []
+        now = [100.0]
+
+        async def send(event):
+            sent.append(event)
+        ready.set()
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: now[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
+        await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] += 46
+        self.assertTrue(await asyncio.wait_for(task, 1))
+        # Nobody heard yet: a quiet room gets it after the quiet time.
+        sent.clear()
+        now[0] = 0.0
+        task = asyncio.create_task(introduce(
+            send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
+            heard_at=lambda: None, clock=lambda: now[0], quiet=2.0))
+        await asyncio.sleep(.03)
+        self.assertEqual(sent, [])
+        now[0] = 2.0
+        self.assertTrue(await asyncio.wait_for(task, 1))
+
     async def test_no_cue_when_disabled_or_stopped_first(self):
         ready, stop, sent = asyncio.Event(), asyncio.Event(), []
 
@@ -179,7 +249,7 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
         off = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': 'off'})
         self.assertFalse(await introduce(send, off, SimpleNamespace(platform_ready=True), ready, stop))
         stop.set()
-        on = RuntimeConfig.from_environ({})
+        on = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '1'})
         self.assertFalse(await introduce(send, on, SimpleNamespace(platform_ready=False),
                                          ready, stop, poll=.01))
         self.assertEqual(sent, [])

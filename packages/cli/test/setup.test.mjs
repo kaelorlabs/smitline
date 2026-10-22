@@ -947,7 +947,7 @@ test('smitline mcp serves MCP on stdin and stdout', async (t) => {
   const replies = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
   assert.equal(replies[0].result.serverInfo.name, 'smitline');
-  assert.equal(replies[1].result.tools.length, 13);
+  assert.equal(replies[1].result.tools.length, 14);
 });
 
 test('setup set accepts the meeting and backend settings, and checks their values', async () => {

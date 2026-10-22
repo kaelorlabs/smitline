@@ -225,6 +225,8 @@ ROUTES = {
     ('POST', '/v1/calls/{callId}/end'): 'end_hidden',
     ('POST', '/v1/calls/{callId}/transfer'): 'transfer_hidden',
     ('GET', '/v1/calls/{callId}/recording'): 'recording_hidden',
+    ('GET', '/v1/calls/{callId}/listen'): 'listen_hidden',
+    ('POST', '/v1/calls/{callId}/requests/{requestId}/reply'): 'request_reply_hidden',
     ('POST', '/v1/calls/{callId}/note'): 'note_hidden',
     ('GET', '/v1/contacts'): 'contacts_are_own',
     ('GET', '/v1/contacts/{number}'): 'contact_hidden',
@@ -253,11 +255,13 @@ def request_for(route, seeded):
     """A request that would succeed for the owner of the things it names (valid body)."""
     method, path = route
     path = (path.replace('{callId}', seeded.live if method == 'POST' and 'note' not in path else seeded.done)
-            .replace('{number}', A_NUMBER).replace('{meetingId}', seeded.meeting))
+            .replace('{number}', A_NUMBER).replace('{meetingId}', seeded.meeting)
+            .replace('{requestId}', 'r1'))
     bodies = {
         '/v1/calls/check': brief(to='+14155550150'),
         '/v1/calls': brief(to='+14155550150'),
         f'/v1/calls/{seeded.live}/instructions': {'text': 'Ask about parking.'},
+        f'/v1/calls/{seeded.live}/requests/r1/reply': {'type': 'status', 'text': 'Picked up.'},
         f'/v1/calls/{seeded.done}/note': {'text': 'Booked for 7pm.'},
         f'/v1/contacts/{A_NUMBER}': {'notes': 'changed'},
         '/v1/profile': {'about': 'changed'},
@@ -402,6 +406,13 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
                                          headers=self.d.as_owner(A))
         self.assertEqual(response.status, 200)
         self.d.line.downloads.pop()
+
+    async def listen_hidden(self):
+        await self.assert_not_found('GET', f'/v1/calls/{self.seeded.live}/listen')
+
+    async def request_reply_hidden(self):
+        await self.assert_not_found('POST', f'/v1/calls/{self.seeded.live}/requests/r1/reply',
+                                    {'type': 'status', 'text': 'Picked up.'})
 
     async def note_hidden(self):
         await self.assert_not_found('POST', f'/v1/calls/{self.seeded.done}/note', {'text': 'Mine now.'})

@@ -97,8 +97,8 @@ class FakeLive:
         self.appends.append((kind, content))
         return True
 
-    async def submit_function_output(self, call_id, output, *, delegation_id=None):
-        self.outputs.append((call_id, output, delegation_id))
+    async def submit_function_output(self, call_id, output):
+        self.outputs.append((call_id, output))
 
     async def close(self):
         self.close_requested = True

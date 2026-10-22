@@ -15,7 +15,7 @@ MEETING_PLATFORMS = ('zoom', 'teams', 'meet')
 MEETING_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 MEETING_SESSION_FIELDS = (
     'id', 'platform', 'meetingUrl', 'context', 'onBehalfOf', 'voice', 'state', 'startedAt',
-    'cameraEnabled', 'cameraState', 'visualState', 'degradedReason', 'owner',
+    'cameraEnabled', 'cameraState', 'visualState', 'degradedReason', 'owner', 'canDo',
 )
 # Fields older snapshots stored for coding-agent sessions; ignored when read back.
 LEGACY_SESSION_FIELDS = ('agentSession', 'permissions')
@@ -52,6 +52,15 @@ def optional_voice(value, environ=None):
     if not VOICE_NAME.fullmatch(name) or name not in voices:
         raise ValueError('voice must be one of: ' + ', '.join(voices))
     return name
+
+
+def optional_can_do(value):
+    """What the agent that started the meeting will do when people ask (call_requests.py)."""
+    if value is None:
+        return None
+    from call_requests import MAX_CAN_DO
+    text = ' '.join(require_string(value, 'canDo', allow_newlines=True, max_length=MAX_CAN_DO).split())
+    return text or None
 
 
 def optional_owner(value):
@@ -96,6 +105,7 @@ class MeetingSession:
     visual_state: str = None
     degraded_reason: str = None
     owner: str = 'local'
+    can_do: str = None
 
     def to_dict(self):
         return omit_none({
@@ -113,6 +123,7 @@ class MeetingSession:
             'degradedReason': self.degraded_reason,
             # The local owner's meetings are stored and shown exactly as before owners existed.
             'owner': None if self.owner == 'local' else self.owner,
+            'canDo': self.can_do,
         })
 
     @classmethod
@@ -147,4 +158,5 @@ class MeetingSession:
             degraded_reason=_optional_enum(optional_field(payload, 'degradedReason'),
                                            'degradedReason', DEGRADED_REASONS),
             owner=optional_owner(optional_field(payload, 'owner')),
+            can_do=optional_can_do(optional_field(payload, 'canDo')),
         )

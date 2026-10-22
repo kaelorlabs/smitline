@@ -621,10 +621,13 @@ class VoiceCoreTests(unittest.IsolatedAsyncioTestCase):
         async def connect(url, key):
             return ws, None
         async with LiveSession('k', {}, connect=connect) as live:
-            await live.submit_function_output('c1', {'ok': True}, delegation_id='d1')
+            await live.submit_function_output('c1', {'ok': True})
         self.assertEqual(ws.sent[1]['item'], {'type': 'function_call_output', 'call_id': 'c1',
                                               'output': '{"ok": true}'})
         self.assertEqual(ws.sent[2]['type'], 'response.create')
+        # GPT-Live refuses a delegation_id on either event.
+        self.assertNotIn('delegation_id', ws.sent[1])
+        self.assertNotIn('delegation_id', ws.sent[2])
 
 
 if __name__ == '__main__':

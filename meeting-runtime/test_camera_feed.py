@@ -36,6 +36,20 @@ class CameraFeedScriptTests(unittest.TestCase):
             self.assertNotIn(token, lowered)
         self.assertIn('data:image/svg+xml', _LOGO_SVG)
 
+    def test_the_only_text_is_the_caption_it_is_given(self):
+        for style in ('still', 'animated'):
+            with self.subTest(style=style):
+                plain = build_camera_override_script(style=style)
+                self.assertNotIn('fillText', plain)
+                self.assertNotIn('__CAPTION__', plain)
+                script = build_camera_override_script(style=style, caption="Arun's AI assistant")
+                self.assertEqual(script.count('fillText('), 1)
+                self.assertIn('ctx.fillText("Arun\'s AI assistant", W / 2, H * 0.9)', script)
+                self.assertNotIn('__CAPTION__', script)
+                # A caption cannot break out of its string.
+                tricky = build_camera_override_script(style=style, caption='"); alert(1); ("')
+                self.assertIn(r'ctx.fillText("\"); alert(1); (\"", W / 2, H * 0.9)', tricky)
+
     def test_disabled_feed_does_not_wrap_or_install(self):
         class Writer:
             audio_format = object()

@@ -68,14 +68,17 @@ const USAGE = `Usage:
                [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--task <id> [--task-title <text>]] [--carry-task] [--carry-contact | --no-carry-contact]
-               [--carry-call <id,id>] [--check] [--wait]
+               [--carry-call <id,id>] [--can-do <what you do when people ask>] [--check] [--wait]
   smitline call --meeting <url> --objective <text> [...same options] [--wait]
   smitline call --channel meeting --to <url> --objective <text> [...same options] [--wait]
   smitline call --brief <json> | --brief-file <path> [--check] [--wait]
   smitline calls list [--limit <n>] [--channel phone|meeting] [--contact <+E.164>] [--task <id>]
   smitline calls get|wait|end|transfer --call-id <id> [--timeout <seconds>]
+  smitline calls wait --call-id <id> --timeout <seconds> [--since <cursor>] [--only requests]
   smitline calls note --call-id <id> --text <note for later calls>
   smitline calls instruct --call-id <id> --text <guidance> [--silent]
+  smitline calls reply --call-id <id> --request <r1> --type status|done --text <text>
+                       [--announce] [--failed] [--details <links, code, numbers>]
   smitline calls recording --call-id <id> [--format wav|mp3] [--out <file>]   (no --out: to stdout)
   smitline profile show
   smitline profile set [--about <text>] [--style <text>] [--boundaries <a; b>]
@@ -252,6 +255,7 @@ async function briefFromArgs(args, root) {
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
     task: text(args.task) ? { id: text(args.task), ...(text(args['task-title']) ? { title: text(args['task-title']) } : {}) } : undefined,
     carryFrom: carryFromArgs(args, text),
+    canDo: text(args['can-do']),
   };
   return Object.fromEntries(Object.entries(brief).filter(([, value]) => value !== undefined));
 }
@@ -380,8 +384,27 @@ async function callsCommand(args) {
   if (action === 'get') printJson(await client.getCall(callId));
   else if (action === 'wait') {
     const timeout = args.timeout === undefined ? null : Number(args.timeout);
-    printJson(timeout === null ? await waitUntilDone(client, callId) : await client.waitForCall(callId, timeout));
+    const follow = {};
+    if (args.since !== undefined) follow.since = args.since === true ? '' : String(args.since);
+    if (args.only !== undefined) {
+      if (args.only !== 'requests') throw new ValidationError('--only must be requests');
+      follow.only = 'requests';
+    }
+    const live = Object.keys(follow).length > 0;
+    if (live && timeout === null) throw new ValidationError('following a call live needs --timeout');
+    printJson(timeout === null ? await waitUntilDone(client, callId) : await client.waitForCall(callId, timeout, follow));
   } else if (action === 'end') printJson(await client.endCall(callId));
+  else if (action === 'reply') {
+    const requestId = args.request === undefined || args.request === true ? '' : String(args.request);
+    if (!/^r[1-9][0-9]{0,2}$/.test(requestId)) throw new ValidationError('--request must be a request id such as r1');
+    if (!['status', 'done'].includes(args.type)) throw new ValidationError('--type must be status or done');
+    if (!args.text || args.text === true) throw new ValidationError('--text is required');
+    const reply = { type: args.type, text: String(args.text) };
+    if (args.announce === true) reply.announce = true;
+    if (args.failed === true) reply.ok = false;
+    if (args.details !== undefined && args.details !== true) reply.details = String(args.details);
+    printJson(await client.replyToRequest(callId, requestId, reply));
+  }
   else if (action === 'transfer') printJson(await client.transferCall(callId));
   else if (action === 'instruct') {
     if (!args.text || args.text === true) throw new ValidationError('--text is required');

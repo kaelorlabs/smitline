@@ -568,10 +568,10 @@ class PoolEnvironmentTests(unittest.IsolatedAsyncioTestCase):
         # Another owner's per-owner settings come from its own settings, never .env.meeting.
         self.assertEqual(theirs['SMITLINE_VOICE'], 'cinder')
         self.assertEqual(theirs['SMITLINE_MEETING_INSTRUCTIONS'], 'Take notes only.')
-        # The local owner's meetings still join as Smitline; another owner's under its name.
+        # The local owner's meetings join as Smitline AI; another owner's under its name.
         names = {meeting_id: read_json(self.runtime / 'run' / 'meetings' / meeting_id / 'runtime.json')['participantName']
                  for meeting_id in ('mtg-local00000001', 'mtg-owner0000000a')}
-        self.assertEqual(names, {'mtg-local00000001': 'Smitline', 'mtg-owner0000000a': "Robin's notetaker"})
+        self.assertEqual(names, {'mtg-local00000001': 'Smitline AI', 'mtg-owner0000000a': "Robin's notetaker"})
 
     def test_the_meeting_reads_nothing_outside_its_allowlist(self):
         from meeting_line import POOL_MEETING_SETTINGS
@@ -586,7 +586,7 @@ class PoolEnvironmentTests(unittest.IsolatedAsyncioTestCase):
 
 # What the meeting container sets for itself (or compose sets), and what only a meeting
 # started by hand or a sign-in reads: none of it comes from the installation's settings.
-MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
+MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'SMITLINE_CONTROL_TOKEN', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
                           'PULSE_SOURCE', 'PULSE_SERVER', 'JOINLY_BROWSER_PROFILE_DIR', 'JOINLY_NAME'}
 MEETING_ENV_NOT_IN_THE_POOL = {
     'MEETING_URL', 'MEETING_PASSCODE',  # a meeting started by hand (.env.meeting); calls use the runtime state

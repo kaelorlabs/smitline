@@ -1,5 +1,7 @@
 // Follow calls live from the local console: brief, status, transcript, result, cost, join, and end.
 // The Calls page (/calls) shows phone calls and the Meetings page (/) meetings: <body data-channel>.
+import { ListenPlayer } from './listen-audio.mjs';
+
 const CHANNEL = document.body.dataset.channel === 'meeting' ? 'meeting' : 'phone';
 const MEETINGS = CHANNEL === 'meeting';
 const WORDS = MEETINGS
@@ -48,6 +50,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   token: '',
   tokenReady: null,
+  listening: null, // { callId, player } while listening in
   calls: [],
   spend: null,
   filter: 'all',
@@ -573,6 +576,7 @@ function renderMeta(call) {
 function renderActions(call) {
   const live = !TERMINAL.has(call.status) && call.status !== 'summarizing';
   $('live-panel').hidden = !live;
+  if (!live && state.listening?.callId === call.id) stopListening();
   if (!live) { cancelConfirm(); return; }
   const canJoin = call.channel === 'phone' && call.status === 'in_progress';
   const join = $('join-button');
@@ -586,6 +590,12 @@ function renderActions(call) {
   } else {
     cancelConfirm();
   }
+  const canListen = call.status === 'in_progress';
+  const listen = $('listen-button');
+  listen.hidden = !canListen;
+  const listening = state.listening?.callId === call.id;
+  listen.textContent = listening ? 'Stop listening' : 'Listen in';
+  listen.setAttribute('aria-pressed', String(listening));
   const end = $('end-button');
   const ending = state.endRequested.has(call.id);
   end.disabled = ending;
@@ -696,6 +706,52 @@ function renderCarried(call) {
   }
 }
 
+// What the people on the call asked your agent for, and how it answered (brief canDo).
+const REQUEST_STATES = {
+  open: ['Waiting for your agent', 'warn'],
+  working: ['Your agent is on it', 'progress'],
+  done: ['Done', 'good'],
+  canceled: ['Canceled', 'neutral'],
+};
+
+function threadLabel(entry) {
+  if (entry.from === 'call') return { ask: 'Asked', add: 'Added', cancel: 'Canceled it' }[entry.type] || 'Asked';
+  if (entry.type === 'done') return entry.ok === false ? 'Could not do it' : 'Done';
+  return entry.announce ? 'Update, said aloud' : 'Update';
+}
+
+function renderRequests(call) {
+  const section = $('requests');
+  if (!section) return;
+  const requests = Array.isArray(call.requests) ? call.requests : [];
+  section.hidden = requests.length === 0;
+  $('requests-list').replaceChildren(...requests.map((request) => {
+    const item = document.createElement('li');
+    const head = Object.assign(document.createElement('p'), { className: 'request-head' });
+    const ended = TERMINAL.has(call.status) || call.status === 'summarizing';
+    let [label, tone] = REQUEST_STATES[request.state] || [String(request.state), 'neutral'];
+    if (request.state === 'done' && request.ok === false) [label, tone] = ['Could not do it', 'bad'];
+    else if (ended && (request.state === 'open' || request.state === 'working')) [label, tone] = ['Still open', 'warn'];
+    const chip = document.createElement('span');
+    setChip(chip, { text: label, tone, live: request.state === 'working' && !ended });
+    const who = [request.askedBy ? `${request.askedBy} asked` : 'Asked', request.kind === 'task' ? 'a task' : 'a question']
+      .join(' ');
+    head.append(Object.assign(document.createElement('strong'), { textContent: who }), chip);
+    const thread = Object.assign(document.createElement('ol'), { className: 'request-thread' });
+    thread.append(...(request.thread || []).map((entry) => {
+      const line = Object.assign(document.createElement('li'), { className: `from-${entry.from === 'agent' ? 'agent' : 'call'}` });
+      const meta = [threadLabel(entry), entry.at ? when(entry.at) : ''];
+      if (entry.from === 'agent' && entry.delivered === false) meta.push('after the call, not spoken');
+      line.append(Object.assign(document.createElement('span'), { className: 'muted small', textContent: meta.filter(Boolean).join(' · ') }));
+      if (entry.text) line.append(Object.assign(document.createElement('span'), { textContent: entry.text }));
+      if (entry.details) line.append(Object.assign(document.createElement('pre'), { className: 'request-details', textContent: entry.details }));
+      return line;
+    }));
+    item.append(head, thread);
+    return item;
+  }));
+}
+
 function renderBrief(call) {
   const section = $('brief');
   if (section.dataset.for === call.id) return;
@@ -720,6 +776,7 @@ function renderBrief(call) {
   const limits = [b.maxMinutes ? `${b.maxMinutes} min at most` : '', b.voice ? `voice ${b.voice}` : '', b.language ? `language ${b.language}` : ''].filter(Boolean);
   if (limits.length) add('Call settings', textBlock(capitalize(limits.join(' · '))));
   if (b.rehearsal) add('Practice', textBlock('A rehearsal: it called your own phone.'));
+  if (b.canDo) add('Your agent can', textBlock(sentence(b.canDo)));
   $('brief-fields').replaceChildren(...rows.flatMap(([label, nodes]) => {
     const dd = document.createElement('dd');
     dd.append(...nodes);
@@ -916,6 +973,7 @@ function renderCall(call, { focusTitle = false } = {}) {
   $('result-pending').hidden = call.status !== 'summarizing';
   renderTags(call);
   renderCarried(call);
+  renderRequests(call);
   renderBrief(call);
   renderResult(call);
   renderCost(call);
@@ -959,6 +1017,10 @@ async function refreshDetail(options) {
     if (fromList && fromList.carryNote?.text !== state.call.carryNote?.text) {
       state.call = { ...state.call, carryNote: fromList.carryNote };
       renderCarried(state.call);
+    }
+    if (fromList && JSON.stringify(fromList.requests || []) !== JSON.stringify(state.call.requests || [])) {
+      state.call = { ...state.call, requests: fromList.requests };
+      renderRequests(state.call);
     }
     renderMeta(state.call);
     return;
@@ -1097,6 +1159,44 @@ $('join-button').addEventListener('click', async () => {
 
 $('join-button').addEventListener('keydown', (event) => {
   if (event.key === 'Escape') cancelConfirm();
+});
+
+function stopListening() {
+  state.listening?.player.stop();
+  state.listening = null;
+}
+
+// Listening in: both sides of the call, live, in this browser. The daemon refuses unless the
+// owner turned it on (SMITLINE_LISTEN=1); the message says so.
+$('listen-button').addEventListener('click', async () => {
+  const callId = state.selected;
+  if (!callId || !state.call) return;
+  if (state.listening) {
+    const wasThis = state.listening.callId === callId;
+    stopListening();
+    renderActions(state.call);
+    if (wasThis) return;
+  }
+  const player = new ListenPlayer();
+  state.listening = { callId, player };
+  renderActions(state.call);
+  note('Listening in. The people on the call do not hear you.');
+  try {
+    await withToken();
+    const response = await fetch(`/api/calls/${callId}/listen`, { headers: { 'x-smitline-token': state.token } });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(String(payload.error?.message || payload.error || `Request failed (${response.status})`)),
+        { status: response.status, code: payload.code });
+    }
+    await player.listen(response);
+    if (state.listening?.player === player) note('The call ended.');
+  } catch (error) {
+    if (state.listening?.player === player) note(actionError(error), true);
+  } finally {
+    if (state.listening?.player === player) state.listening = null;
+    if (state.call?.id === callId) renderActions(state.call);
+  }
 });
 
 $('end-button').addEventListener('click', async () => {

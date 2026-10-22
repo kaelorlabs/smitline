@@ -8,6 +8,7 @@ import contextlib
 import os
 import re
 import signal
+import time
 from contextlib import AsyncExitStack
 from urllib.parse import urlparse
 
@@ -16,13 +17,18 @@ from call_record import CallRecord
 from startup_input import clip_tokens, context_text, handoff_from_state, handoff_to_session_input
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
 from transcript_assembler import TranscriptAssembler
-from voice_core import backend_usage_from
+from listening import AudioTap
+from voice_core import append_event, backend_usage_from, function_call_from, function_output_events
+import call_requests
+from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
-from meeting_intro import addressing_instructions, introduce, intro_instructions
+from meeting_intro import (
+    addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
+    others_in, participants_note)
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
-from meeting_lifecycle import should_leave_alone
+from meeting_lifecycle import AloneWatch
 from pathlib import Path
 from joinly.providers.browser.browser_session import BrowserSession
 from joinly.providers.browser.devices.pulse_server import PulseServer
@@ -39,6 +45,12 @@ state.update(cameraEnabled=True, cameraState='starting', visualState='joining')
 stop = asyncio.Event()
 record = None
 presence = None
+# How often the participant list is read; a change is told to the voice as quiet context.
+PARTICIPANTS_EVERY = 20.0
+# Both sides of the meeting as GPT-Live hears and speaks them, for the owner listening in.
+listening = AudioTap('pcm16', 24000)
+# The daemon's way in (/control) and the voice's requests out; main() sets it up.
+control = MeetingControl('', state, owner='')
 
 
 def _sync_presence():
@@ -74,6 +86,9 @@ class MeetingTranscript:
         self.record = record
         self.state = state
         self.assembler = assembler or TranscriptAssembler()
+        # Each caption's seq is its place among the archive's transcript events, so the daemon
+        # can follow the meeting live and later take the rest from the archive without repeats.
+        self.count = 0
 
     def note(self, event):
         entry = self.assembler.add_delta(event)
@@ -92,12 +107,14 @@ class MeetingTranscript:
             )
         captions = self.state.setdefault('captions', [])
         captions.append({
+            'seq': self.count,
             'speaker': speaker,
             'text': entry.text,
             'start_ms': entry.start_offset_ms,
             'end_ms': entry.end_offset_ms,
         })
         self.state['captions'] = captions[-200:]
+        self.count += 1
         return entry
 
 
@@ -137,6 +154,9 @@ def backend_instructions(runtime, meeting_state=None):
     ]
     if runtime.meeting_instructions:
         parts.append('Organizer-provided meeting guidance: ' + runtime.meeting_instructions)
+    can_do = (meeting_state or {}).get('canDo')
+    if can_do:
+        parts.append(call_requests.backend_instructions(owner, can_do))
     context = context_text(handoff_from_state(meeting_state))
     if context:
         parts.append('Meeting context:\n' + clip_tokens(context, 4000))
@@ -150,8 +170,14 @@ def meeting_delegation_config(runtime, meeting_state=None):
         'instructions': backend_instructions(runtime, meeting_state),
         'tool_choice': 'auto',
     }
+    tools = []
+    if (meeting_state or {}).get('canDo'):
+        tools.append(call_requests.ask_agent_tool(
+            runtime.owner_name or 'the person who invited them'))
     if runtime.web_search:
-        responses['tools'] = [{'type': 'web_search'}]
+        tools.append({'type': 'web_search'})
+    if tools:
+        responses['tools'] = tools
     return {'type': 'responses', 'responses': responses}
 
 
@@ -160,10 +186,16 @@ def build_session_config(runtime, meeting_state=None):
     config = {'model': 'gpt-live-1', 'store': False,
               'audio': {'format': {'type': 'audio/pcm', 'rate': 24000}},
               'instructions': f'''You are {runtime.participant_name}, an AI participant in a real meeting. Follow the conversation continuously and retain the context needed to help.
-Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor.
-Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.''',
+Participation policy: Default to listening silently. Respond when someone directly addresses you by name, explicitly asks you a question, or asks you to perform a task. You may briefly correct a material factual error only when the correction is important to the current decision and you can establish the correct fact. Otherwise keep listening. Do not respond to general discussion, rhetorical questions, greetings between other participants, unfinished thoughts, background conversation, ordinary pauses, or questions clearly directed to somebody else. If it is unclear whether someone addressed you, remain silent. Do not produce acknowledgements, backchannels, or listening sounds such as "mm-hmm." Keep spoken responses concise and natural. Continue through brief listener backchannels such as "mm-hmm," "yeah," "okay," or other non-substantive sounds. Stop speaking when a participant asks you to stop, makes a substantive interruption, or begins a new sentence that takes the floor. After you have answered or helped, go back to listening: do not reply to thanks, "okay", "go ahead", laughter, or other remarks that need no answer, and keep small talk aimed at you to a few words.
+Capability policy: Help with any meeting task you can handle reliably, including questions, explanations, brainstorming, planning, summaries, decisions, calculations, and conversation. Ask one concise clarification when a missing detail would materially change the answer. Clearly distinguish known facts from inference. When a request addressed to you needs careful reasoning or precise facts you are unsure of, hand it to the backend instead of guessing; you may briefly say you are checking and keep listening meanwhile. If a participant cancels or corrects the request, follow the latest spoken request. Never invent results, sources, actions, or capabilities. Identify yourself as an AI if asked.
+Languages: speak the language of the person talking to you. When someone asks you to speak another language, such as Hindi, Tamil, or Telugu, switch right away and keep using it until they ask otherwise; do not decline. Notes and instructions reach you in English: say what they tell you in the language you are speaking.''',
               'delegation': meeting_delegation_config(runtime, meeting_state)}
     config['instructions'] += addressing_instructions(runtime.participant_name)
+    config['instructions'] += identity_instructions(runtime.owner_name)
+    if meeting_state.get('canDo'):
+        config['instructions'] += call_requests.voice_instructions(
+            runtime.owner_name or 'the person who invited them', meeting_state['canDo'],
+            meeting=True)
     if runtime.voice:
         config['audio']['output'] = {'voice': runtime.voice}
     if runtime.meeting_intro:
@@ -191,13 +223,62 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            heard = [None]  # when someone in the meeting was last heard; the intro waits for a pause
+            requests = []
+
+            async def send_note(kind, text):
+                payload = append_event(f'session.{kind}.append', text)
+                if payload is None or not ready.is_set() or stop.is_set():
+                    return False
+                await ws.send_json(payload)
+                record.event('control_note', note=kind)
+                return True
+
+            async def answer_request(call):
+                # Who asked: the backend's name for them, else whoever the meeting shows speaking.
+                try:
+                    speaker = await adapter.get_active_speaker()
+                except Exception:
+                    speaker = None
+                said = call_requests.context_lines(state.get('captions', []))
+                output = control.ask(call['arguments'], asked_by=speaker or '', context=said)
+                record.event('agent_request', status=output.get('status'),
+                             request=output.get('requestId'))
+                try:
+                    for payload in function_output_events(call['call_id'],
+                                                          call_requests.tool_output(output)):
+                        await ws.send_json(payload)
+                except Exception as error:
+                    # The session is closing; the request itself already went out on /health.
+                    record.event('agent_request_unanswered', error=type(error).__name__)
+
+            async def pass_on_claims():
+                """The safety net: a request the voice said it passed on, without its backend."""
+                await ready.wait()
+                while not stop.is_set():
+                    await asyncio.sleep(1)
+                    if not control.claim_pending():
+                        continue
+                    try:
+                        speaker = await adapter.get_active_speaker()
+                    except Exception:
+                        speaker = None
+                    message = control.claims_due(asked_by=speaker or '')
+                    if message is not None:
+                        record.event('agent_request', status='from_speech', request=message['id'])
+
+            control.adapter = adapter
+            control.record = record.event
+            control.send = send_note
 
             async def send_audio():
                 await ready.wait()
                 while not stop.is_set():
                     chunk = await speaker.read()
                     state['input_bytes'] += len(chunk.data)
-                    await ws.send_json({'type': 'session.input_audio.append', 'audio': base64.b64encode(chunk.data).decode()})
+                    audio = base64.b64encode(chunk.data).decode()
+                    await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
+                    listening.push('meeting', audio)
 
             async def watch_microphone():
                 # Also accepts a host's explicit request to unmute (Participation.accept_host_unmute).
@@ -208,12 +289,35 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     await gate.platform_microphone_changed(actual)
 
             async def introduce_once():
-                if await introduce(ws.send_json, runtime, participation, ready, stop):
+                if await introduce(ws.send_json, runtime, participation, ready, stop,
+                                   heard_at=lambda: heard[0]):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 
+            participants = {'names': None, 'read_at': None, 'said_none': False}
+
+            async def tell_who_is_here():
+                """Read who is in the meeting now and then; tell the voice when it changes."""
+                now = time.monotonic()
+                if participants['read_at'] is not None and now - participants['read_at'] < PARTICIPANTS_EVERY:
+                    return
+                participants['read_at'] = now
+                try:
+                    names = others_in(await adapter.get_participant_names(), runtime.participant_name)
+                except Exception:
+                    names = []
+                if not names and not participants['said_none']:
+                    participants['said_none'] = True  # once: the list could not be read here
+                    record.event('participants_unavailable', platform=state.get('platform'))
+                if names and names != participants['names']:
+                    participants['names'] = names
+                    if await send_note('thinking', participants_note(
+                            names, runtime.owner_name, runtime.participant_name)):
+                        record.event('participants', count=len(names))
+
             async def watch_meeting():
                 await ready.wait()
+                alone = AloneWatch()
                 while not stop.is_set():
                     await asyncio.sleep(3)
                     state['microphoneState'] = await adapter.get_microphone_state()
@@ -222,12 +326,13 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('meeting_ended')
                         stop.set()
                         return
+                    await tell_who_is_here()
                     try:
                         count = await adapter.get_participant_count()
                     except Exception:
                         count = None
                     state['participantCount'] = count
-                    if should_leave_alone(count):
+                    if alone.update(count):
                         state['endReason'] = 'alone_in_meeting'
                         record.event('auto_leave', reason='alone_in_meeting')
                         try:
@@ -254,6 +359,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('microphone_monitor', watch_microphone),
                 ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
+                ('request_safety_net', pass_on_claims),
                 ('session_closer', closer),
             ]
             tasks = [asyncio.create_task(fn(), name=name) for name, fn in task_specs]
@@ -275,14 +381,23 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         state['listening'] = True
                         stage('live')
                     elif kind == 'session.output_audio.delta':
+                        listening.push('agent', event['delta'])
                         data = base64.b64decode(event['delta'])
                         # Fail rather than silently accumulate seconds of stale speech.
                         gate.offer(data)
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
+                        if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
+                            heard[0] = time.monotonic()
+                        control.heard('agent' if kind == 'session.output_transcript.delta' else 'meeting',
+                                      event.get('delta') or '')
                         transcript.note(event)
                     elif kind == 'response.event':
                         before = state.get('backend_status')
                         note_backend_event(event, state)
+                        call = function_call_from(event)
+                        if call and call['name'] == 'ask_agent' and control.desk is not None:
+                            requests.append(asyncio.create_task(
+                                answer_request(call), name='agent_request'))
                         if state.get('backend_status') != before:
                             _sync_presence()
                     elif kind == 'session.usage.updated':
@@ -296,19 +411,25 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('finished')
                         break
                     elif kind == 'error':
-                        state['api_error'] = event.get('error', {}).get('code') or 'live_error'
-                        stage('api_error')
+                        error = event.get('error') or {}
+                        state['api_error'] = error.get('code') or 'live_error'
+                        record.event('api_error', code=state['api_error'],
+                                     message=str(error.get('message') or '')[:300])
                         if not ready.is_set():
+                            stage('api_error')
                             raise RuntimeError('GPT-Live rejected session startup')
+                        # After start-up an error refuses one event (a tool result, a note),
+                        # and the session goes on: the meeting continues, as a phone call does.
                     # Unknown future events are ignored so audio and transcripts continue.
             finally:
-                for task in tasks:
+                control.send = None
+                for task in tasks + requests:
                     task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*tasks, *requests, return_exceptions=True)
 
 
 async def main():
-    global record, presence
+    global record, presence, control
     runtime = RuntimeConfig.from_environ()
     # Meet and Teams find the active speaker by skipping the bot's own tile, by this name.
     os.environ['JOINLY_NAME'] = runtime.participant_name
@@ -320,6 +441,9 @@ async def main():
     state['visualState'] = 'joining'
     state['backend'] = {'type': 'responses', 'model': runtime.backend_model,
                         'web_search': runtime.web_search}
+    control = MeetingControl(os.environ.get('SMITLINE_CONTROL_TOKEN'), state,
+                             owner=runtime.owner_name or 'the person who invited them',
+                             can_do=meeting_state.get('canDo'))
     meeting_id = meeting_state.get('meetingId')
     try:
         record = CallRecord(
@@ -346,6 +470,9 @@ async def main():
         payload.update(presence_public_fields(state))
         return web.json_response(payload, headers={'Cache-Control': 'no-store'})
     app.router.add_get('/health', status)
+
+    # /listen and /control: for the daemon that started this meeting alone (meeting_control.py).
+    add_routes(app, control, listening)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
@@ -361,6 +488,7 @@ async def main():
             enabled=runtime.camera_enabled,
             logo_src=runtime.camera_logo_data_uri or None,
             style=runtime.camera_style,
+            caption=camera_caption(runtime.owner_name),
         )
         presence = Presence(state, camera_feed)
         presence.sync()
@@ -392,6 +520,7 @@ async def main():
             print(state['error'], flush=True)
             await stop.wait()
         finally:
+            listening.close()
             drain_task.cancel()
             viewer.terminate()
             await viewer.wait()

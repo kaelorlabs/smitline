@@ -55,6 +55,44 @@ export interface CallBrief {
   task?: { id: string; title?: string };
   /** Start with notes from earlier calls: in this task, to the same number (phone only), or named calls (at most 10). */
   carryFrom?: { task?: boolean; contact?: boolean; calls?: string[] };
+  /** What the calling agent does for the people on the call when they ask; requests are off without it. */
+  canDo?: string;
+}
+
+/** Something a person on the call asked the calling agent for. */
+export interface CallRequest {
+  id: string;
+  kind: 'question' | 'task';
+  text: string;
+  askedBy?: string;
+  /** 'speech': the voice said it passed this on without asking its backend; text is what they said. */
+  source?: 'speech';
+  /** The last lines said before it was asked. */
+  context?: string[];
+  state: 'open' | 'working' | 'done' | 'canceled';
+  ok?: boolean;
+  answer?: string;
+  openedAt: string;
+  updatedAt: string;
+  thread: Array<{ from: 'call' | 'agent'; type: 'ask' | 'add' | 'cancel' | 'status' | 'done'; text?: string; at: string; announce?: boolean; ok?: boolean; details?: string; delivered?: boolean }>;
+}
+
+export interface RequestReply {
+  type: 'status' | 'done';
+  text: string;
+  /** status only: the voice says it now. */
+  announce?: boolean;
+  /** done only: false when it could not be done. */
+  ok?: boolean;
+  /** Links, code, numbers: a meeting's chat gets them. */
+  details?: string;
+}
+
+export interface FollowOptions {
+  /** '' at first, then live.cursor from the last answer. */
+  since?: string;
+  /** Wake only for requests, without the transcript. */
+  only?: 'requests';
 }
 
 /** A note from an earlier call that a call started with. */
@@ -132,6 +170,14 @@ export interface Call {
   carried?: CarriedNote[];
   /** A note saved on this finished call for later calls. */
   carryNote?: { text: string; by: 'agent'; at: string };
+  /** Requests from the people on the call (brief.canDo). */
+  requests?: CallRequest[];
+  /** With since or only: what was said and asked after the cursor. */
+  live?: {
+    cursor: string;
+    transcript?: Array<{ speaker: string; text: string; at?: string }>;
+    requests: Array<{ type: 'ask' | 'add' | 'cancel'; id: string; kind?: 'question' | 'task'; text?: string; askedBy?: string; context?: string[]; at?: string }>;
+  };
   error?: string;
 }
 
@@ -174,7 +220,8 @@ export interface DaemonTransport {
   checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
-  waitForCall(callId: string, timeoutSeconds?: number): Promise<Call>;
+  waitForCall(callId: string, timeoutSeconds?: number, since?: string, only?: 'requests'): Promise<Call>;
+  replyToRequest(callId: string, requestId: string, reply: RequestReply): Promise<{ request: CallRequest; delivered: boolean }>;
   listCalls(limit?: number, filters?: CallFilters): Promise<{ calls: Call[] }>;
   saveCallNote(callId: string, text: string): Promise<Call>;
   listContacts(): Promise<{ contacts: Contact[] }>;
@@ -218,7 +265,10 @@ export class Smitline {
   /** Place a phone call or join a meeting; returns the queued call at once. */
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
-  waitForCall(callId: string, timeoutSeconds?: number): Promise<Call>;
+  /** Follow it live with { since }; { only: 'requests' } wakes for requests alone. */
+  waitForCall(callId: string, timeoutSeconds?: number, follow?: FollowOptions): Promise<Call>;
+  /** Answer a request from the call: status any number of times, then done once. */
+  replyToRequest(callId: string, requestId: string, reply: RequestReply): Promise<{ request: CallRequest; delivered: boolean }>;
   listCalls(limit?: number, filters?: CallFilters): Promise<Call[]>;
   /** Save a note on a finished call for later calls to start with (brief.carryFrom). */
   saveCallNote(callId: string, text: string): Promise<Call>;

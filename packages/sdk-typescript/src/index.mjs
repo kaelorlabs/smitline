@@ -302,10 +302,15 @@ export function createLoopbackTransport(options = {}) {
     getCall(callId) {
       return json('GET', `/v1/calls/${encodeURIComponent(callId)}`);
     },
-    waitForCall(callId, timeoutSeconds = 60) {
+    waitForCall(callId, timeoutSeconds = 60, since = undefined, only = undefined) {
       // Node's fetch gives up on response headers after 300 s, so stay below it.
       const timeout = Math.max(0, Math.min(Number(timeoutSeconds) || 0, 280));
-      return json('GET', `/v1/calls/${encodeURIComponent(callId)}/wait?timeout=${timeout}`);
+      let follow = since === undefined || since === null ? '' : `&since=${encodeURIComponent(String(since))}`;
+      if (only) follow += `&only=${encodeURIComponent(String(only))}`;
+      return json('GET', `/v1/calls/${encodeURIComponent(callId)}/wait?timeout=${timeout}${follow}`);
+    },
+    replyToRequest(callId, requestId, reply) {
+      return json('POST', `/v1/calls/${encodeURIComponent(callId)}/requests/${encodeURIComponent(requestId)}/reply`, reply);
     },
     listCalls(limit = 20, filters = {}) {
       const query = new URLSearchParams({ limit: String(Math.max(1, Math.min(Number(limit) || 20, 100))) });
@@ -392,8 +397,22 @@ export class Smitline {
   }
 
   /** Long-poll until the call is terminal or the timeout (at most 280 s) passes. */
-  async waitForCall(callId, timeoutSeconds = 60) {
-    return this._transport.waitForCall(callId, timeoutSeconds);
+  /**
+   * Wait until the call finishes or the timeout passes. Pass `{ since }` ('' at first, then the
+   * last answer's `live.cursor`) to follow it live: the answer then also comes once something new
+   * is said, with `live.transcript` holding the new lines, and at once for a request
+   * (`live.requests`). `{ only: 'requests' }` wakes for requests alone, without the transcript.
+   */
+  async waitForCall(callId, timeoutSeconds = 60, { since, only } = {}) {
+    return this._transport.waitForCall(callId, timeoutSeconds, since, only);
+  }
+
+  /**
+   * Answer a request from the call: `{ type: 'status', text, announce? }` any number of times,
+   * then `{ type: 'done', text, ok?, details? }` once.
+   */
+  async replyToRequest(callId, requestId, reply) {
+    return this._transport.replyToRequest(callId, requestId, reply);
   }
 
   /** Newest first; filters: { channel: 'phone' | 'meeting', contact: E.164, task: task id }. */

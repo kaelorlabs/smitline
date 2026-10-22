@@ -557,7 +557,7 @@ class MeetingOwnerEnvironmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SMITLINE_MEETING_ENV_FILE', self.launcher.ups[0])
         self.assertEqual(self.seen, [])
         state = read_json(meeting_state_path(self.runtime, meeting.id))
-        self.assertEqual(state['participantName'], 'Smitline')
+        self.assertEqual(state['participantName'], 'Smitline AI')
         await self.supervisor.cancel(meeting.id)
 
     def test_env_file_values_arrive_exactly(self):

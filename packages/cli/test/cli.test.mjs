@@ -104,6 +104,14 @@ test('call --meeting joins the meeting and waits for the result', async (t) => {
   assert.deepEqual(brief, { channel: 'meeting', to: ZOOM, onBehalfOf: 'Robin', objective: 'Take notes' });
 });
 
+test('--can-do lets people on the call ask the agent for things', async (t) => {
+  const { root, daemon, common } = await withDaemon(t);
+  const placed = await runColleague(['call', ...common, '--meeting', ZOOM, '--objective', 'Join the review',
+    '--can-do', 'Look things up in the repo'], { cwd: root });
+  assert.equal(placed.code, 0, placed.stderr);
+  assert.equal(daemon.state.calls.get(JSON.parse(placed.stdout).id).brief.canDo, 'Look things up in the repo');
+});
+
 test('--channel meeting, or a --to that is an invite URL, joins a meeting', async (t) => {
   const { root, daemon, common } = await withDaemon(t);
   const explicit = await runColleague(['call', ...common, '--channel', 'meeting', '--to', ZOOM, '--objective', 'Listen'], { cwd: root });
@@ -130,6 +138,15 @@ test('calls list, get, instruct, and end reach the daemon', async (t) => {
   const instructed = await runColleague(['calls', 'instruct', '--call-id', callId, '--text', 'Ask about the launch date', '--silent', ...common], { cwd: root });
   assert.equal(instructed.code, 0, instructed.stderr);
   assert.deepEqual(daemon.state.instructions, [{ callId, text: 'Ask about the launch date', silent: true }]);
+  const replied = await runColleague(['calls', 'reply', '--call-id', callId, '--request', 'r1', '--type', 'done',
+    '--text', 'Added it.', '--failed', '--details', 'PR 81', ...common], { cwd: root });
+  assert.equal(replied.code, 0, replied.stderr);
+  assert.deepEqual(daemon.state.replies, [{ callId, requestId: 'r1', type: 'done', text: 'Added it.', ok: false, details: 'PR 81' }]);
+  const badReply = await runColleague(['calls', 'reply', '--call-id', callId, '--request', 'one', '--type', 'done', '--text', 'x', ...common], { cwd: root });
+  assert.equal(badReply.code, 2);
+  const followed = await runColleague(['calls', 'wait', '--call-id', callId, '--timeout', '1', '--since', '', '--only', 'requests', ...common], { cwd: root });
+  assert.equal(followed.code, 0, followed.stderr);
+  assert.equal(daemon.state.requests.filter((item) => item.path.endsWith('/wait')).at(-1).search, '?timeout=1&since=&only=requests');
   const ended = await runColleague(['calls', 'end', '--call-id', callId, ...common], { cwd: root });
   assert.equal(JSON.parse(ended.stdout).status, 'canceled');
 });

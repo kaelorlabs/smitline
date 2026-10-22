@@ -23,7 +23,7 @@
       <div class="connection" id="connection">
         <span class="dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
       </div>
-      <a class="account-link" href="/setup"><span class="account-mark" aria-hidden="true"></span>Account</a>
+      <a class="account-link" href="/setup"><span class="account-mark" aria-hidden="true"></span><span class="account-name">Account</span></a>
     </header>
 
     <main>
@@ -92,6 +92,11 @@
               <ul id="carried-list" class="carried-list"></ul>
             </section>
 
+            <section id="requests" class="requests" aria-labelledby="requests-title" hidden>
+              <h3 id="requests-title" class="section-title">Requests to your agent</h3>
+              <ol id="requests-list" class="requests-list"></ol>
+            </section>
+
             <section id="brief" class="brief" aria-labelledby="brief-title" hidden>
               <h3 id="brief-title" class="section-title">Brief</h3>
               <dl id="brief-fields" class="brief-fields"></dl>
@@ -100,6 +105,7 @@
             <div id="live-panel" class="live-panel" hidden>
               <div class="actions">
                 <button type="button" id="join-button" class="button primary" hidden>Take over</button>
+                <button type="button" id="listen-button" class="button" aria-pressed="false" hidden>Listen in</button>
                 <button type="button" id="end-button" class="button danger">Leave meeting</button>
               </div>
               <p id="join-help" class="help" hidden></p>

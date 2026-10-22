@@ -39,8 +39,8 @@ test('the SDK exposes calls only, for calls and meetings only', () => {
   const methods = Object.getOwnPropertyNames(Smitline.prototype).filter((name) => name !== 'constructor').sort();
   assert.deepEqual(methods, [
     'checkCall', 'downloadRecording', 'endCall', 'forgetContact', 'getCall', 'getContact', 'getDoNotCall', 'getProfile',
-    'instructCall', 'listCalls', 'listContacts', 'listVoices', 'saveCallNote', 'startCall', 'transferCall',
-    'updateContact', 'updateDoNotCall', 'updateProfile', 'waitForCall',
+    'instructCall', 'listCalls', 'listContacts', 'listVoices', 'replyToRequest', 'saveCallNote', 'startCall',
+    'transferCall', 'updateContact', 'updateDoNotCall', 'updateProfile', 'waitForCall',
   ]);
 });
 
@@ -57,6 +57,15 @@ test('a meeting is joined with startCall and followed to its result', async (t) 
     assert.equal(done.result.outcome, 'achieved');
     const wait = daemon.state.requests.find((item) => item.path.endsWith('/wait'));
     assert.equal(wait.search, '?timeout=5');
+    await colleague.waitForCall(call.id, 5, { since: '' });
+    await colleague.waitForCall(call.id, 5, { since: '12' });
+    await colleague.waitForCall(call.id, 5, { since: '12', only: 'requests' });
+    const follows = daemon.state.requests.filter((item) => item.path.endsWith('/wait')).slice(-3);
+    assert.deepEqual(follows.map((item) => item.search),
+      ['?timeout=5&since=', '?timeout=5&since=12', '?timeout=5&since=12&only=requests']);
+    const answered = await colleague.replyToRequest(call.id, 'r1', { type: 'done', text: 'Added it.', details: 'PR 81' });
+    assert.equal(answered.delivered, true);
+    assert.deepEqual(daemon.state.replies, [{ callId: call.id, requestId: 'r1', type: 'done', text: 'Added it.', details: 'PR 81' }]);
   });
 });
 
