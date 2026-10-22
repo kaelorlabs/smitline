@@ -16,6 +16,7 @@ Do not publish this package and do not install it globally.
 | `check_call_brief` | Validate a brief without placing the call; missing fields come with a question to ask |
 | `wait_for_call` / `get_call` / `list_calls` | Follow a call to its structured result |
 | `send_call_instruction` / `end_call` / `transfer_call_to_me` | Steer, end, or take over a call in progress |
+| `reply_to_call_request` | Answer a request from the people on the call (brief `canDo`): status as you work, then done |
 | `list_voices` | GPT-Live voices |
 | `get_profile` / `update_profile` | The user's profile that every call gets as background |
 
@@ -28,7 +29,7 @@ Both go through `start_call`:
 - Phone: `{ "channel": "phone", "to": "+14155550142", "objective": "..." }`
 - Meeting: `{ "channel": "meeting", "to": "https://zoom.us/j/...", "objective": "..." }` joins that Zoom, Teams, or Google Meet invite.
 
-Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome.
+Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome. To supervise the call while it runs, pass `since` (`""` first, then `live.cursor`): each answer then also comes once something new is said, with the new lines in `live.transcript`, and the agent can step in with `send_call_instruction`. With `canDo` in the brief, people on the call can ask the agent for things: each request returns the wait at once, in `live.requests`, and the agent answers with `reply_to_call_request` (`status` as it works, then `done`).
 
 ## Connecting an agent
 

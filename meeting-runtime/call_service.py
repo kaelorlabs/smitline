@@ -1,7 +1,9 @@
 """Calls: accept a brief, run it on a line (phone or meeting), and publish the result."""
 import asyncio
+import collections
 import dataclasses
 import os
+import time
 
 from call_brief import BriefIncomplete, CallBrief
 from call_costs import call_cost, spend, with_cost
@@ -12,10 +14,33 @@ from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
     result_from_handoff, result_without_conversation, transcript_entries,
 )
+from call_requests import (
+    CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
+    MAX_REQUEST_TEXT, MAX_REQUESTS, MAX_STATUSES, OPEN_STATES, REQUEST_ID, chat_message, clean,
+    clean_block, done_note, late_note, retell_note, status_note, told,
+)
 from call_store import TERMINAL, CallNotFound, new_call_id
 
 
 MAX_WAIT_SECONDS = 300
+# Following a call live: once something new is said, wait this long for more before answering,
+# so one answer carries a whole exchange rather than a line.
+LIVE_SETTLE_SECONDS = 2.0
+# Events that wake a live wait: what was said, and status changes.
+LIVE_EVENTS = frozenset({'call.transcript', 'call.status'})
+# A request from the call wakes a live wait at once, without settling.
+REQUEST_EVENTS = frozenset({'call.request'})
+# An agent counts as following a call while it waits on it live, and this many seconds after
+# its last contact (a wait, a reply): long enough to act on what a wait brought back.
+FOLLOW_GRACE = 90.0
+# Seconds a request may wait to be picked up before the voice is told it has not been.
+PICKUP_SECONDS = 30.0
+# Seconds after an answer reached the voice by which it should have been said on the call; if
+# it was not (the voice was cut off, or moved on), it is given to the voice once more.
+RETELL_AFTER = 35.0
+# Extra seconds after that for an answer the voice is still in the middle of saying: the
+# transcript has a sentence only once it is finished.
+RETELL_GRACE = 10.0
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -56,6 +81,8 @@ class CallContext:
         self.brief = brief
         self.owner = owner
         self.transcript = []
+        # The agent's recent lines, with when they arrived: did it say what it was told to?
+        self.agent_lines = collections.deque(maxlen=80)
         self.ended = False
         # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
         self.disclosure = None
@@ -89,11 +116,21 @@ class CallContext:
     def event(self, event_type, **data):
         self.service._event(self.call_id, event_type, **data)
 
+    def request(self, message):
+        """A request message from the voice (call_requests.RequestDesk): ask, add, or cancel."""
+        return self.service.note_request(self.call_id, message)
+
+    def agent_following(self):
+        """Whether the agent that started the call follows it now, so can answer requests."""
+        return self.service.agent_following(self.call_id)
+
     def add_transcript(self, speaker, text):
         text = str(text or '').strip()
         if not text:
             return
         entry = {'speaker': speaker, 'text': text}
+        if speaker == 'agent':
+            self.agent_lines.append((time.monotonic(), text))
         self.transcript.append(entry)
         if len(self.transcript) > TRANSCRIPT_HEAD + TRANSCRIPT_TAIL:
             del self.transcript[TRANSCRIPT_HEAD]
@@ -129,8 +166,17 @@ def note_line(item):
 
 class CallService:
     def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None,
-                 price_check_delays=PRICE_CHECK_DELAYS, shutdown_grace=SHUTDOWN_GRACE):
+                 price_check_delays=PRICE_CHECK_DELAYS, shutdown_grace=SHUTDOWN_GRACE,
+                 follow_grace=FOLLOW_GRACE, pickup_seconds=PICKUP_SECONDS, clock=time.monotonic,
+                 retell_after=RETELL_AFTER, retell_grace=RETELL_GRACE):
         self.store = store
+        self.retell_after = retell_after
+        self.retell_grace = retell_grace
+        self.follow_grace = follow_grace
+        self.pickup_seconds = pickup_seconds
+        self._clock = clock
+        self._waiting = {}  # call id -> live waits in progress
+        self._followed = {}  # call id -> clock time of the agent's last contact
         self.price_check_delays = tuple(price_check_delays)
         self._price_checked = set()
         self.hooks = hooks
@@ -712,20 +758,60 @@ class CallService:
     def events(self, call_id, *, after=None):
         return self.store.events(call_id, after=after)
 
-    async def wait(self, call_id, *, owner, timeout=60):
+    async def wait(self, call_id, *, owner, timeout=60, since=None, only=None):
+        """The call once it is terminal or the timeout passes. With `since` (an event cursor,
+        '' for the start), it also comes back once something new was said, with `live`: the
+        transcript lines and requests after the cursor, and the cursor to pass next time. A
+        request comes back at once. only='requests' comes back for requests alone and leaves out
+        the transcript, for long meetings. While an agent waits live, it follows the call."""
         timeout = max(0.0, min(float(timeout), MAX_WAIT_SECONDS))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        while True:
-            record = self.get(call_id, owner=owner)
-            remaining = deadline - loop.time()
-            if record['status'] in TERMINAL or remaining <= 0:
-                return record
-            changed = self._changed.setdefault(call_id, asyncio.Event())
-            try:
-                await asyncio.wait_for(changed.wait(), remaining)
-            except asyncio.TimeoutError:
-                pass
+        settle_until = None
+        live = since is not None
+        self.get(call_id, owner=owner)
+        if live:
+            self._waiting[call_id] = self._waiting.get(call_id, 0) + 1
+        try:
+            while True:
+                record = self.get(call_id, owner=owner)
+                remaining = deadline - loop.time()
+                if live and record['status'] not in TERMINAL:
+                    events = self.events(call_id, after=since or None)
+                    if any(event['type'] in REQUEST_EVENTS for event in events):
+                        remaining = 0
+                    elif (only != 'requests' and settle_until is None
+                          and any(event['type'] in LIVE_EVENTS for event in events)):
+                        settle_until = min(deadline, loop.time() + LIVE_SETTLE_SECONDS)
+                if settle_until is not None:
+                    remaining = min(remaining, settle_until - loop.time())
+                if record['status'] in TERMINAL or remaining <= 0:
+                    return record if not live else dict(record, live=self._live(call_id, since, only))
+                changed = self._changed.setdefault(call_id, asyncio.Event())
+                try:
+                    await asyncio.wait_for(changed.wait(), remaining)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            if live:
+                self._waiting[call_id] -= 1
+                if not self._waiting[call_id]:
+                    del self._waiting[call_id]
+                if call_id in self._contexts:
+                    self._followed[call_id] = self._clock()
+
+    def _live(self, call_id, since, only=None):
+        """What was said and asked after the cursor `since`, and the cursor for next time."""
+        events = self.events(call_id, after=since or None)
+        cursor = events[-1]['id'] if events else (since or '0')
+        live = {'cursor': cursor}
+        if only != 'requests':
+            live['transcript'] = [{'speaker': event['data'].get('speaker'),
+                                   'text': event['data'].get('text'), 'at': event.get('at')}
+                                  for event in events if event['type'] == 'call.transcript']
+        live['requests'] = [dict(event['data'], at=event.get('at'))
+                            for event in events if event['type'] in REQUEST_EVENTS]
+        return live
 
     async def wait_for_change(self, call_id, timeout):
         changed = self._changed.setdefault(call_id, asyncio.Event())
@@ -733,6 +819,27 @@ class CallService:
             await asyncio.wait_for(changed.wait(), timeout)
         except asyncio.TimeoutError:
             pass
+
+    def listen(self, call_id, *, owner):
+        """What to stream to the owner listening in: an object whose chunks() yields the
+        format, then each side's audio until the call ends. Off unless the owner's
+        SMITLINE_LISTEN=1, because people on the call may need to agree to being heard."""
+        record = self.get(call_id, owner=owner)
+        if owner_settings(self.hooks, owner).get('SMITLINE_LISTEN') != '1':
+            raise CallError(403, 'listening_off',
+                            'Listening in is off. Set SMITLINE_LISTEN=1 where the people you call '
+                            'agree to it, or local law allows it.')
+        if record['status'] in TERMINAL:
+            raise CallError(409, 'call_ended', 'The call has ended.')
+        line = self.lines.get(record['channel'])
+        source = getattr(line, 'listen', None)
+        tap = source(call_id) if source is not None else None
+        if tap is None:
+            raise CallError(409, 'listen_unavailable',
+                            'This call cannot be heard yet: it has not connected, or its audio '
+                            'does not pass through Smitline (direct SIP).')
+        self._event(call_id, 'call.listening')
+        return tap
 
     async def instruct(self, call_id, text, *, owner, silent=False):
         record = self.get(call_id, owner=owner)
@@ -748,6 +855,205 @@ class CallService:
         self._event(call_id, 'call.instruction', text=text[:2000], delivered=bool(delivered),
                     silent=bool(silent))
         return {'delivered': bool(delivered)}
+
+    # Requests (call_requests.py) -----------------------------------------
+
+    def agent_following(self, call_id):
+        if self._waiting.get(call_id):
+            return True
+        seen = self._followed.get(call_id)
+        return seen is not None and self._clock() - seen <= self.follow_grace
+
+    def _change_request(self, call_id, request_id, change):
+        """Apply change(request) to one of the call's requests and store it; the request after."""
+        record = self.store.get(call_id)
+        requests = [dict(item) for item in record.get('requests') or ()]
+        for request in requests:
+            if request['id'] == request_id:
+                change(request)
+                request['updatedAt'] = self.store.now()
+                self.store.update(call_id, requests=requests)
+                return request
+        return None
+
+    def note_request(self, call_id, message):
+        """A request message from the voice: a new request (ask), more for one (add), or a cancel.
+        Ignored (None) when the brief gave the agent nothing to do, or the message does not fit."""
+        record = self.store.get(call_id)
+        if not (record.get('brief') or {}).get('canDo') or not isinstance(message, dict):
+            return None
+        action, request_id = message.get('type'), message.get('id')
+        if not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id):
+            return None
+        requests = record.get('requests') or []
+        existing = next((item for item in requests if item['id'] == request_id), None)
+        text = clean(message.get('text'), MAX_REQUEST_TEXT)
+        now = self.store.now()
+        if action == 'ask':
+            limit = MAX_REQUESTS.get(record.get('channel'), MAX_REQUESTS['phone'])
+            if existing is not None or len(requests) >= limit or not text:
+                return None
+            request = {'id': request_id,
+                       'kind': message.get('kind') if message.get('kind') in KINDS else 'question',
+                       'text': text, 'state': 'open', 'openedAt': now, 'updatedAt': now}
+            asked_by = clean(message.get('askedBy'), MAX_ASKED_BY)
+            if asked_by:
+                request['askedBy'] = asked_by
+            if message.get('source') == 'speech':
+                # The voice said it passed this on without asking its backend: what they said.
+                request['source'] = 'speech'
+            context = message.get('context')
+            if not isinstance(context, list):
+                # The phone line sends none: the call's own last lines.
+                said = self._contexts[call_id].transcript if call_id in self._contexts else ()
+                context = [f'{entry["speaker"]}: {entry["text"]}' for entry in said[-CONTEXT_LINES:]]
+            context = [line for line in (clean(line, MAX_CONTEXT_LINE)
+                                         for line in context[-CONTEXT_LINES:]) if line]
+            if context:
+                request['context'] = context
+            request['thread'] = [{'from': 'call', 'type': 'ask', 'text': text, 'at': now}]
+            self.store.update(call_id, requests=list(requests) + [request])
+            self._event(call_id, 'call.request', type='ask',
+                        **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context',
+                                                         'source') if key in request})
+            if self.agent_following(call_id):
+                self._spawn(self._check_pickup(call_id, request_id))
+            return request
+        if action not in ('add', 'cancel') or existing is None or existing['state'] not in OPEN_STATES:
+            return None
+        if action == 'add' and (not text or sum(1 for entry in existing.get('thread') or ()
+                                                if entry['from'] == 'call') > MAX_STATUSES):
+            return None
+
+        def change(request):
+            entry = {'from': 'call', 'type': action, 'at': now}
+            if text:
+                entry['text'] = text
+            request['thread'] = list(request.get('thread') or ()) + [entry]
+            if action == 'cancel':
+                request['state'] = 'canceled'
+        request = self._change_request(call_id, request_id, change)
+        self._event(call_id, 'call.request', type=action, id=request_id,
+                    **({'text': text} if text else {}))
+        return request
+
+    async def _check_pickup(self, call_id, request_id):
+        await asyncio.sleep(self.pickup_seconds)
+        record = self.store.get(call_id)
+        request = next((item for item in record.get('requests') or ()
+                        if item['id'] == request_id), None)
+        if (request is None or request['state'] != 'open' or record['status'] in TERMINAL
+                or record['status'] == 'summarizing'):
+            return
+        self._event(call_id, 'call.request_late', id=request_id)
+        await self._deliver(record, late_note(request, owner=record['brief'].get('onBehalfOf')))
+
+    async def _check_told(self, call_id, request_id, text, sent_at):
+        """Retell an answer once when, RETELL_AFTER seconds after the voice got it, nothing it
+        said carried it: it was cut off, or never said it. A sentence still being said then
+        gets up to RETELL_GRACE seconds to finish."""
+        await asyncio.sleep(self.retell_after)
+        waited = 0.0
+        while True:
+            context = self._contexts.get(call_id)
+            record = self.store.get(call_id)
+            if context is None or record['status'] != 'in_progress':
+                return
+            said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
+            if told(text, said):
+                return
+            if waited >= self.retell_grace:
+                break
+            step = min(0.5, self.retell_grace - waited)
+            await asyncio.sleep(step)
+            waited += step
+        request = next((item for item in record.get('requests') or ()
+                        if item['id'] == request_id), None)
+        if request is None:
+            return
+        delivered = await self._deliver(record, retell_note(
+            request, text, owner=record['brief'].get('onBehalfOf')))
+        self._event(call_id, 'call.request_retold', id=request_id, delivered=delivered)
+
+    async def _deliver(self, record, note):
+        """Give the voice a note; False when the line could not (the call ended, no channel)."""
+        line = self.lines.get(record['channel'])
+        try:
+            deliver = getattr(line, 'deliver', None)
+            if deliver is not None:
+                return bool(await deliver(record['id'], note))
+            return bool(await line.instruct(record['id'], note['text'],
+                                            silent=note['kind'] == 'thinking'))
+        except Exception:
+            return False
+
+    async def reply(self, call_id, request_id, *, owner, type, text, announce=False, ok=True,
+                    details=None):
+        """The agent answers a request: status (any number; the first says it is picked up) or
+        done (once; it closes the request). The voice gets it while the call runs; done is still
+        recorded after the call ends."""
+        record = self.get(call_id, owner=owner)
+        if call_id in self._contexts:
+            self._followed[call_id] = self._clock()
+        request = next((item for item in record.get('requests') or ()
+                        if item['id'] == request_id), None)
+        if request is None:
+            raise CallError(404, 'request_not_found', f'request {request_id} not found on this call')
+        if type not in ('status', 'done'):
+            raise CallError(422, 'invalid_request', 'type must be status or done')
+        text = clean(text, MAX_REPLY_TEXT)
+        if not text:
+            raise CallError(422, 'invalid_request', 'text is required')
+        details = clean_block(details, MAX_DETAILS) or None
+        if request['state'] not in OPEN_STATES:
+            raise CallError(409, 'request_closed',
+                            f'request {request_id} is already {request["state"]}')
+        ended = record['status'] in TERMINAL or record['status'] == 'summarizing'
+        if type == 'status' and ended:
+            raise CallError(409, 'call_ended', 'The call has ended. Send done to record the answer.')
+        if type == 'status' and sum(1 for entry in request.get('thread') or ()
+                                    if entry.get('type') == 'status') >= MAX_STATUSES:
+            raise CallError(429, 'too_many_updates',
+                            f'request {request_id} has had {MAX_STATUSES} status updates; send done')
+        owner_name = record['brief'].get('onBehalfOf')
+        if type == 'status':
+            note = status_note(request, text, owner=owner_name, announce=bool(announce))
+        else:
+            note = done_note(request, text, owner=owner_name, ok=bool(ok))
+        if details:
+            note['details'] = details
+            note['chat'] = chat_message(request, details, owner=owner_name)
+        entry = {'from': 'agent', 'type': type, 'text': text, 'at': self.store.now()}
+        if type == 'status' and announce:
+            entry['announce'] = True
+        if type == 'done':
+            entry['ok'] = bool(ok)
+        if details:
+            entry['details'] = details
+        position = []
+
+        def change(request):
+            # Stored before it is delivered, so a second done for it is refused meanwhile.
+            request['thread'] = list(request.get('thread') or ()) + [entry]
+            position.append(len(request['thread']) - 1)
+            request['state'] = 'done' if type == 'done' else 'working'
+            if type == 'done':
+                request['ok'] = bool(ok)
+                request['answer'] = text
+        self._change_request(call_id, request_id, change)
+        sent_at = time.monotonic()
+        delivered = False if ended else await self._deliver(record, note)
+        if delivered and note['kind'] == 'instructions':
+            # Something to tell them: check that it was said.
+            self._spawn(self._check_told(call_id, request_id, text, sent_at))
+
+        def mark(request):
+            request['thread'][position[0]] = dict(request['thread'][position[0]], delivered=delivered)
+        request = self._change_request(call_id, request_id, mark)
+        self._event(call_id, 'call.request_reply', id=request_id, type=type, text=text,
+                    delivered=delivered, **({'announce': True} if entry.get('announce') else {}),
+                    **({'ok': bool(ok)} if type == 'done' else {}))
+        return {'request': request, 'delivered': delivered}
 
     async def end(self, call_id, *, owner):
         record = self.get(call_id, owner=owner)
@@ -829,6 +1135,14 @@ class CallService:
                 raise
             if record['channel'] == 'phone' and record.get('direction') == 'outbound':
                 result['disclosureVerified'] = context.disclosure
+            # Requests nobody finished during the call are follow-ups; the agent can still
+            # answer them with done.
+            still_open = [{key: request[key] for key in ('id', 'kind', 'text', 'askedBy')
+                           if key in request}
+                          for request in self.store.get(call_id).get('requests') or ()
+                          if request['state'] in OPEN_STATES]
+            if still_open:
+                result['openRequests'] = still_open
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
             if 'summaryModel' in result:
@@ -841,6 +1155,7 @@ class CallService:
             self._honor_do_not_call(record, result)
             self._set_status(call_id, status, endReason=end_reason)
         self._contexts.pop(call_id, None)
+        self._followed.pop(call_id, None)
         record = self.store.get(call_id)
         if self._needs_price(record):
             self._price_checked.add(call_id)

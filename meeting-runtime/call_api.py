@@ -8,6 +8,7 @@ from aiohttp import web
 from call_brief import CHANNELS, TASK_ID, BriefIncomplete, available_voices, normalize_phone
 from call_service import CallError
 from call_store import TERMINAL, CallNotFound
+from listening import ndjson
 
 
 OPENAPI_PATH = Path(__file__).with_name('openapi.json')
@@ -94,9 +95,47 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
             timeout = float(request.query.get('timeout', '60'))
         except ValueError:
             return _error(422, 'invalid_request', 'timeout must be a number of seconds')
+        since = request.query.get('since')
+        if since is not None and since != '' and not (since.isdigit() and len(since) <= 12):
+            return _error(422, 'invalid_request', 'since must be a cursor from an earlier answer')
+        only = request.query.get('only')
+        if only is not None and only != 'requests':
+            return _error(422, 'invalid_request', 'only must be requests')
+        if only and since is None:
+            since = ''  # following requests is following live, from the start
         record = await service.wait(request.match_info['callId'], timeout=timeout,
-                                    owner=await owner(request))
+                                    owner=await owner(request), since=since, only=only)
         return public_json(record)
+
+    @handle
+    async def reply_to_request(request):
+        # The owner first: a bad owner is refused before anything else is read.
+        call_owner = await owner(request)
+        payload = await read_json(request)
+        if not isinstance(payload, dict):
+            return _error(422, 'invalid_request', 'a reply is an object')
+        extra = set(payload) - {'type', 'text', 'announce', 'ok', 'details'}
+        if extra:
+            return _error(422, 'invalid_request', 'unknown fields: ' + ', '.join(sorted(extra)))
+        if payload.get('type') not in ('status', 'done'):
+            return _error(422, 'invalid_request', 'type must be status or done')
+        if not isinstance(payload.get('text'), str):
+            return _error(422, 'invalid_request', 'text is required')
+        for name in ('announce', 'ok'):
+            if not isinstance(payload.get(name, False), bool):
+                return _error(422, 'invalid_request', f'{name} must be true or false')
+        if payload.get('details') is not None and not isinstance(payload['details'], str):
+            return _error(422, 'invalid_request', 'details must be text')
+        if payload['type'] == 'status' and 'ok' in payload:
+            return _error(422, 'invalid_request', 'ok is for done')
+        if payload['type'] == 'done' and 'announce' in payload:
+            return _error(422, 'invalid_request', 'announce is for status; done is always told')
+        result = await service.reply(
+            request.match_info['callId'], request.match_info['requestId'],
+            owner=call_owner, type=payload['type'], text=payload['text'],
+            announce=payload.get('announce', False), ok=payload.get('ok', True),
+            details=payload.get('details'))
+        return public_json(result)
 
     @handle
     async def instruct_call(request):
@@ -181,6 +220,24 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         })
 
     @handle
+    async def listen_call(request):
+        """Both sides of a call in progress, as NDJSON: the format line first, then
+        {"side", "audio"} chunks (base64) until the call ends."""
+        tap = service.listen(request.match_info['callId'], owner=await owner(request))
+        response = web.StreamResponse(status=200, headers={
+            'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff'})
+        await response.prepare(request)
+        try:
+            async for chunk in tap.chunks():
+                await response.write(ndjson(chunk))
+        except (ConnectionResetError, asyncio.CancelledError):
+            raise
+        except Exception:
+            pass
+        return response
+
+    @handle
     async def save_note(request):
         payload = await read_json(request)
         if not isinstance(payload, dict) or set(payload) - {'text'}:
@@ -231,9 +288,11 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_get('/v1/calls/{callId}/wait', wait_call)
     app.router.add_get('/v1/calls/{callId}/events', call_events)
     app.router.add_post('/v1/calls/{callId}/instructions', instruct_call)
+    app.router.add_post('/v1/calls/{callId}/requests/{requestId}/reply', reply_to_request)
     app.router.add_post('/v1/calls/{callId}/end', end_call)
     app.router.add_post('/v1/calls/{callId}/transfer', transfer_call)
     app.router.add_get('/v1/calls/{callId}/recording', call_recording)
+    app.router.add_get('/v1/calls/{callId}/listen', listen_call)
     app.router.add_post('/v1/calls/{callId}/note', save_note)
     app.router.add_get('/v1/contacts', list_contacts)
     app.router.add_get('/v1/contacts/{number}', get_contact)

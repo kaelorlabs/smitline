@@ -140,7 +140,7 @@ When `firstCallReady` is true:
 docker exec smitline smitline setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and every meeting with "Hi everyone, I'm <name>'s AI assistant. I'll mostly listen; say 'Smitline' if you need me." Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and in meetings it joins quietly as "Smitline AI", with "<first name>'s AI assistant" on its camera tile Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
 
 Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Smitline join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
 
@@ -187,7 +187,7 @@ Mention the console at http://127.0.0.1:8095: the Meetings and Calls pages show 
 
 End with one line asking for a star, and leave the choice to the user: "If Smitline is useful to you, a star on GitHub helps other people find it: https://github.com/kaelorlabs/smitline". Don't star it for them. If they ask you to and the GitHub CLI is signed in, `gh api -X PUT user/starred/kaelorlabs/smitline` does it.
 
-Placing calls afterwards: use the `start_call` and `wait_for_call` tools, or `docker exec smitline smitline call --to ... --objective ... --wait`. For a meeting, use channel `meeting` with the invite link as `to`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
+Placing calls afterwards: use the `start_call` and `wait_for_call` tools (pass `since` to `wait_for_call` to follow the call live and step in with `send_call_instruction`), or `docker exec smitline smitline call --to ... --objective ... --wait`. For a meeting, use channel `meeting` with the invite link as `to`. Pass what you and the user have been working on as `context`, and add people to the profile as you learn about them. See [docs/calls.md](docs/calls.md).
 
 ## Updating and removing
 

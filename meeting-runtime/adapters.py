@@ -13,7 +13,43 @@ async def visible(locator):
 
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
-    capabilities = Capabilities(camera=True)
+    capabilities = Capabilities(participant_discovery=True, camera=True)
+    async def get_participant_count(self):
+        """Everyone in the meeting, the bot included: the participants button says it
+        ("open the participants list pane,[3] particpants"), else the open panel's list."""
+        button = self.page.get_by_role(
+            'button', name=re.compile(r'^open the participants list', re.I), include_hidden=True).first
+        with contextlib.suppress(Exception):
+            match = re.search(r'\[(\d+)\]', await button.get_attribute('aria-label', timeout=1000) or '')
+            if match and int(match[1]) >= 1:
+                return int(match[1])
+        listed = await self.page.locator('.participants-item__display-name').count()
+        return listed or None
+    async def get_participant_names(self):
+        """Display names in Zoom's participants panel, opened once when it is not showing.
+        (Zoom web client markup as Recall.ai's Zoom bot guide reads it, June 2026.)"""
+        names = self.page.locator('.participants-item__display-name')
+        if not await names.count():
+            # Zoom hides its toolbar when idle; pointer movement brings it back.
+            viewport = self.page.viewport_size or {'width': 1280, 'height': 720}
+            await self.page.mouse.move(viewport['width'] / 2, max(1, viewport['height'] - 8))
+            button = self.page.get_by_role(
+                'button', name=re.compile(r'^open the participants list', re.I), include_hidden=True).first
+            try:
+                await button.click(timeout=1500)
+            except Exception:
+                return []
+            for _ in range(20):
+                if await names.count():
+                    break
+                await asyncio.sleep(.1)
+        found = []
+        for item in await names.all():
+            with contextlib.suppress(Exception):
+                text = ' '.join((await item.inner_text()).split())
+                if text:
+                    found.append(text)
+        return found
     async def join(self, url, name, passcode=''):
         await join_zoom(self.page, self.normalize_url(url), passcode, self.stop, self.stage, name)
     async def connect_audio(self):
@@ -89,15 +125,35 @@ class ZoomAdapter(MeetingPlatformAdapter):
     async def chat_available(self):
         return await self.page.get_by_role('button', name=re.compile(r'^(open|close) the chat panel$', re.I)).count() > 0
     async def send_chat_message(self, text):
-        if not await visible(self.page.get_by_role('button', name='close the chat panel', exact=True)):
-            await self.page.get_by_role('button', name='open the chat panel', exact=True).click(timeout=3000)
-        recipient = self.page.get_by_role('button', name=re.compile(r'^Send chat to (Everyone|Meeting Group Chat) please select a receiver$', re.I))
-        if not await visible(recipient):
-            raise RuntimeError('Cannot confirm meeting-wide chat recipient')
-        box = self.page.locator('[contenteditable="true"][role="textbox"], textarea[placeholder*="message" i]').first
-        await box.fill(text, timeout=3000)
-        await box.press('Enter')
+        try:
+            if not await visible(self.page.get_by_role('button', name='close the chat panel', exact=True)):
+                await self.page.get_by_role('button', name='open the chat panel', exact=True).click(timeout=3000)
+            recipient = self.page.get_by_role('button', name=re.compile(r'^Send chat to (Everyone|Meeting Group Chat) please select a receiver$', re.I))
+            if not await visible(recipient):
+                raise RuntimeError('Cannot confirm meeting-wide chat recipient')
+            box = self.page.locator('[contenteditable="true"][role="textbox"], textarea[placeholder*="message" i]').first
+            # One line: Enter sends, so a line break could send half a message.
+            await box.fill(' | '.join(line.strip() for line in str(text).splitlines() if line.strip()), timeout=3000)
+            await box.press('Enter')
+        except Exception as error:
+            reason = (str(error).splitlines() or [type(error).__name__])[0][:120]
+            raise RuntimeError(f'{reason}; chat controls seen: {await self._chat_controls()}') from error
         return {'status': 'submitted', 'delivery_confirmed': False}
+    async def _chat_controls(self):
+        """Labels of the chat controls on the page, so a failed post says what Zoom showed."""
+        seen = []
+        for role in ('button', 'textbox', 'combobox'):
+            with contextlib.suppress(Exception):
+                for item in (await self.page.get_by_role(role).all())[:200]:
+                    with contextlib.suppress(Exception):
+                        label = await item.get_attribute('aria-label') or await item.inner_text(timeout=200)
+                        label = ' '.join(str(label or '').split())[:60]
+                        if label and re.search(r'chat|send|everyone|receiver|message|\bto\b', label, re.I) \
+                                and label not in seen:
+                            seen.append(label)
+                    if len(seen) >= 12:
+                        return seen
+        return seen
     async def has_ended(self):
         body = (await self.page.locator('body').inner_text()).lower()
         return any(x in body for x in ('meeting has been ended', 'meeting has ended', 'removed by the host', 'you have been removed'))
@@ -239,6 +295,8 @@ class TeamsAdapter(MeetingPlatformAdapter):
         return None
     async def leave(self): await self.controller.leave(self.page)
     async def get_active_speaker(self): return self.controller.active_speaker
+    async def get_participant_names(self):
+        return [participant.name for participant in await self.controller.get_participants(self.page)]
 
 class MeetAdapter(MeetingPlatformAdapter):
     platform_id = 'meet'
@@ -436,6 +494,8 @@ class MeetAdapter(MeetingPlatformAdapter):
             await button.click(timeout=2000)
     async def get_active_speaker(self):
         return self.controller.active_speaker
+    async def get_participant_names(self):
+        return [participant.name for participant in await self.controller.get_participants(self.page)]
 
 REGISTRY = {'zoom': ZoomAdapter, 'teams': TeamsAdapter, 'meet': MeetAdapter}
 

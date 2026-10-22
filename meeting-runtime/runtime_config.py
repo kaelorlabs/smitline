@@ -4,7 +4,7 @@ import logging
 import os
 
 from meeting_intro import owner_name
-from runtime_state import environ_from_state, read_json
+from runtime_state import DEFAULT_PARTICIPANT_NAME, environ_from_state, read_json
 
 
 logger = logging.getLogger('colleague.meeting')
@@ -60,7 +60,7 @@ class RuntimeConfig:
             state = read_json(state_path) or {}
             overlay = environ_from_state(state)
             env.update(overlay)
-        name = env.get('SMITLINE_PARTICIPANT_NAME', 'Smitline').strip()
+        name = env.get('SMITLINE_PARTICIPANT_NAME', DEFAULT_PARTICIPANT_NAME).strip()
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError('SMITLINE_PARTICIPANT_NAME must contain 1–80 printable characters')
 
@@ -97,7 +97,7 @@ class RuntimeConfig:
         return cls(name, meeting_instructions,
                    camera_enabled, camera_default_on, camera_logo,
                    voice=_voice(env),
-                   meeting_intro=_boolean(env.get('SMITLINE_MEETING_INTRO'), True),
+                   meeting_intro=_boolean(env.get('SMITLINE_MEETING_INTRO'), False),
                    owner_name=owner_name(state, env),
                    backend_model=backend_model or DEFAULT_BACKEND_MODEL,
                    web_search=web_search,

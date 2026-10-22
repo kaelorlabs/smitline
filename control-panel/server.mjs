@@ -501,6 +501,24 @@ export function createServer(options = {}) {
         handoffId: archive.handoffId,
       });
     }
+    // Listening in streams live call audio, so it needs the session token, like changes do.
+    const listenMatch = pathname.match(/^\/api\/calls\/(call-[0-9a-f]{16})\/listen$/);
+    if (listenMatch && request.method === 'GET') {
+      if (request.headers['x-smitline-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+      const abort = new AbortController();
+      response.on('close', () => abort.abort());
+      let upstream;
+      try {
+        upstream = await daemonClient.listen(listenMatch[1], abort.signal);
+      } catch (error) {
+        return json(response, error.status || 503, { error: error.message, code: error.code });
+      }
+      response.writeHead(200, { ...headers('application/x-ndjson'), 'X-Accel-Buffering': 'no' });
+      try {
+        for await (const chunk of upstream.body) response.write(chunk);
+      } catch { /* the listener left, or the call ended */ }
+      return response.end();
+    }
     // Call reads follow the transcript routes above: same-origin GETs carry no Origin header.
     const callMatch = pathname.match(/^\/api\/calls(?:\/(call-[0-9a-f]{16})(?:\/(end|transfer|events|recording))?)?$/);
     if (callMatch && request.method === 'GET') {
@@ -743,6 +761,7 @@ export function createServer(options = {}) {
         '/calls': ['calls.html', 'text/html; charset=utf-8'],
         '/calls.js': ['calls.js', 'text/javascript; charset=utf-8'],
         '/calls.css': ['calls.css', 'text/css; charset=utf-8'],
+        '/listen-audio.mjs': ['listen-audio.mjs', 'text/javascript; charset=utf-8'],
         '/contacts': ['contacts.html', 'text/html; charset=utf-8'],
         '/contacts.js': ['contacts.js', 'text/javascript; charset=utf-8'],
       };

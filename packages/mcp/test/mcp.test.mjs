@@ -36,7 +36,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
   assert.deepEqual(names, [
     'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
     'save_call_note', 'list_contacts',
-    'send_call_instruction', 'end_call', 'transfer_call_to_me', 'list_voices',
+    'send_call_instruction', 'reply_to_call_request', 'end_call', 'transfer_call_to_me', 'list_voices',
     'get_profile', 'update_profile',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
@@ -153,13 +153,14 @@ test('call tools map to the SDK and surface brief questions', async () => {
   const colleague = {
     async startCall(brief) { calls.push(['start', brief]); return { id: callId, status: 'queued' }; },
     async checkCall(brief) { calls.push(['check', brief]); return { ok: true, problems: [] }; },
-    async waitForCall(id, timeout) {
-      calls.push(['wait', id, timeout]);
+    async waitForCall(id, timeout, options) {
+      calls.push(['wait', id, timeout, options]);
       return { id, status: 'completed', result: { outcome: 'achieved' } };
     },
     async getCall(id) { return { id, status: 'ringing' }; },
     async listCalls(limit) { calls.push(['list', limit]); return []; },
     async instructCall(id, text, options) { calls.push(['instruct', id, text, options]); return { delivered: true }; },
+    async replyToRequest(id, requestId, reply) { calls.push(['reply', id, requestId, reply]); return { delivered: true }; },
     async endCall(id) { return { id, status: 'summarizing' }; },
     async transferCall() { return { transferred: true }; },
     async listVoices() { return { default: 'marin', voices: ['marin'] }; },
@@ -172,7 +173,33 @@ test('call tools map to the SDK and surface brief questions', async () => {
   assert.equal(JSON.parse(started.result.content[0].text).id, callId);
   const waited = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId } });
   assert.equal(JSON.parse(waited.result.content[0].text).result.outcome, 'achieved');
-  assert.deepEqual(calls[1], ['wait', callId, 50]);
+  assert.deepEqual(calls[1], ['wait', callId, 50, {}]);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '', timeoutSeconds: 20 } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 20, { since: '' }]);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '14' } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '14' }]);
+  const badSince = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: 'x' } });
+  assert.equal(badSince.result.isError, true);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'requests' } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { only: 'requests' }]);
+  const badOnly = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'all' } });
+  assert.equal(badOnly.result.isError, true);
+  await call(session, 'tools/call', {
+    name: 'reply_to_call_request',
+    arguments: { callId, requestId: 'r2', type: 'status', text: 'Nov 3 or Nov 10?', announce: true },
+  });
+  assert.deepEqual(calls.at(-1), ['reply', callId, 'r2', { type: 'status', text: 'Nov 3 or Nov 10?', announce: true }]);
+  await call(session, 'tools/call', {
+    name: 'reply_to_call_request',
+    arguments: { callId, requestId: 'r2', type: 'done', text: 'Added it.', ok: true, details: 'https://x/pr/81' },
+  });
+  assert.deepEqual(calls.at(-1), ['reply', callId, 'r2', { type: 'done', text: 'Added it.', ok: true, details: 'https://x/pr/81' }]);
+  for (const bad of [{ requestId: 'x', type: 'done', text: 'a' }, { requestId: 'r1', type: 'maybe', text: 'a' },
+    { requestId: 'r1', type: 'done', text: ' ' }]) {
+    const refused = await call(session, 'tools/call', { name: 'reply_to_call_request', arguments: { callId, ...bad } });
+    assert.equal(refused.result.isError, true, JSON.stringify(bad));
+  }
+  calls.splice(2);
   await call(session, 'tools/call', {
     name: 'send_call_instruction', arguments: { callId, text: 'Ask about parking' },
   });

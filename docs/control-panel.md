@@ -62,13 +62,15 @@ Use **Clear saved context** when the material should no longer be available. Thi
 
 ### Operate the meeting
 
-The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Smitline** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
+The console reports the join stage, platform microphone state, listening state, and runtime log. Admit **Smitline AI** from the waiting room when prompted. It listens continuously but is instructed to respond only when directly addressed, explicitly assigned a task, or able to make an important factual correction. GPT-Live decides how to handle conversational pauses, backchannels, and interruptions; the virtual microphone transports its output without adding a local turn-taking delay.
 
 The platform may display Smitline as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Smitline in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Smitline's tile; it accepts that explicit request.
 
 **Open meeting view** shows the container's browser. Stop Smitline from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory.
 
 ### Review local records
+
+While a call or meeting runs, **Listen in** plays both sides in the browser, live. It needs `SMITLINE_LISTEN=1` (`docker exec smitline smitline setup set SMITLINE_LISTEN 1`); the people on the call are not told, so turn it on only where they agree or the law allows it. **Stop listening** ends it; the call goes on.
 
 Each meeting creates a directory under `recordings/` in the meeting data (`/data/meetings` in the volume, `meeting-runtime/` in a checkout) containing the incremental transcript and event trace. The Meetings page shows each meeting's transcript and handoff. The **Transcripts** tab of the manual page still lists every recording there, including meetings started by hand before they went through the calls API, opens their transcripts, and downloads the handoff: the summary, decisions, action items, and open questions built from the transcript.
 

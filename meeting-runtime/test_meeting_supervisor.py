@@ -489,7 +489,7 @@ class RuntimeStateConfigTests(unittest.TestCase):
 
     def test_missing_state_keeps_environ(self):
         config = RuntimeConfig.from_environ({})
-        self.assertEqual(config.participant_name, 'Smitline')
+        self.assertEqual(config.participant_name, 'Smitline AI')
         with self.assertRaises(KeyError):
             resolve_meeting_url({})
 

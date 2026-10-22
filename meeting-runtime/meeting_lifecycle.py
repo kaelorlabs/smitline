@@ -2,6 +2,7 @@
 and when a goodbye ends a call or meeting by itself."""
 import json
 import re
+import time
 
 LEAVE_REASONS = ('completed', 'asked_to_leave', 'not_productive', 'other')
 # Leaving ends every cost: the GPT-Live session closes and the meeting container exits.
@@ -23,6 +24,9 @@ LEAVE_MEETING_TOOL = {
 # Why the agent left, as the meeting's end reason (the handoff's endReason, the call's events).
 AGENT_ENDINGS = frozenset({f'left_{reason}' for reason in LEAVE_REASONS} | {'idle', 'alone_in_meeting'})
 DEFAULT_IDLE_LEAVE_SECONDS = 600
+# Seconds every reading must say the agent is the only one in the meeting before it leaves:
+# a participants list that is re-rendering can be wrong once.
+ALONE_LEAVE_SECONDS = 15.0
 
 LEAVING_INSTRUCTIONS = (
     '\nLeaving: leave the meeting when a person in your place would: when what you were there for '
@@ -190,3 +194,26 @@ def leave_end_reason(reason):
 def is_idle(last_speech, now, limit):
     """Nobody, the agent included, has said anything for `limit` seconds (0 turns it off)."""
     return bool(limit) and now - last_speech >= limit
+
+
+class AloneWatch:
+    """Says when to leave: the agent has been alone for ALONE_LEAVE_SECONDS.
+
+    A count of others resets it; an unknown count (None) neither resets nor advances it.
+    """
+
+    def __init__(self, seconds=ALONE_LEAVE_SECONDS, clock=time.monotonic):
+        self.seconds = seconds
+        self.clock = clock
+        self.since = None
+
+    def update(self, participant_count):
+        if participant_count is None:
+            return False
+        if not should_leave_alone(participant_count):
+            self.since = None
+            return False
+        now = self.clock()
+        if self.since is None:
+            self.since = now
+        return now - self.since >= self.seconds

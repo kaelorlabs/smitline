@@ -15,6 +15,72 @@ POOL_MEETING_SETTINGS = POOL_OWNER_SETTINGS + (
     'SMITLINE_MEETING_BACKEND_MODEL', 'SMITLINE_MEETING_WEB_SEARCH', 'SMITLINE_MEETING_INSTRUCTIONS',
     'SMITLINE_MEETING_INTRO', 'SMITLINE_MEETING_CAMERA_STYLE', 'SMITLINE_MEETING_IDLE_LEAVE_SECONDS',
 )
+# Seconds without a new caption piece that end a line of the live transcript.
+LIVE_PAUSE = 2.5
+
+
+class LiveTranscript:
+    """Joins a meeting's caption pieces into transcript lines as they arrive: pieces in a row from
+    one side are one line, and a pause ends a line so it is not held back. seq is the last piece
+    taken, so the archive's later pieces continue it without repeats."""
+
+    def __init__(self, ctx, pause=LIVE_PAUSE):
+        self.ctx = ctx
+        self.pause = pause
+        self.seq = -1
+        self.speaker = None
+        self.text = ''
+        self.last = None
+
+    def add(self, seq, speaker, text, now):
+        if seq <= self.seq:
+            return
+        self.seq = seq
+        speaker = 'agent' if speaker == 'agent' else 'meeting'
+        if self.speaker is not None and speaker != self.speaker:
+            self.flush()
+        self.speaker = speaker
+        self.text += text
+        self.last = now
+
+    def tick(self, now):
+        if self.speaker is not None and now - self.last >= self.pause:
+            self.flush()
+
+    def flush(self):
+        text = ' '.join(self.text.split())
+        if text:
+            self.ctx.add_transcript(self.speaker, text)
+        self.speaker = None
+        self.text = ''
+
+
+class RemoteTap:
+    """A meeting container's /listen, relayed: the same chunks() as a phone call's tap."""
+
+    def __init__(self, url, session_factory=None, headers=None):
+        self.url = url
+        self.headers = dict(headers or {})
+        self._session_factory = session_factory
+
+    async def chunks(self):
+        import json
+        from aiohttp import ClientSession, ClientTimeout
+        factory = self._session_factory or (lambda: ClientSession(
+            timeout=ClientTimeout(total=None, sock_connect=5)))
+        async with factory() as session:
+            async with session.get(self.url, headers=self.headers) as response:
+                if response.status != 200:
+                    return
+                async for line in response.content:
+                    try:
+                        chunk = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(chunk, dict):
+                        yield chunk
+
+
 MEETING_STATUS = {
     'joining': 'connecting',
     'waiting_for_admission': 'waiting',
@@ -86,6 +152,8 @@ def meeting_payload(brief):
         payload['voice'] = brief.voice
     if brief.camera:
         payload['camera'] = {key: value for key, value in brief.camera.items() if value is not None}
+    if getattr(brief, 'can_do', None):
+        payload['canDo'] = brief.can_do
     return payload
 
 
@@ -93,10 +161,12 @@ class MeetingLine:
     channel = 'meeting'
 
     def __init__(self, daemon, *, poll_interval=2.0, handoff_timeout=120.0,
-                 sleep=asyncio.sleep, monotonic=None, transcript=None):
+                 sleep=asyncio.sleep, monotonic=None, transcript=None, pieces=None):
         self.daemon = daemon
         # transcript(meeting_id): the finished meeting's transcript entries, read from its archive.
         self._transcript = transcript or (lambda _meeting_id: [])
+        # pieces(meeting_id): its transcript pieces, piece i being the live caption with seq i.
+        self._pieces = pieces
         self.poll_interval = poll_interval
         self.handoff_timeout = handoff_timeout
         self._sleep = sleep
@@ -141,8 +211,28 @@ class MeetingLine:
         last = None
         started = None
         limit = ctx.brief.max_minutes * 60
+        live = LiveTranscript(ctx)
+        captions_after = getattr(self.daemon, 'captions_after', None) if self._pieces else None
+        requests_after = (getattr(self.daemon, 'requests_after', None)
+                          if getattr(ctx.brief, 'can_do', None) else None)
+        request_seq = -1
+        told_following = None  # what the meeting was last told: is the agent following?
         while True:
             session = await self.daemon.get_meeting(meeting_id, owner=ctx.owner)
+            if captions_after is not None:
+                now = self._now()
+                for caption in captions_after(meeting_id, live.seq):
+                    live.add(caption['seq'], caption['speaker'], caption['text'], now)
+                live.tick(now)
+            if requests_after is not None:
+                # Requests the voice passed on, to the call service, which wakes the agent.
+                for message in requests_after(meeting_id, request_seq):
+                    request_seq = message['seq']
+                    ctx.request({key: value for key, value in message.items() if key != 'seq'})
+                following = ctx.agent_following()
+                if session.state == 'live' and following != told_following:
+                    if await self._control(meeting_id, {'type': 'following', 'value': following}):
+                        told_following = following
             if session.state != last:
                 last = session.state
                 if session.state == 'live' and started is None:
@@ -160,13 +250,27 @@ class MeetingLine:
                 await self.daemon.cancel_meeting(meeting_id)
             await self._sleep(self.poll_interval)
         handoff = await self._await_handoff(meeting_id, ctx.owner)
-        # The result is judged from what was said, so the call gets the meeting's transcript.
-        try:
-            entries = self._transcript(meeting_id)
-        except Exception:
-            entries = []
-        for entry in entries:
-            ctx.add_transcript(entry['speaker'], entry['text'])
+        # The result is judged from what was said, so the call gets the meeting's transcript:
+        # what was not followed live yet comes from the archive.
+        if live.seq >= 0:
+            try:
+                pieces = self._pieces(meeting_id)
+            except Exception:
+                pieces = []
+            now = self._now()
+            for seq, piece in enumerate(pieces):
+                live.add(seq, piece['speaker'], piece['text'], now)
+            live.flush()
+        else:
+            try:
+                entries = self._transcript(meeting_id)
+            except Exception:
+                entries = []
+            for entry in entries:
+                ctx.add_transcript(entry['speaker'], entry['text'])
+        forget = getattr(self.daemon, 'forget_captions', None)
+        if forget is not None:
+            forget(meeting_id)
         seconds = int(ended - started) if started is not None else 0
         left = (handoff or {}).get('endReason')
         if left in AGENT_ENDINGS:
@@ -193,10 +297,37 @@ class MeetingLine:
             return handoff.to_dict() if hasattr(handoff, 'to_dict') else dict(handoff)
         return None
 
+    def listen(self, call_id):
+        meeting_id = self._meetings.get(call_id)
+        supervisor = getattr(self.daemon, 'supervisor', None)
+        locate = getattr(supervisor, 'listen_url', None)
+        url = locate(meeting_id) if meeting_id and callable(locate) else None
+        headers = getattr(supervisor, 'control_headers', None)
+        headers = headers(meeting_id) if url and callable(headers) else None
+        return RemoteTap(url, headers=headers) if url and headers else None
+
+    async def _control(self, meeting_id, message):
+        """A control message for the running meeting (meeting_control.py); its answer or None."""
+        control = getattr(getattr(self.daemon, 'supervisor', None), 'control', None)
+        if control is None:
+            return None
+        try:
+            return await control(meeting_id, message)
+        except Exception:
+            return None
+
+    async def deliver(self, call_id, note):
+        """A note for the voice, sent into the meeting; True once the voice has it."""
+        meeting_id = self._meetings.get(call_id)
+        if meeting_id is None:
+            return False
+        answer = await self._control(meeting_id, dict(note, type='note'))
+        return bool(answer and answer.get('delivered'))
+
     async def instruct(self, call_id, text, *, silent=False):
-        # Meetings take guidance through the meeting context and the portal; a
-        # live instruction channel for meetings is not implemented yet.
-        return False
+        """Guidance acts now; a silent note is context the voice uses when it helps."""
+        return await self.deliver(call_id, {'kind': 'thinking' if silent else 'instructions',
+                                            'text': text})
 
     async def end(self, call_id):
         meeting_id = self._meetings.get(call_id)

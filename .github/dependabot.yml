@@ -1,0 +1,42 @@
+# Weekly dependency updates, one grouped pull request per ecosystem.
+# Security fixes come separately as soon as an advisory is published.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ['*']
+
+  - package-ecosystem: pip
+    directory: /meeting-runtime
+    schedule:
+      interval: weekly
+    groups:
+      pip:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ['*']
+    # Moving to a new Node major or Python minor is a deliberate change, not a weekly bump:
+    # node:26 needs libatomic, which the Python base image does not have.
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+      - dependency-name: python
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']

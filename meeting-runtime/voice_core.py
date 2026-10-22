@@ -127,17 +127,10 @@ class LiveSession:
             return False
         return await self.send(payload)
 
-    async def submit_function_output(self, call_id, output, *, delegation_id=None):
+    async def submit_function_output(self, call_id, output):
         """Responses delegation: return a backend tool result and continue the response."""
-        item = {'type': 'response.item.create', 'event_id': 'tool-' + uuid4().hex[:12],
-                'item': {'type': 'function_call_output', 'call_id': call_id,
-                         'output': output if isinstance(output, str) else json.dumps(output)}}
-        more = {'type': 'response.create', 'event_id': 'continue-' + uuid4().hex[:12]}
-        if delegation_id:
-            item['delegation_id'] = delegation_id
-            more['delegation_id'] = delegation_id
-        await self.send(item)
-        await self.send(more)
+        for payload in function_output_events(call_id, output):
+            await self.send(payload)
 
     async def close(self):
         """Begin graceful shutdown; session.closed arrives through events()."""
@@ -190,6 +183,16 @@ class LiveSession:
                 raise LiveSessionError(error.get('code') or 'live_error', error.get('message') or '')
             yield event
         self.closed.set()
+
+
+def function_output_events(call_id, output):
+    """The two events that return a backend tool result and continue its response. Neither
+    takes a delegation_id, which GPT-Live refuses there: the call_id ties the result to its call."""
+    item = {'type': 'response.item.create', 'event_id': 'tool-' + uuid4().hex[:12],
+            'item': {'type': 'function_call_output', 'call_id': call_id,
+                     'output': output if isinstance(output, str) else json.dumps(output)}}
+    more = {'type': 'response.create', 'event_id': 'continue-' + uuid4().hex[:12]}
+    return item, more
 
 
 def function_call_from(event):

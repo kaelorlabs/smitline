@@ -326,6 +326,14 @@ p.banner { display: block; }
 .carried-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .carried-list li { display: grid; gap: 2px; }
 .carried-from { font-size: 12px; font-weight: 600; color: var(--accent); }
+.requests { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.requests-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.requests-list > li { display: grid; gap: 6px; }
+.request-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.request-thread { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 8px; }
+.request-thread li { display: grid; gap: 2px; min-width: 0; }
+.request-thread li.from-agent { color: var(--ink); }
+.request-details { margin: 2px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--soft); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .carry-note { display: grid; gap: 6px; }
 .carry-note p { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
 .history-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; }
@@ -366,9 +374,17 @@ p.banner { display: block; }
   .actions .button { flex: 1 1 auto; }
   footer { padding: 0 16px 24px; flex-direction: column; gap: 4px; }
 }
+/* Phones: the bar must fit in the width it has. Account shrinks to its icon
+   (the label stays for screen readers), and the nav scrolls on its own rather
+   than pushing the page sideways on very small screens. */
 @media (max-width: 480px) {
+  .topbar { gap: 8px; }
   .brand-name { display: none; }
-  .connection { font-size: 11px; }
+  .topnav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .topnav a { padding: 0 8px; flex-shrink: 0; }
+  .topnav a:focus-visible { outline-offset: -2px; }
+  .connection { font-size: 11px; flex-shrink: 0; }
   .connection #connection-label { display: none; }
-  .account-link { padding: 0 6px; }
+  .account-link { flex-shrink: 0; justify-content: center; min-width: 36px; padding: 0 7px; }
+  .account-name { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 }

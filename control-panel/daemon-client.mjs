@@ -209,9 +209,31 @@ export function createDaemonClient(options = {}) {
     };
   }
 
+  /** A call's live audio stream from the daemon (the fetch Response); signal stops it. */
+  async function listen(callId, signal) {
+    const token = readTokenFile(tokenPath);
+    if (!token) throw daemonError(managed ? MANAGED_NOT_RUNNING : 'Runtime daemon is not running.', { code: 'daemon_offline' });
+    let response;
+    try {
+      response = await fetchImpl(`${baseUrl()}/v1/calls/${encodeURIComponent(callId)}/listen`, {
+        headers: { Authorization: `Bearer ${token}` }, signal,
+      });
+    } catch {
+      throw daemonError('Runtime daemon is unavailable. Start it or retry from the console.');
+    }
+    if (!response.ok) {
+      const payload = parseDaemonBody(await response.text());
+      throw daemonError(payload?.error?.message || 'The call cannot be heard.', {
+        status: response.status, code: payload?.error?.code || 'daemon_error',
+      });
+    }
+    return response;
+  }
+
   return {
     host,
     port,
+    listen,
     tokenPath,
     downloadRecording,
     managed,

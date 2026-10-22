@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/kaelorlabs/smitline/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue.
+  - name: Ask a question
+    url: https://github.com/kaelorlabs/smitline/discussions
+    about: Setup help and how-to questions go in Discussions.

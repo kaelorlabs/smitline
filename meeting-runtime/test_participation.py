@@ -371,7 +371,7 @@ class HostUnmuteRequestTests(unittest.IsolatedAsyncioTestCase):
 
         socket = FakeLiveSocket(bridge)
         adapter, microphone, record = HostAskingAdapter(), Mic(), Events()
-        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'})
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
 
         async def wait_until(check):
             for _ in range(200):
@@ -384,9 +384,11 @@ class HostUnmuteRequestTests(unittest.IsolatedAsyncioTestCase):
             return [event for event in socket.sent if event['type'] == 'session.commentary.append'
                     and "Robin's AI assistant" in event['content']]
 
+        import meeting_intro
         with patch.object(bridge, 'ClientSession', socket.client), \
                 patch.object(bridge, 'record', record), \
-                patch.object(bridge, 'stop', asyncio.Event()):
+                patch.object(bridge, 'stop', asyncio.Event()), \
+                patch.object(meeting_intro, 'INTRO_QUIET_SECONDS', 0.1):
             task = asyncio.create_task(bridge.run_voice(
                 IdleSpeaker(), microphone, None, 'test-only', runtime, adapter))
             try:
