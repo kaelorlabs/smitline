@@ -371,7 +371,7 @@ def status_note(request, text, *, owner, announce):
     """A status update for the voice: quiet context unless the agent wants it said now."""
     rid = request['id']
     if announce:
-        return {'kind': 'instructions', 'request': rid, 'text': (
+        return {'kind': 'instructions', 'request': rid, 'say': text, 'text': (
             f"{owner}'s agent has an update on request {rid} ({_who(request)} asked: "
             f'"{_about(request)}"): {text} Tell {_who(request)} briefly. {WHEN_TO_TELL} If it '
             f'is a question, ask it, then hand the answer to your backend to pass on for '
@@ -390,13 +390,15 @@ def done_note(request, text, *, owner, ok):
     else:
         said = (f"{owner}'s agent could not complete request {rid} ({_who(request)} asked: "
                 f'"{_about(request)}"): {text} Say {owner} will follow up if it is still needed.')
-    return {'kind': 'instructions', 'request': rid, 'closes': True, 'text': (
+    # `say`: what the people who asked must hear; a meeting cues the voice to say it at the next
+    # pause (meeting_control.py), since an instructions note alone never makes it speak.
+    return {'kind': 'instructions', 'request': rid, 'closes': True, 'say': text, 'text': (
         f'{said} Tell {_who(request)} in a sentence or two. {WHEN_TO_TELL}')}
 
 
 def retell_note(request, text, *, owner):
     """The answer was delivered but not heard on the call (cut off, or never said): once more."""
-    return {'kind': 'instructions', 'request': request['id'], 'text': (
+    return {'kind': 'instructions', 'request': request['id'], 'say': text, 'text': (
         f"{_who(request).capitalize()} has not heard what {owner}'s agent said yet "
         f'(you may have been cut off): {text} Tell them first thing the next time you speak, '
         'or now at a natural pause if they are waiting. If you have already told them, ignore '

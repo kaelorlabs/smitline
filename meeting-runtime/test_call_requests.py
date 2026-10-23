@@ -958,6 +958,70 @@ class MeetingControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(MeetingControl('', {}, owner='Robin').authorized('Bearer '))
         self.assertIsNone(MeetingControl('', {}, owner='Robin').desk)
 
+    async def cued(self, control, timeout=1.0):
+        """Wait for the voice to be cued (a commentary append), or the timeout."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        while loop.time() < end and not any(kind == 'commentary' for kind, _ in self.sent):
+            await asyncio.sleep(0.01)
+        return [text for kind, text in self.sent if kind == 'commentary']
+
+    async def test_in_a_quiet_meeting_the_answer_is_said_without_being_asked(self):
+        # 2026-10-23: the answer reached the voice in 10 s, and was said only when someone asked.
+        control = self.control()
+        control.quiet = lambda: 10.0
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added the launch date.', owner='Robin', ok=True),
+                                  type='note'))
+        cues = await self.cued(control)
+        self.assertEqual(len(cues), 1)
+        self.assertIn('Now is a pause: tell them this now', cues[0])
+        self.assertIn('Added the launch date.', cues[0])
+        self.assertNotIn(call_requests.WHEN_TO_TELL, cues[0])
+
+    async def test_while_people_talk_it_waits_for_a_real_gap(self):
+        control = self.control()
+        quiet = [0.0]
+        control.quiet = lambda: quiet[0]
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added it.', owner='Robin', ok=True), type='note'))
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
+        quiet[0] = 1.0  # a short breath between speakers is not a gap
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
+        quiet[0] = 3.0
+        self.assertEqual(len(await self.cued(control)), 1)
+
+    async def test_no_cue_once_it_was_said_or_when_no_gap_comes(self):
+        control = self.control()
+        quiet = [0.0]
+        control.quiet = lambda: quiet[0]
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added the launch date to the README.',
+                                            owner='Robin', ok=True), type='note'))
+        control.heard('agent', 'Done: I added the launch date to the README.')
+        quiet[0] = 10.0
+        self.assertEqual(await self.cued(control, timeout=0.4), [])
+        # People keep talking: after the longest wait it is left for the next time it speaks.
+        control = self.control()
+        control.quiet = lambda: 0.0
+        control.tell_max_wait = 0.2
+        await control.handle(dict(done_note(request, 'Added it.', owner='Robin', ok=True), type='note'))
+        await asyncio.sleep(0.4)
+        self.assertEqual(await self.cued(control, timeout=0.1), [])
+
+    async def test_only_what_they_must_hear_is_cued(self):
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        self.assertNotIn('say', status_note(request, 'Working on it.', owner='Robin', announce=False))
+        self.assertEqual(status_note(request, 'Nov 3 or 10?', owner='Robin', announce=True)['say'],
+                         'Nov 3 or 10?')
+        self.assertEqual(done_note(request, 'No access.', owner='Robin', ok=False)['say'], 'No access.')
+        control = self.control()
+        control.quiet = lambda: 10.0
+        await control.handle(dict(status_note(request, 'Working on it.', owner='Robin', announce=False),
+                                  type='note'))
+        await control.handle({'type': 'note', 'kind': 'instructions', 'text': 'Ask about parking.'})
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
+
     async def test_notes_reach_the_voice_and_details_the_chat(self):
         control = self.control(chatAvailable=True)
         control.adapter = ChatAdapter()

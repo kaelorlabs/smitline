@@ -307,6 +307,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
             control.adapter = adapter
             control.record = record.event
             control.send = send_note
+            # Seconds since anyone in the meeting, or the voice itself, was last heard.
+            control.quiet = lambda: time.monotonic() - max(heard[0] or float('-inf'),
+                                                           participation.last_output_audio,
+                                                           last_speech[0] or float('-inf'))
 
             async def send_audio():
                 await ready.wait()
@@ -529,6 +533,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     # Unknown future events are ignored so audio and transcripts continue.
             finally:
                 control.send = None
+                control.quiet = None
                 for task in tasks + requests + leaving:
                     task.cancel()
                 await asyncio.gather(*tasks, *requests, *leaving, return_exceptions=True)
