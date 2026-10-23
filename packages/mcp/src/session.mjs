@@ -90,7 +90,7 @@ export const BRIEF_SCHEMA = {
       type: 'object',
       additionalProperties: false,
       required: ['callId', 'requestId'],
-      description: "When this call does what someone on another call asked (such as phoning Arun because a meeting asked you to): that call's id and the request's id. This call then reports to the request by itself: ringing, picked up, and the outcome or why it failed, so the people who asked hear how it went even while you are busy. You can still reply yourself.",
+      description: "When this call does what someone on another call asked (such as phoning Arun because a meeting asked you to): that call's id and the request's id. This call then reports to the request by itself: ringing, picked up, and the outcome or why it failed, so the people who asked hear how it went even while you are busy. You can still reply yourself. If they cancel the request, the call hangs up at once, without a goodbye.",
       properties: {
         callId: CALL_ID_SCHEMA,
         requestId: { type: 'string', pattern: '^r[1-9][0-9]{0,2}$' },

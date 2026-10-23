@@ -807,6 +807,9 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         session.owner_phone = '+14155550199'
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
+        # A person is on the line, so ending says goodbye first (a silent call hangs up at once).
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?'})
+        await until(lambda: session._other_turn)
         await self.h.service.end(record['id'], owner='local')
         pending = session._pending_hangup
         self.assertIsNotNone(pending)

@@ -293,6 +293,30 @@ class CallService:
             raise CallError(409, 'request_closed', f'forRequest names request '
                             f'{served["requestId"]}, which is already {request["state"]}')
 
+    async def _end_serving(self, call_id, request_id):
+        """A canceled request's calls (forRequest) end: in a live test the phone kept ringing
+        about 20 seconds after "disconnect the call", while the agent had to notice and end it."""
+        served = {'callId': call_id, 'requestId': request_id}
+        for other in list(self._contexts):
+            try:
+                record = self.store.get(other)
+            except CallNotFound:
+                continue
+            if (record['brief'] or {}).get('forRequest') != served or record['status'] in TERMINAL:
+                continue
+            self._event(other, 'call.request_canceled', callId=call_id, requestId=request_id)
+            line = self.lines.get(record['channel'])
+            try:
+                # Not yet talking with a person (ringing, a voicemail or screening greeting): it
+                # hangs up at once; with a person on the line, after a short goodbye.
+                ended = await line.end(other)
+            except Exception as error:  # the cancel itself already went through
+                self._event(other, 'call.end_failed', error=type(error).__name__)
+                continue
+            context = self._contexts.get(other)
+            if not ended and context is not None and record['status'] in ('queued', 'connecting'):
+                await context.finish('canceled')
+
     async def _report_to_request(self, call_id, status):
         """Tell the request this call serves how it is going, so the people who asked hear it
         even when the agent is busy elsewhere. Quietly does nothing once the agent has closed
@@ -1090,6 +1114,8 @@ class CallService:
         self._event(call_id, 'call.request', type=action, id=request_id,
                     **({'text': text} if text else {}))
         self._signal_owner(record.get('owner'))
+        if action == 'cancel':
+            self._spawn(self._end_serving(call_id, request_id))
         return request
 
     async def _check_pickup(self, call_id, request_id):

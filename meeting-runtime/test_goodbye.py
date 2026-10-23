@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from meeting_lifecycle import asks_to_leave, only_closing, says_goodbye, voicemail_prompt
+from meeting_lifecycle import (
+    asks_to_leave, machine_prompt, only_closing, says_goodbye, voicemail_prompt,
+)
 from test_phone import FakeLive, PhoneHarness, until
 
 
@@ -37,6 +39,19 @@ class WordsTests(unittest.TestCase):
                      'Sorry, she is not available right now.', 'I left it in your mailbox.',
                      'Beep me when you get here.', 'Let me record that for you.'):
             self.assertFalse(voicemail_prompt(text), text)
+
+    def test_call_screening_is_a_machine_not_a_person(self):
+        # What a phone's call screening said in the live test on 2026-10-23.
+        for text in ("And reason for calling I'll see if this person is available",
+                     "Your name and reason for calling. I'll see if this person is available",
+                     'Thanks. Please stay on the line',
+                     "I'm sorry. This person is not available. If you would like to leave an additional message",
+                     'Please leave your message after the tone.'):
+            self.assertTrue(machine_prompt(text), text)
+        for text in ('Hello', "Yeah, I'm going to join. Thanks", "Who's calling?", 'Hi, this is Ankit',
+                     'Can you hold on, I need to stay on the line with my bank',
+                     "Sorry, she's not available. Can I take a message?"):
+            self.assertFalse(machine_prompt(text), text)
 
     def test_asked_to_leave(self):
         for text in ('Smitline, you can leave now.', 'Thanks, you can drop off now', 'Please leave',
@@ -219,6 +234,45 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 3)
         done = await self.h.service.wait(record['id'], timeout=5, owner='local')
         self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_ending_before_a_person_spoke_hangs_up_without_a_goodbye(self):
+        # 2026-10-23: the call to Ankit was answered by his phone's call screening; the meeting
+        # canceled it, and a 12-second goodbye to the screening kept his phone ringing.
+        record, session, ws, live, task = await self.connected()
+        live.push({'type': 'session.input_transcript.delta',
+                   'delta': "And reason for calling I'll see if this person is available"})
+        self.say(live, 'Calling on behalf of Robin about the meeting.')
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Thanks. Please stay on the line'})
+        await asyncio.sleep(0.1)
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: ws.closed, 3)
+        sent = ' '.join(str(content) for _kind, content in live.appends)
+        self.assertNotIn('end the call now', sent)
+        self.assertFalse(session.person_heard)
+        self.assertIn('call.no_person_hangup', [e['type'] for e in self.h.service.events(record['id'])])
+        await asyncio.wait_for(task, 3)
+
+    async def test_ending_an_answered_but_silent_call_hangs_up_at_once(self):
+        record, session, ws, live, task = await self.connected()
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: ws.closed, 3)
+        self.assertNotIn('end the call now', ' '.join(str(c) for _k, c in live.appends))
+        await asyncio.wait_for(task, 3)
+
+    async def test_a_person_after_the_screening_still_gets_a_goodbye(self):
+        record, session, ws, live, task = await self.connected()
+        live.push({'type': 'session.input_transcript.delta',
+                   'delta': "Your name and reason for calling. I'll see if this person is available"})
+        self.say(live, 'Calling on behalf of Robin.')
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?'})
+        await asyncio.sleep(0.1)
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends), 3)
+        self.assertTrue(session.person_heard)
+        self.assertFalse(ws.closed)
+        self.say(live, "I'm Robin's AI assistant. Thanks, goodbye!")
+        await until(lambda: ws.closed, 5)
+        await asyncio.wait_for(task, 3)
 
     async def test_ending_with_a_person_still_says_goodbye(self):
         record, session, ws, live, task = await self.connected()

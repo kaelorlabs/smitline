@@ -676,6 +676,29 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([entry['text'] for entry in thread if entry['from'] == 'agent'],
                          ['Done another way.'])
 
+    async def test_canceling_a_request_ends_the_call_serving_it(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        ended = []
+        end = self.line.end
+
+        async def tracked_end(call_id):
+            ended.append(call_id)
+            return True
+        self.line.end = tracked_end
+        serving = await self.service.create(brief(to='+14155550143',
+                                                  forRequest={'callId': meeting, 'requestId': 'r1'}))
+        other = await self.service.create(brief(to='+14155550144'))
+        await until(lambda: self.h.store.get(serving['id'])['status'] == 'in_progress')
+        ctx.request({'type': 'cancel', 'id': 'r1', 'text': 'Disconnect the phone call, not the Zoom.'})
+        await until(lambda: ended)
+        self.assertEqual(ended, [serving['id']])  # only the call serving it; never the meeting
+        self.assertIn('call.request_canceled',
+                      [e['type'] for e in self.service.events(serving['id'])])
+        self.line.end = end
+        self.line.proceed.set()
+        self.assertTrue(other['id'])
+
     async def test_another_owners_calls_stay_out_of_sight(self):
         theirs, ctx = await self.start()
         self.h.store.update(theirs, owner='acct_other')

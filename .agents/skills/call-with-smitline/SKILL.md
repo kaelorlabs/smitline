@@ -27,7 +27,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `record` | `true` only when the user asks to record the call. The assistant tells the other person the call is recorded; make sure the user has their agreement. |
 | `task` | For several calls toward one goal, such as quotes from five roofers: the same `{"id": "roof-quotes", "title": "Roof repair quotes"}` on each |
 | `carryFrom` | Start with notes from earlier calls: `{"task": true}`, `{"contact": true}` (same number), or `{"calls": [...]}`. Only what this call needs: the assistant may mention it, so do not carry one business's details to another unless the objective calls for it. |
-| `forRequest` | When this call does what someone on another call asked (phoning Arun because the meeting asked): `{"callId": "<that call>", "requestId": "r1"}`. The call then reports to them by itself: ringing, picked up, and the outcome or why it failed. |
+| `forRequest` | When this call does what someone on another call asked (phoning Arun because the meeting asked): `{"callId": "<that call>", "requestId": "r1"}`. The call then reports to them by itself: ringing, picked up, and the outcome or why it failed. If they cancel the request, the call hangs up at once. |
 | `canDo` | What you will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". Then they can ask you through the voice (step 5). Name only what you can do and the user would approve; leave it out and nobody can ask. |
 
 Before a demo or a call that matters, run `check_call_brief` on the brief: for a phone call it also tests that the phone provider can reach this computer, so a network that blocks it shows up before anyone is waiting.
