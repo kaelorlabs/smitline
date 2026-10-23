@@ -16,6 +16,7 @@ BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
     'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom', 'canDo',
+    'forRequest',
 )
 NOTIFY_FIELDS = ('webhookUrl',)
 # A task ties calls toward one goal together, such as "roof repair quotes"; the agent names it.
@@ -25,6 +26,10 @@ TASK_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 CARRY_FIELDS = ('task', 'contact', 'calls')
 CALL_ID = re.compile(r'^call-[0-9a-f]{16}$')
 MAX_CARRY_CALLS = 10
+# The request on another call that this call serves: {'callId', 'requestId'}. The call then
+# reports its progress and outcome to that request by itself.
+FOR_REQUEST_FIELDS = ('callId', 'requestId')
+REQUEST_ID = re.compile(r'^r[1-9][0-9]{0,2}$')
 # A meeting's virtual camera, as the console's manual start sets it. No avatarPath: a brief
 # never names a file on the computer running Smitline.
 CAMERA_FIELDS = ('enabled', 'defaultOn', 'avatarDataUri')
@@ -149,6 +154,8 @@ class CallBrief:
     # What the calling agent will do for the people on the call when they ask ("look things up
     # in the repo and edit docs"). Requests are off without it. See call_requests.py.
     can_do: str = None
+    # {'callId', 'requestId'}: a request on another call this call serves; see FOR_REQUEST_FIELDS.
+    for_request: dict = field(default=None, compare=False)
 
     @property
     def session_context(self):
@@ -190,6 +197,7 @@ class CallBrief:
             'task': self.task,
             'carryFrom': self.carry_from,
             'canDo': self.can_do,
+            'forRequest': self.for_request,
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -290,6 +298,18 @@ class CallBrief:
                     raise ValueError('carryFrom.calls must be call ids such as call-0123456789abcdef')
                 parsed['calls'] = list(dict.fromkeys(calls))
             carry_from = parsed or None
+        for_request = optional_field(data, 'forRequest')
+        if for_request is not None:
+            for_request = require_mapping(for_request, 'forRequest')
+            reject_unknown_fields(for_request, FOR_REQUEST_FIELDS, 'forRequest')
+            served_call = require_string(for_request.get('callId'), 'forRequest.callId', max_length=21)
+            served_request = require_string(for_request.get('requestId'), 'forRequest.requestId',
+                                            max_length=4)
+            if not CALL_ID.fullmatch(served_call):
+                raise ValueError('forRequest.callId must be a call id such as call-0123456789abcdef')
+            if not REQUEST_ID.fullmatch(served_request):
+                raise ValueError('forRequest.requestId must be a request id such as r1')
+            for_request = {'callId': served_call, 'requestId': served_request}
         tone = _optional_text(data, 'tone', 200)
         can_do = optional_field(data, 'canDo')
         if can_do is not None:
@@ -320,6 +340,7 @@ class CallBrief:
             task=task,
             carry_from=carry_from,
             can_do=can_do,
+            for_request=for_request,
         )
 
 

@@ -3,6 +3,7 @@ import asyncio
 import collections
 import dataclasses
 import os
+import re
 import time
 
 from call_brief import BriefIncomplete, CallBrief
@@ -33,6 +34,8 @@ REQUEST_EVENTS = frozenset({'call.request'})
 # An agent counts as following a call while it waits on it live, and this many seconds after
 # its last contact (a wait, a reply): long enough to act on what a wait brought back.
 FOLLOW_GRACE = 90.0
+# A call serving a request on another call (forRequest) reports these statuses to it.
+REPORTED_STATUSES = frozenset({'ringing', 'in_progress', 'completed', 'failed', 'canceled'})
 # Seconds a request may wait to be picked up before the voice is told it has not been.
 PICKUP_SECONDS = 30.0
 # Seconds after an answer reached the voice by which it should have been said on the call; if
@@ -164,6 +167,32 @@ def note_line(item):
     return f'{item["contact"]}{f" ({when})" if when else ""}: {item["text"]}'
 
 
+def served_update(record, status):
+    """(text, reply type, ok) for what a call serving a request on another call (forRequest)
+    tells that request at `status`. Never names the number called."""
+    brief = record.get('brief') or {}
+    meeting = record.get('channel') == 'meeting'
+    who = ' '.join(str((brief.get('contact') or {}).get('name') or '').split())[:80]
+    if status == 'ringing':
+        return f'Calling {who or "them"} now; it is ringing.', 'status', True
+    if status == 'in_progress':
+        if meeting:
+            return 'Joined the meeting.', 'status', True
+        return f'{who or "They"} picked up; the call is under way.', 'status', True
+    if status == 'completed':
+        result = record.get('result') or {}
+        summary = ' '.join(str(result.get('summary') or '').split())[:400]
+        ok = result.get('outcome') in ('achieved', 'partial')
+        return (f'The call is over: {summary}' if summary else 'The call is over.'), 'done', ok
+    if status == 'canceled':
+        return 'The call was canceled before it connected.', 'done', False
+    error = ' '.join(str(record.get('error') or '').split())
+    if re.match(r'^[A-Z][A-Za-z0-9_]*: ', error):
+        error = error.split(': ', 1)[1]  # "TunnelBlocked: ..." -> what went wrong, in words
+    return (f'The call could not be made: {error[:300]}' if error
+            else 'The call could not be made.'), 'done', False
+
+
 class CallService:
     def __init__(self, store, *, hooks, lines, summarizer_factory=None, environ=None,
                  price_check_delays=PRICE_CHECK_DELAYS, shutdown_grace=SHUTDOWN_GRACE,
@@ -177,6 +206,11 @@ class CallService:
         self._clock = clock
         self._waiting = {}  # call id -> live waits in progress
         self._followed = {}  # call id -> clock time of the agent's last contact
+        # Live waits with others=True also watch the owner's other calls for requests.
+        self._watching = {}  # owner -> such waits in progress
+        self._watched = {}  # owner -> clock time the last one ended
+        self._owner_changed = {}  # owner -> event set when one of its calls gets a request
+        self._owner_requests = {}  # owner -> count of request messages on its calls
         self.price_check_delays = tuple(price_check_delays)
         self._price_checked = set()
         self.hooks = hooks
@@ -210,6 +244,13 @@ class CallService:
         if changed is not None:
             changed.set()
 
+    def _signal_owner(self, owner):
+        """A request came in on one of the owner's calls: wake waits watching its other calls."""
+        self._owner_requests[owner] = self._owner_requests.get(owner, 0) + 1
+        changed = self._owner_changed.pop(owner, None)
+        if changed is not None:
+            changed.set()
+
     def _event(self, call_id, event_type, **data):
         event = self.store.append_event(call_id, event_type, **data)
         self._signal(call_id)
@@ -230,7 +271,40 @@ class CallService:
         record = self.store.update(call_id, status=status, **changes)
         public = {key: value for key, value in fields.items() if key in ('endReason', 'detail')}
         self._event(call_id, 'call.status', status=status, **public)
+        if (record.get('brief') or {}).get('forRequest') and status in REPORTED_STATUSES:
+            self._spawn(self._report_to_request(call_id, status))
         return record
+
+    def _check_served(self, owner, brief):
+        """A brief's forRequest must name an open request on one of the owner's own calls."""
+        served = brief.for_request
+        if not served:
+            return
+        try:
+            record = self.get(served['callId'], owner=owner)
+        except (CallError, CallNotFound):
+            record = None  # another owner's call is not found either
+        request = next((item for item in (record or {}).get('requests') or ()
+                        if item['id'] == served['requestId']), None)
+        if request is None:
+            raise CallError(422, 'invalid_request', f'forRequest names request '
+                            f'{served["requestId"]} on {served["callId"]}, which does not exist')
+        if request['state'] not in OPEN_STATES:
+            raise CallError(409, 'request_closed', f'forRequest names request '
+                            f'{served["requestId"]}, which is already {request["state"]}')
+
+    async def _report_to_request(self, call_id, status):
+        """Tell the request this call serves how it is going, so the people who asked hear it
+        even when the agent is busy elsewhere. Quietly does nothing once the agent has closed
+        the request, or the other call no longer takes updates."""
+        record = self.store.get(call_id)
+        served = record['brief']['forRequest']
+        text, kind, ok = served_update(record, status)
+        try:
+            await self.reply(served['callId'], served['requestId'], owner=record.get('owner'),
+                             type=kind, text=text, ok=ok, automatic=True)
+        except (CallError, CallNotFound):
+            pass
 
     # Public operations ---------------------------------------------------
 
@@ -276,6 +350,10 @@ class CallService:
                 problem = await preflight(self.hooks, owner, brief)
                 if problem:
                     problems.append(problem)
+        try:
+            self._check_served(owner, brief)
+        except CallError as error:
+            problems.append(error.message)
         # How many earlier calls' notes the call would start with.
         try:
             carried = len(self._carried(owner, brief))
@@ -316,6 +394,7 @@ class CallService:
         except MissingCredentials as error:
             raise CallError(503, 'not_configured', str(error),
                             provider=error.provider, missing=list(error.missing)) from error
+        self._check_served(owner, brief)
         # Outbound calls only: an incoming caller ID can be faked, so no earlier call is read to it.
         carried = self._carried(owner, brief)
         if carried:
@@ -764,20 +843,29 @@ class CallService:
     def events(self, call_id, *, after=None):
         return self.store.events(call_id, after=after)
 
-    async def wait(self, call_id, *, owner, timeout=60, since=None, only=None):
+    async def wait(self, call_id, *, owner, timeout=60, since=None, only=None, others=False):
         """The call once it is terminal or the timeout passes. With `since` (an event cursor,
         '' for the start), it also comes back once something new was said, with `live`: the
         transcript lines and requests after the cursor, and the cursor to pass next time. A
         request comes back at once. only='requests' comes back for requests alone and leaves out
-        the transcript, for long meetings. While an agent waits live, it follows the call."""
+        the transcript, for long meetings. While an agent waits live, it follows the call.
+
+        others=True (live only) also watches the owner's other calls in progress: a new request
+        on any of them comes back at once, and `live.otherRequests` lists every request on them
+        the agent has not answered yet, so an agent busy with one call misses none from another.
+        While such a wait runs, the agent follows those calls too."""
         timeout = max(0.0, min(float(timeout), MAX_WAIT_SECONDS))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         settle_until = None
         live = since is not None
+        others = bool(others) and live
         self.get(call_id, owner=owner)
         if live:
             self._waiting[call_id] = self._waiting.get(call_id, 0) + 1
+        if others:
+            self._watching[owner] = self._watching.get(owner, 0) + 1
+            asked = self._owner_requests.get(owner, 0)
         try:
             while True:
                 record = self.get(call_id, owner=owner)
@@ -789,15 +877,31 @@ class CallService:
                     elif (only != 'requests' and settle_until is None
                           and any(event['type'] in LIVE_EVENTS for event in events)):
                         settle_until = min(deadline, loop.time() + LIVE_SETTLE_SECONDS)
+                if others and self._owner_requests.get(owner, 0) != asked:
+                    remaining = 0  # a request on another of the owner's calls
                 if settle_until is not None:
                     remaining = min(remaining, settle_until - loop.time())
                 if record['status'] in TERMINAL or remaining <= 0:
-                    return record if not live else dict(record, live=self._live(call_id, since, only))
+                    if not live:
+                        return record
+                    found = self._live(call_id, since, only)
+                    if others:
+                        found['otherRequests'] = self._unanswered_elsewhere(call_id, owner)
+                    return dict(record, live=found)
                 changed = self._changed.setdefault(call_id, asyncio.Event())
+                if not others:
+                    try:
+                        await asyncio.wait_for(changed.wait(), remaining)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+                watched = self._owner_changed.setdefault(owner, asyncio.Event())
+                tasks = [asyncio.ensure_future(changed.wait()), asyncio.ensure_future(watched.wait())]
                 try:
-                    await asyncio.wait_for(changed.wait(), remaining)
-                except asyncio.TimeoutError:
-                    pass
+                    await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for task in tasks:
+                        task.cancel()
         finally:
             if live:
                 self._waiting[call_id] -= 1
@@ -805,6 +909,36 @@ class CallService:
                     del self._waiting[call_id]
                 if call_id in self._contexts:
                     self._followed[call_id] = self._clock()
+            if others:
+                self._watching[owner] -= 1
+                if not self._watching[owner]:
+                    del self._watching[owner]
+                self._watched[owner] = self._clock()
+
+    def _unanswered_elsewhere(self, call_id, owner):
+        """Requests on the owner's other calls in progress that the agent has not answered at
+        all yet (not even with a status), oldest first."""
+        found = []
+        for other in list(self._contexts):
+            if other == call_id:
+                continue
+            try:
+                record = self.store.get(other)
+            except CallNotFound:
+                continue
+            if record.get('owner') != owner or record['status'] in TERMINAL:
+                continue
+            for request in record.get('requests') or ():
+                if request['state'] not in OPEN_STATES or any(
+                        entry.get('from') == 'agent' for entry in request.get('thread') or ()):
+                    continue
+                item = {'callId': other, 'channel': record.get('channel'), 'id': request['id'],
+                        'kind': request.get('kind'), 'text': request.get('text'),
+                        'openedAt': request.get('openedAt')}
+                if request.get('askedBy'):
+                    item['askedBy'] = request['askedBy']
+                found.append(item)
+        return sorted(found, key=lambda item: item.get('openedAt') or '')
 
     def _live(self, call_id, since, only=None):
         """What was said and asked after the cursor `since`, and the cursor for next time."""
@@ -868,6 +1002,19 @@ class CallService:
         if self._waiting.get(call_id):
             return True
         seen = self._followed.get(call_id)
+        if seen is not None and self._clock() - seen <= self.follow_grace:
+            return True
+        if not self._watching and not self._watched:
+            return False
+        # An agent waiting on another of the owner's calls with others=True sees this one's
+        # requests too.
+        try:
+            owner = self.store.get(call_id).get('owner')
+        except CallNotFound:
+            return False
+        if self._watching.get(owner):
+            return True
+        seen = self._watched.get(owner)
         return seen is not None and self._clock() - seen <= self.follow_grace
 
     def _change_request(self, call_id, request_id, change):
@@ -922,6 +1069,7 @@ class CallService:
             self._event(call_id, 'call.request', type='ask',
                         **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context',
                                                          'source') if key in request})
+            self._signal_owner(record.get('owner'))
             if self.agent_following(call_id):
                 self._spawn(self._check_pickup(call_id, request_id))
             return request
@@ -941,6 +1089,7 @@ class CallService:
         request = self._change_request(call_id, request_id, change)
         self._event(call_id, 'call.request', type=action, id=request_id,
                     **({'text': text} if text else {}))
+        self._signal_owner(record.get('owner'))
         return request
 
     async def _check_pickup(self, call_id, request_id):
@@ -994,12 +1143,13 @@ class CallService:
             return False
 
     async def reply(self, call_id, request_id, *, owner, type, text, announce=False, ok=True,
-                    details=None):
+                    details=None, automatic=False):
         """The agent answers a request: status (any number; the first says it is picked up) or
         done (once; it closes the request). The voice gets it while the call runs; done is still
         recorded after the call ends."""
         record = self.get(call_id, owner=owner)
-        if call_id in self._contexts:
+        if call_id in self._contexts and not automatic:
+            # An automatic update (from a call serving the request) is not the agent's contact.
             self._followed[call_id] = self._clock()
         request = next((item for item in record.get('requests') or ()
                         if item['id'] == request_id), None)
@@ -1030,6 +1180,8 @@ class CallService:
             note['details'] = details
             note['chat'] = chat_message(request, details, owner=owner_name)
         entry = {'from': 'agent', 'type': type, 'text': text, 'at': self.store.now()}
+        if automatic:
+            entry['automatic'] = True
         if type == 'status' and announce:
             entry['announce'] = True
         if type == 'done':
