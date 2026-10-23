@@ -35,9 +35,9 @@ TCP_FAILURE = 'Unable to establish connection with Cloudflare edge'
 # This many failed TCP connections before one registers means the network blocks Cloudflare
 # (older cloudflared versions do not log the precheck).
 TCP_FAILURES_BLOCKED = 4
-BLOCKED = ('This network blocks Cloudflare tunnels (outbound port 7844), so the phone provider '
-           'cannot reach this computer and phone calls cannot connect. Switch networks (a phone '
-           'hotspot works) or set SMITLINE_PUBLIC_URL. Meetings are not affected.')
+# Kept under 200 characters: a failed call keeps that much of its error.
+BLOCKED = ('This network blocks Cloudflare tunnels (port 7844), so phone calls cannot connect. '
+           'Switch networks (a phone hotspot works) or set SMITLINE_PUBLIC_URL. Meetings still work.')
 
 
 class TunnelError(RuntimeError):

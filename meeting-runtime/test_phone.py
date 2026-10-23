@@ -1412,6 +1412,8 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(error, TunnelBlocked)
         self.assertIn('This network blocks Cloudflare tunnels', str(error))
         self.assertIn('hotspot', str(error))
+        # A failed call keeps 200 characters of its error: the advice must fit.
+        self.assertLess(len(f'{type(error).__name__}: {error}'), 200)
         # A blocked network is not retried with a fresh tunnel, and cloudflared is stopped.
         self.assertEqual(len(processes), 1)
         self.assertEqual(processes[0].returncode, 0)
