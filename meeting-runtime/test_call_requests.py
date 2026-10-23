@@ -104,9 +104,39 @@ class RequestDeskTests(unittest.TestCase):
 
     def test_the_voice_knows_only_the_backend_passes_requests_on(self):
         text = call_requests.voice_instructions('Robin', 'look things up', meeting=True)
-        self.assertIn('you cannot pass anything on yourself: only your backend can', text)
+        self.assertIn('You cannot pass anything on yourself: only your backend can', text)
         self.assertIn('If you did not hand it to your backend, it was not passed on', text)
         self.assertIn('you may say only "One moment" first', text)
+        # The words it used in the live test without handing anything over (issue 83).
+        self.assertIn('never say "on it", "sending it", "I\'ll send that", "still waiting"', text)
+        self.assertIn('When someone checks on a request, tell them plainly', text)
+
+    def test_questions_reach_the_agent_and_cando_limits_tasks(self):
+        voice = call_requests.voice_instructions('Robin', 'edit the demo page', meeting=True)
+        self.assertIn('or asks a question you cannot answer from what you know, hand it to your backend', voice)
+        self.assertIn('A task outside what the agent can do, you do not pass on', voice)
+        self.assertIn("When someone asks what you can do, also say what Robin's agent can do", voice)
+        backend = call_requests.backend_instructions('Robin', 'edit the demo page')
+        self.assertIn('When the voice hands you a question you cannot answer from what you have, or a '
+                      'task within what the agent can do, call ask_agent', backend)
+        self.assertIn('Never pass on a task outside what the agent can do', backend)
+        self.assertNotIn('Never pass on anything outside', backend)
+        self.assertIn('a question you cannot answer', call_requests.ask_agent_tool('Robin')['description'])
+
+    def test_with_requests_on_unknown_answers_go_to_the_agent(self):
+        from bridge import backend_instructions as meeting_backend
+        from phone_prompts import backend_instructions as phone_backend
+        runtime = SimpleNamespace(owner_name='Robin', participant_name='Smitline AI',
+                                  meeting_instructions=None)
+        with_requests = meeting_backend(runtime, {'canDo': 'edit the demo page'})
+        self.assertIn('If you cannot establish the answer, pass the question to the agent', with_requests)
+        self.assertIn('If you cannot establish the answer, say so plainly and that Robin will follow up',
+                      meeting_backend(runtime, {}))
+        call = CallBrief.from_dict(brief(canDo='edit the demo page'))
+        self.assertIn('if the answer is not here, pass the question to the agent',
+                      phone_backend(call, background='Notes.'))
+        self.assertIn('if the answer is not here, say so and that Robin will follow up',
+                      phone_backend(CallBrief.from_dict(brief()), background='Notes.'))
 
     def test_tool_is_strict_and_complete(self):
         tool = call_requests.ask_agent_tool('Robin')
@@ -179,6 +209,31 @@ class ClaimWatchTests(unittest.TestCase):
         message = watch.due()
         self.assertEqual((message['type'], message['id'], message['text']),
                          ('add', 'r1', 'November third, please.'))
+
+    def test_what_the_voice_said_in_the_live_test_counts_as_a_claim(self):
+        # 2026-10-23 (issue 83): the voice said these for a question it never handed over.
+        for said in ('Alright, on it.', 'On it.', "Still waiting. I don't know yet.",
+                     "All right, I'm sending it.", "Good, I'll send that.",
+                     'Let me pass the question on.'):
+            self.assertTrue(call_requests.claims_passed_on(said), said)
+        # Offers, refusals and everyday words are not.
+        for said in ("I can send him the request, but it's not up to me.", "I'm not sending that.",
+                     'We are on it as a team.', "I'm sending you the link now.", 'Keep going on it.',
+                     "I don't know, but I can ask Robin's agent about it if you want."):
+            self.assertFalse(call_requests.claims_passed_on(said), said)
+
+    def test_on_it_without_asking_passes_their_question_on(self):
+        watch, now = self.watch()
+        watch.heard('other', 'I see. So, is there any issue that you know that we were facing recently')
+        watch.heard('agent', "I don't know, but I can ask Robin's agent about it if you want.")
+        watch.heard('other', 'Yes, go ahead and ask about it')
+        watch.heard('agent', 'Alright, on it.')
+        now[0] += 11
+        message = watch.due()
+        self.assertEqual((message['type'], message['kind'], message['source']), ('ask', 'question', 'speech'))
+        self.assertEqual(message['text'], 'Yes, go ahead and ask about it')
+        self.assertIn('other: I see. So, is there any issue that you know that we were facing recently',
+                      message['context'])
 
     def test_told_looks_for_the_answer(self):
         answer = 'The latest changes are in pull request 75, requests from calls.'

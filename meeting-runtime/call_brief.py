@@ -152,7 +152,8 @@ class CallBrief:
     # in the brief (the call record keeps them as `carried`).
     carried: tuple = field(default=(), compare=False)
     # What the calling agent will do for the people on the call when they ask ("look things up
-    # in the repo and edit docs"). Requests are off without it. See call_requests.py.
+    # in the repo and edit docs"). It limits tasks; questions the voice cannot answer go to the agent
+    # too. Requests are off without it. See call_requests.py.
     can_do: str = None
     # {'callId', 'requestId'}: a request on another call this call serves; see FOR_REQUEST_FIELDS.
     for_request: dict = field(default=None, compare=False)

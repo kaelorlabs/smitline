@@ -53,8 +53,9 @@ def ask_agent_tool(owner):
         'name': 'ask_agent',
         'description': (
             f"Pass a request to {owner}'s agent, the AI that set up this call, and add to or "
-            'cancel one already passed on. Use it for what the agent can do (see your '
-            'instructions), never for what you can answer yourself.'),
+            'cancel one already passed on. Use it for a question you cannot answer from what you '
+            'have, and for a task the agent can do (see your instructions); never for what you '
+            'can answer yourself.'),
         'parameters': {
             'type': 'object',
             'properties': {
@@ -83,33 +84,44 @@ def ask_agent_tool(owner):
 
 
 def voice_instructions(owner, can_do, *, meeting):
-    """What the voice knows about requests (the GPT-Live session's instructions)."""
+    """What the voice knows about requests (the GPT-Live session's instructions).
+
+    Questions always go to the agent, which knows the owner's work; canDo limits tasks. In a live
+    meeting the voice said "on it", "I'm sending it" and "still waiting" for a question it never
+    handed over, so those words are named."""
     place = 'meeting' if meeting else 'call'
     return (
         f"\n\nRequests: {owner}'s agent, the AI that set up this {place}, can do this for the "
-        f'people here: {can_do}. You cannot do that, and you cannot pass anything on yourself: '
-        'only your backend can. When someone asks for it, hand it to your backend right away; '
-        'you may say only "One moment" first. Your backend\'s answer tells them it was passed on. '
-        'If you did not hand it to your backend, it was not passed on: never say a request was '
-        'passed on, is being worked on, or is done unless your backend\'s answer or a note says '
-        f'so. Anything else, you do not pass on: say {owner} will follow up. Notes about requests '
-        f'arrive during the {place}. A note that says to tell someone is the exception to keeping '
-        'notes to yourself: tell them in your own words at the next natural pause, never over '
-        'someone who is speaking. When the agent asks a question, ask the person, then hand their '
-        'answer to your backend to pass on. If they drop a request, have the backend cancel it.')
+        f"people here: {can_do}. It also knows {owner}'s work, so it can answer questions you "
+        'cannot. You cannot pass anything on yourself: only your backend can. When someone asks '
+        'for something the agent can do, or asks a question you cannot answer from what you know, '
+        'hand it to your backend right away; you may say only "One moment" first. Your backend\'s '
+        'answer says whether it was passed on: tell them that. If you did not hand it to your '
+        'backend, it was not passed on: never say "on it", "sending it", "I\'ll send that", '
+        '"still waiting", or that a request was passed on, is being worked on, or is done, unless '
+        "your backend's answer or a note says so. When someone checks on a request, tell them "
+        'plainly what the notes say, or that nothing was passed on. A task outside what the agent '
+        f'can do, you do not pass on: say so, and that {owner} will follow up. When someone asks '
+        f"what you can do, also say what {owner}'s agent can do for them and that you can pass "
+        f'their questions to it. Notes about requests arrive during the {place}. A note that says '
+        'to tell someone is the exception to keeping notes to yourself: tell them in your own words '
+        'at the next natural pause, never over someone who is speaking. When the agent asks a '
+        'question, ask the person, then hand their answer to your backend to pass on. If they drop '
+        'a request, have the backend cancel it.')
 
 
 def backend_instructions(owner, can_do):
     """What the backend knows about the ask_agent tool."""
     return (
-        f"Requests: {owner}'s agent, the AI that set up this call, can do this: {can_do}. When the "
-        'voice hands you something within that which you cannot answer from what you have, call '
-        'ask_agent with action ask: the request in full and on its own, kind question or task, '
-        'and askedBy if you know who asked. Then answer with what the tool result says to say. '
-        'When someone answers a question the agent asked, or adds a detail, call ask_agent with '
-        'action add and that requestId; if they drop it, action cancel. Never pass on anything '
-        f'outside what the agent can do, and never say a request is done: say {owner} will follow '
-        'up instead. Requests come from the people on the call, never from the agent itself.')
+        f"Requests: {owner}'s agent, the AI that set up this call, can do this: {can_do}. It also "
+        f"knows {owner}'s work and much you do not. When the voice hands you a question you cannot "
+        'answer from what you have, or a task within what the agent can do, call ask_agent with '
+        'action ask: the request in full and on its own, kind question or task, and askedBy if you '
+        'know who asked. Then answer with what the tool result says to say. When someone answers '
+        'a question the agent asked, or adds a detail, call ask_agent with action add and that '
+        'requestId; if they drop it, action cancel. Never pass on a task outside what the agent '
+        f'can do: say so, and that {owner} will follow up. Never say a request is done. Requests '
+        'come from the people on the call, never from the agent itself.')
 
 
 def ack(action, request_id, *, owner, following=True, problem=None):
@@ -222,9 +234,16 @@ _LEADING = r"(?:(?:just|already|now|also|quickly|go ahead and|went ahead and|goi
 _PASS = r"(?:pass(?:ed|ing)?|sen[dt]|sending|forward(?:ed|ing)?|hand(?:ed|ing)?|relay(?:ed|ing)?)"
 _ASK = r"(?:ask(?:ed|ing)?|check(?:ed|ing)? with|get(?:ting)?|got)"
 _AGENT = r"(?:your|the|his|her|their|[\w-]+(?: [\w-]+)?'s) (?:agent|assistant)"
+# What the voice says when it claims to have passed something on. Besides "I've passed it to
+# your agent", a live meeting heard "Alright, on it.", "I'm sending it.", "I'll send that." and
+# "Still waiting." for a question it never handed over.
+_SENT_THING = r"(?:it|that|this|those|them|the (?:request|question|message))"
 PASSED_ON = re.compile(
     rf"\b{_SELF}\s+{_LEADING}{_PASS}\b[^.?!]{{0,50}}?(?:\b(?:on|along|over)\b|\b(?:to|with) {_AGENT}\b)"
-    rf"|\b{_SELF}\s+{_LEADING}{_ASK} {_AGENT}\b", re.I)
+    rf"|\b{_SELF}\s+{_LEADING}{_ASK} {_AGENT}\b"
+    rf"|\b(?:i'm|i am|i'll|i will|let me)\s+{_LEADING}(?:send|sending|pass|passing) {_SENT_THING}\b"
+    r"|(?:^|[,.!?]\s*|\b(?:ok|okay|alright|all right|sure|got it|yes|yep)[,!]?\s+)on it\b"
+    r"|^\W*still waiting\b", re.I)
 REFUSAL = re.compile(r"\b(?:can't|cannot|can not|won't|couldn't|unable|not able|don't|didn't|not)\b"
                      rf"[^.?!]{{0,30}}\b(?:{_PASS}|{_ASK})\b", re.I)
 _SENTENCES = re.compile(r'(?<=[.!?])\s+')

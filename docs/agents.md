@@ -53,7 +53,7 @@ When the agent knows something the call needs, such as the user's calendar, a do
 
 ## Requests from the call
 
-People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`:
+People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`. That limits *tasks*: a question the voice cannot answer is passed on too, since the agent knows the owner's work, and the agent decides how much to share:
 
 ```json
 { "channel": "meeting", "to": "https://zoom.us/j/...", "onBehalfOf": "Sam",
@@ -94,7 +94,7 @@ Nobody is left waiting:
 - If a request is not picked up within 30 seconds, the voice is told, and says it is still waiting if anyone asks.
 - Requests still open when the call ends are in the result as `openRequests`. A `done` after the call is still recorded; it is not spoken.
 
-Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
+Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve, and answer questions only with what the user would want these people to know: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
 
 ## CLI
 
