@@ -86,6 +86,16 @@ export const BRIEF_SCHEMA = {
       maxLength: 500,
       description: "What you will do for the people on the call when they ask, such as \"look things up in the repo and edit the docs\". With it, the voice passes their requests to you (live.requests in wait_for_call) and you answer with reply_to_call_request; it declines anything else. Omit it and nobody can ask you for anything. Name only what you can do and the user would approve.",
     },
+    forRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['callId', 'requestId'],
+      description: "When this call does what someone on another call asked (such as phoning Arun because a meeting asked you to): that call's id and the request's id. This call then reports to the request by itself: ringing, picked up, and the outcome or why it failed, so the people who asked hear how it went even while you are busy. You can still reply yourself.",
+      properties: {
+        callId: CALL_ID_SCHEMA,
+        requestId: { type: 'string', pattern: '^r[1-9][0-9]{0,2}$' },
+      },
+    },
     carryFrom: {
       type: 'object',
       additionalProperties: false,
@@ -128,6 +138,7 @@ export const CALL_TOOL_DEFINITIONS = [
         timeoutSeconds: { type: 'integer', minimum: 0, maximum: 280, description: 'How long to wait in this request. Default 50.' },
         since: { type: 'string', pattern: '^[0-9]{0,12}$', description: 'Follow the call live: "" the first time, then live.cursor from the last answer.' },
         only: { type: 'string', enum: ['requests'], description: 'Wake only for requests from the call, and leave out the transcript. Implies following live.' },
+        others: { type: 'boolean', description: 'While following live, also watch your other calls in progress (default true): a new request on any of them wakes this wait, and live.otherRequests lists every request on them you have not answered yet (callId, id, text). Answer those with reply_to_call_request on their own callId, so a call you are busy with never hides another.' },
       },
     },
   },
@@ -270,7 +281,7 @@ export const TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS;
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
-export const CALLS_INSTRUCTIONS = "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. With canDo in the brief, people on the call can ask you for things: they arrive in live.requests and you answer each with reply_to_call_request (status as you work, then done); keep following the call while you work, for example with a subagent, and never stop following it to fix something else. If what they asked for fails, including a phone call you started for them, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to.";
+export const CALLS_INSTRUCTIONS = "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. With canDo in the brief, people on the call can ask you for things: they arrive in live.requests and you answer each with reply_to_call_request (status as you work, then done); keep following the call while you work, for example with a subagent, and never stop following it to fix something else. Following live also watches your other calls: requests from them come back in live.otherRequests, so answer them too. When you place a call because someone on a call asked, pass forRequest so it reports to them by itself. If what they asked for fails, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, or Google Meet meeting use channel 'meeting' with the invite URL as to.";
 
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {
@@ -293,6 +304,9 @@ export async function callToolFor(colleague, name, args) {
     const follow = {};
     if (args.since !== undefined) follow.since = args.since;
     if (args.only !== undefined) follow.only = args.only;
+    if (args.others !== undefined && typeof args.others !== 'boolean') throw new ValidationError('others must be true or false');
+    // Following live watches the agent's other calls too, unless it says not to.
+    if (follow.since !== undefined || follow.only !== undefined) follow.others = args.others !== false;
     return colleague.waitForCall(requireCallId(args), timeout, follow);
   }
   if (name === 'get_call') return colleague.getCall(requireCallId(args));

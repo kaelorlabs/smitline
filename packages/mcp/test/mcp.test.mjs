@@ -175,13 +175,18 @@ test('call tools map to the SDK and surface brief questions', async () => {
   assert.equal(JSON.parse(waited.result.content[0].text).result.outcome, 'achieved');
   assert.deepEqual(calls[1], ['wait', callId, 50, {}]);
   await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '', timeoutSeconds: 20 } });
-  assert.deepEqual(calls.at(-1), ['wait', callId, 20, { since: '' }]);
+  // Following live also watches the agent's other calls, unless it opts out.
+  assert.deepEqual(calls.at(-1), ['wait', callId, 20, { since: '', others: true }]);
   await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '14' } });
-  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '14' }]);
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '14', others: true }]);
+  await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '14', others: false } });
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '14', others: false }]);
+  const badOthers = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '', others: 'yes' } });
+  assert.equal(badOthers.result.isError, true);
   const badSince = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: 'x' } });
   assert.equal(badSince.result.isError, true);
   await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'requests' } });
-  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { only: 'requests' }]);
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { only: 'requests', others: true }]);
   const badOnly = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'all' } });
   assert.equal(badOnly.result.isError, true);
   await call(session, 'tools/call', {

@@ -302,11 +302,12 @@ export function createLoopbackTransport(options = {}) {
     getCall(callId) {
       return json('GET', `/v1/calls/${encodeURIComponent(callId)}`);
     },
-    waitForCall(callId, timeoutSeconds = 60, since = undefined, only = undefined) {
+    waitForCall(callId, timeoutSeconds = 60, since = undefined, only = undefined, others = undefined) {
       // Node's fetch gives up on response headers after 300 s, so stay below it.
       const timeout = Math.max(0, Math.min(Number(timeoutSeconds) || 0, 280));
       let follow = since === undefined || since === null ? '' : `&since=${encodeURIComponent(String(since))}`;
       if (only) follow += `&only=${encodeURIComponent(String(only))}`;
+      if (others) follow += '&others=true';
       return json('GET', `/v1/calls/${encodeURIComponent(callId)}/wait?timeout=${timeout}${follow}`);
     },
     replyToRequest(callId, requestId, reply) {
@@ -403,8 +404,8 @@ export class Smitline {
    * is said, with `live.transcript` holding the new lines, and at once for a request
    * (`live.requests`). `{ only: 'requests' }` wakes for requests alone, without the transcript.
    */
-  async waitForCall(callId, timeoutSeconds = 60, { since, only } = {}) {
-    return this._transport.waitForCall(callId, timeoutSeconds, since, only);
+  async waitForCall(callId, timeoutSeconds = 60, { since, only, others } = {}) {
+    return this._transport.waitForCall(callId, timeoutSeconds, since, only, others);
   }
 
   /**

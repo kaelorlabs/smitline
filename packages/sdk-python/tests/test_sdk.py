@@ -155,15 +155,17 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         await client.wait_for_call('call-0123456789abcdef', 20, since='')
         await client.wait_for_call('call-0123456789abcdef', 20, since='14')
         await client.wait_for_call('call-0123456789abcdef', 20, since='14', only='requests')
-        self.assertEqual([path for _, path, _ in seen[9:]], [
+        await client.wait_for_call('call-0123456789abcdef', 20, since='14', others=True)
+        self.assertEqual([path for _, path, _ in seen[9:13]], [
             '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=',
             '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14',
-            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14&only=requests'])
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14&only=requests',
+            '/v1/calls/call-0123456789abcdef/wait?timeout=20&since=14&others=true'])
         await client.reply_to_request('call-0123456789abcdef', 'r1', type='status', text='Picked up.',
                                       announce=True)
         await client.reply_to_request('call-0123456789abcdef', 'r1', type='done', text='No access.',
                                       ok=False)
-        self.assertEqual(seen[12:], [
+        self.assertEqual(seen[13:], [
             ('POST', '/v1/calls/call-0123456789abcdef/requests/r1/reply',
              {'type': 'status', 'text': 'Picked up.', 'announce': True}),
             ('POST', '/v1/calls/call-0123456789abcdef/requests/r1/reply',
