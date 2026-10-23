@@ -270,6 +270,12 @@ class CallService:
                     problems.append(str(error))
                 except CallRefused as error:
                     problems.append(error.message)
+            # A line can also test what only shows when tried, such as the phone tunnel.
+            preflight = getattr(line, 'preflight', None)
+            if preflight is not None and not problems:
+                problem = await preflight(self.hooks, owner, brief)
+                if problem:
+                    problems.append(problem)
         # How many earlier calls' notes the call would start with.
         try:
             carried = len(self._carried(owner, brief))

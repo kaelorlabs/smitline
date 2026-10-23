@@ -193,6 +193,23 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(blocked['ok'])
         self.assertIn('SMITLINE_ALLOWED_CALLING_CODES', blocked['problems'][0])
 
+    async def test_check_runs_the_lines_preflight_only_for_an_acceptable_brief(self):
+        tried = []
+
+        async def preflight(hooks, owner, call):
+            tried.append(call.to)
+            return 'This network blocks Cloudflare tunnels'
+        self.h.line.preflight = preflight
+        report = await self.h.service.check(brief())
+        self.assertEqual((report['ok'], report['problems']), (False, ['This network blocks Cloudflare tunnels']))
+        self.assertEqual(tried, ['+14155550142'])
+        # A brief refused for another reason does not start anything.
+        self.h.service.hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k',
+                                                         'SMITLINE_ALLOWED_CALLING_CODES': '44'})
+        refused = await self.h.service.check(brief())
+        self.assertEqual(len(refused['problems']), 1)
+        self.assertEqual(tried, ['+14155550142'])
+
     async def test_a_request_not_to_call_again_is_honored(self):
         summarize = self.h.summarizer.summarize
 
