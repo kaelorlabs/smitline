@@ -49,7 +49,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 }
 ```
 
-`canDo` (optional, up to 500 characters) says what the calling agent will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". With it, the voice passes their requests to the agent; without it, nobody on the call can ask the agent for anything. See [requests from the call](agents.md#requests-from-the-call).
+`canDo` (optional, up to 500 characters) says what the calling agent will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". With it, the voice passes on their tasks within it, and any question it cannot answer itself (the agent knows the owner's work; it decides what to share); without it, nobody on the call can ask the agent for anything. See [requests from the call](agents.md#requests-from-the-call).
 
 `forRequest` (optional) names an open request on another of the owner's calls that this call serves, as `{"callId": "call-…", "requestId": "r1"}`: the call then reports its progress and outcome to that request by itself. See [several calls at once](agents.md#several-calls-at-once).
 

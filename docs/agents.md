@@ -53,7 +53,7 @@ When the agent knows something the call needs, such as the user's calendar, a do
 
 ## Requests from the call
 
-People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`:
+People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`. That limits *tasks*: a question the voice cannot answer is passed on too, since the agent knows the owner's work, and the agent decides how much to share:
 
 ```json
 { "channel": "meeting", "to": "https://zoom.us/j/...", "onBehalfOf": "Sam",
@@ -82,7 +82,7 @@ A small question gets `done` straight away. A bigger task gets a `status` first,
 An agent busy with one call must not miss requests from another, such as a phone call it placed because a meeting asked, while that meeting keeps talking. Two things keep them connected:
 
 - **`others`.** A live wait with `others: true` also watches the owner's other calls in progress. A new request on any of them wakes the wait at once, and `live.otherRequests` lists every request on them the agent has not answered yet (`callId`, `id`, `kind`, `text`, `askedBy`); the agent answers each with `reply_to_call_request` on that request's own `callId`. A request stays listed until the agent sends it at least a `status`. While such a wait runs, the agent counts as following those calls too, so their voices pass requests on instead of saying nobody is there. The MCP `wait_for_call` turns it on whenever it follows live (pass `others: false` to stop); REST (`others=true`), the SDKs (`others`) and the CLI (`--others`) leave it off unless asked.
-- **`forRequest`.** A brief with `forRequest: {"callId", "requestId"}` names an open request on another of the owner's calls that this call serves. The call then reports to that request by itself: a status when it rings and when it connects, and `done` with the outcome, or with why it could not be made (for example "This network blocks Cloudflare tunnels…"). The people who asked hear it even while the agent is busy. The number called is never part of a report. The agent can still reply itself; a report is skipped once the request is closed. CLI: `--for-request <call id>:<request id>`.
+- **`forRequest`.** A brief with `forRequest: {"callId", "requestId"}` names an open request on another of the owner's calls that this call serves. The call then reports to that request by itself: a status when it rings and when it connects, and `done` with the outcome, or with why it could not be made (for example "This network blocks Cloudflare tunnels…"). The people who asked hear it even while the agent is busy. The number called is never part of a report. The agent can still reply itself; a report is skipped once the request is closed. If the people who asked cancel the request, the call hangs up at once, without a goodbye (a disclosure not yet made is still made first). CLI: `--for-request <call id>:<request id>`.
 
 The voice gives an answer at a good moment, as a person would: at the next natural pause when the person is waiting for it, otherwise first thing the next time it speaks, and never by cutting itself off in the middle of something important. If it is interrupted before it has said it, it says it the next time it speaks; and if 35 seconds after an answer reached the voice nothing it said carried the answer (its numbers, or most of its key words), the answer is given to it once more.
 
@@ -94,7 +94,7 @@ Nobody is left waiting:
 - If a request is not picked up within 30 seconds, the voice is told, and says it is still waiting if anyone asks.
 - Requests still open when the call ends are in the result as `openRequests`. A `done` after the call is still recorded; it is not spoken.
 
-Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
+Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve, and answer questions only with what the user would want these people to know: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
 
 ## CLI
 

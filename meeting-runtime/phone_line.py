@@ -17,7 +17,9 @@ import time
 from call_brief import CallBrief, default_voice, normalize_phone, validate_webhook_url
 from barge_in import SpeechDetector, frame_level_db
 from call_costs import provider_price_from
-from meeting_lifecycle import GOODBYE_QUIET_SECONDS, only_closing, says_goodbye, voicemail_prompt
+from meeting_lifecycle import (
+    GOODBYE_QUIET_SECONDS, machine_prompt, only_closing, says_goodbye, voicemail_prompt,
+)
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
@@ -532,6 +534,9 @@ class PhoneSession:
         # The other side's recent words, across the agent's, and whether they were a voicemail.
         self._other_recent = ''
         self.voicemail_heard = False
+        # A person on the other side has spoken: not only a voicemail or call-screening prompt.
+        self.person_heard = False
+        self._other_turn = ''  # the other side's words since they last started talking
 
     # Configuration -------------------------------------------------------
 
@@ -900,6 +905,9 @@ class PhoneSession:
                 self._agent_latest = (self._agent_latest + delta if self._last_speaker == 'agent'
                                       else delta)
             else:
+                if self._last_speaker != 'other':
+                    self._other_turn = ''
+                self._other_turn += delta
                 gap = '' if self._last_speaker == 'other' else ' '
                 self._other_recent = (self._other_recent + gap + delta)[-200:]
                 if not self.voicemail_heard and voicemail_prompt(self._other_recent):
@@ -907,6 +915,8 @@ class PhoneSession:
                     self.ctx.event('call.voicemail_heard')
                 if self._goodbye_watch is not None:
                     self._said_after_goodbye += delta
+            if source == 'agent' and self._last_speaker == 'other':
+                self._person_spoke()  # their turn is over: was it a person?
             self._last_speaker = source
             if source == 'agent' and says_goodbye(self._agent_latest):
                 self._watch_goodbye()
@@ -1165,11 +1175,26 @@ class PhoneSession:
             self.ctx.event('call.voicemail_hangup')
             self._start_hangup('hangup', disclose=False)
             return True
+        if not self._person_spoke():
+            # Answered, but only by a machine so far (call screening) or by silence: nobody to say
+            # goodbye to. In a live test the phone kept ringing through a 12-second goodbye.
+            self.ctx.event('call.no_person_hangup')
+            self._start_hangup('hangup', disclose=False)
+            return True
         await self.live.append('session.commentary.append', self._goodbye_cue(
             'You need to end the call now. Thank them and say goodbye.'))
         if self._pending_hangup is None:
             self._pending_hangup = self._spawn(self._delayed_hangup('hangup', 12.0))
         return True
+
+    def _person_spoke(self):
+        """Whether a person has spoken on the other side: words that are not a voicemail or call
+        screening prompt, counting the turn they are in now."""
+        turn = self._other_turn.strip()
+        if not self.person_heard and turn and not machine_prompt(turn):
+            self.person_heard = True
+            self.ctx.event('call.person_heard')
+        return self.person_heard
 
     async def _delayed_hangup(self, reason, seconds):
         await asyncio.sleep(seconds)
