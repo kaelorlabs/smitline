@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  Don't want to run it yourself? <a href="https://smitline.com"><b>Smitline Cloud</b></a>, the hosted version by Kaelor Labs, is at <a href="https://smitline.com">smitline.com</a>.
+</p>
+
+<p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b2e38"></a>
   <a href="https://github.com/kaelorlabs/smitline/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/kaelorlabs/smitline?label=version&color=555bc0"></a>
   <a href="https://github.com/kaelorlabs/smitline/pkgs/container/smitline"><img alt="Docker image on GHCR" src="https://img.shields.io/badge/docker-ghcr.io%2Fkaelorlabs%2Fsmitline-555bc0"></a>
@@ -120,7 +124,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 - Phone calls are in daily use through SignalWire. Meetings are tested live in Zoom; Teams and Google Meet use the same runtime but have had less live testing.
 - Replies come after a short pause, so a call feels a little slower than talking to a person. Call audio passes through your computer on its way to OpenAI.
 - Trial phone accounts call only numbers you verify, and Twilio's free trial can't carry a live call.
-- Smitline works while your computer is on; there is no hosted version yet.
+- Self-hosted Smitline works while your computer is on. For an always-on version, see [Smitline Cloud](https://smitline.com).
 - In meetings, guidance goes in the brief before it joins, and it doesn't share or read screens.
 
 ## Documentation
