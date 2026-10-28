@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 import re
 from urllib.parse import urlsplit
-from adapters_base import MeetingPlatformAdapter, Capabilities, AuthenticationRequired
+from adapters_base import MeetingPlatformAdapter, Capabilities, AuthenticationRequired, GuestRefused
 from meeting_urls import platform_for_url, normalize_url
 from zoom_controls import accept_host_unmute, microphone_is_muted
 from zoom_join import join_zoom, connect_audio
@@ -326,7 +326,12 @@ class MeetAdapter(MeetingPlatformAdapter):
             if "you can't join this video call" in body or 'you cannot join this video call' in body:
                 if await self._signed_in_ui():
                     raise RuntimeError('Google Meet meeting ended or admission was denied')
-                raise AuthenticationRequired('Google Meet requires an authorized Google account')
+                # Google's own refusal of a guest (it also says "Your meeting is safe"), not a
+                # sign-in page: say what happened. A connected Google account is still the way in.
+                raise GuestRefused(
+                    "Google Meet turned away Smitline's guest join (Google said: You can't join this "
+                    'video call). Connect a Google account for Meet and try again, or use a Zoom or '
+                    'Teams link.')
             if any(x in body for x in (
                 'the meeting has ended', 'you were removed', 'you have been removed',
                 "you've been removed", 'return to home screen',
