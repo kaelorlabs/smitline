@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Google Meet says when Google turns the guest away.** Right after "Join now", Google can refuse a guest browser with "You can't join this video call", even in a meeting open to anyone. Smitline used to report that as needing sign-in; the meeting's error now says Google turned the guest join away (`GuestRefused`, still the `authentication_required` stage). As before, a connected Google account is tried next when there is one.
+
 ## 0.3.0 — 2026-10-21
 
 - **Answers are given at a good moment and are not lost.** The voice gives an answer from the agent at the next natural pause when the person is waiting for it, otherwise first thing the next time it speaks, and finishes what it is saying first. If someone cuts in before it has said it, it says it the next time; if 35 seconds later nothing it said carried the answer, the answer is given to it once more (`call.request_retold`). Paraphrase counts ("the next one after that" for "77", "October 6th" for "October 6"), and a sentence still being said gets up to 10 more seconds.
