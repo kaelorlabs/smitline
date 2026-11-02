@@ -10,6 +10,7 @@ import asyncio
 import base64
 import collections
 import json
+import math
 import os
 import secrets
 import time
@@ -23,6 +24,7 @@ from call_hooks import LineNotReady as NotReady
 from phone_prompts import (
     DEFAULT_BACKEND_MODEL, HANGUP_YIELDED, delegation_config, disclosure_reminder, goodbye_cue,
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
+    voicemail_disclosure,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
 from call_requests import MAX_REQUESTS, ClaimWatch, RequestDesk, appends, tool_output
@@ -94,6 +96,11 @@ GOODBYE_HEARD_SECONDS = 0.8
 # On direct SIP the model's speech plays at OpenAI; its reflected copy going quiet for
 # this long means the goodbye has finished.
 SIP_SPEECH_TAIL = 1.2
+# At a voicemail (see PhoneSession._after_voicemail): quiet this long after the agent's message
+# ends the call, and the call ends at the latest this long after the voicemail prompt
+# (SMITLINE_VOICEMAIL_MAX_SECONDS; 0 turns that off).
+VOICEMAIL_QUIET_SECONDS = 3.0
+VOICEMAIL_MAX_SECONDS = 60.0
 TWILIO_TERMINAL = {
     'completed': 'hangup', 'busy': 'busy', 'no-answer': 'no_answer', 'failed': 'error',
     'canceled': 'canceled',
@@ -457,6 +464,17 @@ def _error_code(error):
     return getattr(error, 'code', None) or type(error).__name__
 
 
+def voicemail_max_seconds(env):
+    """SMITLINE_VOICEMAIL_MAX_SECONDS: how long after a voicemail prompt the call hangs up at the
+    latest. 0 turns this off; a value that is not a number of seconds keeps the default."""
+    value = str((env or {}).get('SMITLINE_VOICEMAIL_MAX_SECONDS') or '').strip()
+    try:
+        seconds = float(value) if value else VOICEMAIL_MAX_SECONDS
+    except ValueError:
+        return VOICEMAIL_MAX_SECONDS
+    return seconds if math.isfinite(seconds) and seconds >= 0 else VOICEMAIL_MAX_SECONDS
+
+
 class PhoneSession:
     """One phone call bridged to GPT-Live."""
 
@@ -529,6 +547,13 @@ class PhoneSession:
         self._last_speaker = None
         self._goodbye_watch = None
         self._said_after_goodbye = ''
+        # At a voicemail (see _after_voicemail): when its prompt was heard, when the call must end
+        # by (SMITLINE_VOICEMAIL_MAX_SECONDS), whether the agent has spoken since (its message),
+        # and what the other side has said once that was heard.
+        self._voicemail_at = None
+        self._voicemail_deadline = None
+        self._voicemail_message = False
+        self._said_after_message = ''
         # The other side's recent words, across the agent's, and whether they were a voicemail.
         self._other_recent = ''
         self.voicemail_heard = False
@@ -755,6 +780,8 @@ class PhoneSession:
             return
         now = time.monotonic()
         change = self.detector.feed(frame, playing=self.pacer.playing())
+        if self.detector.speaking:
+            self.last_activity = now
         if change:
             self._note('vad_' + change)
         if change == 'end':
@@ -795,7 +822,10 @@ class PhoneSession:
 
     def _output_audio(self, event):
         now = time.monotonic()
-        self.last_activity = self.last_output_at = now
+        self.last_output_at = now
+        if _is_speech(event.get('delta') or ''):
+            # GPT-Live streams silence between turns: only its speech keeps a call from going quiet.
+            self.last_activity = now
         self._note('delta', bytes=len(event.get('delta') or '') * 3 // 4)
         if (self._barge == 'dropped' and self._dropped_at is not None
                 and now - self._dropped_at < BARGE_STALE_SECONDS):
@@ -823,8 +853,10 @@ class PhoneSession:
                 # Hanging up needs no tool result or further backend turn.
                 reason = call['arguments'].get('reason')
                 self.ctx.event('call.end_requested', reason=reason or 'completed')
-                self._start_hangup('voicemail' if reason == 'voicemail_left' else 'hangup',
-                                   yield_to_speech=reason != 'voicemail_left')
+                if reason == 'voicemail_left':
+                    self._start_voicemail_hangup('voicemail_left')
+                else:
+                    self._start_hangup('hangup', yield_to_speech=True)
         elif kind == 'error':
             error = event.get('error') or {}
             self.ctx.event('call.voice_error', code=error.get('code') or 'live_error')
@@ -880,9 +912,11 @@ class PhoneSession:
             self.fail('The voice connection was lost during the call.')
 
     def _transcript(self, event):
-        now = self.last_activity = time.monotonic()
+        now = time.monotonic()
         source = 'other' if 'input_transcript' in event['type'] else 'agent'
         delta = event.get('delta') or ''
+        if delta.strip():
+            self.last_activity = now
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
@@ -905,11 +939,14 @@ class PhoneSession:
                 if not self.voicemail_heard and voicemail_prompt(self._other_recent):
                     self.voicemail_heard = True
                     self.ctx.event('call.voicemail_heard')
+                    self._watch_voicemail()
                 if self._goodbye_watch is not None:
                     self._said_after_goodbye += delta
             self._last_speaker = source
             if source == 'agent' and says_goodbye(self._agent_latest):
                 self._watch_goodbye()
+            if self.voicemail_heard:
+                self._voicemail_words(source, delta)
         if self.claims is not None:
             self.claims.heard(source, delta)
         for speaker, text in self.joiner.add(source, delta, event.get('start_ms'), event.get('end_ms')):
@@ -998,13 +1035,19 @@ class PhoneSession:
     def _goodbye_cue(self, text):
         return goodbye_cue(self.brief, text, disclosed=self.inbound or self.disclosed.is_set())
 
+    def _owes_disclosure(self):
+        """An outgoing call the agent has spoken on has not yet said it is an AI. Never on a call
+        to the owner's own phone, which counts as disclosed from the start."""
+        return not (self.inbound or self.disclosed.is_set() or self.live is None
+                    or not self._agent_said.strip() or self.finished.is_set())
+
     async def _disclose_before_ending(self, reason):
         """Before an outgoing call ends, have the agent say it is an AI if it has not yet.
 
-        The hang-up waits a few seconds for it; a voicemail message is already over.
+        The hang-up waits a few seconds for it. At a voicemail it is asked for in other words,
+        without a goodbye (_hang_up_at_voicemail).
         """
-        if (self.inbound or self.disclosed.is_set() or self.live is None or reason == 'voicemail'
-                or not self._agent_said.strip() or self.finished.is_set()):
+        if reason == 'voicemail' or not self._owes_disclosure():
             return False
         self._note('disclosure_reminder')
         await self.live.append('session.instructions.append', disclosure_reminder(self.brief))
@@ -1037,6 +1080,8 @@ class PhoneSession:
             await asyncio.sleep(1)
             self._claims_due()
             now = time.monotonic()
+            if self.pacer is not None and self.pacer.speech_pending():
+                self.last_activity = now  # its speech is still playing
             elapsed = now - self.started_at
             if not warned and elapsed >= max(limit - WRAP_UP_SECONDS, limit * 0.8):
                 warned = True
@@ -1091,6 +1136,140 @@ class PhoneSession:
                 self.ctx.event('call.goodbye_hangup')
                 self._start_hangup('hangup')
                 return
+
+    def _watch_voicemail(self):
+        """A voicemail prompt was heard: what the agent says next is its message."""
+        now = self._voicemail_at = time.monotonic()
+        limit = voicemail_max_seconds(self.line.environ())
+        self._voicemail_deadline = now + limit if limit else None
+        self._voicemail_message = False
+        self._said_after_message = ''
+        self._spawn(self._after_voicemail(now))
+
+    def _voicemail_words(self, source, delta):
+        """At a voicemail, the agent's words are its message. Once it has stopped talking, words
+        from the other side beyond thanks or bye, other than another voicemail prompt, mean a
+        person or a call screener is there after all: the call is theirs again, and only a new
+        prompt makes it a voicemail. What they say over the agent's message does not count: it
+        is the end of the greeting transcribed late, or the agent's own echo; a person who picks
+        up says something once the agent stops for them."""
+        if source == 'agent':
+            self._voicemail_message = True
+            return
+        if not self._voicemail_message or self._agent_speaking():
+            return
+        self._said_after_message += delta
+        if only_closing(self._said_after_message) or voicemail_prompt(self._said_after_message):
+            return
+        self.voicemail_heard = False
+        self._voicemail_at = self._voicemail_deadline = None
+        self._other_recent = ''
+
+    async def _after_voicemail(self, heard_at):
+        """Hang up at a voicemail after the agent's message, when the model does not.
+
+        The model leaves a message and ends the call with the reason voicemail_left, but on a
+        call on 2026-11-02 it said one sentence after the beep and never ended the call: the line
+        stayed open, and billed, until the mailbox cut it off two minutes later. So once the
+        agent has spoken since the prompt, its speech has been heard, and nobody has said anything
+        for VOICEMAIL_QUIET_SECONDS, the call ends exactly as that end_call ends it
+        (_hang_up_at_voicemail). At the latest it ends SMITLINE_VOICEMAIL_MAX_SECONDS after the
+        prompt, even if the agent is still talking or never spoke. A person answering stops this
+        (_voicemail_words)."""
+        quiet_since = None
+        while not self.finished.is_set():
+            await asyncio.sleep(GOODBYE_POLL)
+            if not self.voicemail_heard or self._voicemail_at != heard_at:
+                return  # a person after all, or a later prompt is watched instead
+            if self._hanging_up:
+                quiet_since = None  # already ending; if that hang-up gives way, watch again
+                continue
+            now = time.monotonic()
+            if self._voicemail_deadline is not None and now >= self._voicemail_deadline:
+                self._start_voicemail_hangup('time_cap')
+                return
+            if not self._voicemail_message or self._agent_speaking() or self._other_speaking():
+                quiet_since = None
+                continue
+            quiet_since = quiet_since or now
+            if now - quiet_since >= VOICEMAIL_QUIET_SECONDS:
+                self._start_voicemail_hangup('message_left')
+                return
+
+    def _start_voicemail_hangup(self, why, *, end_reason='voicemail'):
+        task = asyncio.create_task(self._hang_up_at_voicemail(why, end_reason=end_reason))
+        self._hangups.add(task)
+        task.add_done_callback(self._hangups.discard)
+        return task
+
+    async def _hang_up_at_voicemail(self, why, *, end_reason='voicemail'):
+        """End the call at a voicemail: the model's voicemail_left, message_left, time_cap, or
+        /end after the agent's message (asked_to_end, which keeps the end reason hangup).
+
+        A voicemail says it is an AI, as every outgoing call does. When the message has not, the
+        voice is asked for that one sentence first, and the call ends once it has been heard and
+        the line is quiet. The voicemail time cap still wins, and a time_cap hang-up does not wait
+        at all. A call to the owner's own phone has no disclosure."""
+        if self._hanging_up:
+            return
+        self._hanging_up = True
+        if self.end_reason is None:
+            self.end_reason = end_reason
+        deadline = self._voicemail_deadline
+        if why != 'time_cap':
+            in_time = await self._by(deadline, self._let_speech_finish())
+            if in_time and self._owes_disclosure():
+                self._note('voicemail_disclosure')
+                await self.live.append('session.instructions.append', voicemail_disclosure(self.brief))
+                in_time = await self._by(deadline, self._disclosure_heard())
+            if not in_time:
+                why = 'time_cap'
+        self._voicemail_event(why)
+        await self._end_call()
+
+    async def _disclosure_heard(self):
+        """Wait a few seconds for the disclosure, then for it to be heard and the line to go quiet."""
+        try:
+            await asyncio.wait_for(self.disclosed.wait(), DISCLOSE_BEFORE_END_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        await self._line_quiet(GOODBYE_QUIET_SECONDS, DRAIN_TIMEOUT)
+
+    async def _line_quiet(self, seconds, limit):
+        """Wait until neither side has said anything for `seconds`, for at most `limit` seconds."""
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + limit
+        quiet_since = None
+        while loop.time() < give_up:
+            if self._agent_speaking() or self._other_speaking():
+                quiet_since = None
+            elif quiet_since is None:
+                quiet_since = loop.time()
+            elif loop.time() - quiet_since >= seconds:
+                return True
+            await asyncio.sleep(GOODBYE_POLL)
+        return False
+
+    @staticmethod
+    async def _by(deadline, awaitable):
+        """Await it, but only until `deadline` (time.monotonic; None waits as long as it takes).
+        False when the deadline cut it short."""
+        if deadline is None:
+            await awaitable
+            return True
+        try:
+            await asyncio.wait_for(awaitable, max(0.0, deadline - time.monotonic()))
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    def _voicemail_event(self, why):
+        """call.voicemail_hangup: why, and whether the call said it is an AI (left out for calls
+        to the owner's own phone and incoming calls, which have no disclosure)."""
+        data = {'reason': why}
+        if not (self.inbound or self.calling_owner):
+            data['disclosed'] = self.disclosed.is_set()
+        self.ctx.event('call.voicemail_hangup', **data)
 
     # Actions -------------------------------------------------------------
 
@@ -1162,7 +1341,11 @@ class PhoneSession:
         if self.voicemail_heard:
             # A voicemail is recording: there is nobody to thank, and a goodbye would only leave a
             # vague message ("just calling about a couple of things"). What is playing finishes.
-            self.ctx.event('call.voicemail_hangup')
+            if self._voicemail_message and self._owes_disclosure():
+                # Its message is on the recording without the AI disclosure: that comes first.
+                self._start_voicemail_hangup('asked_to_end', end_reason='hangup')
+                return True
+            self._voicemail_event('asked_to_end')
             self._start_hangup('hangup', disclose=False)
             return True
         await self.live.append('session.commentary.append', self._goodbye_cue(

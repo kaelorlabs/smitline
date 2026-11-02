@@ -1926,5 +1926,117 @@ class RealSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disclosure[0]['data'], {'verified': True})
 
 
+class FakeClock:
+    """phone_line's own clock (time.monotonic), moved by hand; the event loop keeps real time."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+
+class SilenceTests(unittest.IsolatedAsyncioTestCase):
+    """Nobody speaking ends a call: a prompt after 40 seconds, the end after 65. GPT-Live streams
+    silence between turns, and that is not anyone speaking."""
+
+    SILENT = base64.b64encode(b'\xff' * 160).decode()  # 20 ms of mu-law silence
+    SPOKEN = base64.b64encode(b'\x2a' * 1600).decode()  # 0.2 s of speech
+
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        FakeSideband.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = None
+        self.clock = FakeClock()
+        self.clock_patch = mock.patch('phone_line.time', self.clock)
+        self.clock_patch.start()
+
+    async def asyncTearDown(self):
+        self.clock_patch.stop()
+        if self.h is not None:
+            await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def relayed_call(self):
+        self.h = PhoneHarness(self.temp.name)
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        self.start = session.started_at
+        return record, ws, live, task
+
+    async def at(self, seconds, voice):
+        """`seconds` into the call. The voice streams a little more silence, as it does all the
+        time; then the watchdog, which looks once a second, gets a look."""
+        voice.push({'type': 'session.output_audio.delta', 'delta': self.SILENT})
+        await asyncio.sleep(0.05)
+        self.clock.now = self.start + seconds
+        await asyncio.sleep(1.2)
+
+    @staticmethod
+    def asked(live):
+        return any('Nobody has spoken for a while' in str(text) for _kind, text in live.appends)
+
+    async def test_streamed_silence_does_not_keep_a_quiet_call_open(self):
+        record, ws, live, task = await self.relayed_call()
+        await self.at(39, live)
+        self.assertFalse(self.asked(live))
+        await self.at(40.5, live)
+        self.assertTrue(self.asked(live))
+        await self.at(64, live)
+        self.assertFalse(ws.closed)
+        await self.at(65.5, live)
+        await until(lambda: ws.closed, 3)
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_the_agents_speech_still_counts(self):
+        record, ws, live, task = await self.relayed_call()
+        await self.at(30, live)
+        live.push({'type': 'session.output_audio.delta', 'delta': self.SPOKEN})  # audio, no transcript
+        await self.at(41, live)  # without that speech, the prompt would be due by now
+        self.assertFalse(self.asked(live))
+        await self.at(70.5, live)  # 40.5 seconds after it
+        self.assertTrue(self.asked(live))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
+    async def test_their_voice_counts_before_any_transcript(self):
+        from test_barge_in import QUIET, SPEECH
+        record, ws, live, task = await self.relayed_call()
+        await self.at(30, live)
+        for frame in [QUIET] * 5 + [SPEECH] * 20 + [QUIET] * 25:  # heard by the detector only
+            ws.push({'event': 'media', 'media': {'track': 'inbound',
+                                                 'payload': base64.b64encode(frame).decode()}})
+        await self.at(41, live)
+        self.assertFalse(self.asked(live))
+        await self.at(70.5, live)
+        self.assertTrue(self.asked(live))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
+    async def test_over_direct_sip_reflected_silence_is_not_speech_either(self):
+        self.h = PhoneHarness(self.temp.name, env=dict(SIP_ENV))
+        client = FakeSipClient()
+        self.h.line.sip_client_factory = lambda key: client
+        self.h.line.sideband_factory = FakeSideband
+        record = await self.h.service.create(brief())
+        await until(lambda: FakeSideband.instances)
+        side = FakeSideband.instances[-1]
+        side.push({'type': 'transport.answered', 'event_id': 'e2'})
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
+        self.start = self.h.line.session(record['id']).started_at
+        await self.at(39, side)
+        self.assertFalse(self.asked(side))
+        await self.at(40.5, side)
+        self.assertTrue(self.asked(side))
+        await self.at(65.5, side)
+        done = await self.h.service.wait(record['id'], timeout=8, owner='local')
+        self.assertEqual(done['endReason'], 'hangup')
+        self.assertIn(('hangup', 'live_sip_1'), client.calls)
+
+
 if __name__ == '__main__':
     unittest.main()

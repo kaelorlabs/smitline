@@ -44,7 +44,7 @@
           },
           "onBehalfOf": {
             "type": "string",
-            "description": "The user's name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Defaults to the name given at setup."
+            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup."
           },
           "objective": {
             "type": "string",
@@ -167,7 +167,7 @@
           },
           "rehearsal": {
             "type": "boolean",
-            "description": "Phone only: practice on the user's own phone first, with the user playing the other side"
+            "description": "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal."
           },
           "record": {
             "type": "boolean",
@@ -264,7 +264,7 @@
           },
           "onBehalfOf": {
             "type": "string",
-            "description": "The user's name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Defaults to the name given at setup."
+            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup."
           },
           "objective": {
             "type": "string",
@@ -387,7 +387,7 @@
           },
           "rehearsal": {
             "type": "boolean",
-            "description": "Phone only: practice on the user's own phone first, with the user playing the other side"
+            "description": "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal."
           },
           "record": {
             "type": "boolean",
