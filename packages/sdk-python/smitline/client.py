@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 SCHEMA_VERSION = 1
-SDK_VERSION = '0.3.1'
+SDK_VERSION = '0.3.2'
 
 def redact(value: Any) -> str:
     import re

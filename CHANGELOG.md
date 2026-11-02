@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 — 2026-11-02
+
+- **A voicemail call ends after its message** ([#90](https://github.com/kaelorlabs/smitline/pull/90)). Once a voicemail greeting has been heard and the agent has left its message, the call hangs up after 3 quiet seconds, even if the model never ends it, and at the latest `SMITLINE_VOICEMAIL_MAX_SECONDS` (default 60, 0 turns it off) after the greeting. On 2026-11-02 a call stayed on a voicemail for two minutes after a one-sentence message. `call.voicemail_hangup` says why: `message_left`, `time_cap` or `asked_to_end`.
+- **Voicemails say it is an AI.** If a voicemail message has not said that it is the user's AI assistant, the voice adds one short sentence before the call hangs up, also when the agent ends the call. Calls to your own phone are unchanged. `call.voicemail_hangup` reports `disclosed`.
+- **Silent calls end again.** Silence the voice streams no longer counts as activity, so the check-in after 40 quiet seconds and the end after 65 work as described.
+- **Calls are made for the user, never as an app** ([#91](https://github.com/kaelorlabs/smitline/pull/91)). When a brief names an AI or app such as ChatGPT or Claude as `onBehalfOf`, the call uses the owner's name (`SMITLINE_OWNER_NAME`) and records `call.brief_corrected`; with no owner name it is refused. The voice never says that an app or AI is calling, even when the brief asks it to. A new optional hook, `brief_overrides(owner, payload)`, lets a hosted service fix fields such as `onBehalfOf`.
+- `start_call`'s brief explains `onBehalfOf` (the person the call is for, never an AI or app such as ChatGPT) and `rehearsal` (only for practising a call to someone else; to call the user, call their number).
+- docs: ChatGPT custom connectors are created on chatgpt.com and then show up in the mobile app.
+
 ## 0.3.1 — 2026-11-02
 
 - **Clearer tool titles.** Claude, ChatGPT and other clients show "Check a call before placing it", "Follow a call live", "Get call details", "Save notes from a call", "List your contacts", "Read your profile" and "Update your profile". Tool names are unchanged.
