@@ -904,11 +904,12 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Hi, I'm calling on behalf of Arun Raj about ...", text)
         self.assertIn("say plainly that you are Arun Raj's AI assistant", text)
 
-    def test_only_the_opening_cue_says_hello(self):
+    def test_no_scripted_greeting_when_someone_picks_up(self):
         # On 2026-11-02 a call to the owner's own phone started over twice: after a quiet moment
         # he said "hello?" and the voice greeted him and gave its reason again ("thanks for
         # picking up"). The standing instructions told it to greet whoever picks up. The hello
         # is the opening cue, sent once; the rest is left to the model, which has the whole call.
+        # (A known contact's line still says to greet them by name: how to address them.)
         parsed = CallBrief.from_dict(brief(onBehalfOf='Arun Raj'))
         for kind, text in (('outbound', voice_instructions(parsed)),
                            ('own phone', voice_instructions(parsed, calling_owner=True))):
