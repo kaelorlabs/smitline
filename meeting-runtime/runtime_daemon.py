@@ -15,7 +15,8 @@ import warnings
 from aiohttp import web
 
 from agent_sessions import MeetingSession, optional_can_do, optional_on_behalf_of, optional_voice
-from call_hooks import LOCAL_OWNER, CallRefused, maybe_await, owner_required
+from call_brief import person_on_behalf_of
+from call_hooks import LOCAL_OWNER, CallRefused, maybe_await, owner_required, owner_settings
 from context_handoff import ContextHandoff
 from event_store import JsonlEventStore
 from meeting_handoff import MeetingHandoff
@@ -674,10 +675,21 @@ def create_app(
                               'owner only: POST /v1/calls with channel meeting.')
         return owner
 
+    def for_a_person(payload, owner):
+        """A meeting is for a person, as a call is: an AI or app named in onBehalfOf becomes the
+        owner's name, or the meeting is refused (call_brief.person_on_behalf_of)."""
+        value = payload.get('onBehalfOf')
+        settings = owner_settings(getattr(call_service, 'hooks', None), owner)
+        try:
+            name = person_on_behalf_of(value, settings.get('SMITLINE_OWNER_NAME'))
+        except ValueError as error:
+            raise DaemonError(422, 'invalid_request', str(error)) from error
+        return payload if name == value else dict(payload, onBehalfOf=name)
+
     async def create_meeting(request):
         owner = await local_owner(request)
         payload = await read_json(request)
-        session = await daemon.create_meeting(payload, owner=owner)
+        session = await daemon.create_meeting(for_a_person(payload, owner), owner=owner)
         return _public_json(daemon.public_meeting(session), status=201)
 
     async def get_meeting(request):

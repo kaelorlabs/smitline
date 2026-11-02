@@ -95,6 +95,42 @@ class BriefTests(unittest.TestCase):
             CallBrief.from_dict(phone_brief(context='x', notify={'apiKey': 'x'}))
 
 
+class OnBehalfOfTests(unittest.TestCase):
+    """onBehalfOf names a person. An AI, a model, an app or a bot is put right, or refused."""
+
+    def test_ai_names_and_people(self):
+        from call_brief import names_an_ai
+        for value in ('ChatGPT', 'GPT-4o mini', 'gpt4o', 'Claude Opus 4.5', 'Claude.ai', 'Meta AI',
+                      'GitHub Copilot', 'Grok by xAI', 'Perplexity AI', 'Smitline AI', 'ChatGPT (OpenAI)',
+                      'chatgpt.com', "OpenAI's ChatGPT", 'Google Assistant', 'Virtual assistant',
+                      'the agent', 'your assistant', "Robin's AI", 'A. I.', 'Bot123'):
+            with self.subTest(value=value):
+                self.assertTrue(names_an_ai(value))
+        # Only the whole value counts: a person who shares a word with a product is a person.
+        for value in ('Alexa Smith', 'Claude Monet', 'Siri Hustvedt', 'Gemini Ruiz', 'Ai Weiwei',
+                      'Jan Bot', 'Mia Agent', 'Claude Max', 'Alexa Smart', "Robin's", "Robin's team",
+                      'Arun via ChatGPT', 'Meta', 'Google', 'the user', '李明', 'Sara.Ivy', '', None, 42):
+            with self.subTest(value=value):
+                self.assertFalse(names_an_ai(value))
+
+    def test_an_ai_becomes_the_owner_or_is_refused(self):
+        from call_brief import NOT_A_PERSON, person_on_behalf_of
+        self.assertEqual(person_on_behalf_of('ChatGPT', '  Arun   Raj '), 'Arun Raj')
+        self.assertEqual(person_on_behalf_of('Alexa Smith', 'Arun Raj'), 'Alexa Smith')
+        self.assertEqual(person_on_behalf_of('Alexa Smith', None), 'Alexa Smith')
+        # The owner's own name stays, even when a product has it too.
+        self.assertEqual(person_on_behalf_of('claude', 'Claude'), 'claude')
+        # What is not a usable name is left for the brief's own checks to refuse.
+        for value in (None, ['ChatGPT'], 'AI ' * 50):
+            with self.subTest(value=value):
+                self.assertEqual(person_on_behalf_of(value, 'Arun Raj'), value)
+        for owner_name in (None, '', '   '):
+            with self.subTest(owner_name=owner_name):
+                with self.assertRaises(ValueError) as caught:
+                    person_on_behalf_of('Claude', owner_name)
+                self.assertEqual(str(caught.exception), NOT_A_PERSON)
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

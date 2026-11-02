@@ -5,7 +5,7 @@ import dataclasses
 import os
 import time
 
-from call_brief import BriefIncomplete, CallBrief
+from call_brief import BriefIncomplete, CallBrief, person_on_behalf_of
 from call_costs import call_cost, spend, with_cost
 from call_hooks import (
     LOCAL_OWNER, CallRefused, LineNotReady, MissingCredentials, maybe_await, owner_settings,
@@ -244,19 +244,33 @@ class CallService:
     def settings(self, owner):
         return owner_settings(self.hooks, owner)
 
-    def _brief(self, owner, payload):
-        """Parse a brief after filling in what setup already knows (the owner's name, phone)."""
+    async def _brief(self, owner, payload):
+        """Parse a brief after filling in what setup already knows (the owner's name, phone) and
+        what the hooks fix for every call (brief_overrides). A call is for a person: an AI or app
+        named in onBehalfOf becomes the owner's name, or the brief is refused. Returns the brief
+        and what was corrected in it, for the call's events."""
+        settings = self.settings(owner)
+        corrected = []
         if isinstance(payload, dict):
             defaults = getattr(self.hooks, 'brief_defaults', None)
-            filled = dict(defaults(owner, payload) or {}) if defaults else {}
+            filled = dict(await maybe_await(defaults(owner, payload)) or {}) if defaults else {}
             filled.update({key: value for key, value in payload.items() if value not in (None, '')})
+            # Optional: hooks written before brief_overrides existed keep working.
+            overrides = getattr(self.hooks, 'brief_overrides', None)
+            fixed = dict(await maybe_await(overrides(owner, payload)) or {}) if overrides else {}
+            filled.update({key: value for key, value in fixed.items() if value not in (None, '')})
+            if 'onBehalfOf' in filled:
+                was = filled['onBehalfOf']
+                filled['onBehalfOf'] = person_on_behalf_of(was, settings.get('SMITLINE_OWNER_NAME'))
+                if filled['onBehalfOf'] != was:
+                    corrected.append({'field': 'onBehalfOf', 'was': was})
             payload = filled
-        return CallBrief.from_dict(payload, environ=self.settings(owner))
+        return CallBrief.from_dict(payload, environ=settings), corrected
 
     async def check(self, payload, *, request=None):
         """Everything create() would refuse, reported instead of raised."""
         owner = await self.owner_for(request)
-        brief = self._brief(owner, payload)
+        brief, _ = await self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         problems = []
         if line is None:
@@ -297,7 +311,7 @@ class CallService:
 
     async def create(self, payload, *, request=None):
         owner = await self.owner_for(request)
-        brief = self._brief(owner, payload)
+        brief, corrected = await self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         if line is None:
             raise CallError(503, 'channel_unavailable',
@@ -314,13 +328,14 @@ class CallService:
         carried = self._carried(owner, brief)
         if carried:
             brief = dataclasses.replace(brief, carried=tuple(note_line(item) for item in carried))
-        return await self._launch(brief, owner, line.start, direction='outbound', carried=carried)
+        return await self._launch(brief, owner, line.start, direction='outbound', carried=carried,
+                                  corrected=corrected)
 
     async def create_inbound(self, brief, owner, start):
         """Record a call someone else placed to us; `start(ctx)` runs it on the line."""
         return await self._launch(brief, owner, start, direction='inbound')
 
-    async def _launch(self, brief, owner, start, *, direction, carried=()):
+    async def _launch(self, brief, owner, start, *, direction, carried=(), corrected=()):
         now = self.store.now()
         record = {
             'version': 1,
@@ -341,6 +356,9 @@ class CallService:
             record['carried'] = list(carried)
         self.store.create(record)
         self._event(record['id'], 'call.created', channel=brief.channel, direction=direction)
+        for correction in corrected:
+            # Such as {field: 'onBehalfOf', was: 'ChatGPT'}: the brief keeps what the call used.
+            self._event(record['id'], 'call.brief_corrected', **correction)
         await self._call_started(owner, record)
         context = CallContext(self, record['id'], brief, owner)
         self._contexts[record['id']] = context

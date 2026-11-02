@@ -292,7 +292,7 @@
         "properties": {
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
           "to": { "type": "string", "description": "E.164 phone number for phone calls, or a Zoom, Teams, or Google Meet invite URL." },
-          "onBehalfOf": { "type": "string", "maxLength": 120, "description": "Name spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows." },
+          "onBehalfOf": { "type": "string", "maxLength": 120, "description": "The person the call is for, never an AI, model or app. Spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows. A name such as ChatGPT or Claude is replaced with the owner's name (SMITLINE_OWNER_NAME), or the brief is refused (422 invalid_request)." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
             "description": "What the calling agent and the owner have been working on. The voice starts with a short version and the backend model gets it all. See docs/calls.md#context.",

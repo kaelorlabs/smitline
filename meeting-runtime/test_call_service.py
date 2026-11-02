@@ -686,6 +686,162 @@ class MeetingCapacityTests(unittest.IsolatedAsyncioTestCase):
             app.runtime_daemon.close()
 
 
+# The brief ChatGPT sent on hosted Smitline on 2026-11-02. The voice opened with "Hi, I'm calling
+# on behalf of ChatGPT"; the account had no owner name yet.
+FROM_CHATGPT = {'onBehalfOf': 'ChatGPT', 'objective': 'Test the line. Open by saying this is '
+                'ChatGPT calling, confirm they can hear you, then say goodbye.'}
+NAMES_OF_AIS = (
+    'ChatGPT', 'chatgpt', 'OpenAI', 'GPT', 'GPT-4o', 'Claude', 'Claude AI', 'Claude Code', 'Anthropic',
+    'Gemini', 'Google Gemini', 'Copilot', 'Grok', 'Cursor', 'Perplexity', 'Siri', 'Alexa', 'Smitline',
+    'AI', 'A.I.', 'an AI', 'assistant', 'the assistant', 'AI assistant', 'agent', 'bot',
+    "Claude's assistant", 'ChatGPT’s assistant', "Arun's AI assistant",
+)
+NAMES_OF_PEOPLE = (
+    'Alexa Smith', 'Claude Monet', 'Claude Dupont', 'Siri Hustvedt', 'Ai Weiwei', 'Grace Hopper',
+    "Ana O'Neil", 'Dr. Lee', 'Sam Rivera', 'José Álvarez', "Robin's team", 'Malcolm X',
+)
+NOT_A_PERSON = ('onBehalfOf must name the person the call is for, such as the user, not an AI or '
+                'app.')
+
+
+class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
+    """A call is made for a person: never as ChatGPT, Claude, or the app that asked for it."""
+
+    OWNER = {'OPENAI_API_KEY': 'sk-test', 'SMITLINE_OWNER_NAME': 'Arun Raj'}
+
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.h = ServiceHarness(self.temp.name, environ=dict(self.OWNER))
+        self.addAsyncCleanup(self.h.service.shutdown)
+
+    def corrections(self, record, harness=None):
+        return [event['data'] for event in (harness or self.h).service.events(record['id'])
+                if event['type'] == 'call.brief_corrected']
+
+    async def named(self, name):
+        return (await self.h.service.check(brief(onBehalfOf=name)))['brief']['onBehalfOf']
+
+    async def client(self, service, supervisor=None):
+        app = create_app(root=Path(self.temp.name) / 'daemon', auth_token='t', supervisor=supervisor,
+                         call_service=service)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+        return client
+
+    async def test_an_ai_in_on_behalf_of_becomes_the_owner_name(self):
+        record = await self.h.service.create(brief(**FROM_CHATGPT))
+        self.assertEqual(record['brief']['onBehalfOf'], 'Arun Raj')
+        self.assertEqual(self.corrections(record), [{'field': 'onBehalfOf', 'was': 'ChatGPT'}])
+        await asyncio.sleep(0)
+        # The line runs the corrected brief, so the voice calls for Arun.
+        self.assertEqual(self.h.line.contexts[record['id']].brief.on_behalf_of, 'Arun Raj')
+        checked = await self.h.service.check(brief(**FROM_CHATGPT))
+        self.assertEqual((checked['ok'], checked['brief']['onBehalfOf']), (True, 'Arun Raj'))
+        for name in NAMES_OF_AIS:
+            with self.subTest(name=name):
+                self.assertEqual(await self.named(name), 'Arun Raj')
+
+    async def test_without_an_owner_name_an_ai_is_refused(self):
+        h = ServiceHarness(Path(self.temp.name) / 'no-name')
+        self.addAsyncCleanup(h.service.shutdown)
+        client = await self.client(h.service)
+        auth = {'Authorization': 'Bearer t'}
+        for path in ('/v1/calls', '/v1/calls/check'):
+            with self.subTest(path=path):
+                response = await client.post(path, json=brief(**FROM_CHATGPT), headers=auth)
+                error = (await response.json())['error']
+                self.assertEqual((response.status, error['code']), (422, 'invalid_request'))
+                self.assertTrue(error['message'].startswith(NOT_A_PERSON), error['message'])
+        self.assertEqual((h.store.list(limit=None), h.line.contexts), ([], {}))
+        # A person's name needs no owner name.
+        response = await client.post('/v1/calls', json=brief(onBehalfOf='Sam Rivera'), headers=auth)
+        self.assertEqual((response.status, (await response.json())['brief']['onBehalfOf']),
+                         (201, 'Sam Rivera'))
+
+    async def test_people_keep_their_names(self):
+        for name in NAMES_OF_PEOPLE:
+            with self.subTest(name=name):
+                self.assertEqual(await self.named(name), name)
+        record = await self.h.service.create(brief(onBehalfOf='Alexa Smith'))
+        self.assertEqual((record['brief']['onBehalfOf'], self.corrections(record)), ('Alexa Smith', []))
+        # An owner whose own name is also a product's keeps it.
+        self.h.hooks._environ['SMITLINE_OWNER_NAME'] = 'Claude'
+        self.assertEqual(await self.named('claude'), 'claude')
+        self.assertEqual(await self.named('ChatGPT'), 'Claude')
+
+    async def test_brief_overrides_replace_what_the_agent_sent(self):
+        self.assertEqual(DefaultCallHooks(environ={}).brief_overrides('local', brief()), {})
+        seen = []
+
+        class Hosted(DefaultCallHooks):
+            def brief_overrides(self, owner, payload):
+                seen.append((owner, dict(payload)))
+                return {'onBehalfOf': 'Ana Lima', 'voice': None, 'tone': ''}
+        self.h.service.hooks = Hosted(environ=dict(self.OWNER), store=self.h.store, clock=DAYTIME)
+        record = await self.h.service.create(brief(onBehalfOf='Robin', voice='vesper', tone='brisk'))
+        self.assertEqual(record['brief']['onBehalfOf'], 'Ana Lima')
+        # None and empty values change nothing; the hook sees what the agent sent.
+        self.assertEqual((record['brief']['voice'], record['brief']['tone']), ('vesper', 'brisk'))
+        self.assertEqual((seen[0][0], seen[0][1]['onBehalfOf']), ('local', 'Robin'))
+        self.assertEqual(self.corrections(record), [])
+        # An override wins over the defaults too, and may be async.
+
+        class AsyncHosted(DefaultCallHooks):
+            async def brief_overrides(self, owner, payload):
+                return {'onBehalfOf': 'Ana Lima'}
+        self.h.service.hooks = AsyncHosted(environ=dict(self.OWNER), store=self.h.store, clock=DAYTIME)
+        payload = {'channel': 'phone', 'to': '+14155550143', 'objective': 'Book a table'}
+        self.assertEqual((await self.h.service.check(payload))['brief']['onBehalfOf'], 'Ana Lima')
+
+        # Hooks written before brief_overrides existed keep working.
+        class Older:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                if name == 'brief_overrides':
+                    raise AttributeError(name)
+                return getattr(self.inner, name)
+        self.h.service.hooks = Older(DefaultCallHooks(environ=dict(self.OWNER), store=self.h.store,
+                                                      clock=DAYTIME))
+        self.assertEqual((await self.h.service.check(payload))['brief']['onBehalfOf'], 'Arun Raj')
+
+    async def test_a_meeting_is_for_a_person_too(self):
+        from test_runtime_daemon import FakeSupervisor, create_payload
+        daemon = FakeDaemon()
+
+        async def no_sleep(_seconds):
+            await asyncio.sleep(0)
+        h = ServiceHarness(Path(self.temp.name) / 'meeting', environ=dict(self.OWNER),
+                           lines={'meeting': MeetingLine(daemon, sleep=no_sleep)})
+        self.addAsyncCleanup(h.service.shutdown)
+        record = await h.service.create(brief(channel='meeting', to=ZOOM, onBehalfOf='Claude'))
+        await h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(daemon.created[0]['onBehalfOf'], 'Arun Raj')
+        self.assertEqual(daemon.created[0]['context']['currentTask'],
+                         'Take part in this meeting on behalf of Arun Raj.')
+        self.assertEqual(self.corrections(record, h), [{'field': 'onBehalfOf', 'was': 'Claude'}])
+        # The console's meetings API, for the local owner, checks onBehalfOf the same way.
+        supervisor = FakeSupervisor()
+        client = await self.client(self.h.service, supervisor)
+        auth = {'Authorization': 'Bearer t'}
+        for sent, kept in (('Claude AI', 'Arun Raj'), ('Claude Monet', 'Claude Monet')):
+            with self.subTest(sent=sent):
+                created = await client.post('/v1/meetings', json=create_payload(onBehalfOf=sent),
+                                            headers=auth)
+                self.assertEqual((created.status, (await created.json())['onBehalfOf']), (201, kept))
+                self.assertEqual(supervisor.sessions[-1].on_behalf_of, kept)
+        self.h.hooks._environ.pop('SMITLINE_OWNER_NAME')
+        refused = await client.post('/v1/meetings', json=create_payload(onBehalfOf='ChatGPT'),
+                                    headers=auth)
+        error = (await refused.json())['error']
+        self.assertEqual((refused.status, error['code']), (422, 'invalid_request'))
+        self.assertTrue(error['message'].startswith(NOT_A_PERSON), error['message'])
+        self.assertEqual(len(supervisor.started), 2)
+
+
 class ServerModeTests(unittest.TestCase):
     def test_server_bind_requires_a_token(self):
         with tempfile.TemporaryDirectory() as temp:

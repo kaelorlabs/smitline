@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 import ipaddress
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 from meeting_urls import platform_for_url
@@ -48,6 +49,28 @@ QUESTIONS = {
     'objective': 'What should the call achieve?',
     'onBehalfOf': 'Whose behalf am I calling on? I say this name when the call starts.',
 }
+MAX_ON_BEHALF_OF = 120
+# A call is always for a person, but agents sometimes put themselves in onBehalfOf ("ChatGPT",
+# "Claude's assistant"). A value names an AI only when it is made of these words alone, so a
+# person who shares a word with a product stays a person ("Alexa Smith", "Claude Monet").
+AI_NAMES = frozenset((
+    'chatgpt', 'openai', 'gpt', 'claude', 'anthropic', 'gemini', 'bard', 'copilot', 'grok', 'xai',
+    'cursor', 'perplexity', 'siri', 'alexa', 'cortana', 'codex', 'deepseek', 'llama', 'mistral',
+    'smitline',
+))
+AI_WORDS = frozenset(('ai', 'assistant', 'agent', 'bot', 'chatbot', 'robot', 'llm', 'model', 'app'))
+# Words that may stand around those in a product's name without making it a person's: articles,
+# makers and editions ("the assistant", "Google Gemini", "Claude Code", "GPT-4o mini").
+AI_NAME_EXTRAS = frozenset((
+    'the', 'a', 'an', 'my', 'your', 'our', 'this', 'by', 'from', 'of', 'and', 'user',
+    'google', 'microsoft', 'github', 'meta', 'apple', 'amazon',
+    'pro', 'plus', 'mini', 'turbo', 'ultra', 'flash', 'opus', 'sonnet', 'haiku', 'code', 'chat',
+    'desktop', 'mobile', 'web', 'com', 'voice', 'virtual', 'personal', 'digital',
+))
+# Versions in a product's name: 4, 4o, 3.5 (as 3 and 5), o3, v2.
+AI_VERSION = re.compile(r'^(?:v?\d{1,4}[a-z]?|[a-z]\d{1,2})$')
+NOT_A_PERSON = ('onBehalfOf must name the person the call is for, such as the user, not an AI or '
+                'app. Ask the user for their name and put it in onBehalfOf.')
 
 
 class BriefIncomplete(ValueError):
@@ -69,6 +92,48 @@ def emergency_number(value):
     if not digits or len(digits) > 6:
         return False
     return any(digits[cut:] in EMERGENCY_NUMBERS for cut in range(0, min(4, len(digits) - 1)))
+
+
+def _ai_word(word):
+    """A product's name or an AI word, also with a version stuck to it (gpt4o, claude3)."""
+    if word in AI_NAMES or word in AI_WORDS:
+        return True
+    stem = re.fullmatch(r'([a-z]+)\d[a-z0-9]*', word)
+    return bool(stem) and (stem[1] in AI_NAMES or stem[1] in AI_WORDS)
+
+
+def _only_ai(text):
+    """Do these words, together, name an AI: one product or AI word, and nothing else that could
+    be part of a person's name? A.I. counts as AI; a possessive 's is dropped."""
+    text = re.sub(r"'s\b", '', re.sub(r'\ba\.\s?i\b\.?', 'ai', text))
+    words = re.findall(r'\w+', text)
+    return any(_ai_word(word) for word in words) and all(
+        _ai_word(word) or word in AI_NAME_EXTRAS or AI_VERSION.fullmatch(word) for word in words)
+
+
+def names_an_ai(value):
+    """True when onBehalfOf names an AI, a model, an app or a bot instead of a person: "ChatGPT",
+    "Claude AI", "the assistant", "GPT-4o", or anyone's assistant ("Claude's assistant",
+    "Robin's AI"). Only the whole value counts: "Alexa Smith" and "Claude Monet" are people."""
+    if not isinstance(value, str):
+        return False
+    text = unicodedata.normalize('NFKC', value).casefold().replace('’', "'")
+    _, possessive, owned = text.rpartition("'s ")
+    return bool(possessive and _only_ai(owned)) or _only_ai(text)
+
+
+def person_on_behalf_of(value, owner_name):
+    """onBehalfOf as a call uses it. A person's name stays. The name of an AI, a model, an app or
+    a bot becomes the owner's name (SMITLINE_OWNER_NAME), unless it is the owner's own name.
+    Raises ValueError (NOT_A_PERSON) when there is no owner name to use instead."""
+    if not isinstance(value, str) or len(value) > MAX_ON_BEHALF_OF or not names_an_ai(value):
+        return value
+    name = ' '.join(str(owner_name or '').split())
+    if name.casefold() == ' '.join(value.split()).casefold():
+        return value
+    if not name:
+        raise ValueError(NOT_A_PERSON)
+    return name
 
 
 def normalize_phone(value, name='to'):
@@ -299,7 +364,8 @@ class CallBrief:
         return cls(
             channel=channel,
             to=to,
-            on_behalf_of=require_string(data['onBehalfOf'], 'onBehalfOf', max_length=120),
+            on_behalf_of=require_string(data['onBehalfOf'], 'onBehalfOf',
+                                        max_length=MAX_ON_BEHALF_OF),
             objective=require_string(data['objective'], 'objective', allow_newlines=True,
                                      max_length=1000),
             context=context,
