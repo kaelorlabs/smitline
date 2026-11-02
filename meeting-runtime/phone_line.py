@@ -1196,14 +1196,15 @@ class PhoneSession:
                 self._start_voicemail_hangup('message_left')
                 return
 
-    def _start_voicemail_hangup(self, why):
-        task = asyncio.create_task(self._hang_up_at_voicemail(why))
+    def _start_voicemail_hangup(self, why, *, end_reason='voicemail'):
+        task = asyncio.create_task(self._hang_up_at_voicemail(why, end_reason=end_reason))
         self._hangups.add(task)
         task.add_done_callback(self._hangups.discard)
         return task
 
-    async def _hang_up_at_voicemail(self, why):
-        """End the call at a voicemail: the model's voicemail_left, message_left, or time_cap.
+    async def _hang_up_at_voicemail(self, why, *, end_reason='voicemail'):
+        """End the call at a voicemail: the model's voicemail_left, message_left, time_cap, or
+        /end after the agent's message (asked_to_end, which keeps the end reason hangup).
 
         A voicemail says it is an AI, as every outgoing call does. When the message has not, the
         voice is asked for that one sentence first, and the call ends once it has been heard and
@@ -1213,7 +1214,7 @@ class PhoneSession:
             return
         self._hanging_up = True
         if self.end_reason is None:
-            self.end_reason = 'voicemail'
+            self.end_reason = end_reason
         deadline = self._voicemail_deadline
         if why != 'time_cap':
             in_time = await self._by(deadline, self._let_speech_finish())
@@ -1340,6 +1341,10 @@ class PhoneSession:
         if self.voicemail_heard:
             # A voicemail is recording: there is nobody to thank, and a goodbye would only leave a
             # vague message ("just calling about a couple of things"). What is playing finishes.
+            if self._voicemail_message and self._owes_disclosure():
+                # Its message is on the recording without the AI disclosure: that comes first.
+                self._start_voicemail_hangup('asked_to_end', end_reason='hangup')
+                return True
             self._voicemail_event('asked_to_end')
             self._start_hangup('hangup', disclose=False)
             return True

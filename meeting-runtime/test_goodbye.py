@@ -490,6 +490,42 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hangups, [{'reason': 'message_left', 'disclosed': True}])
         self.assertEqual(done['endReason'], 'voicemail')
 
+    async def test_ending_at_a_voicemail_after_its_message_asks_for_the_disclosure_first(self):
+        record, session, ws, live, task = await self.connected()
+        self.voicemail_greeting(live)
+        await until(lambda: session.voicemail_heard)
+        self.say(live, "Hi, I'm calling on behalf of Robin about Friday's booking.")
+        await self.message_heard(session)
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: self.disclosure_asks(live))
+        self.assertFalse(ws.closed)
+        self.say(live, "This is Robin's AI assistant.")
+        await until(lambda: ws.closed, 4)
+        await asyncio.wait_for(task, 3)
+        self.assertNotIn('end the call now', ' '.join(str(c) for _k, c in live.appends))  # no goodbye
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'asked_to_end', 'disclosed': True}])
+        self.assertEqual(done['endReason'], 'hangup')
+        self.assertIs(done['result']['disclosureVerified'], True)
+
+    async def test_ending_at_a_voicemail_before_its_message_still_hangs_up_at_once(self):
+        record, session, ws, live, task = await self.connected()
+        self.hear(live, 'Hi, you have reached Robin.')
+        self.say(live, 'Hey, hi!')  # over the greeting, before the prompt: not on the recording
+        self.hear(live, ' Please record your message after the beep.')
+        await until(lambda: session.voicemail_heard)
+        await self.message_heard(session)
+        loop = asyncio.get_running_loop()
+        ended = loop.time()
+        await self.h.service.end(record['id'], owner='local')
+        await until(lambda: ws.closed, 3)
+        self.assertLess(loop.time() - ended, 1.0)
+        await asyncio.wait_for(task, 3)
+        self.assertEqual(self.disclosure_asks(live), [])
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'asked_to_end', 'disclosed': False}])
+        self.assertEqual(done['endReason'], 'hangup')
+
 
 class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
     decision = (False, 'other')
