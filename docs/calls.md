@@ -192,7 +192,7 @@ Webhook bodies are signed: `X-Smitline-Signature: sha256=<hex HMAC of the raw bo
 | `POST /v1/calls/{id}/requests/{requestId}/reply` | Answer a [request from the call](agents.md#requests-from-the-call): `{"type": "status", "text", "announce"}` any number of times, then `{"type": "done", "text", "ok", "details"}` once. Returns the request and whether the voice got it. `409 request_closed` for a request already done or canceled, `409 call_ended` for a status after the call, `429 too_many_updates` after 20 statuses. |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |
 | `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
-| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one. `404 no_recording` when there is none, `409 not_ready` while the call runs. |
+| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call: a WAV with each side on its own channel, kept with the call. Calls recorded before 0.3.3 come from the phone provider, which also offers MP3 (both sides mixed). `404 no_recording` when there is none, `409 not_ready` while the call runs. |
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |

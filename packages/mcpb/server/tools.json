@@ -4,6 +4,9 @@
     "capabilities": {
       "tools": {
         "listChanged": false
+      },
+      "resources": {
+        "listChanged": false
       }
     },
     "serverInfo": {
@@ -16,6 +19,13 @@
     {
       "name": "start_call",
       "title": "Start a phone call or join a meeting",
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://smitline/call-card-v1.html"
+        },
+        "openai/outputTemplate": "ui://smitline/call-card-v1.html",
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
@@ -171,7 +181,7 @@
           },
           "record": {
             "type": "boolean",
-            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+            "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording."
           },
           "afterHours": {
             "type": "boolean",
@@ -410,7 +420,7 @@
           },
           "record": {
             "type": "boolean",
-            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+            "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording."
           },
           "afterHours": {
             "type": "boolean",
@@ -540,6 +550,13 @@
     {
       "name": "get_call",
       "title": "Get call details",
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://smitline/call-card-v1.html"
+        },
+        "openai/outputTemplate": "ui://smitline/call-card-v1.html",
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "readOnlyHint": true,
         "openWorldHint": false

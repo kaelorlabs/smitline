@@ -510,6 +510,23 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(f'/v1/calls/{call["id"]}/recording')
         self.assertEqual(response.status, 401)
 
+    async def test_download_smitlines_own_recording(self):
+        response = await self.client.post('/v1/calls', json=brief(record=True), headers=self.auth)
+        call = await response.json()
+        self.h.line.proceed.set()
+        await self.client.get(f'/v1/calls/{call["id"]}/wait?timeout=5', headers=self.auth)
+        self.h.store.recording_path(call['id']).write_bytes(b'RIFFwav')
+        self.h.store.update(call['id'], recording={'seconds': 3, 'format': 'wav', 'source': 'smitline'})
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording', headers=self.auth)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), b'RIFFwav')
+        self.assertEqual(response.headers['Content-Type'], 'audio/wav')
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording?format=mp3', headers=self.auth)
+        self.assertEqual((response.status, (await response.json())['error']['code']), (422, 'invalid_request'))
+        self.h.store.recording_path(call['id']).unlink()
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording', headers=self.auth)
+        self.assertEqual((response.status, (await response.json())['error']['code']), (404, 'no_recording'))
+
     async def test_create_get_wait_list(self):
         response = await self.client.post('/v1/calls', json=brief(), headers=self.auth)
         self.assertEqual(response.status, 201)

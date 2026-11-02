@@ -30,6 +30,7 @@ from phone_prompts import (
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
 from call_requests import MAX_REQUESTS, ClaimWatch, RequestDesk, appends, tool_output
+from call_recorder import CallRecorder
 from listening import AudioTap
 from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
 from twilio_client import client_for, dial_twiml, sip_dial_twiml, stream_twiml
@@ -71,8 +72,12 @@ OPENING_DELAY = 1.5
 # after this much quiet, not the detector's usual 450 ms; that waits out their pauses.
 OPENING_LONG_WORDS_MS = 1500
 OPENING_LONG_QUIET = 1.2
-SILENCE_PROMPT_SECONDS = 40.0
+SILENCE_PROMPT_SECONDS = 12.0
 SILENCE_END_SECONDS = 65.0
+# Turns of ours in a row that got no words back. After this many, once the line has been quiet
+# for SILENCE_PROMPT_SECONDS again, nobody is answering and the call ends.
+UNANSWERED_TURNS = 3
+AGENT_TURN_GAP_SECONDS = 2.0  # a pause this long in the agent's words starts a new turn
 WRAP_UP_SECONDS = 60.0
 RING_SECONDS = 30
 # How long to wait for the media stream or a final status after dialing, before
@@ -492,6 +497,7 @@ class PhoneSession:
         self.inbound = inbound
         # Both sides of the call as they pass, for the owner listening in (G.711 mu-law, 8 kHz).
         self.tap = AudioTap('mulaw', 8000)
+        self.recorder = None  # CallRecorder while a recorded call runs
         # Requests to the agent that started the call, when its brief says what it can do.
         self.desk = (RequestDesk(self.brief.on_behalf_of, limit=MAX_REQUESTS['phone'])
                      if getattr(self.brief, 'can_do', None) else None)
@@ -547,6 +553,8 @@ class PhoneSession:
         # The agent's latest turn, and what they said after its goodbye (see _after_goodbye).
         self._agent_latest = ''
         self._last_speaker = None
+        self._unanswered = 0  # turns of ours in a row with no words from them
+        self._agent_spoke_at = None
         self._goodbye_watch = None
         self._said_after_goodbye = ''
         # At a voicemail (see _after_voicemail): when its prompt was heard, when the call must end
@@ -629,10 +637,36 @@ class PhoneSession:
         message = dict(message, streamSid=self.stream_sid)
         if message.get('event') == 'media':
             self.tap.push('agent', (message.get('media') or {}).get('payload'))
+            self._record('agent', (message.get('media') or {}).get('payload'))
         try:
             await self.ws.send_str(json.dumps(message))
         except Exception:
             pass
+
+    def _record(self, side, payload):
+        if self.recorder is None:
+            return
+        try:
+            if side == 'agent':
+                self.recorder.agent(payload)
+            else:
+                self.recorder.other(payload)
+        except OSError as error:  # a full disk must not take the call down
+            self._finish_recording(error)
+
+    def _finish_recording(self, error=None):
+        """Close the call's own recording; the call record gets it when anything was recorded."""
+        recorder, self.recorder = self.recorder, None
+        if recorder is None:
+            return
+        try:
+            seconds = recorder.close()
+        except OSError as close_error:
+            error, seconds = error or close_error, 0
+        if error is not None:
+            self.ctx.event('call.recording_failed', detail=str(error)[:200])
+        if seconds:
+            self.ctx.recorded(seconds)
 
     async def run(self, ws, start):
         """Bridge until the call ends; `start` is Twilio's start event."""
@@ -648,6 +682,11 @@ class PhoneSession:
         # The provider's clock paces the assistant's speech: this computer's may run fast or slow.
         self.provider_clock = ProviderClock()
         self.pacer = OutputPacer(self._twilio_send, clock=self.provider_clock, trace=self._note)
+        if self.recording and self.recorder is None:
+            try:
+                self.recorder = CallRecorder(self.ctx.recording_path())
+            except OSError as error:
+                self.ctx.event('call.recording_failed', detail=str(error)[:200])
         manager = self.line.live_factory(self.api_key, self.config())
         try:
             try:
@@ -663,6 +702,7 @@ class PhoneSession:
         finally:
             self.stream_ended_at = time.monotonic()
             self.tap.close()
+            self._finish_recording()
             for speaker, text in self.joiner.flush():
                 self.ctx.add_transcript(speaker, text)
                 if speaker == 'agent':
@@ -734,6 +774,7 @@ class PhoneSession:
                         self._note('in', ts=media.get('timestamp'), seq=data.get('sequenceNumber'))
                     await self.live.send_audio(media['payload'])
                     self.tap.push('other', media['payload'])
+                    self._record('other', media['payload'])
                     await self._hear(media['payload'])
             elif event == 'mark':
                 self.pacer.mark_played((data.get('mark') or {}).get('name'))
@@ -922,6 +963,13 @@ class PhoneSession:
         delta = event.get('delta') or ''
         if delta.strip():
             self.last_activity = now
+            if source == 'other':
+                self._unanswered = 0  # words back: whatever we said was answered
+            else:
+                if (self._last_speaker != 'agent' or self._agent_spoke_at is None
+                        or now - self._agent_spoke_at > AGENT_TURN_GAP_SECONDS):
+                    self._unanswered += 1  # a new turn of ours
+                self._agent_spoke_at = now
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
@@ -1101,6 +1149,13 @@ class PhoneSession:
                 await self.hangup('max_duration')
                 return
             quiet = now - self.last_activity
+            if self._unanswered >= UNANSWERED_TURNS and quiet >= SILENCE_PROMPT_SECONDS:
+                # Spoken to, checked on, and not a word back: nobody is answering.
+                self.ctx.event('call.no_answer_hangup', turns=self._unanswered)
+                # Someone may have heard us (a call screener, a person who stayed quiet): the
+                # AI disclosure comes first when it has not been said yet.
+                await self.hangup('hangup')
+                return
             if not prompted and quiet >= SILENCE_PROMPT_SECONDS:
                 prompted = True
                 await self.live.append('session.commentary.append',
@@ -1782,9 +1837,9 @@ class PhoneLine:
                 to=ctx.brief.to, from_=session.from_number, twiml=twiml,
                 status_callback=f'{base}/twilio/status/{ctx.call_id}',
                 amd_callback=f'{base}/twilio/amd/{ctx.call_id}',
-                record=session.recording, timeout=RING_SECONDS,
-                recording_callback=(f'{base}/twilio/recording/{ctx.call_id}'
-                                    if session.recording else None),
+                # A recorded call is recorded by Smitline itself (call_recorder.py): providers
+                # stop at their answering-machine check and keep the audio behind their URLs.
+                timeout=RING_SECONDS,
                 time_limit=ctx.brief.max_minutes * 60 + 90)
             session.call_sid = created.get('sid')
             ctx.link(providerCallSid=session.call_sid, fromNumber=session.from_number)

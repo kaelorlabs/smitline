@@ -119,6 +119,16 @@ class CallContext:
     def event(self, event_type, **data):
         self.service._event(self.call_id, event_type, **data)
 
+    def recording_path(self):
+        """Where the line writes this call's own recording (call_recorder.py)."""
+        return self.service.store.recording_path(self.call_id)
+
+    def recorded(self, seconds):
+        """The line's own recording is complete: both sides, one WAV, kept with the call."""
+        recording = {'seconds': int(seconds), 'format': 'wav', 'source': 'smitline'}
+        self.service.store.update(self.call_id, recording=recording)
+        self.service._event(self.call_id, 'call.recording', **recording)
+
     def request(self, message):
         """A request message from the voice (call_requests.RequestDesk): ask, add, or cancel."""
         return self.service.note_request(self.call_id, message)
@@ -544,18 +554,26 @@ class CallService:
         self._event(call_id, 'call.recording', **recording)
 
     async def recording(self, call_id, *, owner, fmt='wav'):
-        """A recorded call's audio from the phone provider, as (bytes, content type)."""
+        """A recorded call's audio, as (bytes, content type): Smitline's own recording (WAV,
+        each side on its own channel), or, for calls recorded before 0.3.3, the provider's."""
         if fmt not in ('wav', 'mp3'):
             raise CallError(422, 'invalid_request', 'format must be wav or mp3')
         record = self.get(call_id, owner=owner)
+        if (record.get('recording') or {}).get('source') == 'smitline':
+            if fmt != 'wav':
+                raise CallError(422, 'invalid_request', 'Smitline keeps recordings as WAV, each '
+                                'side on its own channel: ask for format=wav.')
+            try:
+                return self.store.recording_path(call_id).read_bytes(), 'audio/wav'
+            except FileNotFoundError:
+                raise CallError(404, 'no_recording', "This call's recording has been "
+                                'deleted.') from None
         fetch = getattr(self.lines.get(record['channel']), 'recording_audio', None)
         if not record.get('recording') or fetch is None:
             if record['status'] not in TERMINAL:
-                raise CallError(409, 'not_ready', 'The recording is ready a minute or so after '
-                                'the call ends.')
-            raise CallError(404, 'no_recording', 'This call has no recording. Recorded calls get '
-                            'one a minute or so after they end; to record a call, start it with '
-                            'record: true.')
+                raise CallError(409, 'not_ready', 'The recording is ready once the call ends.')
+            raise CallError(404, 'no_recording', 'This call has no recording. To record a call, '
+                            'start it with record: true.')
         from twilio_client import TwilioError
         try:
             body, content_type = await fetch(

@@ -143,7 +143,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'them. If they ask not to be called again, apologize, say they will not be called again, '
          'say goodbye, and end the call. Also end it politely when the call is going nowhere: you '
          'keep going around in circles, you still cannot understand each other after a couple of '
-         'tries, they are abusive, or an automated menu will not let you through. Say that '
+         'tries, nobody answers when you check a couple of times, they are abusive, or an '
+         'automated menu will not let you through. Say that '
          f'{who} will follow up, say goodbye, and ask your backend to end the call as not '
          'productive.'),
         ('Voicemail: if their voicemail answers, wait for the beep, then leave a short message '
