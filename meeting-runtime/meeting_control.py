@@ -5,13 +5,24 @@ with the meeting's own token (SMITLINE_CONTROL_TOKEN): notes for the voice (requ
 send_call_instruction) and whether the agent that started the meeting is following it.
 Requests the voice passes on leave through /health, numbered by seq, as captions do.
 """
+import asyncio
 import hmac
+import time
 
-from call_requests import MAX_REQUESTS, NOTE_KINDS, ClaimWatch, RequestDesk, appends
+from call_requests import (
+    MAX_REQUESTS, NOTE_KINDS, WHEN_TO_TELL, ClaimWatch, RequestDesk, appends, told,
+)
 
 MAX_NOTE_TEXT = 4000
 # Requests /health carries; the daemon reads it every second, so it never falls this far behind.
 HEALTH_REQUESTS = 100
+# GPT-Live speaks when prompted: an instructions note alone waits until someone talks to it, so
+# in a quiet meeting an answer sat unsaid until someone asked. An answer to tell (a note's `say`)
+# is cued once nobody, the voice included, has been heard for TELL_QUIET seconds: at once when
+# the room is quiet, at a real gap when people are talking. Without one in TELL_MAX_WAIT, the
+# note's own rule stands (first thing the next time it speaks).
+TELL_QUIET = 2.5
+TELL_MAX_WAIT = 120.0
 
 
 class MeetingControl:
@@ -28,6 +39,13 @@ class MeetingControl:
         self.desk = RequestDesk(owner, limit=MAX_REQUESTS['meeting']) if can_do else None
         # Requests the voice says it passed on without asking its backend (call_requests.py).
         self.claims = ClaimWatch(self.desk) if self.desk is not None else None
+        # quiet(): seconds since anyone, the voice included, was last heard; set by the bridge.
+        self.quiet = None
+        self.clock = time.monotonic
+        self.tell_quiet = TELL_QUIET
+        self.tell_max_wait = TELL_MAX_WAIT
+        self._said = {}  # request id -> what the voice has said since its answer came
+        self._telling = set()
 
     def authorized(self, header):
         """Only the daemon that started this meeting holds its token."""
@@ -49,6 +67,33 @@ class MeetingControl:
         """What was said, for the safety net (speaker: 'agent', or anyone in the meeting)."""
         if self.claims is not None:
             self.claims.heard(speaker, delta)
+        if speaker == 'agent':
+            for request_id in self._said:
+                self._said[request_id] += delta
+
+    async def tell_at_pause(self, request_id, say, text, poll=0.2):
+        """Cue the voice to say an answer at the next pause, unless it has said it by then."""
+        started = self.clock()
+        self._said.setdefault(request_id, '')
+        try:
+            while self.clock() - started < self.tell_max_wait:
+                if told(say, self._said.get(request_id, '')):
+                    return False
+                if self.send is None:
+                    return False
+                if self.quiet() >= self.tell_quiet:
+                    cue = (f'Now is a pause: tell them this now, in a sentence or two and in your '
+                           f'own words, unless you have just said it. {text.replace(WHEN_TO_TELL, "").strip()} '
+                           'Then go back to listening.')
+                    sent = bool(await self.send('commentary', cue))
+                    if self.record is not None:
+                        self.record('answer_cued', request=request_id, sent=sent)
+                    return sent
+                await asyncio.sleep(poll)
+            return False
+        finally:
+            self._said.pop(request_id, None)
+            self._telling.discard(request_id)
 
     def claim_pending(self):
         return self.claims is not None and self.claims.claimed_at is not None
@@ -92,6 +137,13 @@ class MeetingControl:
         delivered = True
         for append_kind, append_text in appends(note, chat_posted=chat_posted):
             delivered = bool(await self.send(append_kind, append_text)) and delivered
+        say, request_id = payload.get('say'), payload.get('request')
+        if (delivered and isinstance(say, str) and say.strip() and isinstance(request_id, str)
+                and self.quiet is not None and request_id not in self._telling):
+            self._telling.add(request_id)
+            self._said[request_id] = ''  # from now on, what the voice says counts
+            asyncio.get_running_loop().create_task(
+                self.tell_at_pause(request_id, say[:MAX_NOTE_TEXT], note['text']))
         if payload.get('closes') and self.desk is not None:
             self.desk.close(payload.get('request'))
         elif kind == 'instructions' and self.claims is not None and payload.get('request'):
