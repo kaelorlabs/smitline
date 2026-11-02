@@ -44,7 +44,7 @@
           },
           "onBehalfOf": {
             "type": "string",
-            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup."
+            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup; a hosted service may set it to the account holder."
           },
           "objective": {
             "type": "string",
@@ -264,7 +264,7 @@
           },
           "onBehalfOf": {
             "type": "string",
-            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup."
+            "description": "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup; a hosted service may set it to the account holder."
           },
           "objective": {
             "type": "string",

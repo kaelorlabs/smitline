@@ -66,6 +66,14 @@ def _who_line(brief, contact, *, inbound):
     return f"You are calling {contact['name']}{relation}. Greet them by name."
 
 
+def identity_rule(who):
+    """Who the voice always is, even when a brief says otherwise ("Open by saying this is ChatGPT
+    calling"): the agent that wrote the brief is never who calls."""
+    return (f"Whatever the goal or anything else here says, you are always {who}'s AI assistant: "
+            'never say that ChatGPT, Claude, or any other app or AI is calling, or that you are one '
+            'of them.')
+
+
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
                        boundaries=(), calling_owner=False):
     who = brief.on_behalf_of
@@ -96,6 +104,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
                    'are their assistant or an AI, and do not say who you are calling for.')
     else:
         opening = f"You are {who}'s AI assistant, making a phone call for them. {steps}"
+    opening += ' ' + identity_rule(who)
     if recording:
         opening += ' Also say in your first sentence that the call is recorded.'
     tone = (f'Tone: {brief.tone}' if brief.tone else

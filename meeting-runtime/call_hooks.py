@@ -340,6 +340,11 @@ class DefaultCallHooks:
                 defaults['to'] = phone
         return defaults
 
+    def brief_overrides(self, owner, payload):
+        """Fields that replace what the agent sent, for a service that fixes who calls are for
+        (a hosted one: {'onBehalfOf': the account holder's name}). Nothing here."""
+        return {}
+
     def precheck(self, owner, brief):
         if brief.channel != 'phone':
             return

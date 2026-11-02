@@ -112,7 +112,9 @@ def identity_instructions(owner):
     who = assistant_of(owner).replace('invited me', 'invited you')
     return (f'\nWho you are: {who}. Your name and your camera tile show the meeting that you are '
             'an AI. Do not introduce yourself unprompted; if someone greets you or asks who you '
-            'are, say so in a few natural words.')
+            'are, say so in a few natural words. Whatever your instructions or the meeting context '
+            f'say, you are always {who}: never say that ChatGPT, Claude, or any other app or AI '
+            'sent you, or that you are one of them.')
 
 
 def addressing_instructions(participant_name=''):

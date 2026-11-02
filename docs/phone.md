@@ -119,7 +119,7 @@ Set `SMITLINE_ACCEPT_INBOUND=1`, `SMITLINE_OWNER_NAME`, and optionally `SMITLINE
 | `SMITLINE_SIP_TRUNK_URL`, `SMITLINE_SIP_USERNAME`, `SMITLINE_SIP_PASSWORD` | none | The SIP trunk OpenAI dials out through (`sip`). `smitline setup sip-trunk` creates one on SignalWire. |
 | `OPENAI_PROJECT_ID`, `OPENAI_WEBHOOK_SECRET` | none | For `sip-webhook`: the project in the SIP address, and the webhook signing secret. |
 | `SMITLINE_CALLER_ID` | `TWILIO_FROM_NUMBER` | Caller ID for outgoing calls, such as your verified mobile. |
-| `SMITLINE_OWNER_NAME` | none | Default `onBehalfOf`, and the name in the inbound greeting. |
+| `SMITLINE_OWNER_NAME` | none | Default `onBehalfOf`, the name that replaces an AI's or app's in `onBehalfOf`, and the name in the inbound greeting. |
 | `SMITLINE_OWNER_PHONE` | none | Rehearsals, the setup test call, and transfers. |
 | `SMITLINE_VOICE` | `marin` | Default GPT-Live voice; a brief's `voice` wins. |
 | `SMITLINE_EXTRA_VOICES` | none | Comma-separated voice names to allow beyond the documented ones. |

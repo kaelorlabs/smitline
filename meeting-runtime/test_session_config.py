@@ -121,6 +121,16 @@ class MeetingIntroTests(unittest.TestCase):
         self.assertEqual(camera_caption(''), 'AI assistant')
         self.assertEqual(camera_caption('A' * 60), 'AI assistant')
 
+    def test_the_meeting_voice_is_the_owners_assistant_never_an_app(self):
+        prompt = build_session_config(RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin'}))
+        self.assertIn("Who you are: Robin's AI assistant.", prompt['instructions'])
+        self.assertIn("Whatever your instructions or the meeting context say, you are always Robin's "
+                      'AI assistant: never say that ChatGPT, Claude, or any other app or AI sent you, '
+                      'or that you are one of them.', prompt['instructions'])
+        unnamed = build_session_config(RuntimeConfig.from_environ({}))['instructions']
+        self.assertIn('you are always an AI assistant for the person who invited you: never say '
+                      'that ChatGPT, Claude, or any other app or AI sent you', unnamed)
+
     def test_the_spoken_hello_is_opt_in_and_names_the_owner_setting(self):
         runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
         config = build_session_config(runtime)
