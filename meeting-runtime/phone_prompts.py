@@ -98,8 +98,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     elif calling_owner:
         # Their own assistant calling them: no introduction, no disclosure, no "on behalf of".
         opening = (f'You are calling {who}, the person you work for, on their own phone, as '
-                   'their assistant. Talk with them the way a trusted assistant would: greet them '
-                   'by first name, say in a few words why you are calling, and get on with it. '
+                   'their assistant, and talk with them the way a trusted assistant would. '
                    'They know exactly who you are: do not introduce yourself, do not say that you '
                    'are their assistant or an AI, and do not say who you are calling for.')
     else:
@@ -136,11 +135,9 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'up facts, reasons, or plans that the brief does not give; say you do not know and that '
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
-        ('Call screening: if an automated assistant answers ("the person you are calling is using '
-         'a screening service", "I\'ll see if this person is available"), let it finish. When it asks '
-         f'who is calling and why, say in one sentence that you are calling on behalf of {who} and '
-         'why, then wait quietly for the person to pick up. When they do, greet them, say in a few '
-         'words why you are calling, and carry on as usual.'),
+        ('Call screening: if an automated assistant answers, let it finish. When it asks who is '
+         f'calling, tell it in one sentence that you are calling on behalf of {who} and why, then '
+         'wait for the person.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them. If they ask not to be called again, apologize, say they will not be called again, '
@@ -236,10 +233,8 @@ def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_own
 def machine_hint(brief):
     """Sent when the phone network guesses that a machine answered; it is often wrong."""
     return ('The phone network guesses that a machine may have answered: a voicemail system or an '
-            'automated call screener. If a person is talking with you, ignore this and carry on. If '
-            'it is a call screener, say who you are calling for and why, then wait for the '
-            'person. If it is a voicemail recording, wait for the beep and leave a short message as '
-            'your instructions describe. Do not mention this note.')
+            'automated call screener. The guess is often wrong, so go by what you hear. Do not '
+            'mention this note.')
 
 
 HANGUP_YIELDED = ('The other person spoke after you said goodbye. Listen and answer them. End the '
