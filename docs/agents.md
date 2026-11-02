@@ -51,6 +51,10 @@ The agent that placed a call can supervise it while it runs. It passes `since: "
 
 When the agent knows something the call needs, such as the user's calendar, a document, or a decision made earlier, it steps in with `send_call_instruction` ("Friday at 10 works"), and the voice uses it straight away. If the call goes wrong, `end_call`. Otherwise it keeps waiting and Smitline runs the conversation. This works for phone calls and meetings, in every MCP client, because it is ordinary tool calls. The skill and the server's MCP instructions teach agents to do this.
 
+## The call card
+
+Clients that support MCP Apps (ChatGPT, Claude and others) show what `start_call` and `get_call` return as a card in the chat: who the call is for and its status, then the outcome, summary and details, what it cost, the recording, and the transcript. While the call runs, the card asks for it again every 3 seconds (`get_call`), so it follows the call until it ends; it does not count as the agent following the call. The card is the resource `ui://smitline/call-card-v1.html` (`text/html;profile=mcp-app`): one self-contained page that shows everything as text and loads nothing from elsewhere. It plays a recording only from an https link in the call's `recordingUrl` whose origin the server allows (`createMcpSession({ card: { mediaOrigins } })`; Smitline Cloud passes its own), and offers `callUrl`, when there is one, as "Open in Smitline". Other clients get the same result as text, as before.
+
 ## Requests from the call
 
 People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`:

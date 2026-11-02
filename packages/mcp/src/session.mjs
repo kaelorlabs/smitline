@@ -7,6 +7,7 @@ import {
   InterruptError,
   redact,
 } from '../../sdk-typescript/src/index.mjs';
+import { CALL_CARD_TOOL_META, CALL_CARD_URI, callCardResource } from './call-card.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -107,6 +108,7 @@ export const CALL_TOOL_DEFINITIONS = [
   {
     name: 'start_call',
     title: "Start a phone call or join a meeting",
+    _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call with since: \"\" to follow the call live and supervise it. With canDo, people on the call can ask you for things; follow the call to answer them.",
     inputSchema: BRIEF_SCHEMA,
@@ -138,6 +140,7 @@ export const CALL_TOOL_DEFINITIONS = [
   {
     name: 'get_call',
     title: "Get call details",
+    _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A finished call includes its result (outcome, summary, details, transcript) and cost. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
     inputSchema: { type: 'object', additionalProperties: false, required: ['callId'], properties: { callId: CALL_ID_SCHEMA } },
@@ -392,6 +395,8 @@ export function createMcpSession(options = {}) {
   }));
   const colleague = options.colleague || createColleague();
   const protocolVersions = options.protocolVersions || null;
+  // The call card (call-card.mjs); card.mediaOrigins lets it play recordings from those origins.
+  const card = callCardResource(options.card);
   const notifications = [];
   let notify = options.notify || ((message) => { notifications.push(message); });
   let initialized = false;
@@ -421,13 +426,19 @@ export function createMcpSession(options = {}) {
         : requested || MCP_PROTOCOL_VERSION;
       return rpcResult(id, {
         protocolVersion,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
         serverInfo: { name: 'smitline', version: MCP_SERVER_VERSION },
         instructions: CALLS_INSTRUCTIONS,
       });
     }
     if (method === 'ping') return rpcResult(id, {});
     if (method === 'tools/list') return rpcResult(id, { tools: TOOL_DEFINITIONS });
+    if (method === 'resources/list') return rpcResult(id, { resources: [card.descriptor] });
+    if (method === 'resources/templates/list') return rpcResult(id, { resourceTemplates: [] });
+    if (method === 'resources/read') {
+      if (params?.uri !== CALL_CARD_URI) return rpcError(id, -32002, 'resource not found');
+      return rpcResult(id, { contents: [card.content] });
+    }
     if (method === 'tools/call') {
       try {
         const result = await callTool(params?.name, params?.arguments || {});

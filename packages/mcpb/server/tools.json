@@ -4,6 +4,9 @@
     "capabilities": {
       "tools": {
         "listChanged": false
+      },
+      "resources": {
+        "listChanged": false
       }
     },
     "serverInfo": {
@@ -16,6 +19,13 @@
     {
       "name": "start_call",
       "title": "Start a phone call or join a meeting",
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://smitline/call-card-v1.html"
+        },
+        "openai/outputTemplate": "ui://smitline/call-card-v1.html",
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
@@ -498,6 +508,13 @@
     {
       "name": "get_call",
       "title": "Get call details",
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://smitline/call-card-v1.html"
+        },
+        "openai/outputTemplate": "ui://smitline/call-card-v1.html",
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "readOnlyHint": true,
         "openWorldHint": false
