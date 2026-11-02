@@ -245,6 +245,13 @@ def disclosure_reminder(brief):
             f'"Oh, and just so you know, I\'m {who}\'s AI assistant." Then say goodbye.')
 
 
+def voicemail_disclosure(brief):
+    """Sent at a voicemail whose message has not said it is an AI, before the call hangs up."""
+    who = brief.on_behalf_of
+    return (f"Your voicemail message has not said that you are {who}'s AI assistant. Say only "
+            f'that now, in one short sentence, for example: "This is {who}\'s AI assistant."')
+
+
 def goodbye_cue(brief, text, *, disclosed):
     """A wrap-up prompt that asks for the AI disclosure first when it has not been said."""
     if disclosed:
