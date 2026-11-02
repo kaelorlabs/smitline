@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **One conversation from hello to goodbye.** The voice's standing instructions no longer tell it to greet whoever picks up: the hello is only in the opening cue, sent once. On 2026-11-02 a call to the user's own phone started over twice when he said "hello?" after a quiet moment, because the call-screening and own-phone instructions said to greet the person and give the reason. The call-screening note and the network's machine guess now say what is happening and leave the rest to the model, which has the whole conversation.
+
 ## 0.3.2 — 2026-11-02
 
 - **A voicemail call ends after its message** ([#90](https://github.com/kaelorlabs/smitline/pull/90)). Once a voicemail greeting has been heard and the agent has left its message, the call hangs up after 3 quiet seconds, even if the model never ends it, and at the latest `SMITLINE_VOICEMAIL_MAX_SECONDS` (default 60, 0 turns it off) after the greeting. On 2026-11-02 a call stayed on a voicemail for two minutes after a one-sentence message. `call.voicemail_hangup` says why: `message_left`, `time_cap` or `asked_to_end`.

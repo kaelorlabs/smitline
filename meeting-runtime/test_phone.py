@@ -20,8 +20,8 @@ from call_store import CallStore
 from phone_gateway import create_gateway_app
 from phone_line import OutputPacer, PhoneLine, ProviderClock, UtteranceJoiner, inbound_brief
 from phone_prompts import (
-    backend_instructions, delegation_config, discloses, goodbye_cue, mentions_ai, opening_cue,
-    voice_instructions,
+    backend_instructions, delegation_config, discloses, goodbye_cue, machine_hint, mentions_ai,
+    opening_cue, voice_instructions,
 )
 from tunnel import PublicUrl, TunnelError, configured_url
 from twilio_client import (
@@ -903,6 +903,23 @@ class PromptTests(unittest.TestCase):
         text = voice_instructions(parsed)
         self.assertIn("Hi, I'm calling on behalf of Arun Raj about ...", text)
         self.assertIn("say plainly that you are Arun Raj's AI assistant", text)
+
+    def test_no_scripted_greeting_when_someone_picks_up(self):
+        # On 2026-11-02 a call to the owner's own phone started over twice: after a quiet moment
+        # he said "hello?" and the voice greeted him and gave its reason again ("thanks for
+        # picking up"). The standing instructions told it to greet whoever picks up. The hello
+        # is the opening cue, sent once; the rest is left to the model, which has the whole call.
+        # (A known contact's line still says to greet them by name: how to address them.)
+        parsed = CallBrief.from_dict(brief(onBehalfOf='Arun Raj'))
+        for kind, text in (('outbound', voice_instructions(parsed)),
+                           ('own phone', voice_instructions(parsed, calling_owner=True))):
+            with self.subTest(kind=kind):
+                self.assertNotIn('greet them', text.lower())
+                self.assertNotIn('pick up', text.lower())
+                self.assertIn('Call screening: if an automated assistant answers', text)
+        hint = machine_hint(parsed)
+        self.assertIn('go by what you hear', hint)
+        self.assertNotIn('greet', hint.lower())
 
 
 class PacingTests(unittest.IsolatedAsyncioTestCase):
