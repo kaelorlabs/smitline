@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Calls nobody answers end sooner.** The voice checks whether anyone is there after 12 seconds of quiet instead of 40. When it has spoken three times in a row without a word back and the line goes quiet again, the call ends (`call.no_answer_hangup`, with `turns`), and the voice is told to end a call when nobody answers after a couple of checks. On 2026-11-02 a restaurant picked up and then went quiet: the voice waited 40 seconds before speaking and then checked in three times over two minutes.
 - **One conversation from hello to goodbye.** The voice's standing instructions no longer tell it to greet whoever picks up: the hello is only in the opening cue, sent once. On 2026-11-02 a call to the user's own phone started over twice when he said "hello?" after a quiet moment, because the call-screening and own-phone instructions said to greet the person and give the reason. The call-screening note and the network's machine guess now say what is happening and leave the rest to the model, which has the whole conversation.
 
 ## 0.3.2 — 2026-11-02

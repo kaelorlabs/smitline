@@ -69,8 +69,12 @@ OPENING_DELAY = 1.5
 # after this much quiet, not the detector's usual 450 ms; that waits out their pauses.
 OPENING_LONG_WORDS_MS = 1500
 OPENING_LONG_QUIET = 1.2
-SILENCE_PROMPT_SECONDS = 40.0
+SILENCE_PROMPT_SECONDS = 12.0
 SILENCE_END_SECONDS = 65.0
+# Turns of ours in a row that got no words back. After this many, once the line has been quiet
+# for SILENCE_PROMPT_SECONDS again, nobody is answering and the call ends.
+UNANSWERED_TURNS = 3
+AGENT_TURN_GAP_SECONDS = 2.0  # a pause this long in the agent's words starts a new turn
 WRAP_UP_SECONDS = 60.0
 RING_SECONDS = 30
 # How long to wait for the media stream or a final status after dialing, before
@@ -545,6 +549,8 @@ class PhoneSession:
         # The agent's latest turn, and what they said after its goodbye (see _after_goodbye).
         self._agent_latest = ''
         self._last_speaker = None
+        self._unanswered = 0  # turns of ours in a row with no words from them
+        self._agent_spoke_at = None
         self._goodbye_watch = None
         self._said_after_goodbye = ''
         # At a voicemail (see _after_voicemail): when its prompt was heard, when the call must end
@@ -917,6 +923,13 @@ class PhoneSession:
         delta = event.get('delta') or ''
         if delta.strip():
             self.last_activity = now
+            if source == 'other':
+                self._unanswered = 0  # words back: whatever we said was answered
+            else:
+                if (self._last_speaker != 'agent' or self._agent_spoke_at is None
+                        or now - self._agent_spoke_at > AGENT_TURN_GAP_SECONDS):
+                    self._unanswered += 1  # a new turn of ours
+                self._agent_spoke_at = now
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
@@ -1091,6 +1104,11 @@ class PhoneSession:
                 await self.hangup('max_duration')
                 return
             quiet = now - self.last_activity
+            if self._unanswered >= UNANSWERED_TURNS and quiet >= SILENCE_PROMPT_SECONDS:
+                # Spoken to, checked on, and not a word back: nobody is answering.
+                self.ctx.event('call.no_answer_hangup', turns=self._unanswered)
+                await self.hangup('hangup', disclose=False)
+                return
             if not prompted and quiet >= SILENCE_PROMPT_SECONDS:
                 prompted = True
                 await self.live.append('session.commentary.append',

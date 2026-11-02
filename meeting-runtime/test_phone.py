@@ -325,6 +325,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Also end it politely when the call is going nowhere', text)
         self.assertIn('going around in circles', text)
         self.assertIn('an automated menu will not let you through', text)
+        self.assertIn('nobody answers when you check a couple of times', text)
         self.assertIn('Robin will follow up', text)
         self.assertIn('reason not_productive', backend_instructions(call))
         self.assertIn('not_productive', END_CALL_TOOL['parameters']['properties']['reason']['enum'])
@@ -1976,8 +1977,9 @@ class FakeClock:
 
 
 class SilenceTests(unittest.IsolatedAsyncioTestCase):
-    """Nobody speaking ends a call: a prompt after 40 seconds, the end after 65. GPT-Live streams
-    silence between turns, and that is not anyone speaking."""
+    """Nobody speaking ends a call: a prompt after 12 seconds, the end after 65, and sooner when
+    three turns of ours in a row get no words back. GPT-Live streams silence between turns, and
+    that is not anyone speaking."""
 
     SILENT = base64.b64encode(b'\xff' * 160).decode()  # 20 ms of mu-law silence
     SPOKEN = base64.b64encode(b'\x2a' * 1600).decode()  # 0.2 s of speech
@@ -2019,9 +2021,9 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_streamed_silence_does_not_keep_a_quiet_call_open(self):
         record, ws, live, task = await self.relayed_call()
-        await self.at(39, live)
+        await self.at(11, live)
         self.assertFalse(self.asked(live))
-        await self.at(40.5, live)
+        await self.at(12.5, live)
         self.assertTrue(self.asked(live))
         await self.at(64, live)
         self.assertFalse(ws.closed)
@@ -2033,11 +2035,11 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_agents_speech_still_counts(self):
         record, ws, live, task = await self.relayed_call()
-        await self.at(30, live)
+        await self.at(10, live)
         live.push({'type': 'session.output_audio.delta', 'delta': self.SPOKEN})  # audio, no transcript
-        await self.at(41, live)  # without that speech, the prompt would be due by now
+        await self.at(21, live)  # without that speech, the prompt would be due by now
         self.assertFalse(self.asked(live))
-        await self.at(70.5, live)  # 40.5 seconds after it
+        await self.at(22.5, live)  # 12.5 seconds after it
         self.assertTrue(self.asked(live))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -2045,13 +2047,13 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_their_voice_counts_before_any_transcript(self):
         from test_barge_in import QUIET, SPEECH
         record, ws, live, task = await self.relayed_call()
-        await self.at(30, live)
+        await self.at(10, live)
         for frame in [QUIET] * 5 + [SPEECH] * 20 + [QUIET] * 25:  # heard by the detector only
             ws.push({'event': 'media', 'media': {'track': 'inbound',
                                                  'payload': base64.b64encode(frame).decode()}})
-        await self.at(41, live)
+        await self.at(21, live)
         self.assertFalse(self.asked(live))
-        await self.at(70.5, live)
+        await self.at(22.5, live)
         self.assertTrue(self.asked(live))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -2067,14 +2069,56 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
         side.push({'type': 'transport.answered', 'event_id': 'e2'})
         await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
         self.start = self.h.line.session(record['id']).started_at
-        await self.at(39, side)
+        await self.at(11, side)
         self.assertFalse(self.asked(side))
-        await self.at(40.5, side)
+        await self.at(12.5, side)
         self.assertTrue(self.asked(side))
         await self.at(65.5, side)
         done = await self.h.service.wait(record['id'], timeout=8, owner='local')
         self.assertEqual(done['endReason'], 'hangup')
         self.assertIn(('hangup', 'live_sip_1'), client.calls)
+
+    async def say(self, live, seconds, speaker, text):
+        """`seconds` into the call, words from `speaker` ('agent' or 'other')."""
+        self.clock.now = self.start + seconds
+        kind = 'output' if speaker == 'agent' else 'input'
+        live.push({'type': f'session.{kind}_transcript.delta', 'delta': text})
+        await asyncio.sleep(0.05)
+
+    async def test_three_turns_without_a_word_back_end_the_call(self):
+        # On 2026-11-02 a restaurant picked up and then said nothing: the voice checked in three
+        # times over two minutes. Its opening and two check-ins, then quiet: nobody is answering.
+        record, ws, live, task = await self.relayed_call()
+        await self.say(live, 1, 'agent', "Hi, I'm calling on behalf of Robin about a table.")
+        await self.at(13.5, live)
+        self.assertTrue(self.asked(live))
+        await self.say(live, 14, 'agent', 'Hello? Are you still there?')
+        await self.at(26.5, live)
+        await self.say(live, 27, 'agent', 'Hello? Can you hear me?')
+        await self.at(38, live)
+        self.assertFalse(ws.closed)  # 11 seconds after the third turn
+        await self.at(39.5, live)
+        await until(lambda: ws.closed, 3)
+        await asyncio.wait_for(task, 3)
+        ended = [e['data'] for e in self.h.service.events(record['id'])
+                 if e['type'] == 'call.no_answer_hangup']
+        self.assertEqual(ended, [{'turns': 3}])
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_words_back_start_the_count_again(self):
+        record, ws, live, task = await self.relayed_call()
+        await self.say(live, 1, 'agent', "Hi, I'm calling on behalf of Robin about a table.")
+        await self.say(live, 14, 'agent', 'Hello? Are you still there?')
+        await self.say(live, 16, 'other', 'Sorry, yes. One moment please.')
+        await self.say(live, 29, 'agent', 'Sure, take your time.')
+        await self.say(live, 42, 'agent', 'Are you still there?')
+        await self.at(56, live)  # two turns since their words, then quiet: not three
+        self.assertFalse(ws.closed)
+        self.assertFalse(any(e['type'] == 'call.no_answer_hangup'
+                             for e in self.h.service.events(record['id'])))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
 
 
 if __name__ == '__main__':
