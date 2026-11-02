@@ -245,6 +245,10 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         live.push({'type': 'session.input_transcript.delta', 'delta': 'Thanks. Please stay on the line'})
         await asyncio.sleep(0.1)
         await self.h.service.end(record['id'], owner='local')
+        # No goodbye to the screening; but it relayed words that did not say it is an AI, so
+        # that one sentence comes first.
+        await until(lambda: any('Before the call ends' in str(content) for _kind, content in live.appends))
+        self.say(live, "Just so you know, I'm Robin's AI assistant.")
         await until(lambda: ws.closed, 3)
         sent = ' '.join(str(content) for _kind, content in live.appends)
         self.assertNotIn('end the call now', sent)

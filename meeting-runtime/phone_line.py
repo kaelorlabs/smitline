@@ -1417,7 +1417,9 @@ class PhoneSession:
             # Answered, but only by a machine so far (call screening) or by silence: nobody to say
             # goodbye to. In a live test the phone kept ringing through a 12-second goodbye.
             self.ctx.event('call.no_person_hangup')
-            self._start_hangup('hangup', disclose=False)
+            # A call screener may have relayed what the voice said: an owed AI disclosure
+            # still comes first (one sentence, not a goodbye).
+            self._start_hangup('hangup')
             return True
         await self.live.append('session.commentary.append', self._goodbye_cue(
             'You need to end the call now. Thank them and say goodbye.'))

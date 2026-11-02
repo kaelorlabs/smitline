@@ -235,15 +235,15 @@ _PASS = r"(?:pass(?:ed|ing)?|sen[dt]|sending|forward(?:ed|ing)?|hand(?:ed|ing)?|
 _ASK = r"(?:ask(?:ed|ing)?|check(?:ed|ing)? with|get(?:ting)?|got)"
 _AGENT = r"(?:your|the|his|her|their|[\w-]+(?: [\w-]+)?'s) (?:agent|assistant)"
 # What the voice says when it claims to have passed something on. Besides "I've passed it to
-# your agent", a live meeting heard "Alright, on it.", "I'm sending it.", "I'll send that." and
-# "Still waiting." for a question it never handed over.
+# your agent", a live meeting heard "Alright, on it.", "I'm sending it." and "I'll send that."
+# for a question it never handed over. (It also said "Still waiting.", but that is what a late
+# request's note tells it to say, so it is not counted: it would pass the question on twice.)
 _SENT_THING = r"(?:it|that|this|those|them|the (?:request|question|message))"
 PASSED_ON = re.compile(
     rf"\b{_SELF}\s+{_LEADING}{_PASS}\b[^.?!]{{0,50}}?(?:\b(?:on|along|over)\b|\b(?:to|with) {_AGENT}\b)"
     rf"|\b{_SELF}\s+{_LEADING}{_ASK} {_AGENT}\b"
     rf"|\b(?:i'm|i am|i'll|i will|let me)\s+{_LEADING}(?:send|sending|pass|passing) {_SENT_THING}\b"
-    r"|(?:^|[,.!?]\s*|\b(?:ok|okay|alright|all right|sure|got it|yes|yep)[,!]?\s+)on it\b"
-    r"|^\W*still waiting\b", re.I)
+    r"|(?:^|[,.!?]\s*|\b(?:ok|okay|alright|all right|sure|got it|yes|yep)[,!]?\s+)on it\b", re.I)
 REFUSAL = re.compile(r"\b(?:can't|cannot|can not|won't|couldn't|unable|not able|don't|didn't|not)\b"
                      rf"[^.?!]{{0,30}}\b(?:{_PASS}|{_ASK})\b", re.I)
 _SENTENCES = re.compile(r'(?<=[.!?])\s+')

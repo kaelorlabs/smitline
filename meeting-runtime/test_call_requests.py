@@ -212,12 +212,14 @@ class ClaimWatchTests(unittest.TestCase):
 
     def test_what_the_voice_said_in_the_live_test_counts_as_a_claim(self):
         # 2026-10-23 (issue 83): the voice said these for a question it never handed over.
-        for said in ('Alright, on it.', 'On it.', "Still waiting. I don't know yet.",
+        for said in ('Alright, on it.', 'On it.',
                      "All right, I'm sending it.", "Good, I'll send that.",
                      'Let me pass the question on.'):
             self.assertTrue(call_requests.claims_passed_on(said), said)
         # Offers, refusals and everyday words are not.
-        for said in ("I can send him the request, but it's not up to me.", "I'm not sending that.",
+        # "Still waiting" is what a late request's note tells the voice to say: not a claim.
+        for said in ("Still waiting. I don't know yet.", "It's still waiting for Robin's agent.",
+                     "I can send him the request, but it's not up to me.", "I'm not sending that.",
                      'We are on it as a team.', "I'm sending you the link now.", 'Keep going on it.',
                      "I don't know, but I can ask Robin's agent about it if you want."):
             self.assertFalse(call_requests.claims_passed_on(said), said)
