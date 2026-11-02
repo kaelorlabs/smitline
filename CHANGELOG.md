@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-11-02
+
+- **Clearer tool titles.** Claude, ChatGPT and other clients show "Check a call before placing it", "Follow a call live", "Get call details", "Save notes from a call", "List your contacts", "Read your profile" and "Update your profile". Tool names are unchanged.
+- **In-call tools can run without asking.** `send_call_instruction`, `reply_to_call_request`, `end_call`, `transfer_call_to_me` and `save_call_note` are marked read-only, so a client can let them run while a call is in progress; `start_call` and `update_profile` still ask ([#88](https://github.com/kaelorlabs/smitline/pull/88)).
+- The README points to Smitline Cloud, the hosted version, at smitline.com ([#85](https://github.com/kaelorlabs/smitline/pull/85)).
+- The Docker images build on the latest base images ([#86](https://github.com/kaelorlabs/smitline/pull/86)).
+
 ## 0.3.0 — 2026-10-21
 
 - **Answers are given at a good moment and are not lost.** The voice gives an answer from the agent at the next natural pause when the person is waiting for it, otherwise first thing the next time it speaks, and finishes what it is saying first. If someone cuts in before it has said it, it says it the next time; if 35 seconds later nothing it said carried the answer, the answer is given to it once more (`call.request_retold`). Paraphrase counts ("the next one after that" for "77", "October 6th" for "October 6"), and a sentence still being said gets up to 10 more seconds.
