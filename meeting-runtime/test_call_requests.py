@@ -263,6 +263,15 @@ class BriefTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CallBrief.from_dict(brief(canDo=['a list']))
 
+    def test_for_request_is_optional_and_checked(self):
+        self.assertIsNone(CallBrief.from_dict(brief()).for_request)
+        served = {'callId': 'call-0123456789abcdef', 'requestId': 'r12'}
+        self.assertEqual(CallBrief.from_dict(brief(forRequest=served)).to_dict()['forRequest'], served)
+        for bad in ({'callId': 'call-1', 'requestId': 'r1'}, {'callId': served['callId'], 'requestId': 'r0'},
+                    {'callId': served['callId']}, dict(served, extra=True), 'r1'):
+            with self.assertRaises(ValueError):
+                CallBrief.from_dict(brief(forRequest=bad))
+
 
 # The call service --------------------------------------------------------------------------
 
@@ -522,6 +531,131 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         await self.service.reply(record['id'], 'r1', owner='local', type='status', text='Picked up.')
         self.assertEqual(line.instructions[-1][1], True)
         line.proceed.set()
+
+
+    # Several calls at once: one stuck call must not hide another's requests.
+
+    def request_on(self, call_id, request_id='r1'):
+        return next(item for item in self.h.store.get(call_id)['requests'] if item['id'] == request_id)
+
+    async def test_a_wait_with_others_wakes_for_a_request_on_another_call(self):
+        meeting, ctx = await self.start()
+        phone, _ = await self.start(to='+14155550143')
+        loop = asyncio.get_running_loop()
+        waiting = asyncio.create_task(self.service.wait(phone, owner='local', timeout=30, since='',
+                                                        others=True))
+        # Waiting on the phone call with others follows the meeting too.
+        await until(lambda: self.service.agent_following(meeting))
+        started = loop.time()
+        ctx.request(ask())
+        answer = await asyncio.wait_for(waiting, 2)
+        self.assertLess(loop.time() - started, 1.0)
+        self.assertEqual([(item['callId'], item['id'], item['text'], item['askedBy'])
+                          for item in answer['live']['otherRequests']],
+                         [(meeting, 'r1', README, 'Priya')])
+        # Still listed until the agent answers it, if only with a status; then not.
+        again = await self.service.wait(phone, owner='local', timeout=0, since='', others=True)
+        self.assertEqual(len(again['live']['otherRequests']), 1)
+        await self.service.reply(meeting, 'r1', owner='local', type='status', text='Picked up.')
+        again = await self.service.wait(phone, owner='local', timeout=0, since='', others=True)
+        self.assertEqual(again['live']['otherRequests'], [])
+
+    async def test_a_wait_without_others_is_unchanged(self):
+        meeting, ctx = await self.start()
+        phone, _ = await self.start(to='+14155550143')
+        waiting = asyncio.create_task(self.service.wait(phone, owner='local', timeout=0.3, since=''))
+        await asyncio.sleep(0.05)
+        # Only the call waited on is followed.
+        self.assertFalse(self.service.agent_following(meeting))
+        ctx.request(ask())
+        answer = await waiting
+        self.assertNotIn('otherRequests', answer['live'])
+        # And the voice is told nobody is following the meeting yet.
+        self.assertEqual(self.request_on(meeting)['state'], 'open')
+
+    async def test_a_call_for_a_request_reports_to_it_by_itself(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        record = await self.service.create(brief(
+            to='+14155550143', contact={'name': 'Arun'},
+            forRequest={'callId': meeting, 'requestId': 'r1'}))
+        self.assertEqual(record['brief']['forRequest'], {'callId': meeting, 'requestId': 'r1'})
+        await until(lambda: len(self.request_on(meeting)['thread']) >= 3)
+        thread = self.request_on(meeting)['thread']
+        self.assertEqual([(entry['type'], entry['text'], entry.get('automatic')) for entry in thread[1:3]],
+                         [('status', 'Calling Arun now; it is ringing.', True),
+                          ('status', 'Arun picked up; the call is under way.', True)])
+        # An automatic report is not the agent checking in: nobody follows the meeting yet.
+        self.assertFalse(self.service.agent_following(meeting))
+        self.line.proceed.set()
+        await until(lambda: self.request_on(meeting)['state'] == 'done')
+        request = self.request_on(meeting)
+        self.assertTrue(request['ok'])
+        self.assertTrue(request['answer'].startswith('The call is over: '))
+        self.assertNotIn('+14155550143', json.dumps(request))
+
+    async def test_a_call_for_a_request_that_fails_says_why(self):
+        from tunnel import BLOCKED, TunnelBlocked
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        self.line.fail = TunnelBlocked(BLOCKED)
+        await self.service.create(brief(to='+14155550143',
+                                        forRequest={'callId': meeting, 'requestId': 'r1'}))
+        await until(lambda: self.request_on(meeting)['state'] == 'done')
+        request = self.request_on(meeting)
+        self.assertFalse(request['ok'])
+        self.assertEqual(request['answer'], f'The call could not be made: {BLOCKED}')
+        self.line.fail = None
+        self.line.proceed.set()
+
+    async def test_reports_stop_once_the_agent_has_closed_the_request(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun'))
+        await self.service.create(brief(to='+14155550143',
+                                        forRequest={'callId': meeting, 'requestId': 'r1'}))
+        # The agent answers it itself before the call rings.
+        await self.service.reply(meeting, 'r1', owner='local', type='done', text='Done another way.')
+        self.line.proceed.set()
+        await asyncio.sleep(0.2)
+        thread = self.request_on(meeting)['thread']
+        self.assertEqual([entry['text'] for entry in thread if entry['from'] == 'agent'],
+                         ['Done another way.'])
+
+    async def test_another_owners_calls_stay_out_of_sight(self):
+        theirs, ctx = await self.start()
+        self.h.store.update(theirs, owner='acct_other')
+        mine, _ = await self.start(to='+14155550143')
+        waiting = asyncio.create_task(self.service.wait(mine, owner='local', timeout=0.3, since='',
+                                                        others=True))
+        await asyncio.sleep(0.05)
+        self.assertFalse(self.service.agent_following(theirs))
+        ctx.request(ask())
+        answer = await waiting
+        self.assertEqual(answer['live']['otherRequests'], [])
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550144', forRequest={'callId': theirs,
+                                                                            'requestId': 'r1'}))
+        self.assertEqual(caught.exception.status, 422)
+        self.line.proceed.set()
+
+    async def test_for_request_must_name_an_open_request_of_the_owners(self):
+        meeting, ctx = await self.start()
+        missing = {'callId': meeting, 'requestId': 'r9'}
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550143', forRequest=missing))
+        self.assertEqual(caught.exception.status, 422)
+        report = await self.service.check(brief(to='+14155550143', forRequest=missing))
+        self.assertIn('does not exist', ' '.join(report['problems']))
+        with self.assertRaises(CallError):
+            await self.service.create(brief(to='+14155550143', forRequest={
+                'callId': 'call-0123456789abcdef', 'requestId': 'r1'}))
+        ctx.request(ask())
+        await self.service.reply(meeting, 'r1', owner='local', type='done', text='Done.')
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550143', forRequest={'callId': meeting,
+                                                                            'requestId': 'r1'}))
+        self.assertEqual(caught.exception.code, 'request_closed')
+        self.line.proceed.set()
 
 
 # The REST API --------------------------------------------------------------------------------

@@ -60,9 +60,11 @@ test('a meeting is joined with startCall and followed to its result', async (t) 
     await colleague.waitForCall(call.id, 5, { since: '' });
     await colleague.waitForCall(call.id, 5, { since: '12' });
     await colleague.waitForCall(call.id, 5, { since: '12', only: 'requests' });
-    const follows = daemon.state.requests.filter((item) => item.path.endsWith('/wait')).slice(-3);
+    await colleague.waitForCall(call.id, 5, { since: '12', others: true });
+    const follows = daemon.state.requests.filter((item) => item.path.endsWith('/wait')).slice(-4);
     assert.deepEqual(follows.map((item) => item.search),
-      ['?timeout=5&since=', '?timeout=5&since=12', '?timeout=5&since=12&only=requests']);
+      ['?timeout=5&since=', '?timeout=5&since=12', '?timeout=5&since=12&only=requests',
+        '?timeout=5&since=12&others=true']);
     const answered = await colleague.replyToRequest(call.id, 'r1', { type: 'done', text: 'Added it.', details: 'PR 81' });
     assert.equal(answered.delivered, true);
     assert.deepEqual(daemon.state.replies, [{ callId: call.id, requestId: 'r1', type: 'done', text: 'Added it.', details: 'PR 81' }]);

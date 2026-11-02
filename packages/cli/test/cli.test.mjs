@@ -112,6 +112,18 @@ test('--can-do lets people on the call ask the agent for things', async (t) => {
   assert.equal(daemon.state.calls.get(JSON.parse(placed.stdout).id).brief.canDo, 'Look things up in the repo');
 });
 
+test('--for-request ties a call to the request on another call it serves', async (t) => {
+  const { root, daemon, common } = await withDaemon(t);
+  const placed = await runColleague(['call', ...common, '--to', '+14155550142', '--objective', 'Ask Arun to join',
+    '--for-request', 'call-0123456789abcdef:r2'], { cwd: root });
+  assert.equal(placed.code, 0, placed.stderr);
+  assert.deepEqual(daemon.state.calls.get(JSON.parse(placed.stdout).id).brief.forRequest,
+    { callId: 'call-0123456789abcdef', requestId: 'r2' });
+  const bad = await runColleague(['call', ...common, '--to', '+14155550142', '--objective', 'Ask',
+    '--for-request', 'r2'], { cwd: root });
+  assert.equal(bad.code, 2);
+});
+
 test('--channel meeting, or a --to that is an invite URL, joins a meeting', async (t) => {
   const { root, daemon, common } = await withDaemon(t);
   const explicit = await runColleague(['call', ...common, '--channel', 'meeting', '--to', ZOOM, '--objective', 'Listen'], { cwd: root });
@@ -147,6 +159,9 @@ test('calls list, get, instruct, and end reach the daemon', async (t) => {
   const followed = await runColleague(['calls', 'wait', '--call-id', callId, '--timeout', '1', '--since', '', '--only', 'requests', ...common], { cwd: root });
   assert.equal(followed.code, 0, followed.stderr);
   assert.equal(daemon.state.requests.filter((item) => item.path.endsWith('/wait')).at(-1).search, '?timeout=1&since=&only=requests');
+  const watching = await runColleague(['calls', 'wait', '--call-id', callId, '--timeout', '1', '--since', '', '--others', ...common], { cwd: root });
+  assert.equal(watching.code, 0, watching.stderr);
+  assert.equal(daemon.state.requests.filter((item) => item.path.endsWith('/wait')).at(-1).search, '?timeout=1&since=&others=true');
   const ended = await runColleague(['calls', 'end', '--call-id', callId, ...common], { cwd: root });
   assert.equal(JSON.parse(ended.stdout).status, 'canceled');
 });
