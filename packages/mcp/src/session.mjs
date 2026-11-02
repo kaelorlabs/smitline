@@ -25,7 +25,7 @@ export const BRIEF_SCHEMA = {
   properties: {
     channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join Zoom, Teams, or Google Meet' },
     to: { type: 'string', description: "E.164 phone number such as +14155550142, or the meeting invite URL. Omit only for a rehearsal, which rings the user's own phone." },
-    onBehalfOf: { type: 'string', description: "The user's name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Defaults to the name given at setup." },
+    onBehalfOf: { type: 'string', description: "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup." },
     objective: { type: 'string', description: 'What the call must achieve, in one or two sentences' },
     context: {
       description: "What you and the user have been working on that the other party may ask about. Text, or an object: summary (a few sentences), facts, decisions, openQuestions, and details (long reference material). The voice starts with a short version and looks details up when asked; it never recites them.",
@@ -63,7 +63,7 @@ export const BRIEF_SCHEMA = {
     language: { type: 'string', description: 'Language tag such as en or es' },
     voice: { type: 'string', description: 'GPT-Live voice name; see list_voices' },
     maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
-    rehearsal: { type: 'boolean', description: "Phone only: practice on the user's own phone first, with the user playing the other side" },
+    rehearsal: { type: 'boolean', description: "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal." },
     record: { type: 'boolean', description: "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
     afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
     notify: {

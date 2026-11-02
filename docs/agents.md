@@ -214,7 +214,7 @@ Add `https://smitline.example.com/mcp` as a custom connector (also called a remo
 Menus change often, and custom connectors may depend on your plan or on workspace settings, so check each product's current help pages. At the time of writing:
 
 - **Claude** (claude.ai, the desktop app, and mobile): open the settings for connectors, choose to add a custom connector, and paste the URL. On Team and Enterprise plans an owner may need to add it for the organization first.
-- **ChatGPT**: custom MCP connectors are under the settings for connectors or apps, sometimes behind a developer mode switch. Create a connector with the URL and choose OAuth sign-in.
+- **ChatGPT**: create the connector on the ChatGPT website; the mobile app cannot add custom MCP connectors, but one made on the web shows up in the app afterwards. Go to **Settings** → **Apps & Connectors** (or **Connectors**) → **Advanced settings**, turn on **Developer mode**, choose **Create**, paste the URL, and choose OAuth sign-in.
 - **Grok, Perplexity, and others**: check whether the product supports custom remote MCP connectors with OAuth sign-in. Any client that supports Streamable HTTP, OAuth dynamic client registration, and PKCE can use the same URL.
 
 Agents on the same computer should use the local MCP server instead. It has the same tools and needs no proxy or sign-in.

@@ -242,6 +242,179 @@ class PhoneGoodbyeTests(unittest.IsolatedAsyncioTestCase):
         await until(lambda: ws.closed, 6)
         await asyncio.wait_for(task, 3)
 
+    # At a voicemail ---------------------------------------------------------
+
+    def hear(self, live, text):
+        live.push({'type': 'session.input_transcript.delta', 'delta': text})
+
+    def voicemail_greeting(self, live, prompt=' Please leave a message after the tone.'):
+        # The greeting on call-91d75999d4bb843b; the prompt arrives as its own piece.
+        self.hear(live, 'Call is not available.')
+        self.hear(live, prompt)
+
+    async def message_heard(self, session):
+        """The agent's message (its first speech) has played to the end."""
+        await until(lambda: session.pacer.speech_until > 0 and not session.pacer.speech_pending())
+
+    async def voicemail_hangups(self, record):
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        events = self.h.service.events(record['id'])
+        return [e['data'] for e in events if e['type'] == 'call.voicemail_hangup'], done
+
+    async def test_a_voicemail_message_without_a_goodbye_hangs_up_once_heard(self):
+        # call-91d75999d4bb843b, 2026-11-02: after the beep the agent said one sentence with no
+        # goodbye and never ended the call; the line stayed open, and billed, until the mailbox
+        # cut it off two minutes later.
+        from phone_line import VOICEMAIL_QUIET_SECONDS
+        record, session, ws, live, task = await self.connected()
+        self.h.line.on_amd(record['id'], 'machine_end_beep')
+        self.voicemail_greeting(live)
+        await until(lambda: session.voicemail_heard)
+        self.say(live, "Hi, I'm calling on behalf of Robin about your question on connecting a "
+                       'custom MCP server to your account.', audio_bytes=8000)  # one second
+        await self.message_heard(session)
+        loop = asyncio.get_running_loop()
+        heard = loop.time()
+        await asyncio.sleep(VOICEMAIL_QUIET_SECONDS - 1)
+        self.assertFalse(ws.closed)  # it waits for a few seconds of quiet first
+        await until(lambda: ws.closed, 3)
+        self.assertGreaterEqual(loop.time() - heard, VOICEMAIL_QUIET_SECONDS - 0.1)
+        await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'message_left'}])
+        # Ended as the model's end_call with voicemail_left ends it, without that call.
+        self.assertEqual((done['endReason'], done['result']['outcome']), ('voicemail', 'voicemail'))
+        self.assertNotIn('call.end_requested', [e['type'] for e in self.h.service.events(record['id'])])
+        self.assertIn(('CA123', {'status': 'completed'}), self.h.twilio.updates)
+        # Nothing more was asked for on the recording: no goodbye cue, no disclosure reminder.
+        sent = ' '.join(str(content) for _kind, content in live.appends)
+        self.assertNotIn('end the call now', sent)
+        self.assertNotIn('Before the call ends', sent)
+
+    async def test_the_voicemail_time_cap_cuts_in_while_the_agent_talks(self):
+        self.h.env['SMITLINE_VOICEMAIL_MAX_SECONDS'] = '1.5'
+        record, session, ws, live, task = await self.connected()
+        self.voicemail_greeting(live)
+        await until(lambda: session.voicemail_heard)
+        loop = asyncio.get_running_loop()
+        heard = loop.time()
+        # It talks on into the recording: ten seconds of speech, far past the cap.
+        self.say(live, 'Hi, this is about the roof, and the invoice, and also the gutters...',
+                 audio_bytes=80000)
+        await until(lambda: ws.closed, 4)
+        self.assertGreaterEqual(loop.time() - heard, 1.4)
+        self.assertLess(loop.time() - heard, 3.0)
+        self.assertTrue(session.pacer.speech_pending())  # cut off, not waited for
+        await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'time_cap'}])
+        self.assertEqual(done['endReason'], 'voicemail')
+
+    async def test_the_voicemail_time_cap_hangs_up_when_the_agent_never_speaks(self):
+        self.h.env['SMITLINE_VOICEMAIL_MAX_SECONDS'] = '1'
+        record, session, ws, live, task = await self.connected()
+        self.voicemail_greeting(live)
+        await until(lambda: session.voicemail_heard)
+        await until(lambda: ws.closed, 3)
+        await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'time_cap'}])
+        self.assertEqual(done['endReason'], 'voicemail')
+
+    def test_the_voicemail_time_cap_setting(self):
+        from phone_line import VOICEMAIL_MAX_SECONDS, voicemail_max_seconds
+        self.assertEqual(VOICEMAIL_MAX_SECONDS, 60.0)
+        self.assertEqual(voicemail_max_seconds({}), 60.0)
+        self.assertEqual(voicemail_max_seconds({'SMITLINE_VOICEMAIL_MAX_SECONDS': ' 90 '}), 90.0)
+        self.assertEqual(voicemail_max_seconds({'SMITLINE_VOICEMAIL_MAX_SECONDS': '0'}), 0.0)  # off
+        for bad in ('soon', '-5', 'nan', 'inf'):
+            self.assertEqual(voicemail_max_seconds({'SMITLINE_VOICEMAIL_MAX_SECONDS': bad}), 60.0, bad)
+
+    async def test_no_voicemail_hangup_before_the_agent_speaks_after_the_beep(self):
+        with patch('phone_line.VOICEMAIL_QUIET_SECONDS', 0.5):
+            record, session, ws, live, task = await self.connected()
+            self.hear(live, 'Hi, you have reached Robin.')
+            self.say(live, 'Hey, hi!')  # it talks over the greeting before it knows
+            self.hear(live, ' Please record your message after the beep.')
+            await until(lambda: session.voicemail_heard)
+            # The prompt, the beep, then quiet: nothing it said is on the recording yet.
+            await asyncio.sleep(2.0)
+            self.assertFalse(ws.closed)
+            self.assertNotIn('call.voicemail_hangup',
+                             [e['type'] for e in self.h.service.events(record['id'])])
+            # Its message after the beep, then quiet: now it hangs up.
+            self.say(live, "Hi, it's Robin's AI assistant, calling about Friday. Robin will "
+                           'follow up by text.')
+            await until(lambda: ws.closed, 3)
+            await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'message_left'}])
+        self.assertEqual(done['endReason'], 'voicemail')
+
+    async def test_thanks_or_bye_after_the_message_is_still_a_voicemail(self):
+        with patch('phone_line.VOICEMAIL_QUIET_SECONDS', 0.5):
+            record, session, ws, live, task = await self.connected()
+            self.voicemail_greeting(live)
+            await until(lambda: session.voicemail_heard)
+            self.say(live, "Hi, it's Robin's AI assistant, calling about Friday.")
+            await self.message_heard(session)
+            self.hear(live, 'Thank you. Goodbye.')
+            await until(lambda: ws.closed, 3)
+            self.assertTrue(session.voicemail_heard)
+            await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'message_left'}])
+
+    async def test_a_person_after_the_voicemail_prompt_is_still_a_person(self):
+        self.h.env['SMITLINE_VOICEMAIL_MAX_SECONDS'] = '2'
+        with patch('phone_line.VOICEMAIL_QUIET_SECONDS', 0.5):
+            record, session, ws, live, task = await self.connected()
+            self.voicemail_greeting(live)
+            await until(lambda: session.voicemail_heard)
+            self.say(live, "Hi, I'm calling on behalf of Robin about Friday's booking.")
+            await self.message_heard(session)
+            # Someone picks up after all.
+            self.hear(live, "Hello? Sorry, I'm here. Who is this?")
+            await until(lambda: not session.voicemail_heard)
+            # Past both the quiet window and the cap: a person is never hung up on as a voicemail.
+            await asyncio.sleep(2.5)
+            self.assertFalse(ws.closed)
+            # Ending the call now says goodbye to them, as to anyone.
+            await self.h.service.end(record['id'], owner='local')
+            await until(lambda: any('end the call now' in str(text) for _kind, text in live.appends))
+            self.assertFalse(ws.closed)
+            self.say(live, "I'm Robin's AI assistant, by the way. Thanks, goodbye!")
+            await until(lambda: ws.closed, 5)
+            await asyncio.wait_for(task, 3)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [])
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_a_call_screener_is_a_person_until_it_offers_voicemail(self):
+        # A screener asking for a name at the tone, which then hands over to voicemail, like the
+        # phone's call screening in the live test on 2026-10-23.
+        with patch('phone_line.VOICEMAIL_QUIET_SECONDS', 0.5):
+            record, session, ws, live, task = await self.connected()
+            self.hear(live, 'Please say your name after the tone.')
+            await until(lambda: session.voicemail_heard)
+            self.say(live, "Hi, I'm calling on behalf of Robin about Friday's booking.")
+            await self.message_heard(session)
+            self.hear(live, 'Thanks. Please stay on the line.')
+            await until(lambda: not session.voicemail_heard)
+            await asyncio.sleep(1.5)  # three times the quiet window: it waits for the person
+            self.assertFalse(ws.closed)
+            self.hear(live, "I'm sorry, this person is not available. Please leave your message "
+                            'after the tone.')
+            await until(lambda: session.voicemail_heard)
+            self.say(live, "Hi, it's Robin's AI assistant. Robin will text you about Friday.")
+            await until(lambda: ws.closed, 3)
+            await asyncio.wait_for(task, 3)
+        events = [e['type'] for e in self.h.service.events(record['id'])]
+        self.assertEqual(events.count('call.voicemail_heard'), 2)
+        hangups, done = await self.voicemail_hangups(record)
+        self.assertEqual(hangups, [{'reason': 'message_left'}])
+        self.assertEqual(done['endReason'], 'voicemail')
+
 
 class MeetingGoodbyeTests(unittest.IsolatedAsyncioTestCase):
     decision = (False, 'other')
