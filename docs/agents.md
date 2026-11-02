@@ -22,7 +22,7 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | --- | --- |
 | `start_call` | Start a phone call or meeting from a brief. Returns at once. |
 | `check_call_brief` | Validate a brief without calling. Missing fields come with the question to ask the user. |
-| `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. With `since`, follow it live: it also returns once something new is said, and at once for a request from the call (see [following a call live](#following-a-call-live)). `only: "requests"` wakes for requests alone. |
+| `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. With `since`, follow it live: it also returns once something new is said, and at once for a request from the call (see [following a call live](#following-a-call-live)). `only: "requests"` wakes for requests alone. Following live also watches your other calls in progress (`others`, on unless `false`): their unanswered requests come back in `live.otherRequests`. |
 | `get_call`, `list_calls` | Read calls without waiting. `list_calls` can show only phone calls or meetings, one number's calls, or one task's. |
 | `save_call_note` | After a call, save a short note that later calls can start with (see [earlier calls](calls.md#earlier-calls)). |
 | `list_contacts` | The people and businesses Smitline has called or been called by. |
@@ -51,9 +51,13 @@ The agent that placed a call can supervise it while it runs. It passes `since: "
 
 When the agent knows something the call needs, such as the user's calendar, a document, or a decision made earlier, it steps in with `send_call_instruction` ("Friday at 10 works"), and the voice uses it straight away. If the call goes wrong, `end_call`. Otherwise it keeps waiting and Smitline runs the conversation. This works for phone calls and meetings, in every MCP client, because it is ordinary tool calls. The skill and the server's MCP instructions teach agents to do this.
 
+## The call card
+
+Clients that support MCP Apps (ChatGPT, Claude and others) show what `start_call` and `get_call` return as a card in the chat: who the call is for and its status, then the outcome, summary and details, what it cost, the recording, and the transcript. While the call runs, the card asks for it again every 3 seconds (`get_call`), so it follows the call until it ends; it does not count as the agent following the call. The card is the resource `ui://smitline/call-card-v1.html` (`text/html;profile=mcp-app`): one self-contained page that shows everything as text and loads nothing from elsewhere. It plays a recording only from an https link in the call's `recordingUrl` whose origin the server allows (`createMcpSession({ card: { mediaOrigins } })`; Smitline Cloud passes its own), and offers `callUrl`, when there is one, as "Open in Smitline". Other clients get the same result as text, as before.
+
 ## Requests from the call
 
-People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`:
+People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`. That limits *tasks*: a question the voice cannot answer is passed on too, since the agent knows the owner's work, and the agent decides how much to share:
 
 ```json
 { "channel": "meeting", "to": "https://zoom.us/j/...", "onBehalfOf": "Sam",
@@ -77,6 +81,13 @@ The agent answers with `reply_to_call_request`, of two types:
 
 A small question gets `done` straight away. A bigger task gets a `status` first, then `done`; meanwhile the agent keeps following the call (a subagent can do the work). The voice can also cancel a request when they drop it (`cancel`). For a long meeting, `only: "requests"` wakes the agent only for requests, and each request carries who asked and the last lines said, so the agent need not read the whole meeting.
 
+### Several calls at once
+
+An agent busy with one call must not miss requests from another, such as a phone call it placed because a meeting asked, while that meeting keeps talking. Two things keep them connected:
+
+- **`others`.** A live wait with `others: true` also watches the owner's other calls in progress. A new request on any of them wakes the wait at once, and `live.otherRequests` lists every request on them the agent has not answered yet (`callId`, `id`, `kind`, `text`, `askedBy`); the agent answers each with `reply_to_call_request` on that request's own `callId`. A request stays listed until the agent sends it at least a `status`. While such a wait runs, the agent counts as following those calls too, so their voices pass requests on instead of saying nobody is there. The MCP `wait_for_call` turns it on whenever it follows live (pass `others: false` to stop); REST (`others=true`), the SDKs (`others`) and the CLI (`--others`) leave it off unless asked.
+- **`forRequest`.** A brief with `forRequest: {"callId", "requestId"}` names an open request on another of the owner's calls that this call serves. The call then reports to that request by itself: a status when it rings and when it connects, and `done` with the outcome, or with why it could not be made (for example "This network blocks Cloudflare tunnels…"). The people who asked hear it even while the agent is busy. The number called is never part of a report. The agent can still reply itself; a report is skipped once the request is closed. If the people who asked cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye. A disclosure not yet made comes first either way. CLI: `--for-request <call id>:<request id>`.
+
 The voice gives an answer at a good moment, as a person would: at the next natural pause when the person is waiting for it, otherwise first thing the next time it speaks, and never by cutting itself off in the middle of something important. If it is interrupted before it has said it, it says it the next time it speaks; and if 35 seconds after an answer reached the voice nothing it said carried the answer (its numbers, or most of its key words), the answer is given to it once more.
 
 GPT-Live alone decides when to hand something to its backend, and sometimes says "I've passed that to your agent" without doing it. When it says so and no `ask_agent` call follows within 10 seconds, Smitline passes on what the person said itself: the request has `source: "speech"`, and its text is their words, not a tidied request.
@@ -87,7 +98,7 @@ Nobody is left waiting:
 - If a request is not picked up within 30 seconds, the voice is told, and says it is still waiting if anyone asks.
 - Requests still open when the call ends are in the result as `openRequests`. A `done` after the call is still recorded; it is not spoken.
 
-Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
+Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve, and answer questions only with what the user would want these people to know: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
 
 ## CLI
 

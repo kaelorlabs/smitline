@@ -46,7 +46,7 @@ export interface CallBrief {
   rehearsal?: boolean;
   /** Phone only: call outside calling hours where the person is; only when the user confirms they expect it. */
   afterHours?: boolean;
-  /** Phone only: record this call in the owner's phone account; the assistant says it is recorded. */
+  /** Phone only: record this call; Smitline keeps the recording, each side on its own channel. */
   record?: boolean;
   notify?: { webhookUrl?: string };
   /** Meetings only: Smitline's virtual camera tile; the avatar is a PNG, JPEG, WebP, or SVG data: URI of up to 80 KB. */
@@ -55,6 +55,8 @@ export interface CallBrief {
   task?: { id: string; title?: string };
   /** Start with notes from earlier calls: in this task, to the same number (phone only), or named calls (at most 10). */
   carryFrom?: { task?: boolean; contact?: boolean; calls?: string[] };
+  /** The request on another call this call serves; it reports its progress there by itself. */
+  forRequest?: { callId: string; requestId: string };
   /** What the calling agent does for the people on the call when they ask; requests are off without it. */
   canDo?: string;
 }
@@ -93,6 +95,9 @@ export interface FollowOptions {
   since?: string;
   /** Wake only for requests, without the transcript. */
   only?: 'requests';
+  /** Also watch your other calls in progress: their new requests wake the wait, and
+   * live.otherRequests lists the ones you have not answered yet. */
+  others?: boolean;
 }
 
 /** A note from an earlier call that a call started with. */
@@ -177,6 +182,8 @@ export interface Call {
     cursor: string;
     transcript?: Array<{ speaker: string; text: string; at?: string }>;
     requests: Array<{ type: 'ask' | 'add' | 'cancel'; id: string; kind?: 'question' | 'task'; text?: string; askedBy?: string; context?: string[]; at?: string }>;
+    /** With others: requests on your other calls in progress you have not answered yet. */
+    otherRequests?: Array<{ callId: string; channel: 'phone' | 'meeting'; id: string; kind?: 'question' | 'task'; text?: string; askedBy?: string; openedAt?: string }>;
   };
   error?: string;
 }
@@ -220,7 +227,7 @@ export interface DaemonTransport {
   checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
-  waitForCall(callId: string, timeoutSeconds?: number, since?: string, only?: 'requests'): Promise<Call>;
+  waitForCall(callId: string, timeoutSeconds?: number, since?: string, only?: 'requests', others?: boolean): Promise<Call>;
   replyToRequest(callId: string, requestId: string, reply: RequestReply): Promise<{ request: CallRequest; delivered: boolean }>;
   listCalls(limit?: number, filters?: CallFilters): Promise<{ calls: Call[] }>;
   saveCallNote(callId: string, text: string): Promise<Call>;

@@ -68,7 +68,7 @@
       "get": {
         "summary": "Wait until the call finishes or the timeout passes; with since, also until something new is said",
         "operationId": "waitForCall",
-        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange), at once for a request from the call, and carries live. While an agent follows a call this way it can answer requests.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }, { "name": "only", "in": "query", "description": "requests: wake only for requests from the call, and leave live.transcript out; for long meetings. Implies since (empty) when since is not given.", "schema": { "type": "string", "enum": ["requests"] } }],
+        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange), at once for a request from the call, and carries live. While an agent follows a call this way it can answer requests.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }, { "name": "only", "in": "query", "description": "requests: wake only for requests from the call, and leave live.transcript out; for long meetings. Implies since (empty) when since is not given.", "schema": { "type": "string", "enum": ["requests"] } }, { "name": "others", "in": "query", "description": "true: also watch the owner's other calls in progress. A new request on any of them wakes the wait at once, live.otherRequests lists every request on them the agent has not answered yet, and while the wait runs the agent counts as following them. Implies since (empty) when since is not given. Default false.", "schema": { "type": "boolean", "default": false } }],
         "responses": {
           "200": { "description": "The call, terminal or not", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
           "404": { "$ref": "#/components/responses/Error" }
@@ -151,7 +151,7 @@
     "/v1/calls/{callId}/recording": {
       "parameters": [{ "$ref": "#/components/parameters/Owner" }],
       "get": {
-        "summary": "Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one.",
+        "summary": "Download a recorded call: a WAV with each side on its own channel. Calls recorded before 0.3.3 come from the phone provider, which also offers MP3 (both sides mixed).",
         "operationId": "getCallRecording",
         "parameters": [
           { "name": "callId", "in": "path", "required": true, "schema": { "type": "string" } },
@@ -308,7 +308,7 @@
           "voice": { "type": "string", "examples": ["marin"] },
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
-          "record": { "type": "boolean", "description": "Phone only: record this call in the owner's phone account. The assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
+          "record": { "type": "boolean", "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel; the assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
           "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
           "camera": {
@@ -337,7 +337,15 @@
               "calls": { "type": "array", "maxItems": 10, "items": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" } }
             }
           },
-          "canDo": { "type": "string", "maxLength": 500, "description": "What the calling agent does for the people on the call when they ask, such as \"look things up in the repo and edit the docs\". With it, the voice passes their requests to the agent (wait's live.requests; answer with replyToRequest) and declines anything else. Requests are off without it." }
+          "canDo": { "type": "string", "maxLength": 500, "description": "What the calling agent does for the people on the call when they ask, such as \"look things up in the repo and edit the docs\". With it, the voice passes on their tasks within it, and any question it cannot answer itself (wait's live.requests; answer with replyToRequest); it declines other tasks. Requests are off without it." },
+          "forRequest": {
+            "type": "object", "additionalProperties": false, "required": ["callId", "requestId"],
+            "description": "A request on another of the owner's calls that this call serves, such as a meeting's request to phone someone. The request must be open. This call then reports to it by itself: a status when it rings and when it connects, and done with the outcome or why it failed. Replies the agent sends itself still work; a report is skipped once the request is closed. If the request is canceled, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye.",
+            "properties": {
+              "callId": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" },
+              "requestId": { "type": "string", "pattern": "^r[1-9][0-9]{0,2}$" }
+            }
+          }
         }
       },
       "Request": {
@@ -536,7 +544,7 @@
           "carryNote": { "type": "object", "description": "A note saved on this finished call for later calls.", "properties": { "text": { "type": "string" }, "by": { "type": "string", "enum": ["agent"] }, "at": { "type": "string", "format": "date-time" } } },
           "error": { "type": "string" },
           "requests": { "type": "array", "description": "Requests from the people on the call (brief canDo).", "items": { "$ref": "#/components/schemas/Request" } },
-          "live": { "type": "object", "description": "Only when waiting with since or only: what was said and asked after the cursor.", "required": ["cursor", "requests"], "properties": { "cursor": { "type": "string", "description": "Pass as since next time." }, "transcript": { "type": "array", "description": "Left out with only=requests.", "items": { "type": "object", "properties": { "speaker": { "type": "string", "description": "agent, other (phone), or meeting" }, "text": { "type": "string" }, "at": { "type": "string", "format": "date-time" } } } }, "requests": { "type": "array", "description": "Request messages from the call: ask (a new request, with kind, text, askedBy, context), add (an answer or detail for id), cancel.", "items": { "type": "object", "required": ["type", "id"], "properties": { "type": { "type": "string", "enum": ["ask", "add", "cancel"] }, "id": { "type": "string" }, "kind": { "type": "string", "enum": ["question", "task"] }, "text": { "type": "string" }, "askedBy": { "type": "string" }, "context": { "type": "array", "items": { "type": "string" } }, "at": { "type": "string", "format": "date-time" } } } } } }
+          "live": { "type": "object", "description": "Only when waiting with since or only: what was said and asked after the cursor.", "required": ["cursor", "requests"], "properties": { "cursor": { "type": "string", "description": "Pass as since next time." }, "transcript": { "type": "array", "description": "Left out with only=requests.", "items": { "type": "object", "properties": { "speaker": { "type": "string", "description": "agent, other (phone), or meeting" }, "text": { "type": "string" }, "at": { "type": "string", "format": "date-time" } } } }, "requests": { "type": "array", "description": "Request messages from the call: ask (a new request, with kind, text, askedBy, context), add (an answer or detail for id), cancel.", "items": { "type": "object", "required": ["type", "id"], "properties": { "type": { "type": "string", "enum": ["ask", "add", "cancel"] }, "id": { "type": "string" }, "kind": { "type": "string", "enum": ["question", "task"] }, "text": { "type": "string" }, "askedBy": { "type": "string" }, "context": { "type": "array", "items": { "type": "string" } }, "at": { "type": "string", "format": "date-time" } } } }, "otherRequests": { "type": "array", "description": "Only with others=true: requests on the owner's other calls in progress that the agent has not answered yet, oldest first. Answer each on its own callId.", "items": { "type": "object", "required": ["callId", "id"], "properties": { "callId": { "type": "string" }, "channel": { "type": "string", "enum": ["phone", "meeting"] }, "id": { "type": "string" }, "kind": { "type": "string", "enum": ["question", "task"] }, "text": { "type": "string" }, "askedBy": { "type": "string" }, "openedAt": { "type": "string", "format": "date-time" } } } } } }
         }
       },
       "Cost": {

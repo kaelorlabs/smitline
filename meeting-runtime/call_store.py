@@ -74,6 +74,10 @@ class CallStore:
     def _dir(self, call_id):
         return self.root / require_call_id(call_id)
 
+    def recording_path(self, call_id):
+        """A call's own recording (call_recorder.py), next to its record."""
+        return self._dir(call_id) / 'recording.wav'
+
     def create(self, record):
         call_id = require_call_id(record['id'])
         reject_secrets(record, 'call')

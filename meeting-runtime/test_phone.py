@@ -23,7 +23,7 @@ from phone_prompts import (
     backend_instructions, delegation_config, discloses, goodbye_cue, machine_hint, mentions_ai,
     opening_cue, voice_instructions,
 )
-from tunnel import PublicUrl, TunnelError, configured_url
+from tunnel import PublicUrl, TunnelBlocked, TunnelError, configured_url
 from twilio_client import (
     TwilioClient, compute_signature, dial_twiml, stream_twiml, valid_signature,
 )
@@ -209,6 +209,43 @@ class PhoneHarness:
 
 
 class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_smitline_records_a_recorded_call_itself(self):
+        # On 2026-11-02 SignalWire's recording of a 2 min 35 s call held 7 seconds: it stops at
+        # its answering-machine check. Smitline records both sides as they pass through instead.
+        import io
+        import wave
+        from call_recorder import ULAW
+        record, session = await self.h.dial(record=True)
+        created = self.h.twilio.created[-1]
+        self.assertFalse(created.get('record'))
+        self.assertIsNone(created.get('recording_callback'))
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        loud = base64.b64encode(b'\x9a' * 160).decode()
+        quiet = base64.b64encode(b'\xff' * 160).decode()
+        for payload in [loud] * 5 + [quiet] * 55:  # 1.2 s from them: a word, then quiet
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': payload}})
+        await until(lambda: len(live.audio) >= 60)  # heard before the voice answers
+        live.push({'type': 'session.output_audio.delta',
+                   'delta': base64.b64encode(b'\x2a' * 1600).decode()})
+        await until(lambda: any(sent.get('event') == 'media' for sent in ws.sent))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['recording'], {'seconds': 2, 'format': 'wav', 'source': 'smitline'})
+        recorded = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.recording']
+        self.assertEqual(recorded, [done['recording']])  # no provider URL anywhere
+        body, kind = await self.h.service.recording(record['id'], owner='local')
+        self.assertEqual(kind, 'audio/wav')
+        with wave.open(io.BytesIO(body)) as audio:
+            self.assertEqual((audio.getnchannels(), audio.getframerate()), (2, 8000))
+            self.assertGreater(audio.getnframes(), 9600)
+            first = audio.readframes(1)
+        self.assertEqual(int.from_bytes(first[:2], 'little', signed=True), ULAW[0x9A])
+        with self.assertRaises(CallError) as refused:
+            await self.h.service.recording(record['id'], owner='local', fmt='mp3')
+        self.assertEqual(refused.exception.status, 422)
+
     async def asyncSetUp(self):
         FakeLive.instances = []
         FakeSummarizer.calls = 0
@@ -325,6 +362,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Also end it politely when the call is going nowhere', text)
         self.assertIn('going around in circles', text)
         self.assertIn('an automated menu will not let you through', text)
+        self.assertIn('nobody answers when you check a couple of times', text)
         self.assertIn('Robin will follow up', text)
         self.assertIn('reason not_productive', backend_instructions(call))
         self.assertIn('not_productive', END_CALL_TOOL['parameters']['properties']['reason']['enum'])
@@ -807,6 +845,9 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         session.owner_phone = '+14155550199'
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
+        # A person is on the line, so ending says goodbye first (a silent call hangs up at once).
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?'})
+        await until(lambda: session._other_turn)
         await self.h.service.end(record['id'], owner='local')
         pending = session._pending_hangup
         self.assertIsNotNone(pending)
@@ -1402,6 +1443,108 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('stopped answering (HTTP 530); starting a fresh one', logged[1])
         await tunnel.close()
 
+    async def blocked_tunnel(self, output, timeout=5.0):
+        """Run a quick tunnel whose cloudflared prints `output` and then waits forever:
+        (the error it raised, the processes spawned)."""
+        class Stream:
+            def __init__(self):
+                self.lines = list(output)
+
+            async def readline(self):
+                if self.lines:
+                    return self.lines.pop(0)
+                await asyncio.Event().wait()
+
+        class Process:
+            def __init__(self):
+                self.returncode = None
+                self.stderr = Stream()
+
+            def terminate(self):
+                self.returncode = 0
+
+            async def wait(self):
+                return 0
+        processes = []
+
+        async def spawn(*command, **kwargs):
+            processes.append(Process())
+            return processes[-1]
+        tunnel = PublicUrl(lambda: {}, 8766, spawn=spawn, which=lambda name: '/usr/bin/cloudflared',
+                           timeout=timeout)
+        with self.assertRaises(TunnelError) as caught:
+            await tunnel.get()
+        return caught.exception, processes
+
+    async def test_a_network_that_blocks_cloudflare_fails_at_once_and_says_so(self):
+        # cloudflared 2026.x checks the network as it starts and reports a hard failure.
+        error, processes = await self.blocked_tunnel([
+            b'2026-10-22T22:54:03Z INF Requesting new quick Tunnel on trycloudflare.com...\n',
+            b'2026-10-22T22:54:06Z INF |  https://pour-rotary-rentals-attacked.trycloudflare.com  |\n',
+            b'2026-10-22T22:54:11Z ERR Failed to dial a quic connection error="failed to dial to edge '
+            b'with quic: timeout: no recent network activity" connIndex=0\n',
+            b'2026-10-22T22:54:16Z INF |  ERROR: Allow outbound TCP on port 7844.  |\n',
+            b'2026-10-22T22:54:16Z INF precheck component="UDP Connectivity" details="QUIC connection '
+            b'failed" status=fail target=region1.v2.argotunnel.com\n',
+            b'2026-10-22T22:54:16Z INF precheck component="TCP Connectivity" details="HTTP/2 connection '
+            b'is blocked or unreachable" status=fail target=region1.v2.argotunnel.com\n',
+            b'2026-10-22T22:54:16Z INF precheck complete hard_fail=true run_id=4517701d\n'])
+        self.assertIsInstance(error, TunnelBlocked)
+        self.assertIn('This network blocks Cloudflare tunnels', str(error))
+        self.assertIn('hotspot', str(error))
+        # A failed call keeps 200 characters of its error: the advice must fit.
+        self.assertLess(len(f'{type(error).__name__}: {error}'), 200)
+        # A blocked network is not retried with a fresh tunnel, and cloudflared is stopped.
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].returncode, 0)
+
+    async def test_repeated_failures_to_reach_cloudflare_mean_the_network_blocks_it(self):
+        # Older cloudflared versions do not log the precheck: repeated edge failures say the same.
+        failure = (b'ERR Unable to establish connection with Cloudflare edge error="TLS handshake '
+                   b'with edge error: read tcp 172.25.36.88:61888->198.41.200.53:7844: read: '
+                   b'connection reset by peer" connIndex=0\n')
+        error, processes = await self.blocked_tunnel(
+            [b'INF |  https://brave-fox-12.trycloudflare.com  |\n'] + [failure] * 4)
+        self.assertIsInstance(error, TunnelBlocked)
+        self.assertEqual(processes[0].returncode, 0)
+
+    async def test_a_network_that_blocks_only_quic_is_left_to_fall_back_to_http2(self):
+        quic = (b'ERR Failed to dial a quic connection error="failed to dial to edge with quic: '
+                b'timeout: no recent network activity" connIndex=0\n')
+        error, _ = await self.blocked_tunnel(
+            [b'INF |  https://brave-fox-12.trycloudflare.com  |\n'] + [quic] * 6 + [
+                b'INF precheck component="UDP Connectivity" details="QUIC connection failed" status=fail\n',
+                b'INF precheck component="TCP Connectivity" details="ok" status=pass\n',
+                b'INF precheck complete hard_fail=true run_id=4517701d\n'],
+            timeout=0.05)
+        self.assertNotIsInstance(error, TunnelBlocked)
+
+    async def test_a_tunnel_that_does_not_start_in_time_says_what_cloudflared_last_reported(self):
+        error, processes = await self.blocked_tunnel([
+            b'INF |  https://brave-fox-12.trycloudflare.com  |\n',
+            b'2026-10-22T22:54:11Z ERR Serve tunnel error error="context canceled" connIndex=0\n'],
+            timeout=0.05)
+        self.assertNotIsInstance(error, TunnelBlocked)
+        self.assertIn('did not start in time', str(error))
+        self.assertIn('Serve tunnel error', str(error))
+
+    async def test_preflight_reports_a_tunnel_that_cannot_start(self):
+        async def blocked():
+            raise TunnelBlocked('This network blocks Cloudflare tunnels')
+        hooks = DefaultCallHooks(environ=dict(ENV))
+        line = PhoneLine(public_url=blocked, environ=lambda: dict(ENV))
+        call = CallBrief.from_dict({'channel': 'phone', 'to': '+14155550142', 'onBehalfOf': 'Robin',
+                                     'objective': 'Ask.'})
+        self.assertIn('blocks Cloudflare', await line.preflight(hooks, 'local', call))
+        reached = []
+
+        async def reachable():
+            reached.append(True)
+            return PUBLIC
+        line = PhoneLine(public_url=reachable, environ=lambda: dict(ENV))
+        self.assertIsNone(await line.preflight(hooks, 'local', call))
+        self.assertEqual(reached, [True])  # it starts (warms up) the tunnel for the call
+
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -1478,13 +1621,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 204)
 
     async def test_a_call_is_recorded_on_request_and_downloaded(self):
-        record, _session = await self.h.dial(record=True)
+        record, session = await self.h.dial(record=True)
         created = self.h.twilio.created[-1]
-        self.assertTrue(created['record'])
-        self.assertEqual(created['recording_callback'], f'{PUBLIC}/twilio/recording/{record["id"]}')
+        # Smitline records the call itself (call_recorder.py); the provider is not asked to.
+        self.assertTrue(session.recording)
+        self.assertNotIn('record', created)
+        self.assertNotIn('recording_callback', created)
         # Not asked for and not turned on for every call: no recording.
-        other, _ = await self.h.dial(to='+14155550199')
-        self.assertFalse(self.h.twilio.created[-1]['record'])
+        other, other_session = await self.h.dial(to='+14155550199')
+        self.assertFalse(other_session.recording)
+        # A call the provider recorded (before 0.3.3) still gets its recording, and downloads.
         with self.assertRaises(CallError) as caught:
             await self.h.service.recording(record['id'], owner='local')
         self.assertEqual(caught.exception.code, 'not_ready')
@@ -1976,8 +2122,9 @@ class FakeClock:
 
 
 class SilenceTests(unittest.IsolatedAsyncioTestCase):
-    """Nobody speaking ends a call: a prompt after 40 seconds, the end after 65. GPT-Live streams
-    silence between turns, and that is not anyone speaking."""
+    """Nobody speaking ends a call: a prompt after 12 seconds, the end after 65, and sooner when
+    three turns of ours in a row get no words back. GPT-Live streams silence between turns, and
+    that is not anyone speaking."""
 
     SILENT = base64.b64encode(b'\xff' * 160).decode()  # 20 ms of mu-law silence
     SPOKEN = base64.b64encode(b'\x2a' * 1600).decode()  # 0.2 s of speech
@@ -2019,9 +2166,9 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_streamed_silence_does_not_keep_a_quiet_call_open(self):
         record, ws, live, task = await self.relayed_call()
-        await self.at(39, live)
+        await self.at(11, live)
         self.assertFalse(self.asked(live))
-        await self.at(40.5, live)
+        await self.at(12.5, live)
         self.assertTrue(self.asked(live))
         await self.at(64, live)
         self.assertFalse(ws.closed)
@@ -2033,11 +2180,11 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_agents_speech_still_counts(self):
         record, ws, live, task = await self.relayed_call()
-        await self.at(30, live)
+        await self.at(10, live)
         live.push({'type': 'session.output_audio.delta', 'delta': self.SPOKEN})  # audio, no transcript
-        await self.at(41, live)  # without that speech, the prompt would be due by now
+        await self.at(21, live)  # without that speech, the prompt would be due by now
         self.assertFalse(self.asked(live))
-        await self.at(70.5, live)  # 40.5 seconds after it
+        await self.at(22.5, live)  # 12.5 seconds after it
         self.assertTrue(self.asked(live))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -2045,13 +2192,13 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_their_voice_counts_before_any_transcript(self):
         from test_barge_in import QUIET, SPEECH
         record, ws, live, task = await self.relayed_call()
-        await self.at(30, live)
+        await self.at(10, live)
         for frame in [QUIET] * 5 + [SPEECH] * 20 + [QUIET] * 25:  # heard by the detector only
             ws.push({'event': 'media', 'media': {'track': 'inbound',
                                                  'payload': base64.b64encode(frame).decode()}})
-        await self.at(41, live)
+        await self.at(21, live)
         self.assertFalse(self.asked(live))
-        await self.at(70.5, live)
+        await self.at(22.5, live)
         self.assertTrue(self.asked(live))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
@@ -2067,14 +2214,60 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
         side.push({'type': 'transport.answered', 'event_id': 'e2'})
         await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
         self.start = self.h.line.session(record['id']).started_at
-        await self.at(39, side)
+        await self.at(11, side)
         self.assertFalse(self.asked(side))
-        await self.at(40.5, side)
+        await self.at(12.5, side)
         self.assertTrue(self.asked(side))
         await self.at(65.5, side)
         done = await self.h.service.wait(record['id'], timeout=8, owner='local')
         self.assertEqual(done['endReason'], 'hangup')
         self.assertIn(('hangup', 'live_sip_1'), client.calls)
+
+    async def say(self, live, seconds, speaker, text):
+        """`seconds` into the call, words from `speaker` ('agent' or 'other')."""
+        self.clock.now = self.start + seconds
+        kind = 'output' if speaker == 'agent' else 'input'
+        live.push({'type': f'session.{kind}_transcript.delta', 'delta': text})
+        await asyncio.sleep(0.05)
+
+    async def test_three_turns_without_a_word_back_end_the_call(self):
+        # On 2026-11-02 a restaurant picked up and then said nothing: the voice checked in three
+        # times over two minutes. Its opening and two check-ins, then quiet: nobody is answering.
+        record, ws, live, task = await self.relayed_call()
+        await self.say(live, 1, 'agent', "Hi, I'm calling on behalf of Robin about a table.")
+        await self.at(13.5, live)
+        self.assertTrue(self.asked(live))
+        await self.say(live, 14, 'agent', 'Hello? Are you still there?')
+        await self.at(26.5, live)
+        await self.say(live, 27, 'agent', 'Hello? Can you hear me?')
+        await self.at(38, live)
+        self.assertFalse(ws.closed)  # 11 seconds after the third turn
+        await self.at(39.5, live)
+        # Whoever may have heard it is told it was an AI before the line closes.
+        await until(lambda: any('you have not yet told them' in str(text) for _kind, text in live.appends))
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Just so you know, I'm Robin's AI assistant."})
+        await until(lambda: ws.closed, 3)
+        await asyncio.wait_for(task, 3)
+        ended = [e['data'] for e in self.h.service.events(record['id'])
+                 if e['type'] == 'call.no_answer_hangup']
+        self.assertEqual(ended, [{'turns': 3}])
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['endReason'], 'hangup')
+
+    async def test_words_back_start_the_count_again(self):
+        record, ws, live, task = await self.relayed_call()
+        await self.say(live, 1, 'agent', "Hi, I'm calling on behalf of Robin about a table.")
+        await self.say(live, 14, 'agent', 'Hello? Are you still there?')
+        await self.say(live, 16, 'other', 'Sorry, yes. One moment please.')
+        await self.say(live, 29, 'agent', 'Sure, take your time.')
+        await self.say(live, 42, 'agent', 'Are you still there?')
+        await self.at(56, live)  # two turns since their words, then quiet: not three
+        self.assertFalse(ws.closed)
+        self.assertFalse(any(e['type'] == 'call.no_answer_hangup'
+                             for e in self.h.service.events(record['id'])))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
 
 
 if __name__ == '__main__':

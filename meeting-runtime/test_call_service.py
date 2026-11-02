@@ -193,6 +193,23 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(blocked['ok'])
         self.assertIn('SMITLINE_ALLOWED_CALLING_CODES', blocked['problems'][0])
 
+    async def test_check_runs_the_lines_preflight_only_for_an_acceptable_brief(self):
+        tried = []
+
+        async def preflight(hooks, owner, call):
+            tried.append(call.to)
+            return 'This network blocks Cloudflare tunnels'
+        self.h.line.preflight = preflight
+        report = await self.h.service.check(brief())
+        self.assertEqual((report['ok'], report['problems']), (False, ['This network blocks Cloudflare tunnels']))
+        self.assertEqual(tried, ['+14155550142'])
+        # A brief refused for another reason does not start anything.
+        self.h.service.hooks = DefaultCallHooks(environ={'OPENAI_API_KEY': 'k',
+                                                         'SMITLINE_ALLOWED_CALLING_CODES': '44'})
+        refused = await self.h.service.check(brief())
+        self.assertEqual(len(refused['problems']), 1)
+        self.assertEqual(tried, ['+14155550142'])
+
     async def test_a_request_not_to_call_again_is_honored(self):
         summarize = self.h.summarizer.summarize
 
@@ -492,6 +509,23 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'filename="{call["id"]}.mp3"', response.headers['Content-Disposition'])
         response = await self.client.get(f'/v1/calls/{call["id"]}/recording')
         self.assertEqual(response.status, 401)
+
+    async def test_download_smitlines_own_recording(self):
+        response = await self.client.post('/v1/calls', json=brief(record=True), headers=self.auth)
+        call = await response.json()
+        self.h.line.proceed.set()
+        await self.client.get(f'/v1/calls/{call["id"]}/wait?timeout=5', headers=self.auth)
+        self.h.store.recording_path(call['id']).write_bytes(b'RIFFwav')
+        self.h.store.update(call['id'], recording={'seconds': 3, 'format': 'wav', 'source': 'smitline'})
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording', headers=self.auth)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), b'RIFFwav')
+        self.assertEqual(response.headers['Content-Type'], 'audio/wav')
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording?format=mp3', headers=self.auth)
+        self.assertEqual((response.status, (await response.json())['error']['code']), (422, 'invalid_request'))
+        self.h.store.recording_path(call['id']).unlink()
+        response = await self.client.get(f'/v1/calls/{call["id"]}/recording', headers=self.auth)
+        self.assertEqual((response.status, (await response.json())['error']['code']), (404, 'no_recording'))
 
     async def test_create_get_wait_list(self):
         response = await self.client.post('/v1/calls', json=brief(), headers=self.auth)

@@ -220,11 +220,13 @@ class LoopbackTransport:
     def get_call(self, call_id):
         return self._http('GET', f'/v1/calls/{quote(call_id)}')
 
-    def wait_for_call(self, call_id, timeout_seconds=60, since=None, only=None):
+    def wait_for_call(self, call_id, timeout_seconds=60, since=None, only=None, others=None):
         timeout = max(0, min(float(timeout_seconds or 0), 300))
         follow = '' if since is None else f'&since={quote(str(since))}'
         if only:
             follow += f'&only={quote(str(only))}'
+        if others:
+            follow += '&others=true'
         return self._http('GET', f'/v1/calls/{quote(call_id)}/wait?timeout={timeout:g}{follow}',
                           timeout=timeout + 15)
 
@@ -299,14 +301,17 @@ class Smitline:
     async def get_call(self, call_id):
         return self._transport.get_call(call_id)
 
-    async def wait_for_call(self, call_id, timeout_seconds=60, *, since=None, only=None):
+    async def wait_for_call(self, call_id, timeout_seconds=60, *, since=None, only=None,
+                            others=None):
         """Wait until the call is terminal or the timeout (at most 300 s) passes. With `since`
         ('' at first, then the last answer's live['cursor']) it follows the call live: the answer
         also comes once something new is said, with live['transcript'] holding the new lines, and
-        at once for a request (live['requests']). only='requests' wakes for requests alone."""
+        at once for a request (live['requests']). only='requests' wakes for requests alone.
+        others=True also watches your other calls in progress: a new request on any of them
+        wakes the wait, and live['otherRequests'] lists the ones you have not answered yet."""
         import asyncio
         return await asyncio.to_thread(self._transport.wait_for_call, call_id, timeout_seconds,
-                                       since, only)
+                                       since, only, others)
 
     async def reply_to_request(self, call_id, request_id, *, type, text, announce=None, ok=None,
                                details=None):

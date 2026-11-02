@@ -104,9 +104,41 @@ class RequestDeskTests(unittest.TestCase):
 
     def test_the_voice_knows_only_the_backend_passes_requests_on(self):
         text = call_requests.voice_instructions('Robin', 'look things up', meeting=True)
-        self.assertIn('you cannot pass anything on yourself: only your backend can', text)
+        self.assertIn('You cannot pass anything on yourself: only your backend can', text)
         self.assertIn('If you did not hand it to your backend, it was not passed on', text)
         self.assertIn('you may say only "One moment" first', text)
+        self.assertIn('never say that a request was passed on, is being worked on, or is done', text)
+        # General rules only: the words it used in the live test (issue 83) are caught in code.
+        self.assertNotIn('"on it"', text)
+        self.assertNotIn('When someone checks on a request', text)
+
+    def test_questions_reach_the_agent_and_cando_limits_tasks(self):
+        voice = call_requests.voice_instructions('Robin', 'edit the demo page', meeting=True)
+        self.assertIn('or asks a question you cannot answer from what you know, hand it to your backend', voice)
+        self.assertIn('A task outside what the agent can do, you do not pass on', voice)
+        self.assertIn("Robin's agent, the AI that set up this meeting, can do this", voice)
+        self.assertNotIn('When someone asks what you can do', voice)
+        backend = call_requests.backend_instructions('Robin', 'edit the demo page')
+        self.assertIn('When the voice hands you a question you cannot answer from what you have, or a '
+                      'task within what the agent can do, call ask_agent', backend)
+        self.assertIn('Never pass on a task outside what the agent can do', backend)
+        self.assertNotIn('Never pass on anything outside', backend)
+        self.assertIn('a question you cannot answer', call_requests.ask_agent_tool('Robin')['description'])
+
+    def test_with_requests_on_unknown_answers_go_to_the_agent(self):
+        from bridge import backend_instructions as meeting_backend
+        from phone_prompts import backend_instructions as phone_backend
+        runtime = SimpleNamespace(owner_name='Robin', participant_name='Smitline AI',
+                                  meeting_instructions=None)
+        with_requests = meeting_backend(runtime, {'canDo': 'edit the demo page'})
+        self.assertIn('If you cannot establish the answer, pass the question to the agent', with_requests)
+        self.assertIn('If you cannot establish the answer, say so plainly and that Robin will follow up',
+                      meeting_backend(runtime, {}))
+        call = CallBrief.from_dict(brief(canDo='edit the demo page'))
+        self.assertIn('if the answer is not here, pass the question to the agent',
+                      phone_backend(call, background='Notes.'))
+        self.assertIn('if the answer is not here, say so and that Robin will follow up',
+                      phone_backend(CallBrief.from_dict(brief()), background='Notes.'))
 
     def test_tool_is_strict_and_complete(self):
         tool = call_requests.ask_agent_tool('Robin')
@@ -179,6 +211,33 @@ class ClaimWatchTests(unittest.TestCase):
         message = watch.due()
         self.assertEqual((message['type'], message['id'], message['text']),
                          ('add', 'r1', 'November third, please.'))
+
+    def test_what_the_voice_said_in_the_live_test_counts_as_a_claim(self):
+        # 2026-10-23 (issue 83): the voice said these for a question it never handed over.
+        for said in ('Alright, on it.', 'On it.',
+                     "All right, I'm sending it.", "Good, I'll send that.",
+                     'Let me pass the question on.'):
+            self.assertTrue(call_requests.claims_passed_on(said), said)
+        # Offers, refusals and everyday words are not.
+        # "Still waiting" is what a late request's note tells the voice to say: not a claim.
+        for said in ("Still waiting. I don't know yet.", "It's still waiting for Robin's agent.",
+                     "I can send him the request, but it's not up to me.", "I'm not sending that.",
+                     'We are on it as a team.', "I'm sending you the link now.", 'Keep going on it.',
+                     "I don't know, but I can ask Robin's agent about it if you want."):
+            self.assertFalse(call_requests.claims_passed_on(said), said)
+
+    def test_on_it_without_asking_passes_their_question_on(self):
+        watch, now = self.watch()
+        watch.heard('other', 'I see. So, is there any issue that you know that we were facing recently')
+        watch.heard('agent', "I don't know, but I can ask Robin's agent about it if you want.")
+        watch.heard('other', 'Yes, go ahead and ask about it')
+        watch.heard('agent', 'Alright, on it.')
+        now[0] += 11
+        message = watch.due()
+        self.assertEqual((message['type'], message['kind'], message['source']), ('ask', 'question', 'speech'))
+        self.assertEqual(message['text'], 'Yes, go ahead and ask about it')
+        self.assertIn('other: I see. So, is there any issue that you know that we were facing recently',
+                      message['context'])
 
     def test_told_looks_for_the_answer(self):
         answer = 'The latest changes are in pull request 75, requests from calls.'
@@ -262,6 +321,15 @@ class BriefTests(unittest.TestCase):
             CallBrief.from_dict(brief(canDo='x' * 501))
         with self.assertRaises(ValueError):
             CallBrief.from_dict(brief(canDo=['a list']))
+
+    def test_for_request_is_optional_and_checked(self):
+        self.assertIsNone(CallBrief.from_dict(brief()).for_request)
+        served = {'callId': 'call-0123456789abcdef', 'requestId': 'r12'}
+        self.assertEqual(CallBrief.from_dict(brief(forRequest=served)).to_dict()['forRequest'], served)
+        for bad in ({'callId': 'call-1', 'requestId': 'r1'}, {'callId': served['callId'], 'requestId': 'r0'},
+                    {'callId': served['callId']}, dict(served, extra=True), 'r1'):
+            with self.assertRaises(ValueError):
+                CallBrief.from_dict(brief(forRequest=bad))
 
 
 # The call service --------------------------------------------------------------------------
@@ -524,6 +592,154 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         line.proceed.set()
 
 
+    # Several calls at once: one stuck call must not hide another's requests.
+
+    def request_on(self, call_id, request_id='r1'):
+        return next(item for item in self.h.store.get(call_id)['requests'] if item['id'] == request_id)
+
+    async def test_a_wait_with_others_wakes_for_a_request_on_another_call(self):
+        meeting, ctx = await self.start()
+        phone, _ = await self.start(to='+14155550143')
+        loop = asyncio.get_running_loop()
+        waiting = asyncio.create_task(self.service.wait(phone, owner='local', timeout=30, since='',
+                                                        others=True))
+        # Waiting on the phone call with others follows the meeting too.
+        await until(lambda: self.service.agent_following(meeting))
+        started = loop.time()
+        ctx.request(ask())
+        answer = await asyncio.wait_for(waiting, 2)
+        self.assertLess(loop.time() - started, 1.0)
+        self.assertEqual([(item['callId'], item['id'], item['text'], item['askedBy'])
+                          for item in answer['live']['otherRequests']],
+                         [(meeting, 'r1', README, 'Priya')])
+        # Still listed until the agent answers it, if only with a status; then not.
+        again = await self.service.wait(phone, owner='local', timeout=0, since='', others=True)
+        self.assertEqual(len(again['live']['otherRequests']), 1)
+        await self.service.reply(meeting, 'r1', owner='local', type='status', text='Picked up.')
+        again = await self.service.wait(phone, owner='local', timeout=0, since='', others=True)
+        self.assertEqual(again['live']['otherRequests'], [])
+
+    async def test_a_wait_without_others_is_unchanged(self):
+        meeting, ctx = await self.start()
+        phone, _ = await self.start(to='+14155550143')
+        waiting = asyncio.create_task(self.service.wait(phone, owner='local', timeout=0.3, since=''))
+        await asyncio.sleep(0.05)
+        # Only the call waited on is followed.
+        self.assertFalse(self.service.agent_following(meeting))
+        ctx.request(ask())
+        answer = await waiting
+        self.assertNotIn('otherRequests', answer['live'])
+        # And the voice is told nobody is following the meeting yet.
+        self.assertEqual(self.request_on(meeting)['state'], 'open')
+
+    async def test_a_call_for_a_request_reports_to_it_by_itself(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        record = await self.service.create(brief(
+            to='+14155550143', contact={'name': 'Arun'},
+            forRequest={'callId': meeting, 'requestId': 'r1'}))
+        self.assertEqual(record['brief']['forRequest'], {'callId': meeting, 'requestId': 'r1'})
+        await until(lambda: len(self.request_on(meeting)['thread']) >= 3)
+        thread = self.request_on(meeting)['thread']
+        self.assertEqual([(entry['type'], entry['text'], entry.get('automatic')) for entry in thread[1:3]],
+                         [('status', 'Calling Arun now; it is ringing.', True),
+                          ('status', 'Arun picked up; the call is under way.', True)])
+        # An automatic report is not the agent checking in: nobody follows the meeting yet.
+        self.assertFalse(self.service.agent_following(meeting))
+        self.line.proceed.set()
+        await until(lambda: self.request_on(meeting)['state'] == 'done')
+        request = self.request_on(meeting)
+        self.assertTrue(request['ok'])
+        self.assertTrue(request['answer'].startswith('The call is over: '))
+        self.assertNotIn('+14155550143', json.dumps(request))
+
+    async def test_a_call_for_a_request_that_fails_says_why(self):
+        from tunnel import BLOCKED, TunnelBlocked
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        self.line.fail = TunnelBlocked(BLOCKED)
+        await self.service.create(brief(to='+14155550143',
+                                        forRequest={'callId': meeting, 'requestId': 'r1'}))
+        await until(lambda: self.request_on(meeting)['state'] == 'done')
+        request = self.request_on(meeting)
+        self.assertFalse(request['ok'])
+        self.assertEqual(request['answer'], f'The call could not be made: {BLOCKED}')
+        self.line.fail = None
+        self.line.proceed.set()
+
+    async def test_reports_stop_once_the_agent_has_closed_the_request(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun'))
+        await self.service.create(brief(to='+14155550143',
+                                        forRequest={'callId': meeting, 'requestId': 'r1'}))
+        # The agent answers it itself before the call rings.
+        await self.service.reply(meeting, 'r1', owner='local', type='done', text='Done another way.')
+        self.line.proceed.set()
+        await asyncio.sleep(0.2)
+        thread = self.request_on(meeting)['thread']
+        self.assertEqual([entry['text'] for entry in thread if entry['from'] == 'agent'],
+                         ['Done another way.'])
+
+    async def test_canceling_a_request_ends_the_call_serving_it(self):
+        meeting, ctx = await self.start()
+        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        ended = []
+        end = self.line.end
+
+        async def tracked_end(call_id):
+            ended.append(call_id)
+            return True
+        self.line.end = tracked_end
+        serving = await self.service.create(brief(to='+14155550143',
+                                                  forRequest={'callId': meeting, 'requestId': 'r1'}))
+        other = await self.service.create(brief(to='+14155550144'))
+        await until(lambda: self.h.store.get(serving['id'])['status'] == 'in_progress')
+        ctx.request({'type': 'cancel', 'id': 'r1', 'text': 'Disconnect the phone call, not the Zoom.'})
+        await until(lambda: ended)
+        self.assertEqual(ended, [serving['id']])  # only the call serving it; never the meeting
+        self.assertIn('call.request_canceled',
+                      [e['type'] for e in self.service.events(serving['id'])])
+        self.line.end = end
+        self.line.proceed.set()
+        self.assertTrue(other['id'])
+
+    async def test_another_owners_calls_stay_out_of_sight(self):
+        theirs, ctx = await self.start()
+        self.h.store.update(theirs, owner='acct_other')
+        mine, _ = await self.start(to='+14155550143')
+        waiting = asyncio.create_task(self.service.wait(mine, owner='local', timeout=0.3, since='',
+                                                        others=True))
+        await asyncio.sleep(0.05)
+        self.assertFalse(self.service.agent_following(theirs))
+        ctx.request(ask())
+        answer = await waiting
+        self.assertEqual(answer['live']['otherRequests'], [])
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550144', forRequest={'callId': theirs,
+                                                                            'requestId': 'r1'}))
+        self.assertEqual(caught.exception.status, 422)
+        self.line.proceed.set()
+
+    async def test_for_request_must_name_an_open_request_of_the_owners(self):
+        meeting, ctx = await self.start()
+        missing = {'callId': meeting, 'requestId': 'r9'}
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550143', forRequest=missing))
+        self.assertEqual(caught.exception.status, 422)
+        report = await self.service.check(brief(to='+14155550143', forRequest=missing))
+        self.assertIn('does not exist', ' '.join(report['problems']))
+        with self.assertRaises(CallError):
+            await self.service.create(brief(to='+14155550143', forRequest={
+                'callId': 'call-0123456789abcdef', 'requestId': 'r1'}))
+        ctx.request(ask())
+        await self.service.reply(meeting, 'r1', owner='local', type='done', text='Done.')
+        with self.assertRaises(CallError) as caught:
+            await self.service.create(brief(to='+14155550143', forRequest={'callId': meeting,
+                                                                            'requestId': 'r1'}))
+        self.assertEqual(caught.exception.code, 'request_closed')
+        self.line.proceed.set()
+
+
 # The REST API --------------------------------------------------------------------------------
 
 class RequestApiTests(unittest.IsolatedAsyncioTestCase):
@@ -768,6 +984,70 @@ class MeetingControlTests(unittest.IsolatedAsyncioTestCase):
         # No token (a meeting started by hand): nothing gets in.
         self.assertFalse(MeetingControl('', {}, owner='Robin').authorized('Bearer '))
         self.assertIsNone(MeetingControl('', {}, owner='Robin').desk)
+
+    async def cued(self, control, timeout=1.0):
+        """Wait for the voice to be cued (a commentary append), or the timeout."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        while loop.time() < end and not any(kind == 'commentary' for kind, _ in self.sent):
+            await asyncio.sleep(0.01)
+        return [text for kind, text in self.sent if kind == 'commentary']
+
+    async def test_in_a_quiet_meeting_the_answer_is_said_without_being_asked(self):
+        # 2026-10-23: the answer reached the voice in 10 s, and was said only when someone asked.
+        control = self.control()
+        control.quiet = lambda: 10.0
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added the launch date.', owner='Robin', ok=True),
+                                  type='note'))
+        cues = await self.cued(control)
+        self.assertEqual(len(cues), 1)
+        self.assertIn('Now is a pause: tell them this now', cues[0])
+        self.assertIn('Added the launch date.', cues[0])
+        self.assertNotIn(call_requests.WHEN_TO_TELL, cues[0])
+
+    async def test_while_people_talk_it_waits_for_a_real_gap(self):
+        control = self.control()
+        quiet = [0.0]
+        control.quiet = lambda: quiet[0]
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added it.', owner='Robin', ok=True), type='note'))
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
+        quiet[0] = 1.0  # a short breath between speakers is not a gap
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
+        quiet[0] = 3.0
+        self.assertEqual(len(await self.cued(control)), 1)
+
+    async def test_no_cue_once_it_was_said_or_when_no_gap_comes(self):
+        control = self.control()
+        quiet = [0.0]
+        control.quiet = lambda: quiet[0]
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        await control.handle(dict(done_note(request, 'Added the launch date to the README.',
+                                            owner='Robin', ok=True), type='note'))
+        control.heard('agent', 'Done: I added the launch date to the README.')
+        quiet[0] = 10.0
+        self.assertEqual(await self.cued(control, timeout=0.4), [])
+        # People keep talking: after the longest wait it is left for the next time it speaks.
+        control = self.control()
+        control.quiet = lambda: 0.0
+        control.tell_max_wait = 0.2
+        await control.handle(dict(done_note(request, 'Added it.', owner='Robin', ok=True), type='note'))
+        await asyncio.sleep(0.4)
+        self.assertEqual(await self.cued(control, timeout=0.1), [])
+
+    async def test_only_what_they_must_hear_is_cued(self):
+        request = {'id': 'r1', 'text': README, 'askedBy': 'Ankit'}
+        self.assertNotIn('say', status_note(request, 'Working on it.', owner='Robin', announce=False))
+        self.assertEqual(status_note(request, 'Nov 3 or 10?', owner='Robin', announce=True)['say'],
+                         'Nov 3 or 10?')
+        self.assertEqual(done_note(request, 'No access.', owner='Robin', ok=False)['say'], 'No access.')
+        control = self.control()
+        control.quiet = lambda: 10.0
+        await control.handle(dict(status_note(request, 'Working on it.', owner='Robin', announce=False),
+                                  type='note'))
+        await control.handle({'type': 'note', 'kind': 'instructions', 'text': 'Ask about parking.'})
+        self.assertEqual(await self.cued(control, timeout=0.3), [])
 
     async def test_notes_reach_the_voice_and_details_the_chat(self):
         control = self.control(chatAvailable=True)

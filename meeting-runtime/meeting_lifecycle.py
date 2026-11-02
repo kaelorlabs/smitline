@@ -75,6 +75,16 @@ VOICEMAIL_PROMPT = re.compile(
     r"\b(?:record your message|voice ?(?:mail|message) ?(?:box|system)|"
     r"(?:after|at|when you hear) the (?:tone|beep)|mailbox (?:is full|is not set up|has not been set up))\b",
     re.I)
+# A phone's call screening ("Google Assistant", carriers) answers before the person does. In a
+# live test it said "your name and reason for calling, I'll see if this person is available",
+# "please stay on the line" and "this person is not available": nobody to say goodbye to.
+SCREENING_PROMPT = re.compile(
+    r"\b(?:reason for (?:your )?call(?:ing)?|"
+    r"(?:i'll|i will|let me) see if (?:this person|the person|they|he|she)(?:'s| is| are)? (?:is |are )?available|"
+    r"please stay on the line|"
+    r"(?:this|the) person (?:you(?:'re| are) calling )?is (?:not |un)available|"
+    r"call screening|screening service|google assistant|(?:say|record|state) your name)\b",
+    re.I)
 # Quiet after the goodbye has been heard before a call hangs up, or a meeting is left.
 GOODBYE_QUIET_SECONDS = 1.5
 LEAVE_QUIET_SECONDS = 2.0
@@ -108,6 +118,12 @@ def asks_to_leave(text):
 def voicemail_prompt(text):
     """A voicemail greeting or a carrier's mailbox message, from the other side's words."""
     return bool(VOICEMAIL_PROMPT.search(' '.join(str(text or '').split())))
+
+
+def machine_prompt(text):
+    """What a machine says, not a person: a voicemail greeting or a phone's call screening."""
+    text = ' '.join(str(text or '').split())
+    return bool(VOICEMAIL_PROMPT.search(text) or SCREENING_PROMPT.search(text))
 
 
 # After the agent's goodbye, if nobody asked it to leave in so many words, a quick model check of

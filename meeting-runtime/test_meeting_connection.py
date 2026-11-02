@@ -2,10 +2,44 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from adapters_base import AuthenticationRequired, Capabilities
+from adapters_base import AuthenticationRequired, Capabilities, GuestRefused
 from meeting_connection import joined_meeting
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_google_refusing_the_guest_retries_with_the_connected_account(self):
+        envs = []
+        class Browser:
+            def __init__(self, env): self.env = env; envs.append(env.copy())
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def get_page(self): return self.env
+        class Adapter:
+            platform_id = 'meet'; capabilities = Capabilities()
+            signed_in_profile = ('google-connected', 'google')
+            def __init__(self, url, page, stop, stage): self.env = page
+            async def join(self, *args):
+                if 'JOINLY_BROWSER_PROFILE_DIR' not in self.env:
+                    raise GuestRefused('Google Meet turned away the guest join')
+            async def leave(self): return None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'google-connected').touch()
+            state = {}
+            async with joined_meeting('https://meet.google.com/aaa-bbbb-ccc', 'Smitline AI', '', {}, asyncio.Event(),
+                                      lambda _: None, state, profile_root=root,
+                                      browser_factory=Browser, adapter_factory=Adapter):
+                self.assertEqual(len(envs), 2)
+                self.assertEqual(envs[1]['JOINLY_BROWSER_PROFILE_DIR'], str(root / 'google'))
+                self.assertEqual(state['authenticationState'], 'signed_in')
+        # Without a connected account the refusal reaches the caller as it is.
+        state = {}
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(GuestRefused):
+                async with joined_meeting('https://meet.google.com/aaa-bbbb-ccc', 'Smitline AI', '', {}, asyncio.Event(),
+                                          lambda _: None, state, profile_root=Path(directory),
+                                          browser_factory=Browser, adapter_factory=Adapter):
+                    pass
+        self.assertEqual(state['authenticationState'], 'required')
+
     async def test_guest_closed_before_profile_retry_and_profile_never_leaks_to_guest(self):
         trace=[]
         class Browser:

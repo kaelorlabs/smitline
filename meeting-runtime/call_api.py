@@ -101,10 +101,15 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         only = request.query.get('only')
         if only is not None and only != 'requests':
             return _error(422, 'invalid_request', 'only must be requests')
-        if only and since is None:
+        others = request.query.get('others')
+        if others is not None and others not in ('true', 'false', '1', '0'):
+            return _error(422, 'invalid_request', 'others must be true or false')
+        others = others in ('true', '1')
+        if (only or others) and since is None:
             since = ''  # following requests is following live, from the start
         record = await service.wait(request.match_info['callId'], timeout=timeout,
-                                    owner=await owner(request), since=since, only=only)
+                                    owner=await owner(request), since=since, only=only,
+                                    others=others)
         return public_json(record)
 
     @handle

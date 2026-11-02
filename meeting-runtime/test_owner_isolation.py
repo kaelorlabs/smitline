@@ -712,7 +712,10 @@ class SettingsStayWithTheirOwnerTests(unittest.IsolatedAsyncioTestCase):
         mine_record, mine, created_mine = await self.dial('local')
         theirs_record, theirs, created_theirs = await self.dial(A, to='+14155550143')
         self.assertEqual((created_mine['from_'], created_theirs['from_']), ('+15005550006', '+15005550007'))
-        self.assertEqual((created_mine['record'], created_theirs['record']), (False, True))
+        # Each owner's recording setting holds. Smitline records the call itself, so the provider
+        # is never asked to.
+        self.assertEqual((mine.recording, theirs.recording), (False, True))
+        self.assertNotIn('record', created_theirs)
         self.assertEqual((mine.owner_phone, theirs.owner_phone), ('+14155550111', '+14155550122'))
         self.assertEqual(self.h.hooks.credentials(A, 'twilio')['fromNumber'], '+15005550007')
         self.assertEqual(self.h.hooks.credentials('local', 'twilio')['fromNumber'], '+15005550006')

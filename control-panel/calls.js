@@ -961,14 +961,17 @@ function renderCall(call, { focusTitle = false } = {}) {
     : (MEETINGS ? 'This meeting did not start' : 'This call did not go through');
   $('problem-text').textContent = failed ? sentence(call.error || 'Something went wrong before the call could start.') : '';
   $('handed-over').hidden = !(state.transferred || call.endReason === 'transferred');
-  // The recording stays in the phone account; the console fetches it with the account's keys.
-  const recording = call.recording && typeof call.recording.url === 'string' ? call.recording : null;
+  // Smitline records a recorded call itself (a WAV kept with the call). Calls recorded before
+  // 0.3.3 stay in the phone account; the console fetches those with the account's keys.
+  const own = Boolean(call.recording && call.recording.source === 'smitline');
+  const recording = call.recording && (own || typeof call.recording.url === 'string') ? call.recording : null;
   $('recording').hidden = !recording;
   $('recording-text').textContent = recording
-    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', 'kept in your phone account; the WAV has each side on its own channel'].filter(Boolean).join(' · ')
+    ? [Number.isFinite(recording.seconds) ? duration(recording.seconds) : '', own ? 'each side on its own channel' : 'kept in your phone account; the WAV has each side on its own channel'].filter(Boolean).join(' · ')
     : '';
   for (const format of ['wav', 'mp3']) {
     $(`recording-${format}`).href = recording ? `/api/calls/${encodeURIComponent(call.id)}/recording?format=${format}` : '';
+    $(`recording-${format}`).hidden = own && format === 'mp3';
   }
   $('result-pending').hidden = call.status !== 'summarizing';
   renderTags(call);

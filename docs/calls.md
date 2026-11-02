@@ -49,7 +49,9 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 }
 ```
 
-`canDo` (optional, up to 500 characters) says what the calling agent will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". With it, the voice passes their requests to the agent; without it, nobody on the call can ask the agent for anything. See [requests from the call](agents.md#requests-from-the-call).
+`canDo` (optional, up to 500 characters) says what the calling agent will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". With it, the voice passes on their tasks within it, and any question it cannot answer itself (the agent knows the owner's work; it decides what to share); without it, nobody on the call can ask the agent for anything. See [requests from the call](agents.md#requests-from-the-call).
+
+`forRequest` (optional) names an open request on another of the owner's calls that this call serves, as `{"callId": "call-…", "requestId": "r1"}`: the call then reports its progress and outcome to that request by itself. See [several calls at once](agents.md#several-calls-at-once).
 
 A meeting brief may also set `camera` (meetings only): `{ "enabled": true, "defaultOn": true, "avatarDataUri": "data:image/png;base64,..." }`. `enabled` shows Smitline's virtual camera tile, `defaultOn` turns it on after joining (both default to `true`), and the avatar is a PNG, JPEG, WebP, or SVG of up to 80 KB. The stored brief keeps `enabled` and `defaultOn` but not the image.
 
@@ -57,7 +59,7 @@ Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup pro
 
 `onBehalfOf` names the person the call is for, never an AI, model, app or bot. A value such as `ChatGPT`, `Claude AI`, `the assistant` or `Claude's assistant` is replaced with `SMITLINE_OWNER_NAME`, and the call gets a `call.brief_corrected` event with `field` and `was`. Without an owner name, the brief is refused with `422 invalid_request`. Only the whole value is matched, so people such as Alexa Smith or Claude Monet keep their names. The [meetings API](#meetings-api) checks it the same way. The voice is always that person's AI assistant: it never says that ChatGPT, Claude or another app is calling, even when the objective says so.
 
-`POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
+`POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess. For a phone call in relay mode it also tests that the provider can reach this computer, starting the quick tunnel if none is running (a few seconds), so a network that blocks the tunnel is reported in `problems` before anyone dials, and the call that follows reuses the tunnel.
 
 ## Context
 
@@ -161,7 +163,7 @@ Every finished call carries `cost`, in US dollars:
 | Method | Use |
 | --- | --- |
 | `GET /v1/calls/{id}` | Poll the call. |
-| `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. Add `since` (empty at first, then the last answer's `live.cursor`) to follow the call live: the answer also comes about 2 seconds after something new is said, with `live.transcript` holding the lines said after the cursor, and at once for a request from the call, in `live.requests`. `only=requests` wakes for requests alone and leaves `live.transcript` out. While an agent waits live, the call counts it as following, so the voice passes requests on (see [requests from the call](agents.md#requests-from-the-call)). |
+| `GET /v1/calls/{id}/wait?timeout=60` | Long-poll until the call reaches a terminal status or the timeout (maximum 300 seconds) passes. Add `since` (empty at first, then the last answer's `live.cursor`) to follow the call live: the answer also comes about 2 seconds after something new is said, with `live.transcript` holding the lines said after the cursor, and at once for a request from the call, in `live.requests`. `only=requests` wakes for requests alone and leaves `live.transcript` out. `others=true` also watches the owner's other calls in progress: their new requests wake the wait, and `live.otherRequests` lists the ones not answered yet (see [several calls at once](agents.md#several-calls-at-once)). While an agent waits live, the call counts it as following, so the voice passes requests on (see [requests from the call](agents.md#requests-from-the-call)). |
 | `GET /v1/calls/{id}/listen` | Listen in: both sides of a call in progress as NDJSON, a `format` line (`mulaw` at 8000 Hz for phone calls, `pcm16` at 24000 Hz for meetings), then `{"side", "audio"}` chunks in base64 until the call ends. Off unless the owner sets `SMITLINE_LISTEN=1`: `403 listening_off`. `409 listen_unavailable` when the call has not connected or its audio does not pass through Smitline (direct SIP), `409 call_ended` after it ends. Each listen adds a `call.listening` event. A listener that falls behind loses audio; the call never waits for it. |
 | `GET /v1/calls/{id}/events` | Server-sent events with `Last-Event-ID` resume; `call.transcript` events carry each line as it is said, for phone calls and meetings. Add `?format=json&after=N` for a JSON page of events after event `N`, as the local console does. |
 | `notify.webhookUrl` | One `POST` when the call reaches a terminal status. |
@@ -190,7 +192,7 @@ Webhook bodies are signed: `X-Smitline-Signature: sha256=<hex HMAC of the raw bo
 | `POST /v1/calls/{id}/requests/{requestId}/reply` | Answer a [request from the call](agents.md#requests-from-the-call): `{"type": "status", "text", "announce"}` any number of times, then `{"type": "done", "text", "ok", "details"}` once. Returns the request and whether the voice got it. `409 request_closed` for a request already done or canceled, `409 call_ended` for a status after the call, `429 too_many_updates` after 20 statuses. |
 | `POST /v1/calls/{id}/end` | End the call politely and build the result. |
 | `POST /v1/calls/{id}/transfer` | Phone only: hand the connected call to the owner's phone. |
-| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call from the phone provider. WAV keeps both sides on separate channels; MP3 mixes them into one. `404 no_recording` when there is none, `409 not_ready` while the call runs. |
+| `GET /v1/calls/{id}/recording?format=wav\|mp3` | Download a recorded call: a WAV with each side on its own channel, kept with the call. Calls recorded before 0.3.3 come from the phone provider, which also offers MP3 (both sides mixed). `404 no_recording` when there is none, `409 not_ready` while the call runs. |
 | `GET /v1/voices` | GPT-Live voices this installation accepts. |
 | `GET /v1/profile` | The owner's profile, the first level of [context](#context). |
 | `PATCH /v1/profile` | Update the profile. Fields present replace the saved ones; `people` are added or updated by name; `removePeople` drops names. A problem returns `422` with a readable message. |
