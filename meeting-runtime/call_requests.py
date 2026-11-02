@@ -86,9 +86,9 @@ def ask_agent_tool(owner):
 def voice_instructions(owner, can_do, *, meeting):
     """What the voice knows about requests (the GPT-Live session's instructions).
 
-    Questions always go to the agent, which knows the owner's work; canDo limits tasks. In a live
-    meeting the voice said "on it", "I'm sending it" and "still waiting" for a question it never
-    handed over, so those words are named."""
+    Questions always go to the agent, which knows the owner's work; canDo limits tasks. The rules
+    stay general: the words the voice once used for a question it never handed over ("on it",
+    "I'm sending it") are caught in code, by ClaimWatch."""
     place = 'meeting' if meeting else 'call'
     return (
         f"\n\nRequests: {owner}'s agent, the AI that set up this {place}, can do this for the "
@@ -97,13 +97,10 @@ def voice_instructions(owner, can_do, *, meeting):
         'for something the agent can do, or asks a question you cannot answer from what you know, '
         'hand it to your backend right away; you may say only "One moment" first. Your backend\'s '
         'answer says whether it was passed on: tell them that. If you did not hand it to your '
-        'backend, it was not passed on: never say "on it", "sending it", "I\'ll send that", '
-        '"still waiting", or that a request was passed on, is being worked on, or is done, unless '
-        "your backend's answer or a note says so. When someone checks on a request, tell them "
-        'plainly what the notes say, or that nothing was passed on. A task outside what the agent '
-        f'can do, you do not pass on: say so, and that {owner} will follow up. When someone asks '
-        f"what you can do, also say what {owner}'s agent can do for them and that you can pass "
-        f'their questions to it. Notes about requests arrive during the {place}. A note that says '
+        'backend, it was not passed on: never say that a request was passed on, is being worked '
+        "on, or is done, unless your backend's answer or a note says so. A task outside what the "
+        f'agent can do, you do not pass on: say so, and that {owner} will follow up. Notes about '
+        f'requests arrive during the {place}. A note that says '
         'to tell someone is the exception to keeping notes to yourself: tell them in your own words '
         'at the next natural pause, never over someone who is speaking. When the agent asks a '
         'question, ask the person, then hand their answer to your backend to pass on. If they drop '

@@ -561,7 +561,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A finished call includes its result (outcome, summary, details, transcript) and cost. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
+      "description": "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A finished call includes its result (outcome, summary, details, transcript) and what it cost: cost, at your providers' prices, when self-hosted; on a hosted service such as Smitline Cloud, charge, what the service billed for the call. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -583,7 +583,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List recent phone calls and meetings, newest first, with each call's id, status, brief, and outcome. Filter by channel (phone or meeting), by contact (calls to or from one E.164 number), or by task id. limit defaults to 20 (at most 100); there is no paging, so narrow with the filters. Use get_call or wait_for_call for one call's full result.",
+      "description": "List recent phone calls and meetings, newest first, with each call's id, status, brief, outcome, and cost (on a hosted service, its charge). Filter by channel (phone or meeting), by contact (calls to or from one E.164 number), or by task id. limit defaults to 20 (at most 100); there is no paging, so narrow with the filters. Use get_call or wait_for_call for one call's full result.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -801,7 +801,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries.",
+      "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries. On a hosted service such as Smitline Cloud it also has the account's wallet: what is left to spend, and this month's spend.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,

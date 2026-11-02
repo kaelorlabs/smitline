@@ -22,7 +22,7 @@ const DONE = {
     durationSeconds: 155,
   },
   transcript: [{ speaker: 'agent', text: 'Hi, calling for Ankit.' }, { speaker: 'other', text: 'Sure.' }],
-  charge: { amount: '$0.66', billedSeconds: 198, ratePerMinute: '$0.20', status: 'charged' },
+  charge: { amount: '$0.66', billedSeconds: 198, pricePerMinute: '$0.20', status: 'charged' },
   recording: { seconds: 155, format: 'wav', source: 'smitline' },
   recordingUrl: 'https://app.example.com/r/abc',
   callUrl: 'https://app.example.com/app/calls/call-0123456789abcdef',
@@ -55,6 +55,8 @@ test('the view of a self-hosted or live call: provider cost, no player without a
   assert.equal(live.callUrl, null);
   assert.equal(callCardView({ id: ID, status: 'completed', charge: { status: 'pending' } }).cost,
     'Worked out when the call ends');
+  assert.equal(callCardView({ id: ID, status: 'in_progress', charge: { status: 'pending', pricePerMinute: '$0.20' } }).cost,
+    'Billed when the call ends, at $0.20/min');
   const failed = callCardView({ id: ID, status: 'failed', error: 'The number is not in service.' });
   assert.deepEqual([failed.status, failed.tone, failed.summary], ['Failed', 'bad', 'The number is not in service.']);
   assert.equal(callCardView({ id: ID, channel: 'meeting', status: 'waiting' }).title, 'Meeting');

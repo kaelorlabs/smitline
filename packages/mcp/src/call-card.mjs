@@ -77,13 +77,14 @@ export function callCardView(record, now = Date.now()) {
 
   let cost = '';
   const charge = object(call.charge);
-  if (text(charge.amount)) {
+  if (charge.status === 'pending') {
+    const price = text(charge.pricePerMinute);
+    cost = price ? `Billed when the call ends, at ${price}/min` : 'Worked out when the call ends';
+  } else if (text(charge.amount)) {
     const billed = count(charge.billedSeconds);
-    const rate = text(charge.ratePerMinute);
-    cost = [text(charge.amount), billed !== null ? `${length(billed)}${rate ? ` at ${rate}/min` : ''}` : '']
+    const price = text(charge.pricePerMinute);
+    cost = [text(charge.amount), billed !== null ? `${length(billed)}${price ? ` at ${price}/min` : ''}` : '']
       .filter(Boolean).join(' · ');
-  } else if (charge.status === 'pending') {
-    cost = 'Worked out when the call ends';
   } else if (typeof object(call.cost).total === 'number' && Number.isFinite(call.cost.total)) {
     cost = `$${call.cost.total.toFixed(2)} at your providers' prices${call.cost.estimated ? ', estimated' : ''}`;
   }

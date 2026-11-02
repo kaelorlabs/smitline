@@ -107,15 +107,17 @@ class RequestDeskTests(unittest.TestCase):
         self.assertIn('You cannot pass anything on yourself: only your backend can', text)
         self.assertIn('If you did not hand it to your backend, it was not passed on', text)
         self.assertIn('you may say only "One moment" first', text)
-        # The words it used in the live test without handing anything over (issue 83).
-        self.assertIn('never say "on it", "sending it", "I\'ll send that", "still waiting"', text)
-        self.assertIn('When someone checks on a request, tell them plainly', text)
+        self.assertIn('never say that a request was passed on, is being worked on, or is done', text)
+        # General rules only: the words it used in the live test (issue 83) are caught in code.
+        self.assertNotIn('"on it"', text)
+        self.assertNotIn('When someone checks on a request', text)
 
     def test_questions_reach_the_agent_and_cando_limits_tasks(self):
         voice = call_requests.voice_instructions('Robin', 'edit the demo page', meeting=True)
         self.assertIn('or asks a question you cannot answer from what you know, hand it to your backend', voice)
         self.assertIn('A task outside what the agent can do, you do not pass on', voice)
-        self.assertIn("When someone asks what you can do, also say what Robin's agent can do", voice)
+        self.assertIn("Robin's agent, the AI that set up this meeting, can do this", voice)
+        self.assertNotIn('When someone asks what you can do', voice)
         backend = call_requests.backend_instructions('Robin', 'edit the demo page')
         self.assertIn('When the voice hands you a question you cannot answer from what you have, or a '
                       'task within what the agent can do, call ask_agent', backend)
