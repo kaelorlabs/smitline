@@ -5,6 +5,10 @@ from dataclasses import dataclass, asdict
 class AuthenticationRequired(RuntimeError):
     pass
 
+class GuestRefused(AuthenticationRequired):
+    """The platform turned the guest browser away (not a sign-in page). A connected account may still
+    get in, so the join retries with it like any other AuthenticationRequired."""
+
 @dataclass(frozen=True)
 class Capabilities:
     text_chat: bool = True

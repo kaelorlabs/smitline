@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from playwright.async_api import Error as PlaywrightError, async_playwright
 from adapters import create_adapter
-from adapters_base import AuthenticationRequired
+from adapters_base import AuthenticationRequired, GuestRefused
 from meeting_urls import platform_for_url, normalize_url
 
 class UrlTests(unittest.TestCase):
@@ -279,13 +279,18 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
 
     async def test_meet_auth_failure_and_guest_denial(self):
         await self.page.route('**/*', lambda route: route.fulfill(body='Sign in to join this video call'))
-        with self.assertRaises(AuthenticationRequired):
+        with self.assertRaises(AuthenticationRequired) as signin:
             await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
+        self.assertNotIsInstance(signin.exception, GuestRefused)
         await self.page.unroute('**/*')
         await self.page.route('**/*', lambda route: route.fulfill(
             body="You can't join this video call"))
-        with self.assertRaises(AuthenticationRequired):
+        # Google's refusal of the guest is its own error, and still an AuthenticationRequired so the
+        # join retries with a connected Google account.
+        with self.assertRaises(GuestRefused) as refused:
             await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
+        self.assertIsInstance(refused.exception, AuthenticationRequired)
+        self.assertIn('turned away', str(refused.exception))
 
     async def test_meet_mute_camera_chat_end_and_degraded_policy(self):
         await self.page.set_content('''

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **One conversation from hello to goodbye.** The voice's standing instructions no longer tell it to greet whoever picks up: the hello is only in the opening cue, sent once. On 2026-11-02 a call to the user's own phone started over twice when he said "hello?" after a quiet moment, because the call-screening and own-phone instructions said to greet the person and give the reason. The call-screening note and the network's machine guess now say what is happening and leave the rest to the model, which has the whole conversation.
+- **Google Meet says when Google turns the guest away** ([#87](https://github.com/kaelorlabs/smitline/pull/87)). Right after "Join now", Google can refuse a guest browser with "You can't join this video call", even in a meeting open to anyone. Smitline used to report that as needing sign-in; the meeting's error now says Google turned the guest join away (`GuestRefused`, still the `authentication_required` stage). As before, a connected Google account is tried next when there is one.
 
 ## 0.3.2 — 2026-11-02
 
