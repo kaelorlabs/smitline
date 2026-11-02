@@ -57,7 +57,7 @@ Required: `channel` and `objective`, plus `to` and `onBehalfOf` unless setup pro
 
 `onBehalfOf` names the person the call is for, never an AI, model, app or bot. A value such as `ChatGPT`, `Claude AI`, `the assistant` or `Claude's assistant` is replaced with `SMITLINE_OWNER_NAME`, and the call gets a `call.brief_corrected` event with `field` and `was`. Without an owner name, the brief is refused with `422 invalid_request`. Only the whole value is matched, so people such as Alexa Smith or Claude Monet keep their names. The [meetings API](#meetings-api) checks it the same way. The voice is always that person's AI assistant: it never says that ChatGPT, Claude or another app is calling, even when the objective says so.
 
-`POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess.
+`POST /v1/calls/check` validates a brief without starting anything. An incomplete brief returns `422 brief_incomplete` with the missing fields and a question the agent can ask the user for each one. Agents should ask the user rather than guess. For a phone call in relay mode it also tests that the provider can reach this computer, starting the quick tunnel if none is running (a few seconds), so a network that blocks the tunnel is reported in `problems` before anyone dials, and the call that follows reuses the tunnel.
 
 ## Context
 
