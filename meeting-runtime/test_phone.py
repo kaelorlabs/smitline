@@ -209,6 +209,43 @@ class PhoneHarness:
 
 
 class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_smitline_records_a_recorded_call_itself(self):
+        # On 2026-11-02 SignalWire's recording of a 2 min 35 s call held 7 seconds: it stops at
+        # its answering-machine check. Smitline records both sides as they pass through instead.
+        import io
+        import wave
+        from call_recorder import ULAW
+        record, session = await self.h.dial(record=True)
+        created = self.h.twilio.created[-1]
+        self.assertFalse(created.get('record'))
+        self.assertIsNone(created.get('recording_callback'))
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        loud = base64.b64encode(b'\x9a' * 160).decode()
+        quiet = base64.b64encode(b'\xff' * 160).decode()
+        for payload in [loud] * 5 + [quiet] * 55:  # 1.2 s from them: a word, then quiet
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': payload}})
+        await until(lambda: len(live.audio) >= 60)  # heard before the voice answers
+        live.push({'type': 'session.output_audio.delta',
+                   'delta': base64.b64encode(b'\x2a' * 1600).decode()})
+        await until(lambda: any(sent.get('event') == 'media' for sent in ws.sent))
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(done['recording'], {'seconds': 2, 'format': 'wav', 'source': 'smitline'})
+        recorded = [e['data'] for e in self.h.service.events(record['id']) if e['type'] == 'call.recording']
+        self.assertEqual(recorded, [done['recording']])  # no provider URL anywhere
+        body, kind = await self.h.service.recording(record['id'], owner='local')
+        self.assertEqual(kind, 'audio/wav')
+        with wave.open(io.BytesIO(body)) as audio:
+            self.assertEqual((audio.getnchannels(), audio.getframerate()), (2, 8000))
+            self.assertGreater(audio.getnframes(), 9600)
+            first = audio.readframes(1)
+        self.assertEqual(int.from_bytes(first[:2], 'little', signed=True), ULAW[0x9A])
+        with self.assertRaises(CallError) as refused:
+            await self.h.service.recording(record['id'], owner='local', fmt='mp3')
+        self.assertEqual(refused.exception.status, 422)
+
     async def asyncSetUp(self):
         FakeLive.instances = []
         FakeSummarizer.calls = 0
@@ -1479,13 +1516,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 204)
 
     async def test_a_call_is_recorded_on_request_and_downloaded(self):
-        record, _session = await self.h.dial(record=True)
+        record, session = await self.h.dial(record=True)
         created = self.h.twilio.created[-1]
-        self.assertTrue(created['record'])
-        self.assertEqual(created['recording_callback'], f'{PUBLIC}/twilio/recording/{record["id"]}')
+        # Smitline records the call itself (call_recorder.py); the provider is not asked to.
+        self.assertTrue(session.recording)
+        self.assertNotIn('record', created)
+        self.assertNotIn('recording_callback', created)
         # Not asked for and not turned on for every call: no recording.
-        other, _ = await self.h.dial(to='+14155550199')
-        self.assertFalse(self.h.twilio.created[-1]['record'])
+        other, other_session = await self.h.dial(to='+14155550199')
+        self.assertFalse(other_session.recording)
+        # A call the provider recorded (before 0.3.3) still gets its recording, and downloads.
         with self.assertRaises(CallError) as caught:
             await self.h.service.recording(record['id'], owner='local')
         self.assertEqual(caught.exception.code, 'not_ready')
@@ -2098,6 +2138,10 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
         await self.at(38, live)
         self.assertFalse(ws.closed)  # 11 seconds after the third turn
         await self.at(39.5, live)
+        # Whoever may have heard it is told it was an AI before the line closes.
+        await until(lambda: any('you have not yet told them' in str(text) for _kind, text in live.appends))
+        live.push({'type': 'session.output_transcript.delta',
+                   'delta': "Just so you know, I'm Robin's AI assistant."})
         await until(lambda: ws.closed, 3)
         await asyncio.wait_for(task, 3)
         ended = [e['data'] for e in self.h.service.events(record['id'])

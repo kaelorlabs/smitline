@@ -171,7 +171,7 @@
           },
           "record": {
             "type": "boolean",
-            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+            "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording."
           },
           "afterHours": {
             "type": "boolean",
@@ -391,7 +391,7 @@
           },
           "record": {
             "type": "boolean",
-            "description": "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording."
+            "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording."
           },
           "afterHours": {
             "type": "boolean",

@@ -46,7 +46,7 @@ export interface CallBrief {
   rehearsal?: boolean;
   /** Phone only: call outside calling hours where the person is; only when the user confirms they expect it. */
   afterHours?: boolean;
-  /** Phone only: record this call in the owner's phone account; the assistant says it is recorded. */
+  /** Phone only: record this call; Smitline keeps the recording, each side on its own channel. */
   record?: boolean;
   notify?: { webhookUrl?: string };
   /** Meetings only: Smitline's virtual camera tile; the avatar is a PNG, JPEG, WebP, or SVG data: URI of up to 80 KB. */

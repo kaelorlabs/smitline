@@ -64,7 +64,7 @@ export const BRIEF_SCHEMA = {
     voice: { type: 'string', description: 'GPT-Live voice name; see list_voices' },
     maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
     rehearsal: { type: 'boolean', description: "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal." },
-    record: { type: 'boolean', description: "Phone only: record this call in the user's phone account; the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
+    record: { type: 'boolean', description: "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
     afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
     notify: {
       type: 'object',
