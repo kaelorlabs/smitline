@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **MCP 2026-07-28.** The MCP server speaks the newest MCP revision as well as the older ones, on the local endpoint, over stdio and in the remote connector.
+  - A 2026-07-28 client needs no `initialize` and no session. Every request names its version and the client's capabilities in `_meta`; on HTTP it also sends `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, which the server checks against the body.
+  - `server/discover` describes the server. Results carry `resultType` and the server's name, and lists and the call card carry caching hints. `subscriptions/listen` is acknowledged and then ends at once, because nothing changes while the server runs.
+  - `initialize` still opens a 2025-11-25, 2025-06-18 or 2025-03-26 session, so existing clients are unaffected. A client that speaks both now uses 2026-07-28; the official TypeScript SDK 2.4 in auto mode does.
+  - The Claude Desktop bundle passes the new headers on and cancels a request when the client does. Over stdio, a cancelled request gets no reply.
+
 ## 0.3.4 — 2026-11-02
 
 - **Newer MCP clients connect without pinning an old version.** The MCP server now speaks protocol version 2025-11-25 as well as 2025-06-18 and 2025-03-26. `initialize` negotiates in its body whatever `MCP-Protocol-Version` header comes with it, so a client that sends its own newest version there gets the server's instead of `400`; every later request must still name a version the server speaks. On 2026-11-02 an agent app was refused on its first request and had to be pinned to 2025-06-18. A request in revision 2026-07-28 (stateless, no `initialize`) gets `400` with an ordinary JSON-RPC error, which tells a client that also speaks older revisions to fall back to `initialize`; full 2026-07-28 support comes later.

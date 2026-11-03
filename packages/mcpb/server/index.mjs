@@ -17,8 +17,37 @@ const NOT_RUNNING = 'Smitline is not reachable at {url}. Start the smitline cont
   + '(https://github.com/kaelorlabs/smitline#readme), and check the token: '
   + 'docker exec smitline smitline setup register --json prints it.';
 
+const META_VERSION = 'io.modelcontextprotocol/protocolVersion';
+const NAMED_BY = { 'tools/call': 'name', 'prompts/get': 'name', 'resources/read': 'uri' };
+
+/** A name the Mcp-Name header can carry as it is: visible ASCII and inner spaces, and not itself
+ *  shaped like the Base64 form. */
+function headerSafe(value) {
+  return /^[\x21-\x7e]([\x20-\x7e]*[\x21-\x7e])?$/.test(value) && !/^=\?base64\?.*\?=$/s.test(value);
+}
+
+/**
+ * The HTTP headers a stdio message in MCP revision 2026-07-28 needs on the way to the endpoint:
+ * its version, method and name, mirrored from the body (Streamable HTTP, "Request Metadata").
+ * None for a legacy message, which names no version in _meta.
+ */
+export function modernHeaders(message) {
+  const meta = message?.params?._meta;
+  const version = meta && typeof meta === 'object' ? meta[META_VERSION] : undefined;
+  if (typeof version !== 'string' || typeof message.method !== 'string') return null;
+  const headers = { 'MCP-Protocol-Version': version, 'Mcp-Method': message.method };
+  const name = NAMED_BY[message.method] ? message.params[NAMED_BY[message.method]] : undefined;
+  if (typeof name === 'string') {
+    headers['Mcp-Name'] = headerSafe(name) ? name : `=?base64?${Buffer.from(name, 'utf8').toString('base64')}?=`;
+  }
+  return headers;
+}
+
 export function createRelay({ url, token, fetchImpl = fetch, write }) {
   let sessionId = null;
+  // Requests on their way, by id: notifications/cancelled aborts one (on HTTP, closing the request
+  // is the cancellation), and nothing more is written for it.
+  const inFlight = new Map();
 
   function local(message, error) {
     const { id, method } = message;
@@ -37,18 +66,23 @@ export function createRelay({ url, token, fetchImpl = fetch, write }) {
     return { jsonrpc: '2.0', id, error: { code: -32603, message: NOT_RUNNING.replace('{url}', url) } };
   }
 
-  async function forward(message) {
+  async function forward(message, signal) {
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-    const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message) });
+    // A modern message keeps no session; it names its version, method and name in headers.
+    const modern = modernHeaders(message);
+    if (modern) Object.assign(headers, modern);
+    else if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+    const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(message), signal });
     if (response.status === 401 || response.status === 403) {
       throw new Error(`the token was refused (HTTP ${response.status})`);
     }
-    if (response.status === 404 && sessionId) {
-      sessionId = null; // The server restarted; the client initializes again.
+    if (!modern) {
+      if (response.status === 404 && sessionId) {
+        sessionId = null; // The server restarted; the client initializes again.
+      }
+      sessionId = response.headers.get('mcp-session-id') || sessionId;
     }
-    sessionId = response.headers.get('mcp-session-id') || sessionId;
     const type = response.headers.get('content-type') || '';
     const text = await response.text();
     if (!text.trim()) return;
@@ -64,11 +98,21 @@ export function createRelay({ url, token, fetchImpl = fetch, write }) {
   }
 
   return async function handle(message) {
+    if (message?.method === 'notifications/cancelled') {
+      inFlight.get(message.params?.requestId)?.abort();
+      return;
+    }
+    const id = message?.id;
+    const controller = (typeof id === 'string' || typeof id === 'number') && !inFlight.has(id) ? new AbortController() : null;
+    if (controller) inFlight.set(id, controller);
     try {
-      await forward(message);
+      await forward(message, controller?.signal);
     } catch (error) {
+      if (controller?.signal.aborted) return;
       const reply = local(message, error.message || String(error));
       if (reply) write(reply);
+    } finally {
+      if (controller) inFlight.delete(id);
     }
   };
 }

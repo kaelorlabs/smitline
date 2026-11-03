@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import '../../cli/src/adopt-old-settings.mjs';
 import { createMcpSession } from './session.mjs';
+import { checkModernBody, isModern, listenAcknowledgment } from './modern.mjs';
 import { redact } from '../../sdk-typescript/src/index.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -72,9 +73,46 @@ export function startStdioServer(options = {}) {
     },
   });
 
+  // Both eras share the process (modern.mjs): a legacy initialize starts the legacy session, and a
+  // message naming its version in _meta is answered on its own, with errors in-band (stdio has no
+  // HTTP status).
+  async function answer(message) {
+    if (!isModern(message)) {
+      const reply = await session.dispatch(message);
+      return reply ? [reply] : [];
+    }
+    if (message.id === undefined) return [];
+    const refused = checkModernBody(message);
+    if (refused) return [refused];
+    const reply = await session.dispatchModern(message);
+    if (message.method === 'subscriptions/listen' && reply.result) return [listenAcknowledgment(message.id), reply];
+    return [reply];
+  }
+
+  // Requests being answered, and the ones the client cancelled (notifications/cancelled): nothing
+  // more is sent for a cancelled request.
+  const inFlight = new Set();
+  const cancelled = new Set();
+
   async function onMessage(message) {
-    const response = await session.dispatch(message);
-    if (response) framer.write(response);
+    if (message?.method === 'notifications/cancelled') {
+      const requestId = message.params?.requestId;
+      if (inFlight.has(requestId)) cancelled.add(requestId);
+      return;
+    }
+    const id = message?.id;
+    const tracked = (typeof id === 'string' || typeof id === 'number') && !inFlight.has(id);
+    if (tracked) inFlight.add(id);
+    try {
+      const replies = await answer(message);
+      if (tracked && cancelled.has(id)) return;
+      for (const reply of replies) framer.write(reply);
+    } finally {
+      if (tracked) {
+        inFlight.delete(id);
+        cancelled.delete(id);
+      }
+    }
   }
 
   const pending = new Set();
