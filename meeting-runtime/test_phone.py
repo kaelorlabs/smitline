@@ -353,7 +353,7 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('picks up while you are leaving the message, stop and talk', text)
         self.assertIn('mailbox is not set up or is full', text)
         self.assertIn('say nothing to it and end the call with the reason other', text)
-        self.assertIn('Never read them out', text)
+        self.assertIn('Never read a note out or talk about it; act on it.', text)
 
     def test_a_call_going_nowhere_is_ended_politely(self):
         from phone_prompts import END_CALL_TOOL, backend_instructions
@@ -532,7 +532,14 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         live.push({'type': 'session.started', 'session': {}})
         self.assertEqual(await self.h.service.instruct(record['id'], 'He tried it yesterday.', silent=True, owner='local'),
                          {'delivered': True})
-        self.assertIn(('session.thinking.append', 'He tried it yesterday.'), live.appends)
+        self.assertIn(('session.thinking.append', "From Robin's agent: He tried it yesterday."), live.appends)
+        # Labelled as the agent's, so the voice tells it from its system's own notes.
+        self.assertEqual(await self.h.service.instruct(record['id'], 'Mention the patio.', owner='local'),
+                         {'delivered': True})
+        self.assertIn(('session.instructions.append', "From Robin's agent: Mention the patio."), live.appends)
+        said = [event['data']['text'] for event in self.h.store.events(record['id'])
+                if event['type'] == 'call.instruction']
+        self.assertEqual(said, ['He tried it yesterday.', 'Mention the patio.'])
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
 
@@ -895,6 +902,18 @@ class PromptTests(unittest.TestCase):
         self.assertEqual([tool.get('name', tool['type']) for tool in config['responses']['tools']],
                          ['end_call', 'web_search'])
         self.assertEqual(config['responses']['model'], 'gpt-5.6-luna')
+
+    def test_notes_are_acted_on_and_what_they_carry_is_told_at_a_pause(self):
+        # 2026-11-02: the agent's note had the email the person asked for, but the voice was told
+        # to follow notes "silently" and said it did not know.
+        text = voice_instructions(CallBrief.from_dict(brief()))
+        self.assertNotIn('Follow them silently', text)
+        self.assertIn("and so may Robin's agent (\"From Robin's agent: ...\"). Never read a note out or talk "
+                      'about it; act on it.', text)
+        self.assertIn('tell them in your own words at the next pause, never over someone who is speaking. '
+                      'If you are cut off before you finish, tell them the next time you speak.', text)
+        self.assertIn('When you are, say so, and do not say you do not know until the answer comes back.',
+                      text)
 
     def test_the_opening_cue_says_who_and_why_and_the_ai_part_follows(self):
         parsed = CallBrief.from_dict(brief())
@@ -2272,3 +2291,76 @@ class SilenceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TellAtPauseTests(unittest.IsolatedAsyncioTestCase):
+    """An answer the person must hear is cued at the next pause on a phone call, as in a meeting:
+    GPT-Live speaks when prompted, so the note alone waited until they spoke again."""
+
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name)
+        self.patches = [mock.patch('phone_line.TELL_QUIET', 0.3), mock.patch('phone_line.TELL_POLL', 0.02)]
+        for patcher in self.patches:
+            patcher.start()
+
+    async def asyncTearDown(self):
+        for patcher in self.patches:
+            patcher.stop()
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def call(self):
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        return record, ws, live, task
+
+    @staticmethod
+    def cues(live):
+        return [text for kind, text in live.appends
+                if kind == 'session.commentary.append' and 'Now is a pause' in str(text)]
+
+    @staticmethod
+    def answer():
+        from call_requests import done_note
+        return done_note({'id': 'r1', 'text': 'Is the patio open tonight?', 'askedBy': 'Sam'},
+                         'The patio opens at 6 pm.', owner='Robin', ok=True)
+
+    async def hang_up(self, ws, task):
+        ws.push({'event': 'stop'})
+        await asyncio.wait_for(task, 3)
+
+    async def test_on_a_quiet_line_the_answer_is_said_without_being_asked(self):
+        import call_requests
+        record, ws, live, task = await self.call()
+        self.assertTrue(await self.h.line.deliver(record['id'], self.answer()))
+        await until(lambda: self.cues(live), 2)
+        [cue] = self.cues(live)
+        self.assertIn('Now is a pause: tell them this now', cue)
+        self.assertIn('The patio opens at 6 pm.', cue)
+        self.assertNotIn(call_requests.WHEN_TO_TELL, cue)
+        self.assertIn('call.answer_cued', [event['type'] for event in self.h.store.events(record['id'])])
+        await self.hang_up(ws, task)
+
+    async def test_while_they_talk_it_waits_for_a_pause(self):
+        record, ws, live, task = await self.call()
+        await self.h.line.deliver(record['id'], self.answer())
+        for _ in range(10):  # they keep talking for about a second
+            live.push({'type': 'session.input_transcript.delta', 'delta': 'and another thing ',
+                       'start_ms': 0, 'end_ms': 100})
+            await asyncio.sleep(0.1)
+        self.assertEqual(self.cues(live), [])
+        await until(lambda: self.cues(live), 3)  # then the line goes quiet
+        await self.hang_up(ws, task)
+
+    async def test_an_answer_the_voice_has_given_is_not_cued(self):
+        record, ws, live, task = await self.call()
+        with mock.patch('phone_line.TELL_QUIET', 1.0):
+            await self.h.line.deliver(record['id'], self.answer())
+            live.push({'type': 'session.output_transcript.delta', 'delta': 'Good news: the patio opens at 6 pm.',
+                       'start_ms': 0, 'end_ms': 1500})
+            await asyncio.sleep(1.6)
+        self.assertEqual(self.cues(live), [])
+        await self.hang_up(ws, task)

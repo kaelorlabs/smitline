@@ -29,7 +29,10 @@ from phone_prompts import (
     voicemail_disclosure,
 )
 from briefing import backend_background, contact_for, voice_input, voice_notes
-from call_requests import MAX_REQUESTS, ClaimWatch, RequestDesk, appends, tool_output
+from call_requests import (
+    MAX_REQUESTS, TELL_MAX_WAIT, TELL_QUIET, ClaimWatch, RequestDesk, appends, pause_cue, told,
+    tool_output,
+)
 from call_recorder import CallRecorder
 from listening import AudioTap
 from live_sip import LiveSideband, LiveSipClient, LiveSipError, openai_sip_uri, sip_session
@@ -100,6 +103,8 @@ MAX_HANGUP_YIELDS = 2
 # (transcripts arrive a little after the audio the detector hears).
 GOODBYE_POLL = 0.1
 GOODBYE_HEARD_SECONDS = 0.8
+# How often the wait to tell an answer at a pause looks (_tell_at_pause).
+TELL_POLL = 0.1
 # On direct SIP the model's speech plays at OpenAI; its reflected copy going quiet for
 # this long means the goodbye has finished.
 SIP_SPEECH_TAIL = 1.2
@@ -557,6 +562,8 @@ class PhoneSession:
         self._agent_spoke_at = None
         self._goodbye_watch = None
         self._said_after_goodbye = ''
+        # Answers waiting for a pause to be told (_tell_at_pause): what the voice said since each came.
+        self._telling = {}
         # At a voicemail (see _after_voicemail): when its prompt was heard, when the call must end
         # by (SMITLINE_VOICEMAIL_MAX_SECONDS), whether the agent has spoken since (its message),
         # and what the other side has said once that was heard.
@@ -930,17 +937,49 @@ class PhoneSession:
             self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
 
     async def deliver(self, note):
-        """A note about a request, for the voice (call_requests.appends)."""
+        """A note about a request, for the voice (call_requests.appends). An answer the person must
+        hear (`say`) is also cued at the next pause (_tell_at_pause)."""
         if self.live is None:
             return False
         sent = True
         for kind, text in appends(note):
             sent = await self.live.append(f'session.{kind}.append', text) and sent
+        say, request_id = note.get('say'), note.get('request')
+        if (sent and isinstance(say, str) and say.strip() and isinstance(request_id, str)
+                and request_id not in self._telling):
+            self._telling[request_id] = ''
+            self._spawn(self._tell_at_pause(request_id, say, note['text']))
         if note.get('closes') and self.desk is not None:
             self.desk.close(note.get('request'))
         elif note.get('kind') == 'instructions' and self.claims is not None:
             self.claims.awaiting = note.get('request')  # their answer belongs to this request
         return bool(sent)
+
+    async def _tell_at_pause(self, request_id, say, text):
+        """Cue the voice to tell an answer once neither side has been heard for TELL_QUIET seconds,
+        unless it has said it by then (call_requests.told), as a meeting does: GPT-Live speaks when
+        prompted, so the note alone would wait until they speak again. Gives up after TELL_MAX_WAIT,
+        when the note's own rule stands (the next time it speaks)."""
+        started = time.monotonic()
+        quiet_since = None
+        try:
+            while not self.finished.is_set() and not self._hanging_up:
+                now = time.monotonic()
+                if now - started >= TELL_MAX_WAIT or told(say, self._telling.get(request_id, '')):
+                    return False
+                if self._agent_speaking() or self._other_speaking():
+                    quiet_since = None
+                elif quiet_since is None:
+                    quiet_since = now
+                elif now - quiet_since >= TELL_QUIET:
+                    sent = bool(self.live is not None
+                                and await self.live.append('session.commentary.append', pause_cue(text)))
+                    self.ctx.event('call.answer_cued', request=request_id, sent=sent)
+                    return sent
+                await asyncio.sleep(TELL_POLL)
+            return False
+        finally:
+            self._telling.pop(request_id, None)
 
     def _claims_due(self):
         """Pass on a request the voice said it passed on, when its backend never did."""
@@ -961,6 +1000,9 @@ class PhoneSession:
         now = time.monotonic()
         source = 'other' if 'input_transcript' in event['type'] else 'agent'
         delta = event.get('delta') or ''
+        if source == 'agent' and self._telling:
+            for request_id in self._telling:  # an answer waiting for a pause: was it said?
+                self._telling[request_id] += delta
         if delta.strip():
             self.last_activity = now
             if source == 'other':

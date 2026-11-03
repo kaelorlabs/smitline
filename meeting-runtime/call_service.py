@@ -1049,9 +1049,11 @@ class CallService:
         if not text:
             raise CallError(422, 'invalid_request', 'instruction text is required')
         line = self.lines[record['channel']]
+        # The voice tells the agent's notes from its system's apart (phone_prompts, "Notes").
+        note = f"From {record['brief'].get('onBehalfOf') or 'the user'}'s agent: {text[:2000]}"
         # Lines that predate silent notes take (call_id, text); pass the flag only when set.
-        delivered = await (line.instruct(call_id, text[:2000], silent=True) if silent
-                           else line.instruct(call_id, text[:2000]))
+        delivered = await (line.instruct(call_id, note, silent=True) if silent
+                           else line.instruct(call_id, note))
         self._event(call_id, 'call.instruction', text=text[:2000], delivered=bool(delivered),
                     silent=bool(silent))
         return {'delivered': bool(delivered)}

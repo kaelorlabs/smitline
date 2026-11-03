@@ -658,7 +658,7 @@
         "readOnlyHint": true,
         "openWorldHint": true
       },
-      "description": "Pass new guidance to the voice during a phone call or meeting that is still in progress, for example an answer the user just gave or a change of plan. It acts on it right away; with silent: true it keeps it as a background note and uses it when relevant. Errors with conflict once the call has ended. To end the call use end_call; to take it over use transfer_call_to_me.",
+      "description": "Pass new guidance to the voice during a phone call or meeting that is still in progress, for example an answer the user just gave or a change of plan. The voice gets it as a note from the user's agent and acts on it right away, telling the people on the call anything in it meant for them at the next pause; with silent: true it keeps it as a background note and uses it when relevant. Errors with conflict once the call has ended. To end the call use end_call; to take it over use transfer_call_to_me.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,

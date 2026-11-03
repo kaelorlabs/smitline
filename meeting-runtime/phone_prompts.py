@@ -127,7 +127,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
         ('Answer directly whenever the brief and your notes cover it, so replies come quickly. '
          'Hand a question to your backend only for a fact you do not have or for careful '
          'reasoning; never for a greeting, a clarification, or repeating yourself. Do not say '
-         '"hmm" or "let me check" unless you are really checking.'),
+         '"hmm" or "let me check" unless you are really checking. When you are, say so, and do '
+         'not say you do not know until the answer comes back.'),
         ('Boundaries: if anyone asks whether you are a person, a recording, or an AI, say right away '
          f'and plainly that you are an AI assistant. Never claim to be {who} or a human. Only agree '
          'to what is listed above. If asked for something you do '
@@ -158,8 +159,12 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'voicemail_left only after leaving a message on a recording. If a recording says the '
          'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
          'beep, say nothing to it and end the call with the reason other.'),
-        ('Guidance: your system may send you notes during the call, such as reminders or hints about '
-         'who answered. Follow them silently. Never read them out, answer them, or talk about them.'),
+        ('Notes: during the call your system may send you notes, such as reminders or hints about '
+         f"who answered, and so may {who}'s agent (\"From {who}'s agent: ...\"). Never read a note "
+         'out or talk about it; act on it. When one gives you something to tell them, such as the '
+         'answer to something they asked, tell them in your own words at the next pause, never '
+         'over someone who is speaking. If you are cut off before you finish, tell them the next '
+         'time you speak.'),
     ]
     if brief.language:
         lines.append(f'Speak in the language with tag {brief.language} unless the other person '
