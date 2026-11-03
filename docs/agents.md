@@ -166,7 +166,7 @@ Remote programs that are not MCP clients can use the daemon's server mode with a
 
 ## Remote connector for cloud agents
 
-The remote connector is an MCP server that cloud agents reach over HTTPS. It uses the MCP Streamable HTTP transport (protocol versions 2025-11-25, 2025-06-18 and 2025-03-26; revision 2026-07-28, which drops the `initialize` handshake, is not supported yet) and OAuth 2.1 sign-in, so an agent can connect only after you approve it with your owner passphrase. It runs next to the daemon, listens on `127.0.0.1:8767`, and is published by your TLS proxy. It offers only the call tools, and it reaches the daemon through the TypeScript SDK on the same machine.
+The remote connector is an MCP server that cloud agents reach over HTTPS. It uses the MCP Streamable HTTP transport (protocol revision 2026-07-28, which needs no `initialize` handshake or session, and the `initialize`-based versions 2025-11-25, 2025-06-18 and 2025-03-26) and OAuth 2.1 sign-in, so an agent can connect only after you approve it with your owner passphrase. It runs next to the daemon, listens on `127.0.0.1:8767`, and is published by your TLS proxy. It offers only the call tools, and it reaches the daemon through the TypeScript SDK on the same machine.
 
 ```text
 ChatGPT / Claude ──HTTPS──► your proxy (TLS) ──► connector 127.0.0.1:8767 ──► daemon 127.0.0.1:8765

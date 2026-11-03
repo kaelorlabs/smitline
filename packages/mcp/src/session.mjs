@@ -8,12 +8,18 @@ import {
   redact,
 } from '../../sdk-typescript/src/index.mjs';
 import { CALL_CARD_TOOL_META, CALL_CARD_URI, callCardResource } from './call-card.mjs';
+import { META_SERVER_INFO, META_SUBSCRIPTION_ID, MODERN_PROTOCOL_VERSIONS } from './modern.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
 export const MCP_SERVER_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const DEFAULT_SMITLINE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const SERVER_INFO = Object.freeze({ name: 'smitline', version: MCP_SERVER_VERSION });
+const capabilities = () => ({ tools: { listChanged: false }, resources: { listChanged: false } });
+// Modern caching hints (2026-07-28, "Caching"): the tools and the call card are the same for every
+// caller, and change only with a new version of Smitline.
+const CACHE_HINTS = Object.freeze({ ttlMs: 5 * 60_000, cacheScope: 'public' });
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };
 
@@ -422,6 +428,21 @@ export function createMcpSession(options = {}) {
     throw new ValidationError(`unknown tool: ${name}`);
   }
 
+  /** A tool's result; its failure is a result too (isError), so the agent can read it. */
+  async function runTool(name, args) {
+    try {
+      return await callTool(name, args);
+    } catch (error) {
+      const mapped = mapToolError(error);
+      return toolResult({
+        code: mapped.code,
+        message: redact(error.message),
+        archivePath: error.archivePath,
+        ...(error.details ? { details: error.details } : {}),
+      }, { isError: true });
+    }
+  }
+
   async function dispatch(message) {
     if (!message || message.jsonrpc !== '2.0') {
       return rpcError(message?.id ?? null, -32600, 'invalid JSON-RPC message');
@@ -440,8 +461,8 @@ export function createMcpSession(options = {}) {
         : requested || MCP_PROTOCOL_VERSION;
       return rpcResult(id, {
         protocolVersion,
-        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
-        serverInfo: { name: 'smitline', version: MCP_SERVER_VERSION },
+        capabilities: capabilities(),
+        serverInfo: { ...SERVER_INFO },
         instructions: CALLS_INSTRUCTIONS,
       });
     }
@@ -453,21 +474,51 @@ export function createMcpSession(options = {}) {
       if (params?.uri !== CALL_CARD_URI) return rpcError(id, -32002, 'resource not found');
       return rpcResult(id, { contents: [card.content] });
     }
-    if (method === 'tools/call') {
-      try {
-        const result = await callTool(params?.name, params?.arguments || {});
-        return rpcResult(id, result);
-      } catch (error) {
-        const mapped = mapToolError(error);
-        return rpcResult(id, toolResult({
-          code: mapped.code,
-          message: redact(error.message),
-          archivePath: error.archivePath,
-          ...(error.details ? { details: error.details } : {}),
-        }, { isError: true }));
-      }
-    }
+    if (method === 'tools/call') return rpcResult(id, await runTool(params?.name, params?.arguments || {}));
     return rpcError(id, -32601, `method not found: ${method}`);
+  }
+
+  /**
+   * A request in revision 2026-07-28, already checked (modern.mjs): answered on its own, with no
+   * session and nothing remembered. Every result says resultType "complete" and names the server
+   * in _meta; lists, discovery and the call card carry caching hints. An unknown tool or resource
+   * is -32602, and an unknown or removed method (ping, logging/setLevel, resources/subscribe) is
+   * -32601, which HTTP answers with 404. Notifications get nothing back.
+   */
+  async function dispatchModern(message) {
+    const { id, method, params } = message;
+    if (id === undefined || id === null) return null;
+    const complete = (result, meta = {}) => rpcResult(id, {
+      resultType: 'complete',
+      ...result,
+      _meta: { ...meta, [META_SERVER_INFO]: { ...SERVER_INFO } },
+    });
+    if (method === 'server/discover') {
+      return complete({
+        supportedVersions: [...MODERN_PROTOCOL_VERSIONS],
+        capabilities: capabilities(),
+        instructions: CALLS_INSTRUCTIONS,
+        ...CACHE_HINTS,
+      });
+    }
+    if (method === 'tools/list') return complete({ tools: TOOL_DEFINITIONS, ...CACHE_HINTS });
+    if (method === 'resources/list') return complete({ resources: [card.descriptor], ...CACHE_HINTS });
+    if (method === 'resources/templates/list') return complete({ resourceTemplates: [], ...CACHE_HINTS });
+    if (method === 'resources/read') {
+      if (params?.uri !== CALL_CARD_URI) return rpcError(id, -32602, 'Resource not found', { uri: params?.uri });
+      return complete({ contents: [card.content], ...CACHE_HINTS });
+    }
+    if (method === 'tools/call') {
+      const name = params?.name;
+      if (!CALL_TOOL_NAMES.has(name)) return rpcError(id, -32602, `Unknown tool: ${String(name).slice(0, 128)}`);
+      return complete(await runTool(name, params.arguments || {}));
+    }
+    if (method === 'subscriptions/listen') {
+      // The transport sends the acknowledgment first. Nothing here changes while the server runs,
+      // so the subscription ends at once, gracefully, with this result.
+      return complete({}, { [META_SUBSCRIPTION_ID]: id });
+    }
+    return rpcError(id, -32601, `Method not found: ${String(method).slice(0, 128)}`);
   }
 
   // Calls run in the daemon and outlive this MCP process, so there is nothing to stop here.
@@ -477,6 +528,7 @@ export function createMcpSession(options = {}) {
 
   return {
     dispatch,
+    dispatchModern,
     shutdown,
     notifications,
     setNotify(fn) { notify = fn; },

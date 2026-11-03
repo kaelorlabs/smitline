@@ -403,28 +403,35 @@ test('missing, unknown, and expired tokens get 401 with WWW-Authenticate', async
   assert.match(expired.headers.get('www-authenticate'), /error="invalid_token"/);
 });
 
-test('a client newer than this server negotiates down instead of being refused', async (t) => {
+test('a modern client is served in 2026-07-28, and a newer legacy one negotiates down', async (t) => {
   // 2026-11-02: an agent app sent its newest MCP-Protocol-Version with initialize and got 400
   // before any negotiation, so it had to be pinned to 2025-06-18.
   const { base } = await startServer(t);
   const { tokens } = await signIn(base);
   const token = tokens.access_token;
-  // A client that speaks 2026-07-28 and older revisions tries a modern request first: an ordinary
-  // JSON-RPC error, not UnsupportedProtocolVersionError (-32022), sends it back to initialize.
+  // A client that speaks 2026-07-28 tries a modern request first, with no initialize and no
+  // session, and stays modern.
   const modern = await mcp(base, token, {
     jsonrpc: '2.0', id: 1, method: 'server/discover',
-    params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
-  }, { headers: { 'MCP-Protocol-Version': '2026-07-28' } });
-  assert.equal(modern.status, 400);
-  assert.equal(modern.body.error.code, -32600);
-  assert.match(modern.body.error.message, /use one of 2025-11-25, 2025-06-18, 2025-03-26$/);
-  // Its initialize carries its newest legacy version, and possibly still the modern header.
+    params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } },
+  }, { headers: { 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'server/discover' } });
+  assert.equal(modern.status, 200);
+  assert.equal(modern.body.result.resultType, 'complete');
+  assert.deepEqual(modern.body.result.supportedVersions, ['2026-07-28']);
+  assert.equal(modern.headers.get('mcp-session-id'), null);
+  const modernList = await mcp(base, token, {
+    jsonrpc: '2.0', id: 2, method: 'tools/list',
+    params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } },
+  }, { headers: { 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/list' } });
+  assert.deepEqual(modernList.body.result.tools.map((tool) => tool.name), CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
+  // A legacy client's initialize carries its newest legacy version, and possibly the modern header.
   const init = await mcp(base, token, { ...INITIALIZE, params: { ...INITIALIZE.params, protocolVersion: '2025-11-25' } },
     { headers: { 'MCP-Protocol-Version': '2026-07-28' } });
   assert.equal(init.status, 200);
   assert.equal(init.body.result.protocolVersion, '2025-11-25');
   const session = init.headers.get('mcp-session-id');
-  // A revision this server does not speak is answered with its newest.
+  // initialize asking for a revision without initialize (or one it does not know) gets the newest
+  // initialize-based one.
   const newer = await mcp(base, token, { ...INITIALIZE, params: { ...INITIALIZE.params, protocolVersion: '2026-07-28' } });
   assert.equal(newer.body.result.protocolVersion, '2025-11-25');
   // After that, requests name a version it speaks.
@@ -432,9 +439,12 @@ test('a client newer than this server negotiates down instead of being refused',
     { session, headers: { 'MCP-Protocol-Version': '2025-11-25' } });
   assert.equal(listed.status, 200);
   assert.ok(listed.body.result.tools.length > 0);
+  // The modern header on a request that does not name its version in _meta is a malformed modern
+  // request, session or not.
   const stale = await mcp(base, token, { jsonrpc: '2.0', id: 3, method: 'tools/list' },
     { session, headers: { 'MCP-Protocol-Version': '2026-07-28' } });
   assert.equal(stale.status, 400);
+  assert.equal(stale.body.error.code, -32602);
 });
 
 test('Streamable HTTP rules: Origin, sessions, notifications, methods, and body size', async (t) => {

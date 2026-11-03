@@ -6,6 +6,8 @@ The call tools for any MCP-capable agent (`smitline-mcp` 0.3.4): phone calls and
 - **stdio**, with `smitline mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.
 - **The remote connector** (`src/remote.mjs`): the same tools over HTTPS with OAuth sign-in, for cloud agents such as ChatGPT and Claude. It runs from a checkout with `start-connector.sh`; see [docs/agents.md](../../docs/agents.md).
 
+All three speak MCP revision 2026-07-28, with no `initialize` and no session (`src/modern.mjs`), and the `initialize`-based 2025-11-25, 2025-06-18 and 2025-03-26. A client picks by how it opens: `initialize` starts a session, and a request that names its version in `_meta` is answered on its own.
+
 Do not publish this package and do not install it globally.
 
 ## Tools
