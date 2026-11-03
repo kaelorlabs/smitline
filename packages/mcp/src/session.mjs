@@ -11,7 +11,7 @@ import { CALL_CARD_TOOL_META, CALL_CARD_URI, callCardResource } from './call-car
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const MCP_PROTOCOL_VERSION = '2025-06-18';
+export const MCP_PROTOCOL_VERSION = '2025-11-25';
 export const MCP_SERVER_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const DEFAULT_SMITLINE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 

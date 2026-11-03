@@ -166,7 +166,7 @@ Remote programs that are not MCP clients can use the daemon's server mode with a
 
 ## Remote connector for cloud agents
 
-The remote connector is an MCP server that cloud agents reach over HTTPS. It uses the MCP Streamable HTTP transport (protocol versions 2025-06-18 and 2025-03-26) and OAuth 2.1 sign-in, so an agent can connect only after you approve it with your owner passphrase. It runs next to the daemon, listens on `127.0.0.1:8767`, and is published by your TLS proxy. It offers only the call tools, and it reaches the daemon through the TypeScript SDK on the same machine.
+The remote connector is an MCP server that cloud agents reach over HTTPS. It uses the MCP Streamable HTTP transport (protocol versions 2025-11-25, 2025-06-18 and 2025-03-26; revision 2026-07-28, which drops the `initialize` handshake, is not supported yet) and OAuth 2.1 sign-in, so an agent can connect only after you approve it with your owner passphrase. It runs next to the daemon, listens on `127.0.0.1:8767`, and is published by your TLS proxy. It offers only the call tools, and it reaches the daemon through the TypeScript SDK on the same machine.
 
 ```text
 ChatGPT / Claude ──HTTPS──► your proxy (TLS) ──► connector 127.0.0.1:8767 ──► daemon 127.0.0.1:8765
@@ -225,8 +225,8 @@ Add `https://smitline.example.com/mcp` as a custom connector (also called a remo
 Menus change often, and custom connectors may depend on your plan or on workspace settings, so check each product's current help pages. At the time of writing:
 
 - **Claude** (claude.ai, the desktop app, and mobile): open the settings for connectors, choose to add a custom connector, and paste the URL. On Team and Enterprise plans an owner may need to add it for the organization first.
-- **ChatGPT**: create the connector on the ChatGPT website; the mobile app cannot add custom MCP connectors, but one made on the web shows up in the app afterwards. Go to **Settings** → **Apps & Connectors** (or **Connectors**) → **Advanced settings**, turn on **Developer mode**, choose **Create**, paste the URL, and choose OAuth sign-in.
-- **Grok, Perplexity, and others**: check whether the product supports custom remote MCP connectors with OAuth sign-in. Any client that supports Streamable HTTP, OAuth dynamic client registration, and PKCE can use the same URL.
+- **ChatGPT**: create the connector on the ChatGPT website; one made there shows up in the app afterwards. Open your **Connectors** (called **Plugins** in some accounts), choose **Add**, then **Add custom connector** (or **Add custom MCP server**), paste the URL, and choose OAuth sign-in. Developer mode is no longer needed.
+- **Grok, Muse, Perplexity, and others**: check whether the product supports custom remote MCP connectors with OAuth sign-in. Muse (Meta) adds one when you ask it in the chat. Any client that supports Streamable HTTP, OAuth dynamic client registration, and PKCE can use the same URL.
 
 Agents on the same computer should use the local MCP server instead. It has the same tools and needs no proxy or sign-in.
 

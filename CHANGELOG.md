@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Newer MCP clients connect without pinning an old version.** The MCP server now speaks protocol version 2025-11-25 as well as 2025-06-18 and 2025-03-26. `initialize` negotiates in its body whatever `MCP-Protocol-Version` header comes with it, so a client that sends its own newest version there gets the server's instead of `400`; every later request must still name a version the server speaks. On 2026-11-02 an agent app was refused on its first request and had to be pinned to 2025-06-18. A request in revision 2026-07-28 (stateless, no `initialize`) gets `400` with an ordinary JSON-RPC error, which tells a client that also speaks older revisions to fall back to `initialize`; full 2026-07-28 support comes later.
+- docs: ChatGPT adds a custom connector from its Connectors (or Plugins): **Add**, then **Add custom connector**. Developer mode is no longer needed.
+
 ## 0.3.3 — 2026-11-02
 
 - **What the agent tells the voice gets said, at the right moment.** On 2026-11-02 an agent following a call sent the voice the email address the person had just asked for. The voice's instructions said to follow notes "silently", so it said it did not know; it started to give the address a few seconds later, was cut off, and gave it only when asked again. Now the voice acts on notes without mentioning them, and tells the people on the call what a note gives it for them at the next pause, never over someone who is speaking, and again if it is cut off. While it checks something it says so, and it does not say it does not know before the answer comes back. Notes from the agent (`send_call_instruction`) reach it labelled "From NAME's agent:", so it can tell them from its system's own notes. Phone calls now cue an answer from the agent (`done`, an announced `status`, a retell) once nobody has been heard for 2.5 seconds, as meetings do (`call.answer_cued`); before, it waited until the person spoke again.

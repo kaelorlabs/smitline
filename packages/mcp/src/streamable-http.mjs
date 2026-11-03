@@ -4,8 +4,22 @@
 // the Mcp-Session-Id header, DELETE to close one. No SSE stream is offered.
 import crypto from 'node:crypto';
 
-export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26']);
+// The MCP revisions this server speaks, newest first. All are initialize-based ("legacy" in
+// revision 2026-07-28's terms): `initialize` gets the version it asks for when it is listed, else
+// the newest (session.mjs). 2026-07-28 and later (stateless, no initialize) are not spoken yet: a
+// request in one of them gets 400 with an ordinary JSON-RPC error, which tells a client that also
+// speaks older revisions to fall back to initialize (2026-07-28, "Backward Compatibility with
+// Initialization-Based Versions").
+export const PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18', '2025-03-26']);
 export const MAX_BODY = 1024 * 1024;
+
+/** The JSON-RPC error for an MCP-Protocol-Version this server does not speak; null when it
+ *  speaks it, or when there is none. */
+function unsupportedVersion(request) {
+  const version = request.headers['mcp-protocol-version'];
+  if (version === undefined || PROTOCOL_VERSIONS.includes(version)) return null;
+  return rpcError(null, -32600, `Unsupported MCP-Protocol-Version; use one of ${PROTOCOL_VERSIONS.join(', ')}`);
+}
 
 export function httpError(status, message) {
   return Object.assign(new Error(message), { status });
@@ -123,6 +137,10 @@ export async function handleMcpPost(request, response, { store, owner, label, lo
   const messages = batch ? payload : [payload];
   if (!messages.length) return send(response, 400, rpcError(null, -32600, 'Empty batch'));
   const initializing = messages.some((message) => message?.method === 'initialize');
+  // initialize negotiates the version in its body, whatever the header says: a client may send
+  // its own newest version there before it knows ours. Every later request names one of ours.
+  const unsupported = initializing ? null : unsupportedVersion(request);
+  if (unsupported) return send(response, 400, unsupported);
   let entry;
   if (initializing) {
     if (messages.length > 1) return send(response, 400, rpcError(null, -32600, 'initialize must be sent on its own'));
@@ -153,13 +171,12 @@ export async function handleMcpPost(request, response, { store, owner, label, lo
   return send(response, 200, batch ? replies : replies[0], headers);
 }
 
-/** Everything after authentication: protocol version, then POST, DELETE, or 405. */
+/** Everything after authentication: POST (which checks the protocol version once it knows
+ *  whether the request is initialize), DELETE, or 405. */
 export async function handleMcpRequest(request, response, options) {
-  const version = request.headers['mcp-protocol-version'];
-  if (version !== undefined && !PROTOCOL_VERSIONS.includes(version)) {
-    return send(response, 400, rpcError(null, -32600, `Unsupported MCP-Protocol-Version; use ${PROTOCOL_VERSIONS.join(' or ')}`));
-  }
   if (request.method === 'POST') return handleMcpPost(request, response, options);
+  const unsupported = unsupportedVersion(request);
+  if (unsupported) return send(response, 400, unsupported);
   if (request.method === 'DELETE') {
     const found = options.store.find(request, options.owner);
     if (!found.entry) return send(response, found.status, rpcError(null, -32000, found.message));
