@@ -4,7 +4,7 @@
 # The Docker CLI starts meeting containers through the host's Docker socket, and
 # cloudflared gives laptops their phone tunnel without a second container.
 FROM docker:29.9.2-cli AS docker-cli
-FROM cloudflare/cloudflared:2026.10.3 AS cloudflared
+FROM cloudflare/cloudflared:2026.10.7 AS cloudflared
 
 FROM python:3.12-slim-bookworm
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker

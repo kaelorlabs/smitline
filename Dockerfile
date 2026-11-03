@@ -14,7 +14,7 @@ RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
 
 # Pinned so a rebuild of the same release gets the same binaries.
 FROM docker:29.9.2-cli AS docker-cli
-FROM cloudflare/cloudflared:2026.10.3 AS cloudflared
+FROM cloudflare/cloudflared:2026.10.7 AS cloudflared
 
 FROM python:3.12-slim-bookworm
 # The meeting image this build goes with; the workflow sets the published tag.
