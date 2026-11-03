@@ -10,19 +10,16 @@ import hmac
 import time
 
 from call_requests import (
-    MAX_REQUESTS, NOTE_KINDS, WHEN_TO_TELL, ClaimWatch, RequestDesk, appends, told,
+    MAX_REQUESTS, NOTE_KINDS, TELL_MAX_WAIT, TELL_QUIET, ClaimWatch, RequestDesk, appends,
+    pause_cue, told,
 )
 
 MAX_NOTE_TEXT = 4000
 # Requests /health carries; the daemon reads it every second, so it never falls this far behind.
 HEALTH_REQUESTS = 100
-# GPT-Live speaks when prompted: an instructions note alone waits until someone talks to it, so
-# in a quiet meeting an answer sat unsaid until someone asked. An answer to tell (a note's `say`)
-# is cued once nobody, the voice included, has been heard for TELL_QUIET seconds: at once when
-# the room is quiet, at a real gap when people are talking. Without one in TELL_MAX_WAIT, the
-# note's own rule stands (first thing the next time it speaks).
-TELL_QUIET = 2.5
-TELL_MAX_WAIT = 120.0
+# An answer to tell (a note's `say`) is cued at the next pause: call_requests.TELL_QUIET,
+# TELL_MAX_WAIT and pause_cue, shared with phone calls. In a quiet meeting an answer once sat
+# unsaid until someone asked.
 
 
 class MeetingControl:
@@ -82,9 +79,7 @@ class MeetingControl:
                 if self.send is None:
                     return False
                 if self.quiet() >= self.tell_quiet:
-                    cue = (f'Now is a pause: tell them this now, in a sentence or two and in your '
-                           f'own words, unless you have just said it. {text.replace(WHEN_TO_TELL, "").strip()} '
-                           'Then go back to listening.')
+                    cue = pause_cue(text)
                     sent = bool(await self.send('commentary', cue))
                     if self.record is not None:
                         self.record('answer_cued', request=request_id, sent=sent)

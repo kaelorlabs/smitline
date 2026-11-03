@@ -364,6 +364,23 @@ WHEN_TO_TELL = (
     'time you speak.')
 
 
+# An answer to tell (a note's `say`) is cued once nobody, the voice included, has been heard for
+# TELL_QUIET seconds: at once when the line is quiet, at a real gap while people talk. GPT-Live
+# speaks when prompted, so an instructions note alone waits until someone talks to it; without
+# such a gap in TELL_MAX_WAIT, the note's own rule stands (WHEN_TO_TELL). Meetings
+# (meeting_control.tell_at_pause) and phone calls (phone_line) cue the same way.
+TELL_QUIET = 2.5
+TELL_MAX_WAIT = 120.0
+
+
+def pause_cue(text):
+    """The commentary that has the voice say an answer now, at a pause: the note's text without
+    its rule about when."""
+    return (f'Now is a pause: tell them this now, in a sentence or two and in your own words, '
+            f'unless you have just said it. {text.replace(WHEN_TO_TELL, "").strip()} '
+            'Then go back to listening.')
+
+
 def status_note(request, text, *, owner, announce):
     """A status update for the voice: quiet context unless the agent wants it said now."""
     rid = request['id']
