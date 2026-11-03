@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4 — 2026-11-02
 
 - **Newer MCP clients connect without pinning an old version.** The MCP server now speaks protocol version 2025-11-25 as well as 2025-06-18 and 2025-03-26. `initialize` negotiates in its body whatever `MCP-Protocol-Version` header comes with it, so a client that sends its own newest version there gets the server's instead of `400`; every later request must still name a version the server speaks. On 2026-11-02 an agent app was refused on its first request and had to be pinned to 2025-06-18. A request in revision 2026-07-28 (stateless, no `initialize`) gets `400` with an ordinary JSON-RPC error, which tells a client that also speaks older revisions to fall back to `initialize`; full 2026-07-28 support comes later.
 - docs: ChatGPT adds a custom connector from its Connectors (or Plugins): **Add**, then **Add custom connector**. Developer mode is no longer needed.
