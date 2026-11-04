@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- docs: Smithery no longer lists Smitline. It became part of Arcade and shut down its proxy and accounts on 2026-10-31. The README's Smithery badge now points to MCP Market, which lists Smitline, and [MCP directories](docs/mcp-directories.md) says where Smitline is listed today.
+
 ## 0.3.5 — 2026-11-04
 
 - **MCP 2026-07-28.** The MCP server speaks the newest MCP revision as well as the older ones, on the local endpoint, over stdio and in the remote connector.
