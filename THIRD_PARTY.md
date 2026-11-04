@@ -27,3 +27,13 @@ The images redistribute these components unchanged. Each keeps its own license; 
 | websockify | meeting image, PyPI | LGPL-3.0 |
 
 The npm dependencies of Mammoth and PDF.js are listed with their licenses in `package-lock.json` and ship in `node_modules`. The Python packages (aiohttp, numpy, and their dependencies) come from PyPI, and the Debian packages (tini, PulseAudio, Xvfb, x11vnc) from Debian bookworm, each under its publisher's license; Debian's copyright files are in `/usr/share/doc`. No model weights are downloaded.
+
+## Fonts
+
+The local console serves three variable fonts from `control-panel/fonts/` (in the repository and the `smitline` image): the Latin subsets from Fontsource 5.3.0 (`@fontsource-variable`), unchanged. Each is under the SIL Open Font License 1.1, whose text is next to it.
+
+| Font | Use | License |
+| --- | --- | --- |
+| Fraunces | Headings and the name beside the logo | OFL-1.1; see `control-panel/fonts/Fraunces-OFL.txt` |
+| Jost | Text | OFL-1.1; see `control-panel/fonts/Jost-OFL.txt` |
+| Geist Mono | Machine values, such as telemetry and logs | OFL-1.1; see `control-panel/fonts/GeistMono-OFL.txt` |

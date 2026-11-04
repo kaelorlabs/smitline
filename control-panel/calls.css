@@ -1,62 +1,77 @@
-/* Calls view. Tokens, type, and the top bar follow the meeting console (styles.css). */
+/* Calls view. Tokens, type, and the top bar follow the meeting console (styles.css).
+   The Relay look, as Smitline Cloud's dashboard: sand paper, navy-brown ink, denim for actions,
+   links and focus; night denim in dark mode. Every text colour is AA on the surfaces it sits on. */
+@font-face { font-family: "Jost Variable"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(/fonts/jost-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Fraunces Variable"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(/fonts/fraunces-latin-opsz-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Geist Mono Variable"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(/fonts/geist-mono-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
 :root {
   color-scheme: light dark;
-  --paper: #ffffff;
-  --bar: #fafafb;
-  --surface: #ffffff;
-  --soft: #f6f6f9;
-  --select: #f1f1fa;
-  --ink: #25262b;
-  --muted: #6b6e78;
-  --line: #e5e6eb;
-  --line-strong: #d4d5dd;
-  --accent: #555bc0;
-  --accent-hover: #464ca8;
-  --on-accent: #ffffff;
-  --accent-soft: #ebecfa;
-  --mark: #30323b;
-  --good: #1d6b45; --good-bg: #e7f4ec; --good-line: #bfe0cc;
-  --warn: #85540c; --warn-bg: #fdf3e1; --warn-line: #f0d7a8;
-  --bad: #a3303d; --bad-bg: #fcecee; --bad-line: #efc9ce;
-  --neutral: #4d505a; --neutral-bg: #eeeff3;
-  --focus: #555bc0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --paper: #fcf6f1;
+  --bar: #fcf6f1;
+  --surface: #fffdfb;
+  --soft: #f5e9e0;
+  --select: #efe1d6;
+  --ink: #2e2b3a;
+  --muted: #574a45;
+  --subtle: #6e5f58;
+  --line: #e8d8cb;
+  --line-strong: #dac6b6;
+  --accent: #3a4a78;
+  --accent-hover: #2e3b66;
+  --on-accent: #fffdfb;
+  --accent-soft: #edf1f8;
+  --good: #15803d; --good-bg: #f0fdf4; --good-line: #bbf7d0;
+  --warn: #a16207; --warn-bg: #fffbeb; --warn-line: #fde68a;
+  --bad: #c81e1e; --bad-bg: #fef2f2; --bad-line: #fecaca;
+  --neutral: #574a45; --neutral-bg: #f5e9e0;
+  --idle-dot: #918176; --live-dot: #15803d; --down-dot: #c81e1e;
+  --focus: #3a4a78;
+  --shadow: rgb(46 43 58 / 0.18);
+  --font-sans: "Jost Variable", "Jost", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Fraunces Variable", "Fraunces", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-sans);
   font-size: 14px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #131418;
-    --bar: #18191e;
-    --surface: #1b1c21;
-    --soft: #22232a;
-    --select: #262844;
-    --ink: #e8e9ef;
-    --muted: #a4a7b3;
-    --line: #2e3038;
-    --line-strong: #3d3f49;
-    --accent: #a9adf5;
-    --accent-hover: #bfc2f8;
-    --on-accent: #15161b;
-    --accent-soft: #272a4a;
-    --mark: #e8e9ef;
-    --good: #86d9a8; --good-bg: #16301f; --good-line: #25533a;
-    --warn: #f2c678; --warn-bg: #36290f; --warn-line: #5c4518;
-    --bad: #f5a0a9; --bad-bg: #3a1a1f; --bad-line: #62303a;
-    --neutral: #c4c6d0; --neutral-bg: #2a2c34;
-    --focus: #a9adf5;
+    --paper: #15172a;
+    --bar: #15172a;
+    --surface: #1c1f35;
+    --soft: #23273f;
+    --select: #2a2f49;
+    --ink: #f5efe9;
+    --muted: #b9b2c4;
+    --subtle: #9e97ab;
+    --line: #2e3450;
+    --line-strong: #3b4263;
+    --accent: #abbcd9;
+    --accent-hover: #c9d5e9;
+    --on-accent: #15172a;
+    --accent-soft: #232a47;
+    --good: #4ade80; --good-bg: #0a1a10; --good-line: #0f2a19;
+    --warn: #fbbf24; --warn-bg: #1a1506; --warn-line: #3a2e0b;
+    --bad: #f87171; --bad-bg: #1f0b0b; --bad-line: #3b1414;
+    --neutral: #b9b2c4; --neutral-bg: #23273f;
+    --idle-dot: #7d7892; --live-dot: #4ade80; --down-dot: #f87171;
+    --focus: #abbcd9;
+    --shadow: rgb(0 0 0 / 0.5);
   }
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--paper); color: var(--ink); line-height: 1.5; }
+body { margin: 0; background: var(--paper); color: var(--ink); line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 button { font: inherit; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.55; }
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
+h1 { font-family: var(--font-display); }
 p { margin: 0; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+code, pre { font-family: var(--font-mono); font-variant-ligatures: none; }
+code { font-size: 0.92em; }
+input::placeholder, textarea::placeholder { color: var(--subtle); opacity: 1; }
 
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .skip-link { position: absolute; left: 12px; top: -48px; z-index: 10; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 12px; }
@@ -65,19 +80,18 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 /* Top bar, as in the meeting console. */
 .shell { min-height: 100vh; display: flex; flex-direction: column; }
 .topbar { height: 64px; padding: 0 32px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 24px; background: var(--bar); }
-.brand { color: var(--ink); display: flex; align-items: center; gap: 10px; text-decoration: none; font-size: 17px; font-weight: 600; letter-spacing: -0.5px; }
+.brand { color: var(--ink); display: flex; align-items: center; gap: 8px; text-decoration: none; font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .brand b { font-weight: 400; color: var(--muted); }
-.brand-mark { width: 26px; height: 26px; background: var(--mark); border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 3px; }
-.brand-mark i { display: block; width: 3px; height: 12px; border-radius: 2px; background: var(--paper); }
-.brand-mark i:nth-child(2) { height: 18px; }
+/* The Relay arch beside the name, as in Smitline Cloud's logo. */
+.brand-mark { display: block; width: auto; height: 1.5em; flex-shrink: 0; }
 .topnav { display: flex; gap: 4px; margin-right: auto; }
 .topnav a { display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500; }
 .topnav a:hover { color: var(--ink); background: var(--soft); }
 .topnav a[aria-current="page"] { color: var(--ink); background: var(--select); }
 .connection { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-.connection .dot { width: 7px; height: 7px; border-radius: 50%; background: #92949e; flex-shrink: 0; }
-.connection.live .dot { background: #2f9e62; }
-.connection.down .dot { background: #d04a57; }
+.connection .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle-dot); flex-shrink: 0; }
+.connection.live .dot { background: var(--live-dot); }
+.connection.down .dot { background: var(--down-dot); }
 .account-link { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .account-link:hover { color: var(--ink); background: var(--soft); }
 .account-link[aria-current="page"] { color: var(--ink); background: var(--select); }
@@ -102,10 +116,10 @@ main { flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; padding: 32px 40
 a.button { text-decoration: none; }
 .section-tools { display: inline-flex; align-items: center; gap: 12px; }
 .small-button { min-height: 32px; padding: 4px 12px; font-size: 12px; }
-.eyebrow { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
-h1 { font-size: 28px; letter-spacing: -0.8px; font-weight: 600; margin-bottom: 8px; }
+.eyebrow { font-size: 12px; color: var(--subtle); margin-bottom: 14px; }
+h1 { font-size: 28px; letter-spacing: -0.02em; font-weight: 500; margin-bottom: 8px; }
 .hero-copy { color: var(--muted); max-width: 640px; line-height: 1.6; }
-footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 11px; }
+footer { max-width: 1280px; width: 100%; margin: 0 auto; padding: 0 40px 24px; display: flex; justify-content: space-between; gap: 16px; color: var(--subtle); font-size: 11px; }
 
 .banner { border: 1px solid var(--line); border-left-width: 4px; background: var(--soft); color: var(--ink); border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; display: grid; gap: 4px; }
 .banner.info { border-color: var(--line); border-left-color: var(--accent); background: var(--accent-soft); }
@@ -117,10 +131,10 @@ p.banner { display: block; }
 .spend { margin-bottom: 28px; display: grid; gap: 10px; }
 .spend-figures { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .spend-figures > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 2px; align-content: start; }
-.spend-figures dt { font-size: 12px; font-weight: 600; color: var(--muted); }
+.spend-figures dt { font-size: 12px; font-weight: 600; color: var(--subtle); }
 .spend-figures dd { margin: 0; }
 .spend-value { font-size: 24px; font-weight: 600; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
-.spend-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.spend-sub { font-size: 12px; color: var(--subtle); font-variant-numeric: tabular-nums; }
 .split { display: flex; height: 6px; margin: 6px 0 4px; border-radius: 999px; overflow: hidden; background: var(--soft); }
 .split .phone, .swatch.phone { background: var(--warn); }
 .split .openai, .swatch.openai { background: var(--accent); }
@@ -133,7 +147,7 @@ p.banner { display: block; }
 .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; align-items: start; }
 .layout[data-mode="welcome"] { grid-template-columns: minmax(0, 1fr); }
 .layout[data-mode="welcome"] .list-pane { display: none; }
-.label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.label { font-size: 12px; font-weight: 600; color: var(--subtle); margin-bottom: 10px; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .loading { padding: 12px 0; }
@@ -159,7 +173,7 @@ p.banner { display: block; }
 .pick { padding: 32px 24px; text-align: center; }
 
 .welcome { display: grid; gap: 12px; max-width: 680px; }
-.welcome h2 { font-size: 18px; font-weight: 600; }
+.welcome h2 { font-family: var(--font-display); font-size: 18px; font-weight: 500; letter-spacing: -0.01em; }
 .welcome h3 { font-size: 13px; font-weight: 600; margin-top: 8px; }
 .examples { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .examples li { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
@@ -169,12 +183,12 @@ p.banner { display: block; }
 .back { display: none; justify-self: start; border: 0; background: none; color: var(--accent); padding: 6px 0; min-height: 40px; font-weight: 500; }
 .call-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .call-heading { display: grid; gap: 4px; min-width: 0; }
-.call-head h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; overflow-wrap: anywhere; }
+.call-head h2 { font-family: var(--font-display); font-size: 20px; font-weight: 500; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .call-head h2:focus { outline: none; }
 .call-head h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .meta { color: var(--muted); font-size: 13px; }
 .objective { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
-.objective-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-right: 6px; }
+.objective-label { font-size: 12px; font-weight: 600; color: var(--subtle); margin-right: 6px; }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; line-height: 1; padding: 5px 10px; border-radius: 999px; background: var(--neutral-bg); color: var(--neutral); white-space: nowrap; }
 .chip.good { color: var(--good); background: var(--good-bg); }
@@ -218,7 +232,7 @@ p.banner { display: block; }
 .pending { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); flex-shrink: 0; }
 
-.section-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.section-title { font-size: 12px; font-weight: 600; color: var(--subtle); text-transform: uppercase; letter-spacing: 0.06em; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .result { display: grid; gap: 16px; padding-top: 20px; border-top: 1px solid var(--line); }
 .outcome { gap: 6px; padding: 14px 18px; }
@@ -255,7 +269,7 @@ p.banner { display: block; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
 .cost-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cost-table th, .cost-table td { padding: 9px 14px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
-.cost-table thead th { border-top: 0; background: var(--soft); color: var(--muted); font-size: 12px; font-weight: 600; }
+.cost-table thead th { border-top: 0; background: var(--soft); color: var(--subtle); font-size: 12px; font-weight: 600; }
 .cost-table tbody th { font-weight: 600; }
 .cost-table .model { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
 .cost-table .usage { color: var(--muted); }
@@ -270,15 +284,15 @@ p.banner { display: block; }
 .transcript .speaker { font-size: 12px; font-weight: 600; color: var(--muted); }
 .transcript li.agent .speaker { color: var(--accent); }
 .transcript .text { overflow-wrap: anywhere; }
-.jump { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600; box-shadow: 0 2px 8px rgb(0 0 0 / 0.18); }
+.jump { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600; box-shadow: 0 2px 8px var(--shadow); }
 
 /* Account: the setup checklist, then each key and setting. */
 .setup-card { display: grid; gap: 14px; margin-bottom: 32px; }
 .setup-card:focus { outline: none; }
-.setup-title { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+.setup-title { font-family: var(--font-display); font-size: 17px; font-weight: 500; letter-spacing: -0.01em; }
 .setup-fields { display: grid; gap: 12px; }
 .checks { list-style: none; margin: 0; padding: 0; display: grid; }
-.check-group h3 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 0 4px; }
+.check-group h3 { font-size: 12px; font-weight: 600; color: var(--subtle); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 0 4px; }
 .check-group:first-child h3 { padding-top: 0; }
 .check { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .check-mark { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; background: var(--neutral-bg); color: var(--neutral); }

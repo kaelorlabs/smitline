@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="#get-started"><b>Get started</b></a> · <a href="#how-it-works">How it works</a> · <a href="#safe-by-default">Safety</a> · <a href="#documentation">Docs</a>
+  <a href="#get-started"><b>Get started</b></a> · <a href="#how-it-works">How it works</a> · <a href="#safe-by-default">Safety</a> · <a href="#documentation">Docs</a> · <a href="https://smitline.com"><b>smitline.com</b></a>
 </p>
 
 <p align="center">
@@ -44,6 +44,7 @@ Smitline makes the call, talks with whoever answers in a natural voice, and send
 
 - **Calls anyone.** Restaurants, offices, plumbers, friends, using your own number through your SignalWire or Twilio account.
 - **Joins meetings.** Zoom, Microsoft Teams and Google Meet, as a participant that listens and answers when it's spoken to.
+- **Your agent stays in charge.** It briefs Smitline with what it already knows, follows the call as it happens, passes on facts and decisions, and can do work people ask for while the call or meeting runs.
 - **Works with your agent.** Claude Code, Codex, Cursor, Claude Desktop, OpenClaw, Hermes, and anything that can use MCP, a CLI or a REST API.
 - **Runs on your computer.** One Docker container, your own OpenAI and phone keys, open source under Apache-2.0.
 

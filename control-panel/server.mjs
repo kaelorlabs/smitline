@@ -758,6 +758,11 @@ export function createServer(options = {}) {
         '/visual-preview.mjs': ['visual-preview.mjs', 'text/javascript; charset=utf-8'],
         '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
         '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+        // The Relay look: the arch beside the name, and the self-hosted fonts (SIL OFL, in fonts/).
+        '/relay-arch-mark.svg': ['relay-arch-mark.svg', 'image/svg+xml'],
+        '/fonts/jost-latin-wght-normal.woff2': ['fonts/jost-latin-wght-normal.woff2', 'font/woff2'],
+        '/fonts/fraunces-latin-opsz-normal.woff2': ['fonts/fraunces-latin-opsz-normal.woff2', 'font/woff2'],
+        '/fonts/geist-mono-latin-wght-normal.woff2': ['fonts/geist-mono-latin-wght-normal.woff2', 'font/woff2'],
         '/calls': ['calls.html', 'text/html; charset=utf-8'],
         '/calls.js': ['calls.js', 'text/javascript; charset=utf-8'],
         '/calls.css': ['calls.css', 'text/css; charset=utf-8'],
