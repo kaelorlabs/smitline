@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 — 2026-11-04
 
 - **MCP 2026-07-28.** The MCP server speaks the newest MCP revision as well as the older ones, on the local endpoint, over stdio and in the remote connector.
   - A 2026-07-28 client needs no `initialize` and no session. Every request names its version and the client's capabilities in `_meta`; on HTTP it also sends `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, which the server checks against the body.
@@ -8,6 +8,7 @@
   - `initialize` still opens a 2025-11-25, 2025-06-18 or 2025-03-26 session, so existing clients are unaffected. A client that speaks both now uses 2026-07-28; the official TypeScript SDK 2.4 in auto mode does.
   - The Claude Desktop bundle passes the new headers on and cancels a request when the client does. Over stdio, a cancelled request gets no reply.
 - **The Relay look.** The console and the README take Smitline's brand from smitline.com: the Relay arch beside the name (also the favicon, the README logo and the Claude Desktop bundle's icon), warm sand pages with denim buttons, links and focus, and night denim in dark mode. Headings and the name are in Fraunces, text in Jost and machine values in Geist Mono, served by the console itself from `control-panel/fonts/` (SIL Open Font License). The key page and the connector's approval page take the colours and the arch but keep the system's fonts, because they load nothing. Every text colour meets WCAG AA. The meeting camera picture is unchanged.
+- The MCP Registry entry's website is now smitline.com, the home of Smitline Cloud (the hosted version), instead of this repository.
 
 ## 0.3.4 — 2026-11-02
 
