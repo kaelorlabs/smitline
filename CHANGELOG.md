@@ -7,6 +7,7 @@
   - `server/discover` describes the server. Results carry `resultType` and the server's name, and lists and the call card carry caching hints. `subscriptions/listen` is acknowledged and then ends at once, because nothing changes while the server runs.
   - `initialize` still opens a 2025-11-25, 2025-06-18 or 2025-03-26 session, so existing clients are unaffected. A client that speaks both now uses 2026-07-28; the official TypeScript SDK 2.4 in auto mode does.
   - The Claude Desktop bundle passes the new headers on and cancels a request when the client does. Over stdio, a cancelled request gets no reply.
+- **The Relay look.** The console and the README take Smitline's brand from smitline.com: the Relay arch beside the name (also the favicon, the README logo and the Claude Desktop bundle's icon), warm sand pages with denim buttons, links and focus, and night denim in dark mode. Headings and the name are in Fraunces, text in Jost and machine values in Geist Mono, served by the console itself from `control-panel/fonts/` (SIL Open Font License). The key page and the connector's approval page take the colours and the arch but keep the system's fonts, because they load nothing. Every text colour meets WCAG AA. The meeting camera picture is unchanged.
 
 ## 0.3.4 — 2026-11-02
 

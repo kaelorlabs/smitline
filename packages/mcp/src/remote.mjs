@@ -8,7 +8,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Smitline, redact } from '../../sdk-typescript/src/index.mjs';
-import { CONNECTOR_PASSPHRASE_MIN, PAGE_STYLE, connectorOrigin, escapeHtml, readEnv } from '../../cli/src/setup.mjs';
+import { BRAND, CONNECTOR_PASSPHRASE_MIN, PAGE_STYLE, connectorOrigin, escapeHtml, readEnv } from '../../cli/src/setup.mjs';
 import { createMcpSession } from './session.mjs';
 import { openConnectorStore, sha256 } from './connector-store.mjs';
 import {
@@ -56,7 +56,6 @@ const PAGE_EXTRA = `.eyebrow{font-size:13px;font-weight:600;color:var(--muted);m
 .scope.cannot .icon{background:var(--good-bg);color:var(--good)}
 .decide .actions button{min-width:120px}
 @media (max-width:480px){.decide .actions button{min-width:0}}`;
-const BRAND = '<div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Smitline</span></div>';
 
 // Configuration ---------------------------------------------------------------
 

@@ -70,6 +70,38 @@ test('serves app.js and its visual-preview module', async () => {
   });
 });
 
+test('serves the arch, the icon and every font the pages ask for, under the same CSP', async () => {
+  await withServer(async base => {
+    // Each image or icon a page shows and each font its stylesheet loads needs a route of its own.
+    const wanted = new Map();
+    for (const page of ['/', '/meetings/new', '/calls', '/contacts', '/setup']) {
+      const html = await (await fetch(`${base}${page}`)).text();
+      for (const [, src] of html.matchAll(/<(?:img [^>]*src|link rel="icon" href)="(\/[^"]+)"/g)) wanted.set(src, 'image/svg+xml');
+      for (const [, href] of html.matchAll(/<link rel="stylesheet" href="(\/[^"]+)"/g)) {
+        const css = await (await fetch(`${base}${href}`)).text();
+        for (const [, url] of css.matchAll(/url\((\/[^)]+)\)/g)) wanted.set(url, 'font/woff2');
+      }
+    }
+    assert.deepEqual([...wanted.keys()].sort(), [
+      '/favicon.svg',
+      '/fonts/fraunces-latin-opsz-normal.woff2',
+      '/fonts/geist-mono-latin-wght-normal.woff2',
+      '/fonts/jost-latin-wght-normal.woff2',
+      '/relay-arch-mark.svg',
+    ]);
+    for (const [url, type] of wanted) {
+      const response = await fetch(`${base}${url}`);
+      assert.equal(response.status, 200, url);
+      assert.equal(response.headers.get('content-type'), type, url);
+      // Same-origin fonts and images are allowed by default-src 'self'; nothing else is needed.
+      assert.match(response.headers.get('content-security-policy'), /^default-src 'self';/, url);
+      const body = Buffer.from(await response.arrayBuffer());
+      if (type === 'font/woff2') assert.equal(body.subarray(0, 4).toString('latin1'), 'wOF2', url);
+      else assert.match(body.toString('utf8'), /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="/, url);
+    }
+  });
+});
+
 test('bootstrap excludes API credentials and mutations require a session token', async () => {
   await withServer(async base => {
     const bootstrap = await fetch(`${base}/api/bootstrap`);
