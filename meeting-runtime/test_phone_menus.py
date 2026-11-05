@@ -77,7 +77,11 @@ class PromptTests(unittest.TestCase):
     def test_with_it_the_voice_works_the_menu(self):
         on = parsed(phoneMenus=True)
         text = voice_instructions(on)
-        self.assertIn('Phone menus: if an automated phone menu answers, do not greet it', text)
+        self.assertIn('Phone menus: an automated phone menu is a recording', text)
+        # On a live call the voice handed nothing to its backend until it was told plainly.
+        self.assertIn('You cannot press keys yourself', text)
+        self.assertIn('only your backend can', text)
+        self.assertIn('Say nothing to a menu: do not greet it', text)
         self.assertIn('Never key in a card number, a PIN, or a password', text)
         self.assertIn('still will not let you through after you have tried its options', text)
         backend = backend_instructions(on)

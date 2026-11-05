@@ -93,11 +93,14 @@ def identity_rule(who):
 
 def phone_menus_rule(who):
     """How the voice gets through an automated phone menu (briefs with phoneMenus)."""
-    return ('Phone menus: if an automated phone menu answers, do not greet it or introduce '
-            'yourself to it. Listen to its options until you hear the one that fits why you are '
-            'calling, then ask your backend to press its key, or say the option when the menu asks '
-            'you to say it. When the menu asks for a number that your brief or notes give for this '
-            'call, such as an account, order, or reference number, ask your backend to key it in. '
+    return ('Phone menus: an automated phone menu is a recording that lists options, such as "for '
+            'billing, press 2". You cannot press keys yourself, and saying a number out loud does '
+            'not press it: only your backend can. As soon as you hear the option that fits why you '
+            'are calling, hand it to your backend right away, saying which key to press, for '
+            'example "press 2 for billing". Say nothing to a menu: do not greet it, introduce '
+            'yourself, or ask whether anyone is there. When the menu asks you to say an option, say '
+            'it. When it asks for a number that your brief or notes give for this call, such as an '
+            'account, order, or reference number, hand that to your backend to key in the same way. '
             'Say nothing while keys are pressed. Never key in a card number, a PIN, or a password, '
             'or anything under "Never share", and never press a key that agrees to something you '
             'may not agree to. If no option fits, choose the one for an agent or a representative, '
