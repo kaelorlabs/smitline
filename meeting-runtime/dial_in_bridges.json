@@ -1,0 +1,211 @@
+{
+  "about": "Meeting dial-in numbers published by the platforms themselves, copied from their own pages with the page and the date it was read. A dial-in to one of them reaches a meeting bridge, not a person, so it skips the calling hours and the call limits of phone calls (call_hooks.check_dial_in); every other number keeps them. SMITLINE_DIAL_IN_BRIDGES extends or replaces this list. Zoom only: Teams and Google Meet dial-in numbers belong to each organizer's audio conferencing or come from a pool, so they keep the phone rules.",
+  "zoom": [
+    {
+      "source": "https://zoom.us/u/actuuYsofT",
+      "read": "2026-11-05",
+      "page": "Zoom International Dial-in Numbers (a meeting invitation's \"Find your local number\" link)",
+      "numbers": [
+        {
+          "number": "+17806660144",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 780 666 0144"
+        },
+        {
+          "number": "+12042727920",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 204 272 7920"
+        },
+        {
+          "number": "+14388097799",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 438 809 7799"
+        },
+        {
+          "number": "+15873281099",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 587 328 1099"
+        },
+        {
+          "number": "+16473744685",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 647 374 4685"
+        },
+        {
+          "number": "+16475580588",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 647 558 0588"
+        },
+        {
+          "number": "+17789072071",
+          "country": "CA",
+          "kind": "toll",
+          "shown": "+1 778 907 2071"
+        },
+        {
+          "number": "+17193594580",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 719 359 4580"
+        },
+        {
+          "number": "+12532050468",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 253 205 0468"
+        },
+        {
+          "number": "+12532158782",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 253 215 8782 (Tacoma)"
+        },
+        {
+          "number": "+13017158592",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 301 715 8592 (Washington DC)"
+        },
+        {
+          "number": "+13052241968",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 305 224 1968"
+        },
+        {
+          "number": "+13092053325",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 309 205 3325"
+        },
+        {
+          "number": "+13126266799",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 312 626 6799 (Chicago)"
+        },
+        {
+          "number": "+13462487799",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 346 248 7799 (Houston)"
+        },
+        {
+          "number": "+13602095623",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 360 209 5623"
+        },
+        {
+          "number": "+13863475053",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 386 347 5053"
+        },
+        {
+          "number": "+14086380968",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 408 638 0968 (San Jose)"
+        },
+        {
+          "number": "+15074734847",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 507 473 4847"
+        },
+        {
+          "number": "+15642172000",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 564 217 2000"
+        },
+        {
+          "number": "+16468769923",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 646 876 9923 (New York)"
+        },
+        {
+          "number": "+16469313860",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 646 931 3860"
+        },
+        {
+          "number": "+16694449171",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 669 444 9171"
+        },
+        {
+          "number": "+16699006833",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 669 900 6833 (San Jose)"
+        },
+        {
+          "number": "+16892781000",
+          "country": "US",
+          "kind": "toll",
+          "shown": "+1 689 278 1000"
+        }
+      ]
+    },
+    {
+      "source": "https://zoom.us/u/adtBZPAIK7",
+      "read": "2026-11-05",
+      "page": "Zoom International Dial-in Numbers (a meeting invitation's \"Find your local number\" link)",
+      "numbers": [
+        {
+          "number": "+18335480276",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "833 548 0276"
+        },
+        {
+          "number": "+18335480282",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "833 548 0282"
+        },
+        {
+          "number": "+18339284608",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "833 928 4608"
+        },
+        {
+          "number": "+18339284609",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "833 928 4609"
+        },
+        {
+          "number": "+18339284610",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "833 928 4610"
+        },
+        {
+          "number": "+18778535247",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "877 853 5247"
+        },
+        {
+          "number": "+18887880099",
+          "country": "US",
+          "kind": "toll-free",
+          "shown": "888 788 0099"
+        }
+      ]
+    }
+  ]
+}

@@ -17,8 +17,11 @@ From `MeetingPlatformAdapter.capabilities` in `meeting-runtime/adapters.py` and 
 | Participant discovery | Yes (the participants button and panel) | Yes | Yes |
 | Empty-room auto-leave | Leaves when the participant count shows it alone for 15 s; ended/removal detection also applies | Leaves when the toolbar reports one participant | Same count-based leave when the toolbar reports one participant; ended/removal detection also applies |
 | Screen sharing (outgoing or incoming) | No | No | No |
+| Join by phone (`dialIn`, [joining by phone](meetings.md#joining-by-phone)) | Meeting ID, then the numeric phone passcode after `*`: `,,ID#,,,,*PASSCODE#` | Phone conference ID: `,,ID#` (organizers with audio conferencing) | PIN: `,,PIN#` (Workspace meetings) |
+| Read from a pasted invitation | One-tap lines, dial-in numbers, "Meeting ID", the numeric "Passcode" | One-tap lines, "Phone conference ID" (never the app's "Meeting ID" or passcode) | "Or dial" numbers, "PIN", with Google's bidi marks |
+| Dial-in fallback | When the browser join is refused (`authentication_required`) or no meeting seat is free | Same | Same |
 
-Live tenant policy can still refuse admission. Browser fixtures do not prove production compatibility.
+Live tenant policy can still refuse admission. Browser fixtures do not prove production compatibility. Joining by phone is tested against a simulated bridge (`test_dial_in_sim.py`); real Zoom, Teams and Google Meet bridges are not yet verified.
 
 ## Voice
 

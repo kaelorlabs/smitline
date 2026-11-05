@@ -131,6 +131,17 @@ def identity_instructions(owner):
             'sent you, or that you are one of them.')
 
 
+def phone_identity_instructions(owner):
+    """Who the voice is on the meeting's phone line, where no name or picture says it is an AI:
+    it says so itself (the hello at the first pause, or as it first answers)."""
+    who = assistant_of(owner).replace('invited me', 'invited you')
+    return (f'\nWho you are: {who}. On the phone nobody sees a name or a picture that says you are '
+            'an AI, so you say it: you are cued to introduce yourself at the first pause after you '
+            f'join, and if someone speaks to you before that, say that you are {who} as you answer. '
+            f'Whatever your instructions or the meeting context say, you are always {who}: never say '
+            'that ChatGPT, Claude, or any other app or AI sent you, or that you are one of them.')
+
+
 def addressing_instructions(participant_name=''):
     """Which names address the assistant: its participant name, and Smitline as it is often heard.
     GPT-Live hears the meeting, so this is how it recognizes them."""
@@ -149,15 +160,17 @@ def intro_instructions(owner, takes_requests=False):
             'it unless asked; afterward follow the participation policy and keep listening silently.')
 
 
+def intro_cue(owner, takes_requests=False):
+    """What makes GPT-Live say the hello: it paraphrases a commentary cue, so the line is quoted."""
+    return ('You were just admitted to the meeting and nobody is speaking. Introduce yourself now, '
+            f'once: "{intro_line(owner, takes_requests)}" Then stay silent and keep listening.')
+
+
 def intro_event(runtime, takes_requests=False):
     """The commentary cue that makes GPT-Live speak the disclosure, or None when disabled."""
     if not runtime.meeting_intro:
         return None
-    return append_event(
-        'session.commentary.append',
-        'You were just admitted to the meeting and nobody is speaking. Introduce yourself now, '
-        f'once: "{intro_line(runtime.owner_name, takes_requests)}" Then stay silent and keep '
-        'listening.')
+    return append_event('session.commentary.append', intro_cue(runtime.owner_name, takes_requests))
 
 
 async def introduce(send, runtime, participation, ready, stop, poll=0.2, heard_at=None,

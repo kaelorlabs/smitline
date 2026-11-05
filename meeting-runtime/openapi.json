@@ -291,7 +291,7 @@
         "required": ["channel", "to", "objective", "onBehalfOf"],
         "properties": {
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
-          "to": { "type": "string", "description": "E.164 phone number for phone calls, or a Zoom, Teams, or Google Meet invite URL." },
+          "to": { "type": "string", "description": "E.164 phone number for phone calls. For meetings: a Zoom, Teams, Google Meet, or Daily invite URL; \"new\" for a room Smitline opens; or the meeting's dial-in number to join by phone, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). A meeting with dialIn may leave it out." },
           "onBehalfOf": { "type": "string", "maxLength": 120, "description": "The person the call is for, never an AI, model or app. Spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows. A name such as ChatGPT or Claude is replaced with the owner's name (SMITLINE_OWNER_NAME), or the brief is refused (422 invalid_request)." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
@@ -309,7 +309,7 @@
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
           "record": { "type": "boolean", "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel; the assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
-          "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
+          "afterHours": { "type": "boolean", "description": "Phone calls, and meetings with a dialIn: call even though it is outside calling hours (default 8 AM to 9 PM) where the number rings. Set it only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
           "camera": {
             "type": "object", "additionalProperties": false,
@@ -344,6 +344,18 @@
             "properties": {
               "callId": { "type": "string", "pattern": "^call-[0-9a-f]{16}$" },
               "requestId": { "type": "string", "pattern": "^r[1-9][0-9]{0,2}$" }
+            }
+          },
+          "dialIn": {
+            "type": "object", "additionalProperties": false,
+            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
+            "properties": {
+              "number": { "type": "string", "description": "The meeting's dial-in number in E.164 form; a one-tap number, with its keys after commas, works too." },
+              "meetingId": { "type": "string", "description": "What the bridge asks for: Zoom's meeting ID, Teams' phone conference ID, or Google Meet's PIN. Digits; spaces and dashes are dropped." },
+              "passcode": { "type": "string", "description": "Zoom's numeric phone passcode (not the web one). Teams and Google Meet dial-ins take none." },
+              "platform": { "type": "string", "enum": ["zoom", "teams", "meet"], "description": "Whose bridge it is, when to and invite do not say: it sets how the keys are timed." },
+              "keys": { "type": "string", "pattern": "^[0-9*#,]{1,64}$", "description": "The keys pressed once the call is answered, as in a one-tap number: digits, * and #, with a comma for each two-second pause, such as ,,85951289482#,,,,*123456#. Defaults to the platform's own timing." },
+              "invite": { "type": "string", "maxLength": 12000, "description": "The invitation text, as pasted: its one-tap lines, numbers, meeting ID or PIN, and numeric passcode. The first number this installation may call is dialed. Not kept in the stored brief." }
             }
           }
         }
@@ -528,13 +540,13 @@
           "owner": { "type": "string", "description": "The owner the call belongs to; local on a self-hosted installation." },
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
           "status": { "type": "string", "enum": ["queued", "connecting", "ringing", "waiting", "in_progress", "summarizing", "completed", "failed", "canceled"] },
-          "endReason": { "type": "string", "enum": ["hangup", "remote_hangup", "no_answer", "busy", "voicemail", "max_duration", "canceled", "meeting_ended", "transferred", "error", "refused"] },
+          "endReason": { "type": "string", "enum": ["hangup", "remote_hangup", "no_answer", "busy", "voicemail", "max_duration", "canceled", "meeting_ended", "transferred", "error", "refused", "not_admitted", "dial_in_refused"], "description": "A meeting joined by phone ends meeting_ended, max_duration or canceled like any meeting; not_admitted when nobody let it in within 10 minutes, dial_in_refused when the bridge did not accept the meeting ID or passcode, and busy or no_answer when its number did not answer." },
           "brief": { "$ref": "#/components/schemas/Brief" },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
           "answeredAt": { "type": "string", "format": "date-time" },
           "endedAt": { "type": "string", "format": "date-time" },
-          "line": { "type": "object", "description": "Line references such as meetingId." },
+          "line": { "type": "object", "description": "Line references such as meetingId. A meeting joined by phone has joinedBy: \"phone\", its platform when known, and the phone call's providerCallSid and fromNumber." },
           "result": { "oneOf": [{ "$ref": "#/components/schemas/Result" }, { "type": "null" }] },
           "direction": { "type": "string", "enum": ["outbound", "inbound"] },
           "recording": { "type": "object", "description": "Phone calls recorded with SMITLINE_RECORD_CALLS=1. The url is a Twilio API URL; fetching it needs the Twilio account SID and auth token.", "properties": { "sid": { "type": "string" }, "url": { "type": "string" }, "seconds": { "type": "integer" } } },
