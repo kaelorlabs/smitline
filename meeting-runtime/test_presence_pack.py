@@ -1,0 +1,145 @@
+import base64
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from presence_pack import MAX_FRAME_BYTES, load_presence_pack
+from visual_presence import VISUAL_STATES
+
+PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 24
+WEBP = b'RIFF\x10\x00\x00\x00WEBPVP8 ' + b'\x00' * 16
+
+
+def write_pack(root, manifest=None, files=None):
+    files = files if files is not None else {
+        'offstage.webp': WEBP, 'arrive/000.webp': WEBP, 'arrive/001.webp': WEBP,
+        'listening/000.png': PNG, 'leave/000.webp': WEBP,
+    }
+    for relative, data in files.items():
+        path = Path(root, relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    manifest = manifest if manifest is not None else {
+        'format': 'smitline-presence-pack', 'version': 1, 'name': 'test',
+        'width': 640, 'height': 360, 'fps': 12, 'captionColor': '#2E2B3A',
+        'clips': {
+            'offstage': {'frames': ['offstage.webp'], 'loop': True},
+            'arrive': {'frames': ['arrive/000.webp', 'arrive/001.webp'], 'loop': False},
+            'listening': {'frames': ['listening/000.png'], 'loop': True},
+            'leave': {'frames': ['leave/000.webp'], 'loop': False},
+        },
+        'states': {'joining': 'offstage', 'listening': 'listening', 'finalizing': 'leave',
+                   'ended': 'offstage'},
+        'arrival': 'arrive',
+    }
+    Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+    return manifest
+
+
+class PresencePackTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = self.temp.name
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def edited(self, **changes):
+        manifest = write_pack(self.root)
+        manifest.update(changes)
+        Path(self.root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+
+    def test_loads_a_pack_and_fills_the_states_it_leaves_out_with_listening(self):
+        write_pack(self.root)
+        pack = load_presence_pack(self.root)
+        self.assertEqual((pack.width, pack.height, pack.fps), (640, 360, 12))
+        self.assertEqual(set(pack.states), set(VISUAL_STATES))
+        self.assertEqual(pack.clip_for('working'), 'listening')
+        self.assertEqual(pack.clip_for('finalizing'), 'leave')
+        self.assertEqual(pack.arrival, 'arrive')
+        self.assertEqual(pack.clips['arrive'].frames, (WEBP, WEBP))
+        self.assertFalse(pack.clips['arrive'].loop)
+        self.assertEqual(pack.total_bytes, 4 * len(WEBP) + len(PNG))
+
+    def test_the_manifest_path_itself_works_too(self):
+        write_pack(self.root)
+        self.assertEqual(load_presence_pack(Path(self.root, 'manifest.json')).name, 'test')
+
+    def test_page_payload_carries_each_frame_as_base64_with_its_type(self):
+        write_pack(self.root)
+        payload = load_presence_pack(self.root).page_payload()
+        json.dumps(payload)
+        frame = payload['clips']['listening']['frames'][0]
+        self.assertEqual(frame['type'], 'image/png')
+        self.assertEqual(base64.b64decode(frame['data']), PNG)
+        self.assertEqual(payload['states']['speaking'], 'listening')
+        self.assertEqual(payload['captionColor'], '#2E2B3A')
+
+    def test_frames_must_stay_inside_the_pack(self):
+        outside = Path(self.root).parent / 'outside-frame.webp'
+        outside.write_bytes(WEBP)
+        self.addCleanup(outside.unlink)
+        for relative in ('../outside-frame.webp', '/etc/passwd', 'a/../../outside-frame.webp', 'a\\b.webp'):
+            with self.subTest(relative=relative):
+                manifest = write_pack(self.root)
+                manifest['clips']['listening']['frames'] = [relative]
+                Path(self.root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'inside the pack|outside the pack'):
+                    load_presence_pack(self.root)
+
+    @unittest.skipUnless(hasattr(os, 'symlink'), 'needs symlinks')
+    def test_a_symlink_out_of_the_pack_is_refused(self):
+        outside = Path(self.root).parent / 'outside-link-target.webp'
+        outside.write_bytes(WEBP)
+        self.addCleanup(outside.unlink)
+        write_pack(self.root)
+        link = Path(self.root, 'listening', 'linked.webp')
+        os.symlink(outside, link)
+        manifest = json.loads(Path(self.root, 'manifest.json').read_text())
+        manifest['clips']['listening']['frames'] = ['listening/linked.webp']
+        Path(self.root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'outside the pack'):
+            load_presence_pack(self.root)
+
+    def test_refuses_what_a_camera_cannot_use(self):
+        cases = {
+            'fps': ({'fps': 0}, 'fps'),
+            'odd size': ({'width': 641}, 'even'),
+            'no listening': ({'states': {'joining': 'offstage'}}, 'listening'),
+            'unknown state': ({'states': {'listening': 'listening', 'dancing': 'arrive'}}, 'unknown presence state'),
+            'missing clip': ({'states': {'listening': 'nope'}}, 'does not have'),
+            'bad arrival': ({'arrival': 'nope'}, 'does not have'),
+            'bad colour': ({'captionColor': 'navy'}, 'colour'),
+            'wrong format': ({'format': 'something-else'}, 'format'),
+        }
+        for label, (changes, message) in cases.items():
+            with self.subTest(label):
+                self.edited(**changes)
+                with self.assertRaisesRegex(ValueError, message):
+                    load_presence_pack(self.root)
+
+    def test_refuses_a_frame_that_is_not_the_picture_its_name_says(self):
+        write_pack(self.root, files={
+            'offstage.webp': PNG, 'arrive/000.webp': WEBP, 'arrive/001.webp': WEBP,
+            'listening/000.png': PNG, 'leave/000.webp': WEBP,
+        })
+        with self.assertRaisesRegex(ValueError, 'not the picture'):
+            load_presence_pack(self.root)
+
+    def test_refuses_an_oversized_frame(self):
+        write_pack(self.root, files={
+            'offstage.webp': WEBP + b'\x00' * MAX_FRAME_BYTES, 'arrive/000.webp': WEBP,
+            'arrive/001.webp': WEBP, 'listening/000.png': PNG, 'leave/000.webp': WEBP,
+        })
+        with self.assertRaisesRegex(ValueError, 'over'):
+            load_presence_pack(self.root)
+
+    def test_a_missing_manifest_says_so(self):
+        with self.assertRaisesRegex(ValueError, 'no manifest.json'):
+            load_presence_pack(self.root)
+
+
+if __name__ == '__main__':
+    unittest.main()
