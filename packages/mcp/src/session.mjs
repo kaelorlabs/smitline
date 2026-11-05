@@ -72,6 +72,7 @@ export const BRIEF_SCHEMA = {
     maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
     rehearsal: { type: 'boolean', description: "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal." },
     record: { type: 'boolean', description: "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
+    phoneMenus: { type: 'boolean', description: "Phone only: let the assistant press keys in an automated phone menu (\"press 2 for billing\", \"enter your account number\") for a call to a business, such as a bank, utility or airline. Off by default; turn it on only when the call needs it, because menus make calls longer and cost more. The assistant keys in menu choices and numbers the brief gives for this call, never card numbers, PINs or passwords." },
     afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
     notify: {
       type: 'object',
