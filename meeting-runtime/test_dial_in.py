@@ -377,7 +377,7 @@ class MeetingSummarizer:
 
 
 class DialHarness:
-    def __init__(self, temp, env=None, flavor='twilio'):
+    def __init__(self, temp, env=None, flavor='twilio', daemon=None):
         self.env = dict(ENV, **(env or {}))
         self.twilio = FakeTwilio()
         self.twilio.flavor = flavor
@@ -391,7 +391,7 @@ class DialHarness:
         self.phone = PhoneLine(public_url=public_url, environ=lambda: self.env,
                                twilio_factory=lambda creds: self.twilio, live_factory=FakeLive,
                                status_grace=0.2)
-        self.daemon = BrowserMeetings()
+        self.daemon = daemon or BrowserMeetings()
 
         async def no_sleep(_seconds):
             await asyncio.sleep(0.005)
@@ -869,6 +869,81 @@ class WayInTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(checked['ok'], checked['problems'])
         self.assertEqual(checked['brief']['to'], '+14388097799')
         self.assertEqual(checked['brief']['dialIn']['keys'], ',,85951289482#,,,,*123456#')
+
+
+class MeetingMachineTests(unittest.IsolatedAsyncioTestCase):
+    """With the meeting router: Zoom, Teams and Meet meetings on machines of their own from a
+    launcher plugin, rooms in this computer's pool, one meeting at a time. A meeting joined by
+    phone takes neither a machine nor a seat, so it still joins when every seat is taken."""
+
+    async def asyncSetUp(self):
+        from meeting_supervisor import MeetingPool, MeetingRouter, RemoteMeetingPool
+        from runtime_daemon import RuntimeDaemon
+        from test_meeting_pool import ComposeRunner
+        from test_meeting_supervisor import FakeHealth, FakeLauncher
+        from test_remote_meetings import FakeProvider, owner_environment
+        FakeLive.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        runtime = root / 'meeting-runtime'
+        runtime.mkdir()
+        self.containers = []
+
+        def container(project, env):
+            self.containers.append(FakeLauncher())
+            return self.containers[-1]
+        local = MeetingPool(root, runtime_root=runtime, runner=ComposeRunner(), environ={},
+                            max_meetings=1, ports=(18100, 18119), poll_interval=0.02,
+                            start_timeout=0.4, stop_timeout=0.4, launcher_factory=container,
+                            health_factory=lambda port: FakeHealth(), port_free=lambda port: True)
+        self.provider = FakeProvider()
+        remote = RemoteMeetingPool(root, launcher=self.provider, runtime_root=runtime, max_meetings=1,
+                                   poll_interval=0.02, start_timeout=30.0, stop_timeout=1.0,
+                                   archive_timeout=1.0)
+        self.router = MeetingRouter(local, remote, remote_platforms={'zoom', 'teams', 'meet'},
+                                    max_meetings=1)
+        self.router.owner_environment = owner_environment
+        self.daemon = RuntimeDaemon(root / 'daemon', supervisor=self.router)
+        self.router.bind_daemon(self.daemon)
+        self.h = DialHarness(self.temp.name, daemon=self.daemon)
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        for meeting_id in self.daemon.meetings.list_ids():
+            if self.daemon.meetings.get(meeting_id).session.state != 'ended':
+                await self.daemon.cancel_meeting(meeting_id)
+        await until(lambda: not self.daemon._start_tasks)
+        await self.router.shutdown()
+        for machine in self.provider.machines.values():
+            await machine.vanish()
+        self.daemon.close()
+        self.temp.cleanup()
+
+    def held(self):
+        """The machines made, the containers started, and the meetings the router counts."""
+        return sorted(self.provider.machines), len(self.containers), sorted(self.router.active_ids())
+
+    async def test_a_meeting_joined_by_phone_takes_no_machine_and_no_seat(self):
+        from test_runtime_daemon import create_payload
+        record, _session = await self.h.join(to='+14388097799,,85951289482#')
+        self.assertEqual(self.held(), ([], 0, []))
+        self.assertIsNone(self.router.capacity_problem('local'))
+        # Its seat is still free: a Zoom meeting takes it, on a machine of its own.
+        zoom = await self.daemon.create_meeting(create_payload())
+        await until(lambda: zoom.id in self.provider.machines)
+        self.assertIsNotNone(self.router.capacity_problem('local'))
+        # With every seat taken, a meeting with its link and dial-in joins by phone, as one with
+        # only its number does; neither makes a machine or waits for a seat.
+        linked = await self.h.service.create(meeting_brief(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE}))
+        number = await self.h.service.create(meeting_brief(to='+16469313860,,85951289482#'))
+        await until(lambda: self.h.phone.session(linked['id']) and self.h.phone.session(number['id']))
+        self.assertEqual([event['reason'] for event in self.h.events(linked, 'call.dial_in')], ['no_seat'])
+        self.assertEqual(self.held(), ([zoom.id], 0, [zoom.id]))
+        for call in (record, linked, number):
+            await self.h.service.end(call['id'], owner='local')
+            done = await self.h.service.wait(call['id'], timeout=5, owner='local')
+            self.assertEqual(done['line']['joinedBy'], 'phone')
+        self.assertEqual(self.held(), ([zoom.id], 0, [zoom.id]))
 
 
 class GuardrailTests(unittest.TestCase):
