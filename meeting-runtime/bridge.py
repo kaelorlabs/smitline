@@ -619,6 +619,32 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
+    if state['platform'] == 'daily':
+        # A Daily room needs no browser, display or PulseAudio: daily-python joins it (daily_room.py).
+        from daily_room import joined_room
+        try:
+            async with joined_room(url, runtime, stop, stage, state,
+                                   caption=camera_caption(runtime.owner_name)) as (adapter, speaker, camera_feed):
+                presence = Presence(state, camera_feed)
+                presence.sync()
+                state['admissionState'] = 'admitted'
+                await apply_platform_camera(adapter, enabled=runtime.camera_enabled,
+                                            default_on=runtime.camera_default_on, state=state)
+                presence.sync()
+                stage('connecting_audio')
+                await adapter.connect_audio()
+                state['chatAvailable'] = await adapter.chat_available()
+                await run_voice(speaker, camera_feed.audio_writer, None, api_key, runtime, adapter, meeting_state)
+        except Exception as exc:
+            state['error'] = type(exc).__name__ + ': ' + str(exc)[:300]
+            stage('needs_attention')
+            print(state['error'], flush=True)
+            await stop.wait()
+        finally:
+            listening.close()
+            await runner.cleanup()
+            close_record(runtime)
+        return
     # The browser and display subprocesses do not inherit project secrets.
     env = browser_environment(os.environ)
     async with AsyncExitStack() as stack:
@@ -662,21 +688,27 @@ async def main():
             viewer.terminate()
             await viewer.wait()
             await runner.cleanup()
-            if record:
-                usage = {'usageSeconds': state.get('usage_seconds', 0)}
-                tokens = state.get('backend_tokens') or {}
-                if any(tokens.values()):
-                    usage['backendTokens'] = dict(tokens)
-                    usage['backendModel'] = runtime.backend_model
-                record.close(
-                    usage=usage,
-                    end_reason=state.get('endReason') or state.get('stage'),
-                    stage=state.get('stage'),
-                )
-                archive = state.get('archive')
-                if isinstance(archive, dict):
-                    archive['closed'] = True
-                    archive['handoffStatus'] = 'local'
+            close_record(runtime)
+
+
+def close_record(runtime):
+    """Close the meeting's record with what it used, once the meeting is over."""
+    if not record:
+        return
+    usage = {'usageSeconds': state.get('usage_seconds', 0)}
+    tokens = state.get('backend_tokens') or {}
+    if any(tokens.values()):
+        usage['backendTokens'] = dict(tokens)
+        usage['backendModel'] = runtime.backend_model
+    record.close(
+        usage=usage,
+        end_reason=state.get('endReason') or state.get('stage'),
+        stage=state.get('stage'),
+    )
+    archive = state.get('archive')
+    if isinstance(archive, dict):
+        archive['closed'] = True
+        archive['handoffStatus'] = 'local'
 
 
 if __name__ == '__main__':
