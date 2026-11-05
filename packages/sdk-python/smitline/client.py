@@ -307,8 +307,9 @@ class Smitline:
                             others=None):
         """Wait until the call is terminal or the timeout (at most 300 s) passes. With `since`
         ('' at first, then the last answer's live['cursor']) it follows the call live: the answer
-        also comes once something new is said, with live['transcript'] holding the new lines, and
-        at once for a request (live['requests']). only='requests' wakes for requests alone.
+        also comes once new talk has gathered (about 12 s), with live['transcript'] holding the new
+        lines, and at once for a request (live['requests']) or a status change. only='requests'
+        wakes for requests alone.
         others=True also watches your other calls in progress: a new request on any of them
         wakes the wait, and live['otherRequests'] lists the ones you have not answered yet."""
         import asyncio

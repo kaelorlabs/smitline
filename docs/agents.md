@@ -22,7 +22,7 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | --- | --- |
 | `start_call` | Start a phone call or meeting from a brief. Returns at once. |
 | `check_call_brief` | Validate a brief without calling. Missing fields come with the question to ask the user. |
-| `wait_for_call` | Wait up to `timeoutSeconds` (default 50) and return the call; call again while it is running. With `since`, follow it live: it also returns once something new is said, and at once for a request from the call (see [following a call live](#following-a-call-live)). `only: "requests"` wakes for requests alone. Following live also watches your other calls in progress (`others`, on unless `false`): their unanswered requests come back in `live.otherRequests`. |
+| `wait_for_call` | Follow a call live: wait up to `timeoutSeconds` (default 50) and return the call, at once for a request from the call or a status change, otherwise once new talk has gathered (see [following a call live](#following-a-call-live)). Call it again, in the same turn, until the call ends. `since` is the last answer's `live.cursor` (by default `""`, the start). `only: "requests"` wakes for requests alone. It also watches your other calls in progress (`others`, on unless `false`): their unanswered requests come back in `live.otherRequests`. |
 | `get_call`, `list_calls` | Read calls without waiting. `list_calls` can show only phone calls or meetings, one number's calls, or one task's. |
 | `save_call_note` | After a call, save a short note that later calls can start with (see [earlier calls](calls.md#earlier-calls)). |
 | `list_contacts` | The people and businesses Smitline has called or been called by. |
@@ -41,7 +41,7 @@ The skill in `.agents/skills/call-with-smitline` teaches agents to write a compl
 
 ## Following a call live
 
-The agent that placed a call can supervise it while it runs. It passes `since: ""` to `wait_for_call`, then the `live.cursor` of each answer. Each answer comes about 2 seconds after something new is said, so it holds the whole exchange, with the new lines in `live.transcript`:
+The agent that placed a call follows it while it runs, in the same turn: once its turn ends, nothing from the call reaches it. It calls `wait_for_call` with `since: ""` (the default), then with the `live.cursor` of each answer, until the call is `completed`, `failed` or `canceled`. An answer comes at once for a request from the call, a status change (`ringing`, `waiting`, `in_progress`) and the end; otherwise about 12 seconds after something new is said, so it holds an exchange or two and following a call takes about five tool calls a minute. The new lines are in `live.transcript`:
 
 ```json
 { "status": "in_progress", "live": { "cursor": "14", "transcript": [
@@ -51,13 +51,15 @@ The agent that placed a call can supervise it while it runs. It passes `since: "
 
 When the agent knows something the call needs, such as the user's calendar, a document, or a decision made earlier, it steps in with `send_call_instruction` ("Friday at 10 works"), and the voice uses it straight away. It reaches the voice as a note from the user's agent ("From Robin's agent: ..."): the voice acts on it without mentioning it, and tells the people on the call anything in it meant for them at the next pause, never over someone who is speaking. If the call goes wrong, `end_call`. Otherwise it keeps waiting and Smitline runs the conversation. This works for phone calls and meetings, in every MCP client, because it is ordinary tool calls. The skill and the server's MCP instructions teach agents to do this.
 
+Every `start_call` and `wait_for_call` result starts with `next`, a sentence or two on what to do now: follow the call (with the cursor to pass), answer the requests first, or tell the user the outcome and finish `openRequests`. In apps that ask before each tool call, each answer is a click: the agent suggests once, on the first call, that the user set `wait_for_call`, `get_call` and `list_calls` to always allow, and never `start_call`. With an empty `since`, what was already there when the wait began comes after those 12 seconds too, so an agent that keeps asking from the start is not answered at once every time. REST, the SDKs and the CLI keep `since` optional: a wait without it waits for the end and does not count as following, because code that only waits for the result, such as `smitline call --wait`, cannot answer requests.
+
 ## The call card
 
 Clients that support MCP Apps (ChatGPT, Claude and others) show what `start_call` and `get_call` return as a card in the chat: who the call is for and its status, then the outcome, summary and details, what it cost, the recording, and the transcript. While the call runs, the card asks for it again every 3 seconds (`get_call`), so it follows the call until it ends; it does not count as the agent following the call. The card is the resource `ui://smitline/call-card-v1.html` (`text/html;profile=mcp-app`): one self-contained page that shows everything as text and loads nothing from elsewhere. It plays a recording only from an https link in the call's `recordingUrl` whose origin the server allows (`createMcpSession({ card: { mediaOrigins } })`; Smitline Cloud passes its own), and offers `callUrl`, when there is one, as "Open in Smitline". Other clients get the same result as text, as before.
 
 ## Requests from the call
 
-People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`. That limits *tasks*: a question the voice cannot answer is passed on too, since the agent knows the owner's work, and the agent decides how much to share:
+People on a call can ask the agent that started it for things the voice cannot do itself: change a file, look something up in the user's documents, check a fact only the agent can reach. The brief says what the agent will do, in `canDo`, and agents set it whenever they could help, at least to answer questions about the user's work. It limits *tasks*: a question the voice cannot answer is passed on too, since the agent knows the owner's work, and the agent decides how much to share. Without `canDo` nothing reaches the agent, and the voice says the owner will follow up:
 
 ```json
 { "channel": "meeting", "to": "https://zoom.us/j/...", "onBehalfOf": "Sam",
@@ -79,7 +81,7 @@ The agent answers with `reply_to_call_request`, of two types:
 - **`status`**, any number of times. The first one says it picked the request up. The voice keeps a status to itself and uses it if someone asks how it is going; `announce: true` has it say the status now, for a question or a blocker. Their answer comes back as a request message of type `add` with the same id.
 - **`done`**, once. It closes the request; `ok: false` when it could not be done. The voice tells the person who asked at the next natural pause. Links, code, and numbers go in `details`: a meeting posts them in its chat, and on a phone call the voice reads them out only if asked.
 
-A small question gets `done` straight away. A bigger task gets a `status` first, then `done`; meanwhile the agent keeps following the call (a subagent can do the work). The voice can also cancel a request when they drop it (`cancel`). For a long meeting, `only: "requests"` wakes the agent only for requests, and each request carries who asked and the last lines said, so the agent need not read the whole meeting.
+A small question gets `done` straight away. A bigger task gets a `status` first, then `done`; meanwhile the agent keeps following the call (a subagent can do the work). The voice says the reply itself, so the agent never sends the same answer as an instruction too: it would be said twice. The voice can also cancel a request when they drop it (`cancel`). For a long meeting, `only: "requests"` wakes the agent only for requests, and each request carries who asked and the last lines said, so the agent need not read the whole meeting.
 
 ### Several calls at once
 

@@ -400,9 +400,10 @@ export class Smitline {
   /** Long-poll until the call is terminal or the timeout (at most 280 s) passes. */
   /**
    * Wait until the call finishes or the timeout passes. Pass `{ since }` ('' at first, then the
-   * last answer's `live.cursor`) to follow it live: the answer then also comes once something new
-   * is said, with `live.transcript` holding the new lines, and at once for a request
-   * (`live.requests`). `{ only: 'requests' }` wakes for requests alone, without the transcript.
+   * last answer's `live.cursor`) to follow it live: the answer then also comes once new talk has
+   * gathered (about 12 s), with `live.transcript` holding the new lines, and at once for a request
+   * (`live.requests`) or a status change. `{ only: 'requests' }` wakes for requests alone, without
+   * the transcript.
    */
   async waitForCall(callId, timeoutSeconds = 60, { since, only, others } = {}) {
     return this._transport.waitForCall(callId, timeoutSeconds, since, only, others);
