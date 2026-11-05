@@ -208,7 +208,8 @@ Languages: speak the language of the person talking to you. When someone asks yo
     if runtime.voice:
         config['audio']['output'] = {'voice': runtime.voice}
     if runtime.meeting_intro:
-        config['instructions'] += intro_instructions(runtime.owner_name)
+        config['instructions'] += intro_instructions(runtime.owner_name,
+                                                     bool(meeting_state.get('canDo')))
     if runtime.meeting_instructions:
         config['instructions'] += (
             '\nOrganizer-provided meeting guidance: ' + runtime.meeting_instructions +
@@ -331,7 +332,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
             async def introduce_once():
                 if await introduce(ws.send_json, runtime, participation, ready, stop,
-                                   heard_at=lambda: heard[0]):
+                                   heard_at=lambda: heard[0],
+                                   takes_requests=bool(meeting_state.get('canDo'))):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
 

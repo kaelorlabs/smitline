@@ -14,8 +14,8 @@ From `MeetingPlatformAdapter.capabilities` in `meeting-runtime/adapters.py` and 
 | Signed-in profile fallback | No | Microsoft (`teams-connected` / `teams`) | Google (`google-connected` / `google`) |
 | Browser controls | Smitline's own Zoom controls | Joinly Teams controller | Joinly Google Meet controller |
 | Virtual camera | Yes | Yes | Yes |
-| Participant discovery | No | Yes | Yes |
-| Empty-room auto-leave | Ended/removal detection only (no participant count) | Leaves when the toolbar reports one participant | Same count-based leave when the toolbar reports one participant; ended/removal detection also applies |
+| Participant discovery | Yes (the participants button and panel) | Yes | Yes |
+| Empty-room auto-leave | Leaves when the participant count shows it alone for 15 s; ended/removal detection also applies | Leaves when the toolbar reports one participant | Same count-based leave when the toolbar reports one participant; ended/removal detection also applies |
 | Screen sharing (outgoing or incoming) | No | No | No |
 
 Live tenant policy can still refuse admission. Browser fixtures do not prove production compatibility.

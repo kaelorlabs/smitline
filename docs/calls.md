@@ -24,7 +24,7 @@ queued ─► connecting ─► ringing / waiting ─► in_progress ─► summ
 | `failed` | Terminal. A system error prevented a result. `error` explains it. |
 | `canceled` | Terminal. Ended by the caller before a result was possible. |
 
-`endReason` records how the conversation ended: `hangup`, `remote_hangup`, `no_answer`, `busy`, `voicemail`, `max_duration`, `canceled`, `meeting_ended`, `transferred`, `error`. When the agent itself ended it, the events say why: `call.end_requested` for a phone call (the `end_call` reason), and `call.agent_left` for a meeting the agent left (`left_completed`, `left_asked_to_leave`, `left_not_productive`, `left_other`, `idle` or `alone_in_meeting`).
+`endReason` records how the conversation ended: `hangup`, `remote_hangup`, `no_answer`, `busy`, `voicemail`, `max_duration`, `canceled`, `meeting_ended`, `transferred`, `error`. When the agent itself ended it, the events say why: `call.end_requested` for a phone call (the `end_call` reason), and `call.agent_left` for a meeting the agent left (`left_completed`, `left_asked_to_leave`, `left_not_productive`, `left_other`, `idle` or `alone_in_meeting`). A meeting outlives a daemon that stops without ending it (a crash, a forced restart): the next daemon follows it again (`call.resumed`), counts its meeting time from when it went live and still ends it at `maxMinutes`; a meeting whose container is gone by then is closed as `failed`, like any call the last daemon left open.
 
 ## Brief
 

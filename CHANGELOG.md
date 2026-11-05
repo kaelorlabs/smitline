@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A meeting that outlives a daemon restart keeps its call.** A daemon that stopped without ending its meetings (a crash, a forced restart) left their containers running; the next daemon adopted them but had already closed their calls, so the rest of each meeting ran with nothing counting its time or ending it at `maxMinutes`. Now the call is followed again (`call.resumed`): its meeting time counts from when it went live, and it still ends at `maxMinutes`. Instructions and listening in need the meeting's token, which only the daemon that started it had, so they stay unavailable for the rest of such a meeting.
+- **The meeting hello says what Smitline is there for.** With `SMITLINE_MEETING_INTRO=1`: "Hey, this is NAME's AI assistant. I'm here to answer any questions or do any work. I'll be here taking notes, so let me know if you need anything." It offers to do work only when the brief's `canDo` lets people ask the agent for things, and it waits for a pause however long that takes, instead of speaking over people after 45 seconds.
+- docs: `.env.example` and `AGENTS.md` said meetings introduce themselves by default; since 0.3.0 the spoken hello is opt-in. The capability matrix now shows Zoom's participant list and its empty-room leave.
 - docs: Smithery no longer lists Smitline. It became part of Arcade and shut down its proxy and accounts on 2026-10-31. The README's Smithery badge now points to MCP Market, which lists Smitline, and [MCP directories](docs/mcp-directories.md) says where Smitline is listed today.
 
 ## 0.3.5 — 2026-11-04

@@ -2,6 +2,7 @@
 import asyncio
 import collections
 import dataclasses
+from datetime import datetime
 import os
 import re
 import time
@@ -235,6 +236,9 @@ class CallService:
         # Calls closed before they could finish (a stop, a restart): their usage is still
         # recorded, once each, so a hosted deployment settles what call_started held.
         self._unsettled = []
+        # Meeting calls a previous daemon left open: their meeting may still be running, adopted
+        # by the meeting supervisor at startup. resume_meetings() follows or closes each.
+        self._resumable = []
 
     @property
     def environ(self):
@@ -412,10 +416,19 @@ class CallService:
 
     def reconcile(self):
         """At startup, close calls a previous daemon left unfinished; nothing will finish them.
-        Their usage is recorded as for any finished call."""
+        Their usage is recorded as for any finished call.
+
+        A meeting call is the exception: its meeting runs in its own container, which a daemon
+        that stopped without ending it (a crash, a forced restart) leaves running, and the meeting
+        supervisor adopts it at startup. Such calls wait for resume_meetings(), which follows the
+        ones still running and closes the rest."""
         closed = []
         for record in self.store.list(limit=1000):
             if record['status'] in TERMINAL or record['id'] in self._contexts:
+                continue
+            if self._may_resume(record):
+                if record['id'] not in self._resumable:
+                    self._resumable.append(record['id'])
                 continue
             self._close_unfinished(record['id'], 'The daemon stopped before the call finished.')
             closed.append(record['id'])
@@ -426,6 +439,66 @@ class CallService:
         if closed:
             self._spawn(self._settle_unfinished(), name='settle-unfinished-calls')
         return closed
+
+    def _may_resume(self, record):
+        line = self.lines.get(record.get('channel'))
+        return (record.get('channel') == 'meeting' and bool((record.get('line') or {}).get('meetingId'))
+                and callable(getattr(line, 'resume', None)) and callable(getattr(line, 'running', None)))
+
+    async def resume_meetings(self):
+        """Follow again the meetings a previous daemon left running (call after reconcile() and
+        after the meeting supervisor adopted its containers, as daemon_main does). Each such call
+        is billed from the moment its meeting went live and still ends at its maxMinutes, as if
+        the daemon had never stopped: without this, the meeting ran on with nobody billing or
+        ending it. Calls whose meeting is gone are closed as reconcile() closes any other.
+        Returns the ids of the calls followed again."""
+        resumed, closed = [], []
+        while self._resumable:
+            call_id = self._resumable.pop(0)
+            try:
+                record = self.store.get(call_id)
+            except CallNotFound:
+                continue
+            if record['status'] in TERMINAL or call_id in self._contexts:
+                continue
+            line = self.lines.get(record.get('channel'))
+            meeting_id = (record.get('line') or {}).get('meetingId')
+            context = None
+            try:
+                if await line.running(meeting_id, record.get('owner')):
+                    brief = CallBrief.from_dict(record.get('brief') or {},
+                                                environ=self.settings(record.get('owner')))
+                    context = CallContext(self, call_id, brief, record.get('owner'))
+            except Exception:
+                context = None
+            if context is None:
+                self._close_unfinished(call_id, 'The daemon stopped before the call finished.')
+                closed.append(call_id)
+                continue
+            live_for = self._seconds_since(record.get('answeredAt'))
+            self._contexts[call_id] = context
+            self._event(call_id, 'call.resumed')
+
+            async def follow(ctx, line=line, meeting_id=meeting_id, live_for=live_for):
+                await line.resume(ctx, meeting_id, live_for=live_for)
+            task = self._spawn(self._run(follow, context), name='call-' + call_id)
+            self._call_tasks[call_id] = task
+            task.add_done_callback(lambda _done, call_id=call_id: self._call_tasks.pop(call_id, None))
+            resumed.append(call_id)
+        if closed:
+            self._spawn(self._settle_unfinished(), name='settle-unfinished-calls')
+        return resumed
+
+    def _seconds_since(self, moment):
+        """Seconds from an ISO time in a call record (answeredAt) to now; None if unknown."""
+        if not moment:
+            return None
+        try:
+            then = datetime.fromisoformat(str(moment).replace('Z', '+00:00'))
+            now = datetime.fromisoformat(self.store.now().replace('Z', '+00:00'))
+        except ValueError:
+            return None
+        return max(0.0, (now - then).total_seconds())
 
     async def create(self, payload, *, request=None):
         owner = await self.owner_for(request)

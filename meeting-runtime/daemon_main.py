@@ -197,7 +197,11 @@ def build_app(args):
     app.auth_token_path = token_path
 
     async def on_startup(_app):
+        # The phone gateway's startup closed the calls the last daemon left open, except
+        # meetings (call_service.reconcile). The supervisor adopts the meeting containers still
+        # running; their calls are then followed again, billed and timed as before the restart.
         await supervisor.reconcile(app.runtime_daemon)
+        await app.call_service.resume_meetings()
 
     async def on_cleanup(_app):
         await supervisor.shutdown()

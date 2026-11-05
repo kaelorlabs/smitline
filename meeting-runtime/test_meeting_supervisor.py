@@ -372,6 +372,30 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         finally:
             app.runtime_daemon.close()
 
+    def test_meeting_calls_are_followed_again_only_after_the_supervisor_adopts_meetings(self):
+        # After a restart the supervisor adopts the meeting containers still running; only
+        # then can the call service tell which meeting calls to follow again.
+        from daemon_main import build_app, build_parser
+        args = build_parser().parse_args([
+            '--root', str(self.root), '--runtime-root', str(self.runtime),
+        ])
+        app, _host, _port, _token_path = build_app(args)
+        order = []
+
+        async def adopt(_daemon):
+            order.append('adopt')
+
+        async def follow_again():
+            order.append('follow again')
+            return []
+        try:
+            app.meeting_supervisor.reconcile = adopt
+            app.call_service.resume_meetings = follow_again
+            asyncio.run(app.on_startup[-1](app))
+            self.assertEqual(order, ['adopt', 'follow again'])
+        finally:
+            app.runtime_daemon.close()
+
 
 class FakeRunner:
     """Records host commands and answers each with success."""

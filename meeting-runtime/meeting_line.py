@@ -207,9 +207,25 @@ class MeetingLine:
             await self.daemon.cancel_meeting(session.id)
         await self._follow(ctx, session.id)
 
-    async def _follow(self, ctx, meeting_id):
+    async def running(self, meeting_id, owner):
+        """Whether a meeting a previous daemon started is still going (the supervisor adopted
+        its container at startup)."""
+        try:
+            session = await self.daemon.get_meeting(meeting_id, owner=owner)
+        except Exception:
+            return False
+        return getattr(session, 'state', 'ended') != 'ended'
+
+    async def resume(self, ctx, meeting_id, *, live_for=None):
+        """Follow a meeting that outlived the daemon that started it, as start() would have:
+        it went live live_for seconds ago (None: not live yet), so its meeting time counts from
+        then and it still ends at maxMinutes."""
+        self._meetings[ctx.call_id] = meeting_id
+        await self._follow(ctx, meeting_id, live_for=live_for)
+
+    async def _follow(self, ctx, meeting_id, live_for=None):
         last = None
-        started = None
+        started = None if live_for is None else self._now() - max(0.0, float(live_for))
         limit = ctx.brief.max_minutes * 60
         live = LiveTranscript(ctx)
         captions_after = getattr(self.daemon, 'captions_after', None) if self._pieces else None
