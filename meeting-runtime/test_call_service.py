@@ -353,6 +353,30 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(left, [{'reason': 'left_asked_to_leave'}])
             await h.service.shutdown()
 
+    async def test_a_meeting_whose_machine_never_started_fails_the_call(self):
+        # A launcher plugin starts each meeting on a machine of its own, in the background. One
+        # that never comes up ends the meeting (supervisor_start_failed): the call failed, rather
+        # than a meeting that ended with nothing said.
+        with tempfile.TemporaryDirectory() as temp:
+            class NeverStarted(FakeDaemon):
+                async def get_handoff(self, meeting_id, owner=None):
+                    handoff = await super().get_handoff(meeting_id, owner)
+                    return dict(handoff, endReason='supervisor_start_failed')
+            daemon = NeverStarted()
+            daemon.states = ['joining', 'joining', 'ended']
+            ticks = iter(range(0, 10000, 5))
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks))
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            done = await h.service.wait(record['id'], timeout=5, owner='local')
+            self.assertEqual((done['status'], done['endReason']), ('failed', 'error'))
+            self.assertIn('could not be started', done['error'])
+            self.assertEqual(done['usage']['voiceSeconds'], 0)
+            await h.service.shutdown()
+
     async def test_meeting_call_follows_meeting_to_handoff(self):
         with tempfile.TemporaryDirectory() as temp:
             daemon = FakeDaemon()
@@ -373,8 +397,11 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
                         if e['type'] == 'call.status']
             self.assertEqual(statuses[:4], ['connecting', 'waiting', 'in_progress', 'summarizing'])
             payload = daemon.created[0]
-            self.assertEqual(set(payload), {'meetingUrl', 'context', 'onBehalfOf'})
+            self.assertEqual(set(payload), {'meetingUrl', 'context', 'onBehalfOf', 'maxMinutes'})
             self.assertEqual(payload['onBehalfOf'], 'Robin')
+            # The meeting's own time limit (the core's default for meetings, 120 minutes), which a
+            # launcher plugin gives the meeting's machine its lifetime from.
+            self.assertEqual(payload['maxMinutes'], 120)
             self.assertEqual(payload['context']['summary'], 'Q3 sales review')
             self.assertEqual(h.summarizer.calls, 0)
             await h.service.shutdown()

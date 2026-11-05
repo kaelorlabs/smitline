@@ -130,11 +130,26 @@ async def post_control(url, message, headers, timeout=5.0):
 
 
 class UrlHealthClient:
-    """Reads meeting-agent /health. Tests inject a fake instead of this class."""
+    """Reads meeting-agent /health. Tests inject a fake instead of this class.
 
-    def __init__(self, url=HEALTH_URL, timeout=0.7):
-        self.url = url
+    `url` may be a function, for a meeting on a machine of its own whose address is known only
+    once it runs; `headers` too, for the meeting's token there (SMITLINE_HEALTH_TOKEN)."""
+
+    def __init__(self, url=HEALTH_URL, timeout=0.7, headers=None):
+        self._url = url
         self.timeout = timeout
+        self._headers = headers
+
+    @property
+    def url(self):
+        return self._url() if callable(self._url) else self._url
+
+    @url.setter
+    def url(self, value):
+        self._url = value
+
+    def headers(self):
+        return dict((self._headers() if callable(self._headers) else self._headers) or {})
 
     async def fetch(self):
         loop = asyncio.get_running_loop()
@@ -143,11 +158,75 @@ class UrlHealthClient:
     def _get(self):
         from urllib.error import URLError
         from urllib.request import Request, urlopen
+        url = self.url
+        if not url:
+            return None
         try:
-            with urlopen(Request(self.url), timeout=self.timeout) as response:
+            with urlopen(Request(url, headers=self.headers()), timeout=self.timeout) as response:
                 return json.loads(response.read().decode('utf-8'))
         except (URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
             return None
+
+
+# A meeting on a machine of its own (SMITLINE_MEETING_LAUNCHER): a machine takes a minute or two
+# to boot (about 80 s on a Google VM, docs/meetings.md), and its archive comes back over HTTP.
+REMOTE_START_TIMEOUT = 300.0
+# How long the daemon asks for the archive once the meeting ended, and how long the meeting's
+# server waits for it (SMITLINE_ARCHIVE_GRACE).
+ARCHIVE_TIMEOUT = 90.0
+ARCHIVE_GRACE = 120
+MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+
+
+def unpack_archive(data, directory):
+    """Write a meeting archive's files (a gzipped tar from GET /archive) into `directory`, private
+    to this user. Only plain top-level files, within MAX_ARCHIVE_BYTES; anything else is skipped."""
+    import io
+    import tarfile
+    directory = Path(directory)
+    ensure_private_dir(directory)
+    written, total = [], 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tar:
+        for member in tar:  # one header at a time, so the cap stops reading too
+            name = member.name
+            if (not member.isfile() or not name or '/' in name or '\\' in name
+                    or name in ('.', '..') or name.startswith('.')):
+                continue
+            total += member.size
+            if total > MAX_ARCHIVE_BYTES:
+                break
+            source = tar.extractfile(member)
+            if source is None:
+                continue
+            write_private_file(directory / name, source.read())
+            written.append(name)
+    return written
+
+
+def fetch_archive(url, headers, timeout=10.0):
+    """GET /archive once: ('ready', bytes), ('not_closed', None) or ('unreachable', None)."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+    try:
+        with urlopen(Request(url, headers=headers), timeout=timeout) as response:
+            return 'ready', response.read(MAX_ARCHIVE_BYTES + 1)
+    except HTTPError as error:
+        return ('not_closed' if error.code == 409 else 'unreachable'), None
+    except (URLError, TimeoutError, OSError, ValueError):
+        return 'unreachable', None
+
+
+def remote_token_path(project_root, meeting_id):
+    """A remote meeting's token, in a private file beside its claim: a restarted daemon needs it
+    to control, hear and finish the meeting, and claims are JSON, which never holds a secret."""
+    return pool_claim_path(project_root, meeting_id).with_suffix('.token')
+
+
+def read_token(path):
+    try:
+        return Path(path).read_text(encoding='utf-8').strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def host_user_env(environ=None):
@@ -275,6 +354,7 @@ class ProductionMeetingSupervisor:
         owner_environment=None,
         claim=None,
         mounts=(),
+        archive_timeout=ARCHIVE_TIMEOUT,
     ):
         self.project_root = Path(project_root).resolve()
         # claim: a pool meeting's own claim file and what it records (owner, project, ports),
@@ -285,10 +365,14 @@ class ProductionMeetingSupervisor:
         self.runtime_root = Path(runtime_root or (self.project_root / 'meeting-runtime')).resolve()
         self.runner = runner or SubprocessCommandRunner(self.project_root)
         self.launcher = launcher or ComposeMeetingAgent(self.runner)
+        # A launcher plugin's machine (RemoteMeetingPool) runs the meeting where the daemon cannot
+        # read its disk: it gets a start package, and the archive comes back over HTTP.
+        self.remote = bool(getattr(self.launcher, 'remote', False))
         self.health = health or UrlHealthClient()
         self.poll_interval = poll_interval
         self.start_timeout = start_timeout
         self.stop_timeout = stop_timeout
+        self.archive_timeout = archive_timeout
         # owner_environment(owner): a pool meeting's whole environment besides HOME and its
         # runtime state (meeting_line.pool_meeting_environment), written to a private env file
         # that the pool's compose files read instead of .env. One meeting container at a time
@@ -301,8 +385,14 @@ class ProductionMeetingSupervisor:
         self._watch_task = None
         self._finalize_inflight = {}
         # The running meeting's own token for /control and /listen, kept in memory only: a
-        # meeting adopted after a restart has none, so it runs on without either.
+        # meeting adopted after a restart has none, so it runs on without either. A remote
+        # meeting's is also kept in a private file beside its claim, so a restarted daemon has it.
         self._control_token = None
+        # While a remote meeting starts: its id, and an event cancel() sets to stop the start.
+        self._start_cancel = None
+        self._starting_id = None
+        # The remote meeting whose archive is already here (_fetch_archive).
+        self._archive_taken = None
 
     def bind_daemon(self, daemon):
         self.daemon = daemon
@@ -390,11 +480,60 @@ class ProductionMeetingSupervisor:
         if self._claim:
             claim.update(self._claim.get('record') or {})
         write_private_json(self._claim_path(), claim)
+        if self.remote and self._control_token:
+            # A restarted daemon reads it back to control, hear and finish the meeting (adopt).
+            write_private_file(self._claim_path().with_suffix('.token'), self._control_token + '\n')
         return payload
+
+    def _drop_claim(self):
+        """Remove a pool meeting's claim, and a remote meeting's token beside it."""
+        self._claim['path'].unlink(missing_ok=True)
+        if self.remote:
+            self._claim['path'].with_suffix('.token').unlink(missing_ok=True)
+
+    def _start_package(self, session, payload, values):
+        """What a remote meeting's machine needs to run it, handed to the launcher's up(): the
+        runtime state the container reads, its whole environment (the owner's settings and
+        provider key, as a pool meeting's env file would hold them) and the meeting's token,
+        with the meeting's time limit when it has one (maxMinutes), for the machine's lifetime.
+        No setting or key of it is written to disk here."""
+        environment = dict(values or {})
+        environment.update({
+            'MEETING_URL': session.meeting_url,
+            'SMITLINE_RUNTIME_STATE': '/meeting-runtime/run/meetings/' + session.id + '/runtime.json',
+            'SMITLINE_CONTROL_TOKEN': self._control_token,
+            # Its port is reachable on a network: /health takes the token too.
+            'SMITLINE_HEALTH_TOKEN': '1',
+            'SMITLINE_ARCHIVE_GRACE': str(ARCHIVE_GRACE),
+        })
+        package = {
+            'meetingId': session.id,
+            'owner': getattr(session, 'owner', 'local'),
+            'meetingUrl': session.meeting_url,
+            'runtimeState': payload,
+            'environment': environment,
+            'controlToken': self._control_token,
+        }
+        if getattr(session, 'max_minutes', None):
+            package['maxMinutes'] = session.max_minutes
+        return package
 
     async def start(self, session, camera_settings=None):
         if self.local_only and getattr(session, 'owner', 'local') != 'local':
             raise DaemonError(409, 'meeting_pool_required', MEETING_POOL_REQUIRED)
+        if not self.remote:
+            return await self._start(session, camera_settings)
+        # A machine takes a minute or more to start. cancel() sets this, so ending the meeting
+        # meanwhile stops the start at once instead of waiting behind it.
+        self._start_cancel = asyncio.Event()
+        self._starting_id = session.id
+        try:
+            return await self._start(session, camera_settings)
+        finally:
+            self._start_cancel = None
+            self._starting_id = None
+
+    async def _start(self, session, camera_settings):
         async with self._lock:
             status = await self.launcher.inspect()
             if status.get('unknown'):
@@ -405,16 +544,23 @@ class ProductionMeetingSupervisor:
                 raise DaemonError(409, 'capacity_exceeded', 'meeting agent is already running')
             values = self._owner_values(session)
             self._control_token = secrets.token_urlsafe(32)
-            self._write_session_files(session, camera_settings=camera_settings, owner_values=values)
+            payload = self._write_session_files(session, camera_settings=camera_settings,
+                                                owner_values=values)
             try:
-                self._prepare_mounts()
-                owner_env = self._write_owner_env(session, values)
-                try:
-                    await self.launcher.up(self._container_env(session, owner_env))
-                finally:
-                    # Compose copied it into the container; no key stays on disk.
-                    if owner_env is not None:
-                        owner_env.unlink(missing_ok=True)
+                if self.remote:
+                    # The machine gets everything by value: no setting or key is written here.
+                    self._check_start_canceled()
+                    await self._unless_canceled(
+                        self.launcher.up(self._start_package(session, payload, values)))
+                else:
+                    self._prepare_mounts()
+                    owner_env = self._write_owner_env(session, values)
+                    try:
+                        await self.launcher.up(self._container_env(session, owner_env))
+                    finally:
+                        # Compose copied it into the container; no key stays on disk.
+                        if owner_env is not None:
+                            owner_env.unlink(missing_ok=True)
                 await self._wait_until_running()
                 await self._wait_until_health()
             except Exception:
@@ -423,7 +569,7 @@ class ProductionMeetingSupervisor:
                 self._active_session = None
                 self._control_token = None
                 if self._claim:
-                    self._claim['path'].unlink(missing_ok=True)
+                    self._drop_claim()
                 raise
             self._active_id = session.id
             self._active_session = session
@@ -439,17 +585,26 @@ class ProductionMeetingSupervisor:
             payload['context'] = context.to_dict() if hasattr(context, 'to_dict') else context
             write_private_json(path, payload)
 
-    async def cancel(self, meeting_id):
+    async def cancel(self, meeting_id, reason='cancelled'):
+        # A remote machine takes minutes to start; ending the meeting meanwhile stops the start
+        # at once instead of waiting behind it.
+        if self._start_cancel is not None:
+            self._start_cancel.set()
         async with self._lock:
-            await self._cancel_locked(meeting_id)
+            await self._cancel_locked(meeting_id, reason)
 
-    async def _cancel_locked(self, meeting_id):
+    async def _cancel_locked(self, meeting_id, reason='cancelled'):
         if self._active_id not in (None, meeting_id):
-            await self._complete_handoff_for(meeting_id, 'cancelled', partial=True)
+            await self._complete_handoff_for(meeting_id, reason, partial=True)
             return
         await self._stop_watch()
+        if self.remote and self._active_id == meeting_id:
+            # The daemon cannot signal a container on another machine: the meeting is asked to
+            # stop, as SIGTERM would, and its archive comes back before the machine is deleted.
+            if await self.control(meeting_id, {'type': 'stop'}) is not None:
+                await self._fetch_archive(meeting_id, timeout=self.stop_timeout)
         await self._await_stop()
-        await self._complete_handoff_for(meeting_id, 'cancelled', partial=True)
+        await self._complete_handoff_for(meeting_id, reason, partial=True)
         self._release_active_claim(meeting_id)
 
     async def reconcile(self, daemon=None):
@@ -470,10 +625,13 @@ class ProductionMeetingSupervisor:
             return
         await self._finish_unfinished(daemon)
 
-    def adopt(self, session):
-        """Follow a meeting whose container is still running from before a restart."""
+    def adopt(self, session, control_token=None):
+        """Follow a meeting whose container is still running from before a restart; with its
+        token (kept beside a remote meeting's claim), control, hearing and its archive too."""
         self._active_id = session.id
         self._active_session = session
+        if control_token:
+            self._control_token = control_token
         if self._watch_task is None or self._watch_task.done():
             self._watch_task = asyncio.create_task(
                 self._watch(session), name='meeting-agent-watch-' + session.id)
@@ -504,20 +662,54 @@ class ProductionMeetingSupervisor:
                 partial=True,
             )
 
+    def _check_start_canceled(self):
+        """A remote start stops once its meeting was ended: by cancel(), or by a handoff written
+        meanwhile (the meeting was ended before its start began)."""
+        if self._start_cancel is None:
+            return
+        if self._start_cancel.is_set() or self._handoff_ready(self._starting_id):
+            raise DaemonError(409, 'canceled', 'the meeting was ended while it was starting')
+
+    async def _unless_canceled(self, awaitable):
+        """Await a remote start's step, unless cancel() comes first: the step is then
+        interrupted and the start ends as canceled."""
+        task = asyncio.ensure_future(awaitable)
+        waiter = asyncio.ensure_future(self._start_cancel.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            waiter.cancel()
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        if task.cancelled():
+            self._check_start_canceled()
+        return task.result()
+
+    def _inspect_every(self):
+        """Seconds between asking the launcher while starting or stopping: a container answers
+        at once; a remote machine's state is a cloud API call."""
+        return self.poll_interval if self.remote else min(self.poll_interval, 0.05)
+
     async def _wait_until_running(self):
         deadline = asyncio.get_running_loop().time() + self.start_timeout
         while asyncio.get_running_loop().time() < deadline:
+            self._check_start_canceled()
             status = await self.launcher.inspect()
             if status.get('unknown'):
                 raise DaemonError(503, 'retry_required', 'meeting-agent state is uncertain')
             if status.get('running'):
                 return
-            await asyncio.sleep(min(self.poll_interval, 0.05))
+            await asyncio.sleep(self._inspect_every())
         raise RuntimeError('meeting-agent did not become running')
 
     async def _wait_until_health(self):
         deadline = asyncio.get_running_loop().time() + self.start_timeout
         while asyncio.get_running_loop().time() < deadline:
+            self._check_start_canceled()
             health = await self.health.fetch()
             if health:
                 return health
@@ -526,7 +718,7 @@ class ProductionMeetingSupervisor:
                 raise DaemonError(503, 'retry_required', 'meeting-agent state is uncertain')
             if not status.get('running'):
                 raise RuntimeError('meeting-agent exited during startup')
-            await asyncio.sleep(min(self.poll_interval, 0.05))
+            await asyncio.sleep(self._inspect_every())
         raise RuntimeError('meeting-agent health was not reachable')
 
     async def _stop_container(self):
@@ -544,7 +736,7 @@ class ProductionMeetingSupervisor:
                 return
             if not status.get('running'):
                 return
-            await asyncio.sleep(min(self.poll_interval, 0.05))
+            await asyncio.sleep(self._inspect_every())
         raise DaemonError(503, 'retry_required', 'meeting-agent did not stop')
 
     async def _stop_watch(self):
@@ -562,13 +754,18 @@ class ProductionMeetingSupervisor:
         try:
             while True:
                 await asyncio.sleep(self.poll_interval)
-                status = await self.launcher.inspect()
-                if status.get('unknown'):
-                    continue
-                if not status.get('running'):
-                    await self._complete_handoff(session, 'container_exited', partial=True)
-                    return
-                health = await self.health.fetch()
+                # A remote machine's state is a cloud API call, so it is asked only when the
+                # meeting does not answer; a container's is asked first, as always.
+                health = await self.health.fetch() if self.remote else None
+                if not health:
+                    status = await self.launcher.inspect()
+                    if status.get('unknown'):
+                        continue
+                    if not status.get('running'):
+                        await self._complete_handoff(session, 'container_exited', partial=True)
+                        return
+                    if not self.remote:
+                        health = await self.health.fetch()
                 if not health:
                     continue
                 if await self._apply_health(session, health):
@@ -700,6 +897,9 @@ class ProductionMeetingSupervisor:
             finally:
                 self._release_active_claim(session.id)
             return {'status': 'ready', 'idempotent': True}
+        if self.remote:
+            # Its disk is on another machine: bring the archive here before the handoff.
+            await self._fetch_archive(session.id)
         finalizer = MeetingFinalizer(self.runtime_root, daemon=self.daemon)
         try:
             try:
@@ -714,6 +914,38 @@ class ProductionMeetingSupervisor:
                 # keep the meeting-agent capacity.
                 self._release_active_claim(session.id)
 
+    async def _fetch_archive(self, meeting_id, timeout=None):
+        """A remote meeting's archive into recordings/<meeting id>, from its GET /archive, before
+        the handoff is written. The meeting may still be closing it (409): ask again until
+        archive_timeout, unless the machine is gone. False when it never came; the handoff is
+        then written from what the daemon has (a partial one)."""
+        if self._archive_taken == meeting_id:
+            return True
+        url = self._container_url(meeting_id, '/archive')
+        token = self._control_token
+        if url is None or not token:
+            return False
+        headers = {'Authorization': 'Bearer ' + token}
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (self.archive_timeout if timeout is None else timeout)
+        while True:
+            outcome, data = await loop.run_in_executor(None, fetch_archive, url, headers)
+            if outcome == 'ready' and data and len(data) <= MAX_ARCHIVE_BYTES:
+                try:
+                    await loop.run_in_executor(
+                        None, unpack_archive, data, archive_dir(self.runtime_root, meeting_id))
+                except Exception:
+                    return False
+                self._archive_taken = meeting_id
+                return True
+            if outcome == 'ready' or loop.time() >= deadline:
+                return False
+            if outcome == 'unreachable':
+                status = await self.launcher.inspect()
+                if not status.get('running'):
+                    return False
+            await asyncio.sleep(self.poll_interval)
+
     def _release_active_claim(self, meeting_id):
         if self._active_id == meeting_id:
             self._active_id = None
@@ -722,7 +954,7 @@ class ProductionMeetingSupervisor:
         if self._claimed_id() != meeting_id:
             return
         if self._claim:
-            self._claim['path'].unlink(missing_ok=True)
+            self._drop_claim()
         else:
             write_private_json(active_meeting_path(self.project_root), {})
 
@@ -989,10 +1221,10 @@ class MeetingPool:
         meeting = self._meetings.get(meeting_id)
         await (meeting['supervisor'] if meeting else self._finisher).add_context(meeting_id, context)
 
-    async def cancel(self, meeting_id):
+    async def cancel(self, meeting_id, reason='cancelled'):
         meeting = self._meetings.get(meeting_id)
         try:
-            await (meeting['supervisor'] if meeting else self._finisher).cancel(meeting_id)
+            await (meeting['supervisor'] if meeting else self._finisher).cancel(meeting_id, reason)
         finally:
             async with self._lock:
                 self._prune()
@@ -1013,6 +1245,9 @@ class MeetingPool:
     async def _remove_project(self, name):
         await self.runner.run(['docker', 'compose', '-p', name, 'down', '--remove-orphans'], env=None)
 
+    # A meeting's files in .smitline/active-meetings: its claim (and a remote meeting's token).
+    CLAIM_SUFFIXES = ('.json',)
+
     async def reconcile(self, daemon=None):
         """After a restart: follow every pool meeting of this installation still running and
         remove its other pool containers, then write the handoff of meetings that no container
@@ -1022,9 +1257,27 @@ class MeetingPool:
         daemon = daemon or self.daemon
         if daemon is None:
             return
+        adopted = await self._adopt_running(daemon)
+        if adopted is None:
+            return
+        self._drop_claims(keep=adopted)
+        await self._finisher._finish_unfinished(daemon, skip=adopted)
+
+    def _drop_claims(self, keep, suffixes=None):
+        """Remove the claim files of every meeting not in `keep`."""
+        claims = control_root(self.project_root) / POOL_ACTIVE_DIR
+        suffixes = self.CLAIM_SUFFIXES if suffixes is None else suffixes
+        for path in claims.iterdir() if claims.is_dir() else ():
+            if path.suffix in suffixes and path.stem not in keep:
+                path.unlink(missing_ok=True)
+
+    async def _adopt_running(self, daemon):
+        """reconcile()'s first half: follow the meetings whose containers still run and remove the
+        other containers of this installation. The ids it adopted, or None when Docker's state is
+        unknown (then nothing may change)."""
         projects = await self._projects()
         if projects is None:
-            return
+            return None
         adopted = set()
         for name, running in sorted(projects.items()):
             meeting_id = name[len(POOL_PROJECT_PREFIX):]
@@ -1050,13 +1303,292 @@ class MeetingPool:
                 adopted.add(meeting_id)
             else:
                 await self._remove_project(name)
-        claims = control_root(self.project_root) / POOL_ACTIVE_DIR
-        for path in claims.glob('*.json') if claims.is_dir() else ():
-            if path.stem not in adopted:
-                path.unlink(missing_ok=True)
-        await self._finisher._finish_unfinished(daemon, skip=adopted)
+        return adopted
 
     async def shutdown(self):
         # Containers keep running; the next start follows them again (reconcile).
         for meeting in list(self._meetings.values()):
             await meeting['supervisor'].shutdown()
+
+
+LAUNCHER_PARTS = ('machine', 'running', 'remove')
+
+
+def load_launcher(spec, **kwargs):
+    """A meeting launcher plugin from 'package.module:create' (SMITLINE_MEETING_LAUNCHER), built
+    as create(environ=..., project_root=..., runtime_root=...). See RemoteMeetingPool for what
+    it must provide."""
+    import importlib
+    module_name, _, attribute = str(spec or '').strip().partition(':')
+    if not module_name or not attribute:
+        raise ValueError('SMITLINE_MEETING_LAUNCHER must look like module:create')
+    factory = getattr(importlib.import_module(module_name), attribute)
+    provider = factory(**kwargs)
+    for name in LAUNCHER_PARTS:
+        if not callable(getattr(provider, name, None)):
+            raise ValueError(f'the meeting launcher is missing {name}()')
+    return provider
+
+
+class RemoteMeetingPool(MeetingPool):
+    """Meetings on machines of their own, from a launcher plugin (SMITLINE_MEETING_LAUNCHER), such
+    as a cloud VM for each meeting: every meeting, or with SMITLINE_MEETING_LAUNCHER_PLATFORMS
+    only those platforms' (MeetingRouter runs the others here). The plugin's
+    create(environ=, project_root=, runtime_root=) returns a provider with:
+
+    - machine(meeting_id, owner): the machine for one meeting, at once (no I/O). After a restart
+      it is asked again for a machine that still runs, and then stands for that one. It has:
+        - remote = True;
+        - async up(package): create the machine and have it run the meeting. It may return once
+          the machine is asked for; the daemon then waits for inspect() and /health. The package
+          (ProductionMeetingSupervisor._start_package) holds the meeting id, its runtime state
+          (the container reads it at SMITLINE_RUNTIME_STATE), the container's whole environment
+          (the owner's settings and provider key, SMITLINE_CONTROL_TOKEN), the meeting's token
+          and, when the meeting has one, its time limit (maxMinutes; the call ends it then, so
+          a machine may be given a lifetime a little longer): hand it to the machine over a
+          private channel, never in instance metadata. A
+          meeting ended while it starts interrupts up() (the task is cancelled), then stop();
+        - async stop(): delete the machine, also one that never finished starting; a machine
+          never serves a second meeting;
+        - async inspect(): {'running': bool, 'unknown': bool}. running is False once stop() was
+          asked or the meeting exited, even while the cloud is still deleting the machine. It is
+          asked about once a second while the machine starts or stops, and when the meeting
+          stops answering /health: keep it cheap (a cache) if the cloud's API has quotas;
+        - health_url: http://<address>:8094/health once the machine has an address, else None.
+          A plain attribute that up() or inspect() sets.
+    - async running(): {meeting_id: running} for every machine of this installation (by label),
+      so a restarted daemon adopts the meetings still going;
+    - async remove(meeting_id): delete that meeting's machine;
+    - start_timeout (optional): seconds a machine may take to answer /health (default 300).
+
+    The daemon follows each meeting as it follows a pool container, at the machine's address:
+    /health every second and /control and /listen, all with the meeting's token, and the archive
+    from GET /archive before the handoff is written. Starting runs in the background
+    (starts_in_background), so the meeting is joining meanwhile and ending it never waits behind
+    the start. The token is kept in a private file beside the meeting's claim, so a restarted
+    daemon can still control, hear and finish the meetings it adopts. No ports, folders or
+    containers here.
+    """
+    starts_in_background = True
+
+    def __init__(self, project_root, *, launcher, ports=None, start_timeout=None,
+                 archive_timeout=ARCHIVE_TIMEOUT, port_free=None, launcher_factory=None,
+                 health_factory=None, **kwargs):
+        self.provider = launcher
+        self.archive_timeout = archive_timeout
+        timeout = start_timeout or getattr(launcher, 'start_timeout', None) or REMOTE_START_TIMEOUT
+        super().__init__(project_root, start_timeout=float(timeout),
+                         port_free=lambda _port: True, **kwargs)
+
+    def _allocate(self):
+        return (None, None)  # a machine of its own: no host ports to hand out
+
+    def _meeting(self, meeting_id, owner, ports):
+        machine = self.provider.machine(meeting_id, owner)
+        holder = {}
+
+        def token_header():
+            token = holder['supervisor']._control_token
+            return {'Authorization': 'Bearer ' + token} if token else {}
+        supervisor = self._supervisor(
+            launcher=machine,
+            health=UrlHealthClient(lambda: getattr(machine, 'health_url', None), timeout=2.0,
+                                   headers=token_header),
+            claim={'path': pool_claim_path(self.project_root, meeting_id),
+                   'record': {'owner': owner, 'project': self.project(meeting_id), 'remote': True}},
+            archive_timeout=self.archive_timeout,
+        )
+        holder['supervisor'] = supervisor
+        meeting = {'supervisor': supervisor, 'owner': owner, 'ports': (None, None)}
+        self._meetings[meeting_id] = meeting
+        return meeting
+
+    CLAIM_SUFFIXES = ('.json', '.token')
+
+    # reconcile() (MeetingPool's): adopt every meeting of this installation whose machine still
+    # runs, with the token kept beside its claim, and delete the machines of meetings that ended.
+    # A machine this installation knows nothing about (no claim, no meeting record) is left
+    # alone. Then write the handoff of meetings no machine runs any more.
+
+    async def _adopt_running(self, daemon):
+        try:
+            machines = await self.provider.running()
+        except Exception:
+            return None
+        adopted = set()
+        for meeting_id, running in sorted((machines or {}).items()):
+            session, claim, known = None, {}, False
+            try:
+                claim = read_json(pool_claim_path(self.project_root, meeting_id)) or {}
+                known = bool(claim)
+                record = daemon.meetings.get(meeting_id)
+                known = known or record is not None
+                session = None if record is None or record.session.state == 'ended' else record.session
+            except Exception:
+                session = None
+            if not known:
+                continue
+            if running and session is not None and claim.get('meetingId') == meeting_id:
+                async with self._lock:
+                    meeting = self._meeting(meeting_id, session.owner, (None, None))
+                token = read_token(remote_token_path(self.project_root, meeting_id))
+                meeting['supervisor'].adopt(session, control_token=token)
+                adopted.add(meeting_id)
+            else:
+                try:
+                    await self.provider.remove(meeting_id)
+                except Exception:
+                    pass
+        return adopted
+
+
+def launcher_platforms(environ=None):
+    """SMITLINE_MEETING_LAUNCHER_PLATFORMS: the platforms whose meetings run on the launcher's
+    machines, of zoom, teams, meet and daily. None (unset, or all four): every meeting does. The
+    others run in this computer's meeting pool, such as Smitline rooms (daily), which need no
+    browser and start in seconds."""
+    from agent_sessions import MEETING_PLATFORMS
+    env = os.environ if environ is None else environ
+    text = str(env.get('SMITLINE_MEETING_LAUNCHER_PLATFORMS') or '')
+    found = {item.strip().lower() for item in text.replace(',', ' ').split() if item.strip()}
+    if not found:
+        return None
+    unknown = sorted(found - set(MEETING_PLATFORMS))
+    if unknown:
+        raise ValueError(f'SMITLINE_MEETING_LAUNCHER_PLATFORMS takes {", ".join(MEETING_PLATFORMS)}, '
+                         f'not {unknown[0][:20]!r}')
+    return None if found >= set(MEETING_PLATFORMS) else frozenset(found)
+
+
+class MeetingRouter:
+    """Two meeting pools behind one, chosen by each meeting's platform: the launcher's machines
+    (RemoteMeetingPool) for the platforms in SMITLINE_MEETING_LAUNCHER_PLATFORMS, and containers
+    on this computer (MeetingPool) for the others, such as Smitline rooms, which need no browser
+    and start in seconds.
+
+    SMITLINE_MAX_MEETINGS and SMITLINE_MAX_MEETINGS_PER_OWNER count every meeting, wherever it
+    runs. A meeting on a machine starts in the background, as on RemoteMeetingPool; one here
+    starts at once, as on MeetingPool. Both pools keep their claims in the same folder, so a
+    restart adopts both kinds of meeting before it finishes the ones neither still runs."""
+    local_only = False
+
+    def __init__(self, local, remote, *, remote_platforms, max_meetings, per_owner=None):
+        self.local = local
+        self.remote = remote
+        self.remote_platforms = frozenset(remote_platforms)
+        self.max_meetings = max_meetings
+        self.per_owner = per_owner
+        self.daemon = None
+        self._lock = asyncio.Lock()
+        # Meetings between the count and their pool's own record of them: id -> owner.
+        self._starting = {}
+
+    @property
+    def pools(self):
+        return (self.local, self.remote)
+
+    @property
+    def owner_environment(self):
+        return self.local.owner_environment
+
+    @owner_environment.setter
+    def owner_environment(self, value):
+        for pool in self.pools:
+            pool.owner_environment = value
+
+    def bind_daemon(self, daemon):
+        self.daemon = daemon
+        for pool in self.pools:
+            pool.bind_daemon(daemon)
+        return self
+
+    def pool_for(self, platform):
+        return self.remote if platform in self.remote_platforms else self.local
+
+    def starts_in_background(self, session):
+        """A meeting on a machine of its own starts in the background (RuntimeDaemon)."""
+        return self.pool_for(getattr(session, 'platform', None)) is self.remote
+
+    def _holder(self, meeting_id):
+        """The pool running `meeting_id`; for a meeting neither runs, the one its platform names."""
+        for pool in self.pools:
+            if meeting_id in pool._meetings:
+                return pool
+        try:
+            record = self.daemon.meetings.get(meeting_id)
+            platform = None if record is None else record.session.platform
+        except Exception:
+            platform = None
+        return self.pool_for(platform)
+
+    def _owners(self):
+        """Every meeting either pool runs or starts, with its owner."""
+        owners = dict(self._starting)
+        for pool in self.pools:
+            pool._prune()
+            owners.update({meeting_id: meeting['owner'] for meeting_id, meeting in pool._meetings.items()})
+        return owners
+
+    def _count_problem(self, owner, owners):
+        if len(owners) >= self.max_meetings:
+            return 409, 'capacity_exceeded', f'all {self.max_meetings} meeting agents are busy'
+        if owner != 'local' and self.per_owner is not None and sum(
+                1 for item in owners.values() if item == owner) >= self.per_owner:
+            return 409, 'owner_capacity_exceeded', f'this owner already has {self.per_owner} meetings running'
+        return None
+
+    def capacity_problem(self, owner):
+        """Why a meeting for `owner` cannot start now, wherever it would run, else None. start()
+        decides again, for meetings that race."""
+        return self._count_problem(owner, self._owners())
+
+    async def start(self, session, camera_settings=None):
+        owner = getattr(session, 'owner', 'local')
+        pool = self.pool_for(session.platform)
+        async with self._lock:
+            owners = self._owners()
+            if session.id not in owners:
+                problem = self._count_problem(owner, owners)
+                if problem:
+                    raise DaemonError(*problem)
+            self._starting[session.id] = owner
+        try:
+            await pool.start(session, camera_settings=camera_settings)
+        finally:
+            self._starting.pop(session.id, None)
+
+    async def add_context(self, meeting_id, context):
+        await self._holder(meeting_id).add_context(meeting_id, context)
+
+    async def cancel(self, meeting_id, reason='cancelled'):
+        await self._holder(meeting_id).cancel(meeting_id, reason)
+
+    def control_headers(self, meeting_id):
+        return self._holder(meeting_id).control_headers(meeting_id)
+
+    async def control(self, meeting_id, message):
+        return await self._holder(meeting_id).control(meeting_id, message)
+
+    def listen_url(self, meeting_id):
+        return self._holder(meeting_id).listen_url(meeting_id)
+
+    def active_ids(self):
+        return tuple(meeting_id for pool in self.pools for meeting_id in pool.active_ids())
+
+    async def reconcile(self, daemon=None):
+        """After a restart: each pool adopts its meetings still running, then the claims and
+        handoffs are settled once, keeping both pools' meetings. If either pool cannot tell what
+        runs, nothing more changes, as in MeetingPool.reconcile."""
+        daemon = daemon or self.daemon
+        if daemon is None:
+            return
+        found = [await pool._adopt_running(daemon) for pool in self.pools]
+        if any(adopted is None for adopted in found):
+            return
+        adopted = set().union(*found)
+        self.local._drop_claims(keep=adopted, suffixes=RemoteMeetingPool.CLAIM_SUFFIXES)
+        await self.local._finisher._finish_unfinished(daemon, skip=adopted)
+
+    async def shutdown(self):
+        for pool in self.pools:
+            await pool.shutdown()

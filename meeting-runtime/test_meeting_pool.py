@@ -577,7 +577,7 @@ class PoolEnvironmentTests(unittest.IsolatedAsyncioTestCase):
         from meeting_line import POOL_MEETING_SETTINGS
         reads = meeting_environment_reads()
         allowed = set(POOL_MEETING_SETTINGS) | {'OPENAI_API_KEY'}
-        known = allowed | MEETING_ENV_SET_INSIDE | MEETING_ENV_NOT_IN_THE_POOL
+        known = allowed | MEETING_ENV_SET_INSIDE | MEETING_ENV_NOT_IN_THE_POOL | MEETING_ENV_REMOTE
         unknown = {name: places for name, places in reads.items() if name not in known}
         self.assertEqual(unknown, {}, 'the meeting reads a variable the pool does not pass: add it to '
                                       'POOL_MEETING_SETTINGS (meeting_line.py) or to the lists here')
@@ -593,6 +593,9 @@ MEETING_ENV_NOT_IN_THE_POOL = {
     'SMITLINE_AUTH_MODE',               # signing the bot in, one container at a time
     'SMITLINE_ROOT',                    # preflight.py, which runs on the host
 }
+# Set by the daemon in a launcher plugin's start package, for a meeting on a machine of its own
+# (meeting_supervisor.ProductionMeetingSupervisor._start_package), never from settings.
+MEETING_ENV_REMOTE = {'SMITLINE_HEALTH_TOKEN', 'SMITLINE_ARCHIVE_GRACE'}
 # Imported by the meeting for constants and types; it never runs their environment reads.
 DAEMON_ONLY_MODULES = {'call_hooks.py', 'call_policy.py'}
 
