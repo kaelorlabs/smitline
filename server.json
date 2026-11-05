@@ -17,11 +17,11 @@
     "url": "https://github.com/kaelorlabs/smitline",
     "source": "github"
   },
-  "version": "0.3.9",
+  "version": "0.3.10",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/kaelorlabs/smitline:0.3.9",
+      "identifier": "ghcr.io/kaelorlabs/smitline:0.3.10",
       "runtimeHint": "docker",
       "runtimeArguments": [
         {
