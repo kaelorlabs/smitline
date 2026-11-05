@@ -295,7 +295,9 @@ class Smitline:
 
     async def start_call(self, brief):
         """Place a phone call (channel 'phone', ``to`` an E.164 number) or join a meeting
-        (channel 'meeting', ``to`` the Zoom, Teams, or Google Meet invite URL); returns the queued call."""
+        (channel 'meeting', ``to`` the Zoom, Teams, Google Meet or Daily invite URL, or ``"new"`` for a
+        meeting Smitline starts itself, whose link comes back as the call's ``to``); returns the
+        queued call."""
         return self._transport.start_call(brief)
 
     async def get_call(self, call_id):

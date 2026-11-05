@@ -2,6 +2,7 @@
 import asyncio
 
 from briefing import EARLIER_CALLS_HEADING
+from call_brief import NEW_ROOM
 from call_hooks import LOCAL_OWNER, CallRefused, owner_settings, read_env_file
 from meeting_lifecycle import AGENT_ENDINGS
 
@@ -188,6 +189,8 @@ class MeetingLine:
             status, code, message = problem
             raise CallRefused(code, message, status=status)
         hooks.credentials(owner, 'openai')
+        if brief.to == NEW_ROOM:
+            hooks.credentials(owner, 'daily')  # Smitline makes the room when the call is placed
 
     def _now(self):
         if self._monotonic is not None:

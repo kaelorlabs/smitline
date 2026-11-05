@@ -13,6 +13,9 @@ from schema_validation import (
 
 
 CHANNELS = ('phone', 'meeting')
+# A meeting brief's `to` for a meeting Smitline starts itself: a Daily room of its own, made when
+# the call is placed (CallService.create), whose link the call then carries as `to`.
+NEW_ROOM = 'new'
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
@@ -235,7 +238,9 @@ class CallBrief:
 
     @property
     def platform(self):
-        return platform_for_url(self.to) if self.channel == 'meeting' else 'phone'
+        if self.channel != 'meeting':
+            return 'phone'
+        return 'daily' if self.to == NEW_ROOM else platform_for_url(self.to)
 
     def to_dict(self):
         data = {
@@ -284,7 +289,10 @@ class CallBrief:
             to = normalize_phone(data['to'])
         else:
             to = require_string(data['to'], 'to', max_length=2048)
-            platform_for_url(to)
+            if to.strip().casefold() == NEW_ROOM:
+                to = NEW_ROOM
+            else:
+                platform_for_url(to)
         language = optional_field(data, 'language')
         if language is not None and not LANGUAGE.fullmatch(require_string(language, 'language', max_length=16)):
             raise ValueError('language must be a language tag such as en or pt-BR')
