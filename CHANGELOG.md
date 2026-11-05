@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6 — 2026-11-05
 
 - **A meeting agent that says goodbye leaves.** Asked to leave, the voice says goodbye, and Smitline leaves once that has been heard, even when the voice never asks its backend to. It used to stay: GPT-Live streams silence between replies, and Smitline counted any audio still on its way to the meeting, silence included, as speech, so the goodbye never seemed to end. In a Zoom test on 2026-11-05 it said "Got it, leaving now. Bye.", stayed, and then said it had left. Only audible speech counts now.
 - **A mascot camera.** `SMITLINE_MEETING_CAMERA_STYLE=mascot` with `SMITLINE_MEETING_CAMERA_PACK` plays a presence pack: a clip for each presence state, such as walking in once admitted, listening, thinking, speaking and leaving, each new clip blending in over a quarter of a second. A pack's `persona` says who the character is, and the voice is given it, so Smitline sounds like the character it appears as; its `voice` is the character's GPT-Live voice for meetings, unless the brief names one. See [Appearing in the meeting](docs/meetings.md#appearing-in-the-meeting).
