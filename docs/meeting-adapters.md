@@ -41,7 +41,7 @@ Adapters do not share a screen and do not read shared screens.
 
 `daily_room.DailyRoom` is the one adapter without a browser. daily-python joins the room with a virtual microphone, speaker, and camera, and `bridge.main` skips PulseAudio, Xvfb, Chromium, and the viewer for it; the voice loop, transcript, and leaving are the same. It subscribes to microphones and screen-share audio only, so no remote video is ever decoded.
 
-- **Hearing.** A reader thread takes 20 ms chunks from daily-python's speaker and hands them to GPT-Live; if it falls behind, the oldest audio goes first.
+- **Hearing.** Every 20 ms it hands GPT-Live what daily-python's speaker has played, filled with silence. GPT-Live keeps time by its input, so the stream never stops, also in a room where every microphone is off (Daily then plays nothing). If the voice loop falls behind, the oldest audio goes first.
 - **Speaking.** The voice is paced into daily-python's non-blocking microphone at most 40 ms ahead of real time. Between turns nothing is written, and Daily sends silence.
 - **Camera.** `DailyCamera` draws the tile with Pillow: a presence pack's clips at the pack's frame rate, or the still mark at two frames a second, with the caption. `ClipPlayer` follows the browser camera's rules: the arrival plays once, and a one-shot clip is never cut short.
 - **Waiting.** In an empty room it reports `waiting_for_admission` until someone else joins, for up to 10 minutes like a lobby, so the voice starts only when someone is there; `AloneWatch` then leaves as usual once they go. Hidden participants (Daily's recorders) don't count.

@@ -35,11 +35,8 @@ class FakeDevice:
     def write_frame(self, frame):
         self.written.append(bytes(frame))
 
-    def read_frames(self, frames, completion=None):
-        if self.reads:
-            return self.reads.pop(0)
-        time.sleep(0.005)
-        return b''
+    def read_frames(self, frames, completion=None):  # non-blocking: what has arrived, maybe nothing
+        return self.reads.pop(0) if self.reads else b''
 
 
 class FakeDaily:
@@ -162,7 +159,7 @@ class DailyRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(daily.devices['microphone'].settings,
                          {'sample_rate': 24000, 'channels': 1, 'non_blocking': True})
         self.assertEqual(daily.devices['speaker'].settings,
-                         {'sample_rate': 24000, 'channels': 1, 'non_blocking': False})
+                         {'sample_rate': 24000, 'channels': 1, 'non_blocking': True})
         self.assertEqual(daily.selected_speaker, daily.devices['speaker'].name)
         self.assertEqual(daily.devices['camera'].settings, {'width': 640, 'height': 360, 'color_format': 'RGBA'})
 
@@ -340,17 +337,31 @@ class DailyAudioTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(microphone.drain(), 1)
         self.assertEqual(device.written, [])
 
-    async def test_speaker_hands_over_20_ms_chunks_with_their_time(self):
+    async def test_speaker_streams_20_ms_chunks_and_silence_while_the_room_is_quiet(self):
+        # GPT-Live keeps time by its input: in a room with every microphone off, Daily plays
+        # nothing, and without silence in its place the voice never spoke (the 2026-11-05 self-test).
         device = FakeDevice('speaker', 'speaker')
-        device.reads = [b'\x01' * 960, b'\x02' * 960]
+        device.reads = [b'\x01' * 960, b'', b'\x02' * 400]
         speaker = DailySpeaker(device)
         speaker.start()
-        first = await asyncio.wait_for(speaker.read(), 1)
-        second = await asyncio.wait_for(speaker.read(), 1)
+        started = time.monotonic()
+        chunks = [await asyncio.wait_for(speaker.read(), 1) for _ in range(5)]
+        elapsed = time.monotonic() - started
         speaker.close()
-        self.assertEqual((first.data, first.time_ns), (b'\x01' * 960, 0))
-        self.assertEqual((second.data, second.time_ns), (b'\x02' * 960, 20_000_000))
-        self.assertEqual(speaker.chunk_size, 960)
+        self.assertEqual([chunk.data for chunk in chunks], [
+            b'\x01' * 960, b'\x00' * 960, b'\x02' * 400 + b'\x00' * 560, b'\x00' * 960, b'\x00' * 960])
+        self.assertEqual([chunk.time_ns for chunk in chunks], [i * 20_000_000 for i in range(5)])
+        self.assertGreater(elapsed, 0.07)  # paced in real time, not as fast as it can
+
+    async def test_speaker_keeps_audio_that_arrives_in_bigger_pieces(self):
+        device = FakeDevice('speaker', 'speaker')
+        device.reads = [b'\x03' * 1500]
+        speaker = DailySpeaker(device)
+        self.assertEqual(speaker.next_chunk(), b'\x03' * 960)
+        self.assertEqual(speaker.next_chunk(), b'\x03' * 540 + b'\x00' * 420)
+        device.reads = [b'\x04' * 960 * 30]
+        speaker.next_chunk()
+        self.assertLessEqual(len(speaker._pending), 960 * 10)  # never more than ten chunks behind
 
     async def test_a_speaker_reader_that_falls_behind_loses_the_oldest_audio(self):
         speaker = DailySpeaker(FakeDevice('speaker', 'speaker'), max_chunks=2)

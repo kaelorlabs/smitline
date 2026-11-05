@@ -103,7 +103,7 @@ class DailyRoom(MeetingPlatformAdapter):
         self.microphone_device = daily.create_microphone_device(
             MICROPHONE, sample_rate=SAMPLE_RATE, channels=1, non_blocking=True)
         self.speaker_device = daily.create_speaker_device(
-            SPEAKER, sample_rate=SAMPLE_RATE, channels=1, non_blocking=False)
+            SPEAKER, sample_rate=SAMPLE_RATE, channels=1, non_blocking=True)
         daily.select_speaker_device(SPEAKER)
         self.camera_device = None
         if camera_size:
@@ -298,41 +298,56 @@ class DailyRoom(MeetingPlatformAdapter):
 class DailySpeaker:
     """The room's audio for GPT-Live: joinly AudioChunks of 20 ms, 24 kHz 16-bit mono.
 
-    daily-python's blocking read paces itself in real time, so it runs on a thread of its own and
-    hands chunks to the event loop."""
+    GPT-Live keeps time by its input, so the stream never stops: every 20 ms it takes what Daily's
+    non-blocking speaker has (nothing at all while nobody in the room has a microphone on, because
+    Daily then plays nothing) and fills the rest with silence, as a sound card would. Without that
+    the voice never spoke and GPT-Live closed the session ("context_injection_incomplete")."""
 
     def __init__(self, device, *, frames=SPEAKER_FRAMES, max_chunks=SPEAKER_QUEUE_CHUNKS):
         self.device = device
         self.frames = frames
         self.audio_format = AudioFormat(sample_rate=SAMPLE_RATE, byte_depth=BYTE_DEPTH)
         self.chunk_size = frames * BYTE_DEPTH
+        self.period = frames / SAMPLE_RATE
         self.dropped = 0
         self._queue = asyncio.Queue(maxsize=max_chunks)
-        self._loop = None
-        self._closed = threading.Event()
+        self._task = None
+        self._pending = b''
         self._time_ns = 0
         self._chunk_ns = frames * 1_000_000_000 // SAMPLE_RATE
 
     def start(self):
-        self._loop = asyncio.get_running_loop()
-        threading.Thread(target=self._pump, name='daily-speaker', daemon=True).start()
+        self._task = asyncio.create_task(self._pace(), name='daily-speaker')
 
     def close(self):
-        self._closed.set()
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
 
-    def _pump(self):
-        while not self._closed.is_set():
-            try:
-                data = self.device.read_frames(self.frames)
-            except Exception:
-                data = b''
-            if not data:
-                time.sleep(0.02)
-                continue
-            try:
-                self._loop.call_soon_threadsafe(self._put, bytes(data))
-            except RuntimeError:  # the event loop has closed
-                return
+    def next_chunk(self):
+        """One chunk: what Daily has played since the last one, then silence to fill it."""
+        try:
+            data = self.device.read_frames(self.frames)
+        except Exception:
+            data = b''
+        pending = self._pending + bytes(data or b'')
+        # Never fall more than ten chunks behind the room: older audio is dropped first.
+        if len(pending) > self.chunk_size * 10:
+            pending = pending[-self.chunk_size * 10:]
+        chunk, self._pending = pending[:self.chunk_size], pending[self.chunk_size:]
+        return chunk + b'\x00' * (self.chunk_size - len(chunk))
+
+    async def _pace(self):
+        loop = asyncio.get_running_loop()
+        due = loop.time()
+        while True:
+            due += self.period
+            delay = due - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            elif delay < -0.2:
+                due = loop.time()  # the loop stalled: carry on from now rather than burst
+            self._put(self.next_chunk())
 
     def _put(self, data):
         if self._queue.full():
