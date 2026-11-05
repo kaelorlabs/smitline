@@ -308,8 +308,9 @@ class ArchiveTests(RemoteCase):
         self.assertEqual(file_mode(archive / 'transcript.txt'), 0o600)
         self.assertEqual(file_mode(archive), 0o700)
         await until(lambda: machine.stops >= 1)
-        self.assertFalse(pool_claim_path(self.root, meeting.id).exists())
-        self.assertEqual(self.pool.active_ids(), ())
+        # The pool removes the claim and forgets the meeting just after it stops the machine.
+        await until(lambda: not pool_claim_path(self.root, meeting.id).exists())
+        await until(lambda: self.pool.active_ids() == ())
 
     async def test_ending_a_meeting_takes_its_archive_before_its_machine_is_deleted(self):
         # end_call or maxMinutes: the meeting is asked to stop, as SIGTERM would stop it here.
