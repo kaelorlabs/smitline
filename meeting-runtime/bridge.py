@@ -321,6 +321,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
                         listening.push('meeting', audio)
                 finally:
+                    # Nobody reads the room any more: what still comes in is not lost speech.
+                    stop_listening = getattr(speaker, 'stop_listening', None)
+                    if stop_listening is not None:
+                        stop_listening()
                     # What came in, in the archive before it closes (a machine of its own hands
                     # the archive over before process_stopped is written).
                     record.event('input_audio', **room_input.stats(speaker))

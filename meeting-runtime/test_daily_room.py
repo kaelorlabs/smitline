@@ -632,6 +632,21 @@ class DailyAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(speaker.dropped_ms, 20)
         self.assertEqual([(await speaker.read()).data for _ in range(2)], [b'e', b'f'])
 
+    async def test_once_the_reader_stops_what_still_comes_in_is_not_counted_as_dropped(self):
+        # 2026-11-05: after the meeting ended, the room's audio kept coming in for a second and
+        # a half and was logged as GPT-Live falling behind.
+        speaker = DailySpeaker(FakeSpeakerDevice(), max_chunks=2)
+        speaker._put(b'a')
+        self.assertEqual((await speaker.read()).data, b'a')
+        speaker.stop_listening()
+        for value in (b'b', b'c', b'd', b'e'):
+            speaker._put(value)
+        self.assertEqual(speaker.dropped, 0)
+        self.assertEqual([(await speaker.read()).data for _ in range(2)], [b'd', b'e'])
+        for value in (b'f', b'g', b'h'):
+            speaker._put(value)
+        self.assertEqual(speaker.dropped, 0)  # a read after stopping does not count drops again
+
 
 def pack_of(clips, states, arrival=None, fps=12):
     return PresencePack(

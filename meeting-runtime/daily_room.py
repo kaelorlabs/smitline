@@ -386,6 +386,7 @@ class DailySpeaker:
         self._read_at = 0.0
         self._closed = False
         self._listening = False   # a reader has come: from then on a full queue loses audio
+        self._stopped_listening = False  # the reader has stopped for good (stop_listening)
         self._time_ns = 0
         self._chunk_ns = frames * 1_000_000_000 // SAMPLE_RATE
 
@@ -521,8 +522,15 @@ class DailySpeaker:
                           flush=True)
         self._queue.put_nowait(data)
 
+    def stop_listening(self):
+        """The reader has stopped for good (the meeting is over): from now on the oldest audio
+        gives way again without counting as dropped, as before anyone read."""
+        self._listening = False
+        self._stopped_listening = True
+
     async def read(self):
-        self._listening = True
+        if not self._stopped_listening:
+            self._listening = True
         data = await self._queue.get()
         chunk = AudioChunk(data=data, time_ns=self._time_ns)
         self._time_ns += self._chunk_ns
