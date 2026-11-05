@@ -597,11 +597,22 @@ def presence_pack_for(runtime):
         return None
 
 
-def with_persona(runtime, pack):
-    """The agent appears as the pack's character, so its voice takes the character's persona."""
-    if pack is None or not pack.persona:
+def with_persona(runtime, pack, meeting_state=None):
+    """The agent appears as the pack's character, so it takes the character's persona, and its
+    voice unless the brief named one (a brief's voice reaches the meeting as `voice`)."""
+    if pack is None:
         return runtime
-    return dataclasses.replace(runtime, persona=pack.persona)
+    changes = {}
+    if pack.persona:
+        changes['persona'] = pack.persona
+    if pack.voice and not (meeting_state or {}).get('voice'):
+        from call_brief import available_voices
+        if pack.voice in available_voices(os.environ):
+            changes['voice'] = pack.voice
+        else:
+            print(f'The presence pack names voice {pack.voice!r}, which GPT-Live does not have; '
+                  'the meeting keeps its own.', flush=True)
+    return dataclasses.replace(runtime, **changes) if changes else runtime
 
 
 def camera_feed_for(runtime, microphone, pack=None):
@@ -620,11 +631,11 @@ def camera_feed_for(runtime, microphone, pack=None):
 async def main():
     global record, presence, control
     runtime = RuntimeConfig.from_environ()
-    pack = presence_pack_for(runtime)
-    runtime = with_persona(runtime, pack)
     # Meet and Teams find the active speaker by skipping the bot's own tile, by this name.
     os.environ['JOINLY_NAME'] = runtime.participant_name
     meeting_state = meeting_state_from_environ()
+    pack = presence_pack_for(runtime)
+    runtime = with_persona(runtime, pack, meeting_state)
     state['participant_name'] = runtime.participant_name
     state['meeting_guidance_configured'] = bool(runtime.meeting_instructions)
     state['cameraEnabled'] = runtime.camera_enabled
