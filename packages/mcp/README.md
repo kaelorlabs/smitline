@@ -19,8 +19,8 @@ Do not publish this package and do not install it globally.
 | `wait_for_call` / `get_call` / `list_calls` | Follow a call to its structured result |
 | `send_call_instruction` / `end_call` / `transfer_call_to_me` | Steer, end, or take over a call in progress |
 | `reply_to_call_request` | Answer a request from the people on the call (brief `canDo`): status as you work, then done |
-| `list_voices` | GPT-Live voices |
-| `get_profile` / `update_profile` | The user's profile that every call gets as background |
+| `list_voices` | GPT-Live voices, and the default voices for phone calls and meetings |
+| `get_profile` / `update_profile` | The user's profile that every call gets as background, and the default voices (`voices`) |
 
 See [calls](../../docs/calls.md) for the brief and the result.
 

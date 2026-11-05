@@ -163,6 +163,9 @@ class RuntimeDaemon:
         self._requests = {}
         # Meetings starting on machines of their own (supervisor.starts_in_background).
         self._start_tasks = set()
+        # settings_for(owner): the owner's settings (create_app wires the call hooks'), for the
+        # voices a meeting of theirs may use; None reads this process's environment.
+        self.settings_for = None
 
     def close(self):
         for store in (self.meetings, self.events):
@@ -298,7 +301,9 @@ class RuntimeDaemon:
                 'meetingUrl': meeting_url,
                 'context': payload.get('context'),
                 'onBehalfOf': optional_on_behalf_of(payload.get('onBehalfOf')),
-                'voice': optional_voice(payload.get('voice')),
+                # Among the owner's voices: SMITLINE_EXTRA_VOICES may be in .env, not in os.environ.
+                'voice': optional_voice(payload.get('voice'),
+                                        self.settings_for(owner) if self.settings_for else None),
                 'state': 'joining',
                 'startedAt': started_at,
                 'cameraEnabled': camera['enabled'],
@@ -727,8 +732,14 @@ def create_app(
 
     async def create_meeting(request):
         owner = await local_owner(request)
-        payload = await read_json(request)
-        session = await daemon.create_meeting(for_a_person(payload, owner), owner=owner)
+        payload = for_a_person(await read_json(request), owner)
+        if payload.get('voice') is None:
+            # Without a voice of its own it speaks with the owner's meeting voice, as a meeting call.
+            from meeting_line import meeting_voice
+            voice = meeting_voice(owner_settings(getattr(call_service, 'hooks', None), owner))
+            if voice:
+                payload = dict(payload, voice=voice)
+        session = await daemon.create_meeting(payload, owner=owner)
         return _public_json(daemon.public_meeting(session), status=201)
 
     async def get_meeting(request):
@@ -846,6 +857,7 @@ def create_app(
         from call_api import register_call_routes
         register_call_routes(app, call_service, read_json=read_json, public_json=_public_json,
                              sse_heartbeat_interval=sse_heartbeat_interval)
+        daemon.settings_for = lambda owner: owner_settings(getattr(call_service, 'hooks', None), owner)
 
     async def on_cleanup(_app):
         if call_service is not None:

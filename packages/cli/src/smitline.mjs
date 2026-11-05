@@ -94,7 +94,7 @@ const USAGE = `Usage:
   smitline setup start
   smitline setup stop [--force]
   smitline setup register [--agents claude-code,codex,cursor,claude-desktop] [--json]
-  smitline setup voice [--set <name>] [--preview <name>]
+  smitline setup voice [--set <name>] [--meeting <name>|default] [--preview <name>]
   smitline setup sip-trunk
   smitline setup call-me [--wait]
   smitline connector status
@@ -724,6 +724,10 @@ async function setupCommand(args) {
     if (args.set && args.set !== true) {
       writeEnv(root, { SMITLINE_VOICE: pick(args.set, 'set') });
     }
+    if (args.meeting && args.meeting !== true) {
+      // Meetings' own voice; "default" goes back to the phone calls' one.
+      writeEnv(root, { SMITLINE_MEETING_VOICE: args.meeting === 'default' ? null : pick(args.meeting, 'meeting') });
+    }
     if (args.preview && args.preview !== true) {
       // A short call to the owner's phone in that voice; nothing is saved.
       const voice = pick(args.preview, 'preview');
@@ -744,7 +748,9 @@ async function setupCommand(args) {
         }),
       });
     }
-    printJson({ voice: readEnv(root).SMITLINE_VOICE || 'marin', voices });
+    const saved = readEnv(root);
+    const voice = saved.SMITLINE_VOICE || 'marin';
+    printJson({ voice, meetingVoice: saved.SMITLINE_MEETING_VOICE || voice, voices });
     return EXIT.ok;
   }
   if (action === 'call-me') {

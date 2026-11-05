@@ -167,7 +167,7 @@
           },
           "voice": {
             "type": "string",
-            "description": "GPT-Live voice name; see list_voices"
+            "description": "GPT-Live voice for this call only (see list_voices). Leave it out to use the user's default voice for phone calls or for meetings."
           },
           "maxMinutes": {
             "type": "integer",
@@ -447,7 +447,7 @@
           },
           "voice": {
             "type": "string",
-            "description": "GPT-Live voice name; see list_voices"
+            "description": "GPT-Live voice for this call only (see list_voices). Leave it out to use the user's default voice for phone calls or for meetings."
           },
           "maxMinutes": {
             "type": "integer",
@@ -869,7 +869,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List the GPT-Live voices a phone call or meeting can use, and the default voice. Pass one as voice in start_call's brief; without it, calls use the default chosen in setup. Read-only and takes no arguments.",
+      "description": "List the GPT-Live voices calls can use, and the user's default voices: defaults.phone for phone calls, defaults.meeting for meetings (joined by link or by phone). A brief's voice wins over both for that call; update_profile with voices changes a default. Read-only and takes no arguments.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -883,7 +883,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries. On a hosted service such as Smitline Cloud it also has the account's wallet: what is left to spend, and this month's spend.",
+      "description": "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries. voices has the default voices for phone calls and for meetings. On a hosted service such as Smitline Cloud it also has the account's wallet: what is left to spend, and this month's spend.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -899,11 +899,26 @@
         "idempotentHint": true,
         "openWorldHint": false
       },
-      "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. Never put passwords, keys, or payment details here.",
+      "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. voices changes the user's default voice for phone calls, for meetings, or both, when the user wants another one. A call keeps its voice until it ends: when someone on a call asks for a different voice, it can only apply from the next call, so offer to change the default and do it once the user agrees. Never put passwords, keys, or payment details here.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "voices": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Default voices: phone for phone calls, meeting for meetings (by link or by phone). A name from list_voices, or \"\" to go back to the default. A brief's voice still wins for its call.",
+            "properties": {
+              "phone": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "meeting": {
+                "type": "string",
+                "maxLength": 32
+              }
+            }
+          },
           "about": {
             "type": "string",
             "maxLength": 2000,

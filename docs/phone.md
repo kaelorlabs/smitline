@@ -135,7 +135,8 @@ Set `SMITLINE_ACCEPT_INBOUND=1`, `SMITLINE_OWNER_NAME`, and optionally `SMITLINE
 | `SMITLINE_CALLER_ID` | `TWILIO_FROM_NUMBER` | Caller ID for outgoing calls, such as your verified mobile. |
 | `SMITLINE_OWNER_NAME` | none | Default `onBehalfOf`, the name that replaces an AI's or app's in `onBehalfOf`, and the name in the inbound greeting. |
 | `SMITLINE_OWNER_PHONE` | none | Rehearsals, the setup test call, and transfers. |
-| `SMITLINE_VOICE` | `marin` | Default GPT-Live voice; a brief's `voice` wins. |
+| `SMITLINE_VOICE` | `marin` | Default GPT-Live voice for phone calls, and for meetings without `SMITLINE_MEETING_VOICE`; a brief's `voice` wins. `smitline setup voice --set <name>`, or the agent's `update_profile` with `voices`, changes it. |
+| `SMITLINE_MEETING_VOICE` | none | Default GPT-Live voice for meetings, joined by link or by phone (`smitline setup voice --meeting <name>`, or `update_profile`); a brief's `voice` wins. |
 | `SMITLINE_EXTRA_VOICES` | none | Comma-separated voice names to allow beyond the documented ones. |
 | `SMITLINE_PHONE_BACKEND_MODEL` | `gpt-5.6-terra` | Responses model behind the voice. |
 | `SMITLINE_PHONE_WEB_SEARCH` | off | `1` adds web search to the backend. |

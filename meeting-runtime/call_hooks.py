@@ -174,6 +174,47 @@ def read_env_file(path):
     return values
 
 
+ENV_ASSIGNMENT = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=')
+# Where save_voices keeps each kind of call's voice.
+VOICE_SETTINGS = {'phone': 'SMITLINE_VOICE', 'meeting': 'SMITLINE_MEETING_VOICE'}
+
+
+def write_env_file(path, updates):
+    """Merge values into a .env file, as `smitline setup set` does (setup.mjs writeEnv): a key's
+    first assignment is replaced and any repeats dropped (readers take the last one), a new key
+    goes at the end, and None removes the key. Written whole and moved into place, mode 0600."""
+    import tempfile
+    from pathlib import Path
+    if any(value is not None and ('\n' in str(value) or '\r' in str(value)) for value in updates.values()):
+        raise ValueError('a setting must be one line')
+    path = Path(path)
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except FileNotFoundError:
+        lines = []
+    remaining = dict(updates)
+    written = set()
+    out = []
+    for line in lines:
+        match = ENV_ASSIGNMENT.match(line)
+        if not match or match[1] not in updates:
+            out.append(line)
+            continue
+        key = match[1]
+        remaining.pop(key, None)
+        if updates[key] is not None and key not in written:
+            written.add(key)
+            out.append(f'{key}={updates[key]}')
+    while out and out[-1] == '':
+        out.pop()
+    out += [f'{key}={value}' for key, value in remaining.items() if value is not None]
+    fd, temporary = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write('\n'.join(out) + '\n')
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 class DefaultCallHooks:
     def __init__(self, *, environ=None, env_file=None, store=None, notifier=None, clock=None):
         self._environ = os.environ if environ is None else environ
@@ -276,6 +317,25 @@ class DefaultCallHooks:
         if path is None:
             raise ValueError('no place to keep the profile')
         return save_profile(path, profile)
+
+    def save_voices(self, owner, voices):
+        """Keep the owner's default voices ({phone, meeting}, either one: a voice name, or '' for
+        the default) as SMITLINE_VOICE and SMITLINE_MEETING_VOICE in .env, which settings() reads
+        on each use. They are the installation's settings, so only its own owner changes them."""
+        if owner != LOCAL_OWNER:
+            raise CallRefused('unsupported', "Voices here are the installation's own: only its "
+                              'owner can change them.', status=501)
+        if not self.env_file:
+            raise CallRefused('unsupported', 'These call hooks keep no settings file for voices.',
+                              status=501)
+        updates = {VOICE_SETTINGS[kind]: value or None for kind, value in voices.items()}
+        # The process environment wins over .env (environ): a voice set there stays.
+        for key, value in updates.items():
+            if self._environ.get(key) and self._environ.get(key) != (value or ''):
+                raise CallRefused('set_in_environment', f'{key} is set in the environment '
+                                  'Smitline runs in, which wins over .env: change it there.',
+                                  status=409)
+        write_env_file(self.env_file, updates)
 
     def webhook_secret(self, owner):
         """The key that signs an owner's webhooks: the installation's secret for the local

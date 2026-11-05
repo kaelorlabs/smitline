@@ -36,7 +36,7 @@ Before a demo or a call that matters, run `check_call_brief` on the brief: for a
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
 
-Every phone call also gets the user's profile: who they are, the people they know, how they like to come across, and standing boundaries. Read it with `get_profile`. When the user tells you about someone ("Alex is my close friend"), save it with `update_profile` so later calls know them too.
+Every phone call also gets the user's profile: who they are, the people they know, how they like to come across, and standing boundaries. Read it with `get_profile`. When the user tells you about someone ("Alex is my close friend"), save it with `update_profile` so later calls know them too. When the user wants a different voice, `list_voices` lists them and `update_profile` with `voices` changes the default for phone calls, meetings, or both; a brief's `voice` is for one call. A call keeps its voice until it ends, so when someone on a call asks for another voice, it can only apply from the next call: offer to change the default, and do it once the user agrees.
 
 ## 2. Offer a rehearsal the first time
 

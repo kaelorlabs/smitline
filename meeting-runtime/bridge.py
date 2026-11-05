@@ -596,7 +596,8 @@ def presence_pack_for(runtime):
 
 def with_persona(runtime, pack, meeting_state=None):
     """The agent appears as the pack's character, so it takes the character's persona, and its
-    voice unless the brief named one (a brief's voice reaches the meeting as `voice`)."""
+    voice unless the meeting has one: the brief's, or the owner's meeting voice, which reach it
+    as `voice` (meeting_line.meeting_payload)."""
     if pack is None:
         return runtime
     changes = {}

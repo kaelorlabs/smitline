@@ -200,11 +200,11 @@ def fall_back(meeting_line, ctx, handoff):
 
 def voice_config(brief, settings):
     """The GPT-Live session for a meeting joined by phone: the meeting's participation policy, its
-    name and leaving rules, the spoken hello, the brief's context, on the phone's G.711 audio."""
+    name and leaving rules, the spoken hello, the brief's context, on the phone's G.711 audio. Its
+    voice is a meeting's: the brief's, else the owner's meeting voice, else SMITLINE_VOICE."""
     import call_requests
     import meeting_voice
-    from call_brief import default_voice
-    from meeting_line import context_from_brief
+    from meeting_line import context_from_brief, voice_defaults
     from phone_prompts import DEFAULT_BACKEND_MODEL
     from runtime_state import DEFAULT_PARTICIPANT_NAME
     from startup_input import context_text, handoff_from_state, handoff_to_session_input
@@ -241,7 +241,7 @@ def voice_config(brief, settings):
         'tools': tools,
     }}
     return session_config(instructions=instructions, audio_format=PCMU8,
-                          voice=brief.voice or default_voice(settings), delegation=delegation,
+                          voice=brief.voice or voice_defaults(settings)['meeting'], delegation=delegation,
                           seed_input=handoff_to_session_input(handoff))
 
 

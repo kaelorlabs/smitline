@@ -144,7 +144,7 @@ class ProfileApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_and_update_the_profile(self):
         response = await self.client.get('/v1/profile', headers=self.auth)
-        self.assertEqual(await response.json(), {'version': 1})
+        self.assertEqual(await response.json(), {'version': 1, 'voices': {'phone': 'marin', 'meeting': 'marin'}})
         response = await self.client.patch('/v1/profile', json=PROFILE, headers=self.auth)
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(self.path.read_text())['people'][0]['name'], 'Sam')

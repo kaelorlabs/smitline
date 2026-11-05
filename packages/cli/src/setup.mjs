@@ -16,7 +16,7 @@ export const SECRET_KEYS = Object.freeze([
   'SMITLINE_CONNECTOR_PASSPHRASE', 'SMITLINE_SIP_PASSWORD', 'OPENAI_WEBHOOK_SECRET',
 ]);
 export const SETTING_KEYS = Object.freeze([
-  'SMITLINE_OWNER_NAME', 'SMITLINE_OWNER_PHONE', 'SMITLINE_VOICE', 'SMITLINE_CALLER_ID',
+  'SMITLINE_OWNER_NAME', 'SMITLINE_OWNER_PHONE', 'SMITLINE_VOICE', 'SMITLINE_MEETING_VOICE', 'SMITLINE_CALLER_ID',
   'TWILIO_FROM_NUMBER', 'SMITLINE_ACCEPT_INBOUND', 'SMITLINE_ALLOWED_CALLING_CODES',
   'SMITLINE_PUBLIC_URL', 'SMITLINE_NOTIFY_WEBHOOK', 'SMITLINE_RECORD_CALLS', 'SMITLINE_STREAM_REALTIME', 'SMITLINE_AUDIO_TRACE',
   'SMITLINE_MEETING_INTRO', 'SMITLINE_PHONE_WEB_SEARCH', 'SMITLINE_MEETING_WEB_SEARCH',
@@ -150,8 +150,8 @@ export function validateSetting(key, value, { env = process.env } = {}) {
     if (!E164.test(compact)) throw new Error(`${key} must be an E.164 number such as +14155550142`);
     return compact;
   }
-  if (key === 'SMITLINE_VOICE' && !availableVoices(env).includes(text)) {
-    throw new Error(`SMITLINE_VOICE must be one of: ${availableVoices(env).join(', ')}`);
+  if (['SMITLINE_VOICE', 'SMITLINE_MEETING_VOICE'].includes(key) && !availableVoices(env).includes(text)) {
+    throw new Error(`${key} must be one of: ${availableVoices(env).join(', ')}`);
   }
   if (key === 'SMITLINE_EXTRA_VOICES') {
     const names = text.split(',').map((name) => name.trim()).filter(Boolean);
@@ -548,6 +548,8 @@ export async function setupStatus({
     meetingsReady,
     firstCallReady,
     voice: env.SMITLINE_VOICE || 'marin',
+    // Meetings speak with their own voice, else the phone calls' one.
+    meetingVoice: env.SMITLINE_MEETING_VOICE || env.SMITLINE_VOICE || 'marin',
     voices: availableVoices(env),
     checks,
     next,

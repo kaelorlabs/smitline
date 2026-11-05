@@ -147,15 +147,36 @@ def pool_meeting_environment(hooks, owner, meeting_env_file=None):
     return env
 
 
-def meeting_payload(brief):
-    # The meeting's opening disclosure names onBehalfOf; a brief's voice overrides SMITLINE_VOICE.
+def meeting_voice(settings):
+    """The owner's default voice for meetings, SMITLINE_MEETING_VOICE, when it names a voice this
+    installation has; else ''. Then a meeting keeps its own default: in the browser, a presence
+    pack's character voice, else SMITLINE_VOICE (bridge.with_persona); by phone, SMITLINE_VOICE.
+    The daemon reads it, never the meeting: it reaches the meeting as the payload's voice."""
+    from call_brief import available_voices
+    settings = settings or {}
+    name = str(settings.get('SMITLINE_MEETING_VOICE') or '').strip()
+    return name if name in available_voices(settings) else ''
+
+
+def voice_defaults(settings):
+    """The voice each kind of call speaks with when its brief names none (GET /v1/voices and the
+    profile): phone calls SMITLINE_VOICE, meetings their own voice, else the phone calls' one."""
+    from call_brief import default_voice
+    phone = default_voice(settings or {})
+    return {'phone': phone, 'meeting': meeting_voice(settings) or phone}
+
+
+def meeting_payload(brief, settings=None):
+    # The meeting's opening disclosure names onBehalfOf. Its voice is the brief's, else the owner's
+    # meeting voice (settings: the owner's); with neither, the meeting's own default.
     payload = {
         'meetingUrl': brief.to,
         'context': context_from_brief(brief),
         'onBehalfOf': brief.on_behalf_of,
     }
-    if brief.voice:
-        payload['voice'] = brief.voice
+    voice = brief.voice or meeting_voice(settings)
+    if voice:
+        payload['voice'] = voice
     if brief.camera:
         payload['camera'] = {key: value for key, value in brief.camera.items() if value is not None}
     if getattr(brief, 'can_do', None):
@@ -233,7 +254,8 @@ class MeetingLine:
         ctx.set_status('connecting')
         self._starting.add(ctx.call_id)
         try:
-            session = await self.daemon.create_meeting(meeting_payload(ctx.brief), owner=ctx.owner)
+            session = await self.daemon.create_meeting(meeting_payload(ctx.brief, ctx.settings()),
+                                                       owner=ctx.owner)
         finally:
             self._starting.discard(ctx.call_id)
         self._meetings[ctx.call_id] = session.id

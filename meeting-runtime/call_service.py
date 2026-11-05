@@ -717,21 +717,67 @@ class CallService:
         return body, (content_type.split(';')[0].strip() or default)
 
     def profile(self, owner):
+        """The owner's profile, with `voices`: what phone calls and meetings speak with when the
+        brief names no voice (meeting_line.voice_defaults)."""
+        return dict(self._saved_profile(owner), voices=self._voice_defaults(owner))
+
+    def _saved_profile(self, owner):
         getter = getattr(self.hooks, 'profile', None)
         if getter is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no profile')
         return getter(owner) or {}
 
-    def update_profile(self, owner, update):
+    def _voice_defaults(self, owner):
+        from meeting_line import voice_defaults
+        return voice_defaults(self.settings(owner))
+
+    async def update_profile(self, owner, update):
+        """Merge an update into the profile (briefing.merge_profile). Its `voices`, {phone,
+        meeting} or either one, sets the owner's default voices (a voice name, or '' for the
+        default) through hooks.save_voices. Nothing is saved when any part is invalid."""
         from briefing import merge_profile
         saver = getattr(self.hooks, 'save_profile', None)
         if saver is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no profile')
+        if not isinstance(update, dict):
+            raise CallError(422, 'invalid_request', 'the update must be an object')
+        update = dict(update)
+        voices = update.pop('voices', None)
         try:
-            merged = merge_profile(self.profile(owner), update)
+            voices = self._checked_voices(owner, voices)
+            # An update of the voices alone leaves the saved profile as it is.
+            merged = merge_profile(self._saved_profile(owner), update) if update or not voices else None
         except ValueError as error:
             raise CallError(422, 'invalid_request', str(error)) from error
-        return saver(owner, merged)
+        if voices:
+            await self._save_voices(owner, voices)
+        profile = saver(owner, merged) if merged is not None else self._saved_profile(owner)
+        return dict(profile, voices=self._voice_defaults(owner))
+
+    def _checked_voices(self, owner, voices):
+        """An update's voices, each one of the owner's voices or '': {kind: name}."""
+        from call_brief import check_voice
+        if voices is None:
+            return {}
+        if not isinstance(voices, dict):
+            raise ValueError('voices must be an object with phone, meeting or both')
+        unknown = set(voices) - {'phone', 'meeting'}
+        if unknown:
+            raise ValueError('unknown voices fields: ' + ', '.join(sorted(map(str, unknown))))
+        settings = self.settings(owner)
+        return {kind: '' if value == '' else check_voice(value, settings, f'voices.{kind}')
+                for kind, value in voices.items() if value is not None}
+
+    async def _save_voices(self, owner, voices):
+        saver = getattr(self.hooks, 'save_voices', None)
+        if saver is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no default voices')
+        try:
+            await maybe_await(saver(owner, voices))
+        except CallRefused as error:
+            raise CallError(error.status, error.code, error.message, **error.details) from error
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
 
     def do_not_call(self, owner):
         getter = getattr(self.hooks, 'do_not_call', None)

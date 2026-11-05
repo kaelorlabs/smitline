@@ -446,11 +446,13 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertNotIn('aria', payload['voices'])
         self.assertNotEqual(payload['default'], 'aria')
+        self.assertNotIn('aria', payload['defaults'].values())
 
     async def profile_is_own(self):
         status, payload = await self.call('GET', '/v1/profile')
         self.assertEqual(status, 200)
         self.assertNotIn('Ana', json.dumps(payload))
+        self.assertNotIn('aria', payload['voices'].values())  # owner A's voice
 
     async def profile_change_is_own(self):
         status, payload = await self.call('PATCH', '/v1/profile', {'about': 'Mallory.'})

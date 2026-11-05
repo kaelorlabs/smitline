@@ -452,12 +452,15 @@ export class Smitline {
     return this._transport.instructCall(callId, text, options);
   }
 
-  /** The owner's profile: who they are, the people they know, how they come across. */
+  /** The owner's profile: who they are, the people they know, how they come across, default voices. */
   async getProfile() {
     return this._transport.getProfile();
   }
 
-  /** Merge into the profile: fields replace, people upsert by name, removePeople drops names. */
+  /**
+   * Merge into the profile: fields replace, people upsert by name, removePeople drops names, and
+   * voices ({ phone, meeting }) sets the default voices ('' for the default).
+   */
   async updateProfile(update) {
     return this._transport.updateProfile(update);
   }
@@ -485,6 +488,7 @@ export class Smitline {
     return this._transport.transferCall(callId);
   }
 
+  /** The voices calls can use, and the defaults for phone calls and for meetings. */
   async listVoices() {
     return this._transport.listVoices();
   }

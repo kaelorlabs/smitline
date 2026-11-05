@@ -212,7 +212,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     @handle
     async def update_profile(request):
         payload = await read_json(request)
-        return public_json(service.update_profile(await owner(request), payload))
+        return public_json(await service.update_profile(await owner(request), payload))
 
     @handle
     async def call_recording(request):
@@ -279,9 +279,12 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
 
     @handle
     async def list_voices(request):
-        from call_brief import default_voice
+        from meeting_line import voice_defaults
         env = service.settings(await owner(request))
-        return public_json({'default': default_voice(env), 'voices': list(available_voices(env))})
+        defaults = voice_defaults(env)
+        # default: the phone calls' one, as before there were two.
+        return public_json({'default': defaults['phone'], 'defaults': defaults,
+                            'voices': list(available_voices(env))})
 
     async def openapi(_request):
         return web.json_response(json.loads(OPENAPI_PATH.read_text(encoding='utf-8')))
