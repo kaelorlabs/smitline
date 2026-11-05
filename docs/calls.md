@@ -267,6 +267,8 @@ Phone callbacks are checked with the credentials of the call's owner, and an inc
 - A full pool answers `409 capacity_exceeded`. `SMITLINE_MAX_MEETINGS_PER_OWNER` caps the meetings of each owner other than `local` (`409 owner_capacity_exceeded`); unset, owners share the pool.
 - At startup the daemon follows every pool meeting whose container is still running and whose meeting has not ended, removes its other `smitline-meeting-*` projects, and writes the handoff of meetings no container is running any more. A `smitline-meeting-*` project whose meeting it does not know belongs to another installation on the same Docker host and is left alone.
 
+With `SMITLINE_MEETING_LAUNCHER`, the pool runs each meeting on a machine of its own from a launcher plugin instead of a compose project: no ports or folders here, and the same caps. A meeting then starts in the background, so its call is `connecting` while the machine boots, and `end_call` ends it at once. A machine that never comes up fails the call (`failed`, "The meeting could not be started"). Its claim holds no ports, and the meeting's token is kept beside it in `.smitline/active-meetings/<meeting id>.token`, so a restarted daemon adopts the machines still running. See [Each meeting on a machine of its own](meetings.md#each-meeting-on-a-machine-of-its-own).
+
 ## Access
 
 The daemon listens on loopback with a per-launch token by default. The token is in `.smitline/daemon.auth` (`/data/.smitline/daemon.auth` in the image) and changes each time the daemon starts.

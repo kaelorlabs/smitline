@@ -6,6 +6,9 @@ from call_brief import NEW_ROOM
 from call_hooks import LOCAL_OWNER, CallRefused, owner_settings, read_env_file
 from meeting_lifecycle import AGENT_ENDINGS
 
+# The handoff's endReason when a meeting started in the background never came up
+# (runtime_daemon._start_in_background).
+START_FAILED = 'supervisor_start_failed'
 # What an owner's settings give its meeting container, over the shared .env.
 MEETING_SETTINGS = ('SMITLINE_VOICE', 'SMITLINE_PARTICIPANT_NAME', 'SMITLINE_OWNER_NAME')
 # Everything a pool meeting's container reads from its environment besides OPENAI_API_KEY
@@ -295,16 +298,22 @@ class MeetingLine:
         left = (handoff or {}).get('endReason')
         if left in AGENT_ENDINGS:
             ctx.event('call.agent_left', reason=left)
+        error = None
         if ctx.call_id in self._over_time:
             reason = 'max_duration'
         elif ctx.call_id in self._canceled:
             reason = 'canceled'
+        elif left == START_FAILED:
+            # Its machine never came up (a launcher plugin starts meetings in the background):
+            # nothing was said, so the call fails rather than reporting an empty meeting.
+            reason, handoff = 'error', None
+            error = 'The meeting could not be started. Try again in a few minutes.'
         else:
             reason = 'meeting_ended'
         self._meetings.pop(ctx.call_id, None)
         self._canceled.discard(ctx.call_id)
         self._over_time.discard(ctx.call_id)
-        await ctx.finish(reason, usage={'voiceSeconds': seconds}, handoff=handoff)
+        await ctx.finish(reason, usage={'voiceSeconds': seconds}, handoff=handoff, error=error)
 
     async def _await_handoff(self, meeting_id, owner):
         deadline = self._now() + self.handoff_timeout

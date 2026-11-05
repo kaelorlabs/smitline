@@ -49,7 +49,38 @@ The console talks to the **loopback daemon** in the same container. API keys are
 
 A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path.
 
-While a meeting runs, the daemon reaches it through `POST /control` on the same port, with a token made for that meeting alone (`SMITLINE_CONTROL_TOKEN`, in the container's environment and the daemon's memory, never on disk): `send_call_instruction` guidance, and answers to [requests](agents.md#requests-from-the-call) from the people in the meeting. Listening in (`/listen`) needs the same token. Requests leave the meeting through `/health`, as its captions do. A meeting the daemon adopted after a restart has no token, so it runs on without either until it ends.
+While a meeting runs, the daemon reaches it through `POST /control` on the same port, with a token made for that meeting alone (`SMITLINE_CONTROL_TOKEN`, in the container's environment and the daemon's memory, never on disk): `send_call_instruction` guidance, and answers to [requests](agents.md#requests-from-the-call) from the people in the meeting. Listening in (`/listen`) needs the same token. Requests leave the meeting through `/health`, as its captions do. A meeting the daemon adopted after a restart has no token, so it runs on without either until it ends. A meeting on a [machine of its own](#each-meeting-on-a-machine-of-its-own) is the exception: its token is also kept on the daemon's disk, so a restarted daemon still has it.
+
+## Each meeting on a machine of its own
+
+A hosted installation can run each meeting on a machine of its own, such as a cloud VM made for that meeting and deleted after it, instead of in a container on the daemon's Docker host. `SMITLINE_MEETING_LAUNCHER=package.module:create` names the launcher plugin that makes the machines; the daemon imports it at startup and will not start if it is missing or incomplete. Leave it unset to run meetings on this computer, exactly as before.
+
+What changes for a meeting:
+
+- **Starting takes as long as the machine.** A Google Cloud VM takes about 80 seconds to boot. The call is `connecting` meanwhile (the meeting is `joining`), and `end_call` ends it at once, deleting the machine, even halfway through creating it. A machine that never comes up fails the call: "The meeting could not be started. Try again in a few minutes." The daemon gives a machine 300 seconds to answer, or the plugin's own `start_timeout`.
+- **The machine gets everything by value.** The plugin's `up()` receives a start package: the meeting's runtime state (the container reads it at `SMITLINE_RUNTIME_STATE`), the container's whole environment (its owner's OpenAI key and meeting settings, as a pool meeting's env file holds them, and `SMITLINE_CONTROL_TOKEN`) and the meeting's token. It must reach the machine over a private channel, never in instance metadata. No env file is written on the daemon's side.
+- **Every route takes the meeting's token.** The machine's port 8094 is reached over a network, so the meeting checks the token on `/health` too (`SMITLINE_HEALTH_TOKEN=1`), not only on `/control` and `/listen`. Open the port to the daemon alone.
+- **The archive comes back over HTTP.** The daemon cannot read the machine's disk. Once the meeting has closed its archive, `GET /archive` returns it, a gzipped tar of the files in `recordings/<meeting id>/` (`409` until then). The meeting's server waits up to `SMITLINE_ARCHIVE_GRACE` seconds (the daemon sets 120) for the daemon to take it. The daemon unpacks it into its own `recordings/<meeting id>/`, writes the handoff from it, and has the machine deleted. Ending a meeting (`end_call`, or `maxMinutes`) first asks it to stop, as SIGTERM stops a container here (`POST /control` with `{"type": "stop"}`), and takes its archive before deleting the machine. A meeting that fails (`needs_attention`) closes its archive at once, so it comes back too. A machine that vanished gets a partial handoff from what the daemon followed live.
+- **A restart keeps the meetings.** The meeting's token is kept in `.smitline/active-meetings/<meeting id>.token` (0600), beside its claim. A restarted daemon asks the plugin which machines of this installation run, adopts those whose meetings are still going (with their tokens, so instructions, listening in and the archive keep working), deletes the machines of meetings that ended, and leaves machines it knows nothing about alone.
+- **Capacity is what you allow.** `SMITLINE_MAX_MEETINGS` (default 1) caps how many machines run at once and `SMITLINE_MAX_MEETINGS_PER_OWNER` each owner's. There are no ports or folders to share.
+
+The daemon asks the machine's `/health` every second, and asks the plugin for the machine's state (`inspect()`) only while it starts or stops, or when the meeting stops answering, so a meeting in progress costs no cloud API calls.
+
+A launcher plugin's `create(environ=, project_root=, runtime_root=)` returns a provider with:
+
+| Part | What it does |
+| --- | --- |
+| `machine(meeting_id, owner)` | The machine for one meeting, at once, with no I/O. After a restart it is asked again for a machine that still runs, and then stands for that one. |
+| machine `remote = True` | Marks it as a machine of its own. |
+| machine `async up(package)` | Create the machine and have it run the meeting image with the start package. It may return once the machine is asked for. A meeting ended meanwhile cancels it. |
+| machine `async stop()` | Delete the machine, also one that never finished starting. A machine never serves a second meeting. |
+| machine `async inspect()` | `{"running": bool, "unknown": bool}`. `running` is false once `stop()` was asked or the meeting exited, even while the cloud is still deleting the machine. Keep it cheap, from a cache, if the cloud's API has quotas. |
+| machine `health_url` | `http://ADDRESS:8094/health` once the machine has an address, else `None`. A plain attribute that `up()` or `inspect()` sets. |
+| `async running()` | `{meeting_id: running}` for every machine of this installation, found by label. |
+| `async remove(meeting_id)` | Delete that meeting's machine. |
+| `start_timeout` (optional) | Seconds a machine may take to answer `/health`. |
+
+`RemoteMeetingPool` in [meeting_supervisor.py](../meeting-runtime/meeting_supervisor.py) describes the same, and [test_remote_meetings.py](../meeting-runtime/test_remote_meetings.py) has a fake plugin that serves a meeting on a local port.
 
 ## Appearing in the meeting
 
