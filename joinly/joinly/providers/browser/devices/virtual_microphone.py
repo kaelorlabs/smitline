@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Self
 
@@ -75,6 +76,9 @@ class VirtualMicrophone(PulseModuleManager, AudioWriter):
         self._writer: asyncio.StreamWriter | None = None
         self._queue: asyncio.Queue[bytes] | None = None
         self._pace_task: asyncio.Task | None = None
+        # Called with each chunk as it is written to the meeting (silence included) and the
+        # chunks queued behind it, so a camera can follow the voice as people hear it.
+        self.on_chunk: Callable[[bytes, tuple[bytes, ...]], None] | None = None
 
     async def __aenter__(self) -> Self:
         """Set up the fifo file and input stream."""
@@ -222,6 +226,18 @@ class VirtualMicrophone(PulseModuleManager, AudioWriter):
             self._queue.get_nowait()
             self._queue.task_done()
 
+    def _tap(self, chunk: bytes) -> None:
+        """Hand the chunk being written, and the ones queued behind it, to on_chunk."""
+        tap = self.on_chunk
+        if tap is None:
+            return
+        # asyncio.Queue keeps its items in a deque; reading it does not take them.
+        upcoming = tuple(getattr(self._queue, "_queue", ()))
+        try:
+            tap(chunk, upcoming)
+        except Exception:
+            logger.exception("The microphone tap failed")
+
     async def _pace_loop(self) -> None:
         """Pace the audio stream."""
         if self._writer is None or self._queue is None:
@@ -252,6 +268,7 @@ class VirtualMicrophone(PulseModuleManager, AudioWriter):
             except asyncio.QueueEmpty:
                 chunk = silence
 
+            self._tap(chunk)
             self._writer.write(chunk)
             await self._writer.drain()
 

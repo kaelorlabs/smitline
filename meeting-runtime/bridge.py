@@ -44,6 +44,7 @@ from joinly.providers.browser.devices.virtual_speaker import VirtualSpeaker
 from joinly.providers.browser.devices.virtual_microphone import VirtualMicrophone
 from joinly.providers.browser.camera_feed import CameraFeed
 from visual_presence import Presence, apply_platform_camera, presence_public_fields
+from voice_activity import VoiceActivity
 
 state = {'stage': 'starting', 'model': 'gpt-live-1', 'input_bytes': 0, 'output_bytes': 0,
          'muted': True, 'listening': False, 'admissionState': 'pending', 'authenticationState': 'guest', 'microphoneState': 'muted', 'captions': [], 'usage_seconds': 0, 'finalized': False,
@@ -596,7 +597,10 @@ def with_persona(runtime, pack, meeting_state=None):
 
 
 def camera_feed_for(runtime, microphone, pack=None):
-    """The browser meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE)."""
+    """The browser meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE). The talking
+    picture and the mascot's mouth follow the voice as the microphone writes it (voice_activity.py)."""
+    voice = VoiceActivity()
+    voice.attach(microphone)
     style = runtime.camera_style if runtime.camera_style != 'mascot' or pack else 'still'
     return CameraFeed(
         microphone,
@@ -605,6 +609,7 @@ def camera_feed_for(runtime, microphone, pack=None):
         style=style,
         caption=camera_caption(runtime.owner_name),
         pack=pack.page_payload() if pack is not None else None,
+        voice=voice,
     )
 
 
