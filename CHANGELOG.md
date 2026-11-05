@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.9 — 2026-11-05
 
 - **Phone menus.** A brief with `phoneMenus: true` (phone only, off by default) lets the assistant get through an automated phone menu: it listens for the option that fits the call, presses its key, and keys in a number the menu asks for when the brief gives it for this call, such as an account or order number. It never keys in card numbers, PINs or passwords, and a key that accepts something follows `mayAgreeTo`. SignalWire takes each key on the call's media stream, direct SIP sends it through OpenAI, and Twilio, whose media stream cannot send keys, plays the tones as audio. A `call.keys_pressed` event records each run of keys, showing a longer entry only as its length (the brief, and the transcript if the assistant says the number aloud, still hold it). Without the field nothing changes: the assistant still ends a call politely at a menu it cannot get through. Holding is not handled yet. See [Phone menus](docs/phone.md#phone-menus).
 
