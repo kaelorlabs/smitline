@@ -178,6 +178,34 @@ class PersonaTests(unittest.TestCase):
         self.assertIn('Who you are in this meeting: You appear in this meeting as the Relay arch. '
                       'Sound warm.', instructions)
 
+    def test_the_character_speaks_in_its_own_voice_unless_the_brief_names_one(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+        from unittest.mock import patch
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0', 'SMITLINE_VOICE': 'marin'})
+        with tempfile.TemporaryDirectory() as root:
+            manifest = write_pack(root)
+            manifest['voice'] = 'bossa'
+            Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            pack = load_presence_pack(root)
+            self.assertEqual(pack.voice, 'bossa')
+            for bad in ('Bossa!', 7):
+                with self.subTest(bad=bad):
+                    manifest['voice'] = bad
+                    Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                    with self.assertRaisesRegex(ValueError, 'voice'):
+                        load_presence_pack(root)
+        self.assertEqual(bridge.with_persona(runtime, pack).voice, 'bossa')
+        config = bridge.build_session_config(bridge.with_persona(runtime, pack))
+        self.assertEqual(config['audio']['output'], {'voice': 'bossa'})
+        # A voice the brief asked for wins over the character's.
+        self.assertEqual(bridge.with_persona(runtime, pack, {'voice': 'quartz'}).voice, 'marin')
+        # A voice GPT-Live does not have leaves the meeting's own.
+        import dataclasses
+        odd = dataclasses.replace(pack, voice='nosuchvoice')
+        with patch('builtins.print'):
+            self.assertEqual(bridge.with_persona(runtime, odd).voice, 'marin')
+
 
 class SpeakerNoteTests(unittest.TestCase):
     def test_says_who_is_speaking_and_marks_the_owner(self):

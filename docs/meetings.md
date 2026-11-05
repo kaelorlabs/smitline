@@ -57,7 +57,7 @@ A virtual camera shows Smitline listening, working, or speaking, and never displ
 
 `SMITLINE_MEETING_CAMERA_STYLE=mascot` plays a presence pack instead: a character that walks in once Smitline is admitted, stands and listens, thinks while it waits on its backend, talks while it speaks, and waves and hops off when it leaves. `SMITLINE_MEETING_CAMERA_PACK` names the pack's folder, which must be readable inside the meeting container (copy it into a meeting image of your own). A pack is a `manifest.json` and WebP or PNG frames: clips that loop or play once, the clip each presence state shows, and an optional arrival clip; [presence_pack.py](../meeting-runtime/presence_pack.py) describes the format. The frames are pictures only; the camera adds the caption. A new clip blends in over a quarter of a second, so a change of state never jumps. A 640x360 pack at 12 frames a second needs about a tenth of a CPU core more than the still picture in a browser and sends about 0.8 Mbit/s; at 24 frames a second it needs somewhat more. A pack that cannot be read leaves the still picture.
 
-A pack may also say who its character is (`persona`, a few sentences): Smitline appears as that character, so its voice is given the persona with its instructions and sounds like the character people see.
+A pack may also say who its character is (`persona`, a few sentences) and give it a GPT-Live `voice`: Smitline appears as that character, so its voice is given the persona with its instructions, and the meeting uses the character's voice unless the brief names one. `SMITLINE_VOICE` still sets the voice for phone calls and for meetings without such a pack.
 
 ## Debugging from a checkout
 

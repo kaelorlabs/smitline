@@ -27,6 +27,8 @@ A pack is a folder holding manifest.json and the frames, as WebP or PNG files:
   assistant"); white otherwise.
 - "persona", optional, says who the character is and how it sounds, in a few sentences. The agent
   appears as the character, so the voice is given it as part of its instructions.
+- "voice", optional, is the character's GPT-Live voice. It is used for the meeting unless the
+  brief names a voice, before the installation's SMITLINE_VOICE (which phone calls keep using).
 
 Frames are pictures only: the camera adds the caption itself, so a pack holds no names or text.
 """
@@ -46,6 +48,7 @@ MAX_CLIPS = 32
 MAX_PERSONA = 800
 MEDIA_TYPES = {'.webp': 'image/webp', '.png': 'image/png'}
 _CLIP_NAME = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
+_VOICE = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
 _COLOUR = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
 
@@ -67,6 +70,7 @@ class PresencePack:
     arrival: object = None
     caption_color: object = None
     persona: str = ''
+    voice: str = ''
 
     def clip_for(self, state):
         """The clip a presence state shows; listening's for states the pack leaves out."""
@@ -203,5 +207,8 @@ def load_presence_pack(path):
     if not isinstance(persona, str) or len(persona) > MAX_PERSONA or any(
             ord(char) < 32 for char in persona):
         _fail(f'"persona" must be one paragraph of at most {MAX_PERSONA} characters')
+    voice = manifest.get('voice') or ''
+    if not isinstance(voice, str) or (voice and not _VOICE.match(voice)):
+        _fail('"voice" must be a voice name such as bossa')
     return PresencePack(name, width, height, fps, clips, states, arrival, caption_color,
-                        ' '.join(persona.split()))
+                        ' '.join(persona.split()), voice)
