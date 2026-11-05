@@ -1,6 +1,7 @@
 """Version 1 structured meeting handoff returned to the agent that started the meeting."""
 from dataclasses import dataclass
 
+from adapters_base import JOIN_REFUSALS
 from schema_validation import (
     omit_none, optional_bool, optional_field, optional_int, optional_string, reject_unknown_fields,
     require_enum, require_field, require_id, require_mapping, require_meeting_id,
@@ -15,11 +16,15 @@ DECISION_FIELDS = ('text', 'evidence')
 ACTION_ITEM_FIELDS = ('text', 'owner', 'due')
 WORK_RECORD_FIELDS = ('taskId', 'summary', 'status', 'startedAt', 'endedAt')
 ARTIFACT_REFERENCE_FIELDS = ('artifactId', 'path')
+PARTICIPANTS_FIELDS = ('count', 'names')
+# Names the handoff keeps of the people the meeting showed, and how long each may be.
+MAX_PARTICIPANT_NAMES = 30
+MAX_PARTICIPANT_NAME = 80
 HANDOFF_FIELDS = (
     'version', 'meetingId', 'startedAt', 'endedAt', 'summary', 'decisions', 'requirements',
     'actionItems', 'unresolvedQuestions', 'filesDiscussed', 'workPerformed', 'artifacts',
     'transcriptPath', 'recommendedNextAction', 'handoffId', 'partial', 'endReason',
-    'archivePath',
+    'archivePath', 'joinRefused', 'participants',
 )
 # Fields handoffs stored before coding-agent sessions were removed; dropped when read back.
 LEGACY_HANDOFF_FIELDS = ('git', 'permissions', 'approvals')
@@ -154,6 +159,31 @@ class ArtifactReference:
 
 
 @dataclass(frozen=True)
+class ParticipantsSeen:
+    """Who the meeting showed besides Smitline while it was in: the most people at once (count,
+    None when the meeting never said) and the names it showed (names as people chose them)."""
+    count: int = None
+    names: tuple = ()
+
+    def to_dict(self):
+        payload = omit_none({'count': self.count})
+        payload['names'] = list(self.names)
+        return payload
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = require_mapping(data, 'participants')
+        reject_unknown_fields(payload, PARTICIPANTS_FIELDS, 'participants')
+        names = optional_field(payload, 'names')
+        return cls(
+            count=optional_int(optional_field(payload, 'count'), 'participants.count', min_value=0),
+            names=() if names is None else require_string_list(
+                names, 'participants.names', max_items=MAX_PARTICIPANT_NAMES,
+                item_max_length=MAX_PARTICIPANT_NAME),
+        )
+
+
+@dataclass(frozen=True)
 class MeetingHandoff:
     version: int
     meeting_id: str
@@ -173,6 +203,10 @@ class MeetingHandoff:
     partial: bool = None
     end_reason: str = None
     archive_path: str = None
+    # How the platform kept the browser out (JOIN_REFUSALS), when it did.
+    join_refused: str = None
+    # ParticipantsSeen, when the meeting showed anyone besides Smitline.
+    participants: ParticipantsSeen = None
 
     def to_dict(self):
         return omit_none({
@@ -194,6 +228,8 @@ class MeetingHandoff:
             'partial': self.partial,
             'endReason': self.end_reason,
             'archivePath': self.archive_path,
+            'joinRefused': self.join_refused,
+            'participants': None if self.participants is None else self.participants.to_dict(),
         })
 
     @classmethod
@@ -233,4 +269,8 @@ class MeetingHandoff:
                                        max_length=256),
             archive_path=optional_string(optional_field(payload, 'archivePath'), 'archivePath',
                                          max_length=4096),
+            join_refused=(None if optional_field(payload, 'joinRefused') is None else
+                          require_enum(payload['joinRefused'], 'joinRefused', JOIN_REFUSALS)),
+            participants=(None if optional_field(payload, 'participants') is None else
+                          ParticipantsSeen.from_dict(payload['participants'])),
         )

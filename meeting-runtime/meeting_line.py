@@ -213,6 +213,10 @@ class MeetingLine:
             return self._monotonic()
         return asyncio.get_running_loop().time()
 
+    def warnings(self, hooks, owner, brief):
+        """For a brief check: what may keep this meeting out without stopping it (dial_in.warnings)."""
+        return dial_in.warnings(self, brief, lambda provider: hooks.credentials(owner, provider))
+
     async def preflight(self, hooks, owner, brief):
         """For a brief check: a meeting that would join by phone tests the phone line's tunnel."""
         credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731

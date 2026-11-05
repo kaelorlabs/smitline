@@ -99,8 +99,16 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
     async def test_teams_auth_failure(self):
         await self.page.route('**/*', lambda route: route.fulfill(body='Sign in to join this meeting'))
-        with self.assertRaises(AuthenticationRequired):
+        with self.assertRaises(AuthenticationRequired) as signin:
             await self.adapter().join('https://teams.microsoft.com/meet/123', 'Colleague')
+        self.assertEqual(signin.exception.kind, 'sign_in_required')
+        # An organizer who keeps anonymous people out: restricted, still an AuthenticationRequired.
+        await self.page.unroute('**/*')
+        await self.page.route('**/*', lambda route: route.fulfill(
+            body="Anonymous users can't join this meeting"))
+        with self.assertRaises(AuthenticationRequired) as restricted:
+            await self.adapter().join('https://teams.microsoft.com/meet/123', 'Colleague')
+        self.assertEqual(restricted.exception.kind, 'restricted')
     async def test_mute_controls_and_chat_capabilities(self):
         await self.page.set_content('''<button onclick="this.innerText=this.innerText==='Unmute'?'Mute':'Unmute'">Unmute</button><button>Mute all</button>''')
         a = self.adapter()
@@ -291,6 +299,13 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AuthenticationRequired) as signin:
             await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
         self.assertNotIsInstance(signin.exception, GuestRefused)
+        self.assertEqual(signin.exception.kind, 'sign_in_required')
+        await self.page.unroute('**/*')
+        await self.page.route('**/*', lambda route: route.fulfill(
+            body='Only people invited by the host can join this call'))
+        with self.assertRaises(AuthenticationRequired) as restricted:
+            await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
+        self.assertEqual(restricted.exception.kind, 'restricted')
         await self.page.unroute('**/*')
         await self.page.route('**/*', lambda route: route.fulfill(
             body="You can't join this video call"))
@@ -300,6 +315,7 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
             await self.adapter(meet=True).join('https://meet.google.com/aaa-bbbb-ccc', 'Colleague')
         self.assertIsInstance(refused.exception, AuthenticationRequired)
         self.assertIn('turned away', str(refused.exception))
+        self.assertEqual(refused.exception.kind, 'guest_refused')
 
     async def test_meet_mute_camera_chat_end_and_degraded_policy(self):
         await self.page.set_content('''
@@ -341,3 +357,16 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
             '(el) => el.addEventListener("click", () => { el.dataset.left = "1" })')
         await a.leave()
         self.assertEqual(await self.page.locator('#leave').get_attribute('data-left'), '1')
+
+
+class RefusalKindTests(unittest.TestCase):
+    """How a platform kept the browser out, as one of a few known words (adapters_base.JOIN_REFUSALS)."""
+
+    def test_a_refusal_kind_is_one_of_the_known_words(self):
+        from adapters_base import JOIN_REFUSALS, join_refusal
+        self.assertEqual(join_refusal(AuthenticationRequired()), 'sign_in_required')
+        self.assertEqual(join_refusal(AuthenticationRequired('x', kind='restricted')), 'restricted')
+        self.assertEqual(join_refusal(AuthenticationRequired('x', kind='made up')), 'sign_in_required')
+        self.assertEqual(join_refusal(GuestRefused('x')), 'guest_refused')
+        self.assertIsNone(join_refusal(RuntimeError('Zoom meeting ended or is invalid')))
+        self.assertEqual(set(JOIN_REFUSALS), {'sign_in_required', 'restricted', 'guest_refused'})

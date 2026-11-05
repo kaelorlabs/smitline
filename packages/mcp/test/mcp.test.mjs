@@ -102,6 +102,42 @@ test('a meeting brief can carry its dial-in, and start_call passes it on', async
   assert.deepEqual(briefs, [brief]);
 });
 
+test('agents are told to pass the dial-in up front for Google Meet, and check_call_brief warns without it', async () => {
+  const start = TOOL_DEFINITIONS.find((tool) => tool.name === 'start_call');
+  // Google often turns guest bots away: with dialIn, Smitline joins by phone by itself.
+  assert.match(start.inputSchema.properties.dialIn.description, /For Google Meet, pass it whenever the invitation has a Join by phone number/);
+  assert.match(start.inputSchema.properties.to.description, /Google Meet link, add dialIn too/);
+  const check = TOOL_DEFINITIONS.find((tool) => tool.name === 'check_call_brief');
+  assert.match(check.description, /warnings that would not stop it/);
+  const warning = 'Google Meet often turns guest bots away: pass dialIn.';
+  const session = createMcpSession({
+    colleague: { async checkCall(brief) { return { ok: true, brief, problems: [], warnings: [warning], carried: 0 }; } },
+    log() {},
+  });
+  const checked = await call(session, 'tools/call', {
+    name: 'check_call_brief', arguments: { channel: 'meeting', to: 'https://meet.google.com/abc-defg-hij', objective: 'Take notes' },
+  });
+  assert.equal(checked.result.isError, false);
+  assert.deepEqual(checked.result.structuredContent.warnings, [warning]);
+  assert.equal(checked.result.structuredContent.ok, true);
+});
+
+test('a result that says why and what next reaches the agent as is', async () => {
+  const result = {
+    outcome: 'not_reached', summary: 'Google Meet did not let Smitline in as a guest.',
+    reason: 'Google Meet did not let Smitline in as a guest.',
+    hint: 'Ask the user for the Join by phone number and PIN from the invitation, if it has them, then start again with them as dialIn.',
+    details: [], decisions: [], actionItems: [], openQuestions: [], transcript: [], durationSeconds: 0,
+  };
+  const session = createMcpSession({
+    colleague: { async getCall(callId) { return { id: callId, channel: 'meeting', status: 'completed', result }; } },
+    log() {},
+  });
+  const got = await call(session, 'tools/call', { name: 'get_call', arguments: { callId: 'call-0123456789abcdef' } });
+  assert.equal(got.result.structuredContent.result.reason, result.reason);
+  assert.equal(got.result.structuredContent.result.hint, result.hint);
+});
+
 test('startup errors are mapped without leaking tokens', async () => {
   const colleague = {
     async startCall() {

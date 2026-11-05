@@ -14,7 +14,7 @@ from call_hooks import (
 )
 from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
-    result_from_handoff, result_without_conversation, transcript_entries,
+    meeting_facts, result_from_handoff, result_without_conversation, transcript_entries,
 )
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
@@ -395,11 +395,20 @@ class CallService:
         return CallBrief.from_dict(payload, environ=settings), corrected
 
     async def check(self, payload, *, request=None):
-        """Everything create() would refuse, reported instead of raised."""
+        """Everything create() would refuse, reported instead of raised (problems), and what may
+        go wrong without stopping the call (warnings), such as a platform that often turns guest
+        bots away."""
         owner = await self.owner_for(request)
         brief, _ = await self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         problems = []
+        warnings = []
+        warn = getattr(line, 'warnings', None)
+        if warn is not None:
+            try:
+                warnings.extend(warn(self.hooks, owner, brief) or ())
+            except Exception:
+                pass  # a warning is advice: never a reason for the check to fail
         if line is None:
             problems.append(f'{brief.channel} calls are not available on this installation')
         else:
@@ -427,7 +436,8 @@ class CallService:
         except CallError as error:
             problems.append(error.message)
             carried = 0
-        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems, 'carried': carried}
+        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems,
+                'warnings': warnings, 'carried': carried}
 
     def reconcile(self):
         """At startup, close calls a previous daemon left unfinished; nothing will finish them.
@@ -1464,10 +1474,12 @@ class CallService:
                                                  duration_seconds=duration)
             if simple is not None:
                 return simple
+        facts = self._meeting_facts(record, end_reason, handoff) if record['channel'] == 'meeting' else []
         try:
             summarizer = self._summarizer_factory(context.owner)
             result = await summarizer.summarize(record['brief'], transcript,
-                                                duration_seconds=duration)
+                                                duration_seconds=duration,
+                                                **({'facts': facts} if facts else {}))
             if end_reason == 'voicemail' and result['outcome'] in ('achieved', 'partial'):
                 result['outcome'] = 'voicemail'
             return result
@@ -1475,6 +1487,25 @@ class CallService:
             return fallback_result(end_reason, transcript, duration, str(error))
         except Exception as error:
             return fallback_result(end_reason, transcript, duration, type(error).__name__)
+
+    def _meeting_facts(self, record, end_reason, handoff):
+        """What a meeting's summarizer is told that its transcript cannot show (meeting_facts):
+        that Smitline started the room (call.room_created), that it joined by phone, who the
+        meeting showed (the handoff's participants), and why it left (call.agent_left)."""
+        room, left = False, None
+        try:
+            events = self.store.events(record['id'])
+        except (CallNotFound, ValueError):
+            events = []  # the facts help the summary; without them it is still written
+        for event in events:
+            if event['type'] == 'call.room_created':
+                room = True
+            elif event['type'] == 'call.agent_left':
+                left = (event.get('data') or {}).get('reason')
+        return meeting_facts(room_created=room,
+                             by_phone=(record.get('line') or {}).get('joinedBy') == 'phone',
+                             participants=(handoff or {}).get('participants'),
+                             ended=left or end_reason)
 
     async def _finalize(self, context, end_reason, *, usage, handoff, error):
         call_id = context.call_id

@@ -2,12 +2,29 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 
+# How a platform kept the browser out, as a meeting reports it (/health's joinRefused, the archive's
+# join_refused event, the handoff's joinRefused): it asked for a sign-in, it lets only invited people
+# or its own organization in, or it turned the guest away without asking for either.
+JOIN_REFUSALS = ('sign_in_required', 'restricted', 'guest_refused')
+
 class AuthenticationRequired(RuntimeError):
-    pass
+    """The platform kept the browser out before it was in; `kind` says how (JOIN_REFUSALS)."""
+    kind = 'sign_in_required'
+    def __init__(self, *args, kind=None):
+        super().__init__(*args)
+        if kind in JOIN_REFUSALS:
+            self.kind = kind
 
 class GuestRefused(AuthenticationRequired):
     """The platform turned the guest browser away (not a sign-in page). A connected account may still
     get in, so the join retries with it like any other AuthenticationRequired."""
+    kind = 'guest_refused'
+
+def join_refusal(error):
+    """How the platform refused a failed join (one of JOIN_REFUSALS), or None when it did not."""
+    if not isinstance(error, AuthenticationRequired):
+        return None
+    return error.kind if error.kind in JOIN_REFUSALS else JOIN_REFUSALS[0]
 
 @dataclass(frozen=True)
 class Capabilities:

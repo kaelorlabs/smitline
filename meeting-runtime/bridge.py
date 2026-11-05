@@ -26,7 +26,7 @@ from meeting_connection import joined_meeting
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
     others_in, participants_note, speaker_note)
-from adapters_base import AuthenticationRequired
+from adapters_base import AuthenticationRequired, join_refusal
 from meeting_urls import platform_for_url
 from participation import Participation
 from presence_pack import load_presence_pack
@@ -77,6 +77,19 @@ def stage(value):
         print(value, flush=True)
     if presence is not None:
         presence.sync()
+
+
+def note_join_refused(error):
+    """How the platform kept the browser out, when it did (adapters_base.join_refusal): on /health
+    and in the archive, as a word the call's result explains. The error's own text stays here."""
+    refused = join_refusal(error)
+    if refused:
+        state['joinRefused'] = refused
+        if record:
+            # Never in the way of what the meeting does next: report the stage, close the archive.
+            with contextlib.suppress(Exception):
+                record.event('join_refused', refusal=refused)
+    return refused
 
 
 PRIVATE_NAMES = frozenset({'MEETING_URL', 'MEETING_PASSCODE', 'TWILIO_ACCOUNT_SID'})
@@ -348,9 +361,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     record.event('participants_unavailable', platform=state.get('platform'))
                 if names and names != participants['names']:
                     participants['names'] = names
-                    if await send_note('thinking', participants_note(
-                            names, runtime.owner_name, runtime.participant_name)):
-                        record.event('participants', count=len(names))
+                    # In the archive too: the result says who was there, also people who never spoke.
+                    record.event('participants', count=len(names), names=names)
+                    await send_note('thinking', participants_note(
+                        names, runtime.owner_name, runtime.participant_name))
 
             async def follow_speakers():
                 """Tell the voice who is speaking once that has held for a moment, so a reply can
@@ -394,6 +408,9 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         count = await adapter.get_participant_count()
                     except Exception:
                         count = None
+                    if count is not None and count != participants.get('count'):
+                        participants['count'] = count
+                        record.event('participant_count', count=count)  # itself included
                     state['participantCount'] = count
                     if leaving:
                         return
@@ -729,6 +746,7 @@ async def main():
                 await run_voice(speaker, camera_feed.audio_writer, page, api_key, runtime, adapter, meeting_state)
         except Exception as exc:
             state['error'] = type(exc).__name__ + ': ' + str(exc).split('Call log:')[0][:300]
+            note_join_refused(exc)
             stage('authentication_required' if isinstance(exc, AuthenticationRequired) else 'needs_attention')
             print(state['error'], flush=True)
             if archive_grace(os.environ):

@@ -7,7 +7,7 @@ description: Place a phone call, join a video meeting, or start a new meeting ro
 
 Smitline talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `smitline call ... --wait`. When Smitline runs in its Docker container, as it does after a normal setup, the CLI is `docker exec smitline smitline call ... --wait`.
 
-Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`. When the user has the meeting's dial-in details, usually in the invitation, add them as `dialIn` (`{"invite": "<the pasted invitation>"}` works): Smitline then joins by phone if the platform turns it away, or when there is only a number. To start a meeting of its own, set `to` to `"new"`: Smitline opens a room people join from a link in any browser, ready in seconds, and the call returns that link as `to` for you to send them. Joining someone's meeting by its link can take a minute or two, for example while a hosted service starts a machine for it; the call is `connecting` meanwhile.
+Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`. When the user has the meeting's dial-in details, usually in the invitation, add them as `dialIn` (`{"invite": "<the pasted invitation>"}` works): Smitline then joins by phone if the platform turns it away, or when there is only a number. For Google Meet, ask for them up front when the invitation has a Join by phone number: Google often turns guest bots away, and with `dialIn` Smitline joins by phone by itself. To start a meeting of its own, set `to` to `"new"`: Smitline opens a room people join from a link in any browser, ready in seconds, and the call returns that link as `to` for you to send them. Joining someone's meeting by its link can take a minute or two, for example while a hosted service starts a machine for it; the call is `connecting` meanwhile.
 
 ## 1. Write a complete brief
 
@@ -15,7 +15,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | --- | --- |
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link, or a new room |
 | `to` | E.164 number such as `+14155550142`, the invite URL, or `"new"` for a new room |
-| `dialIn` | Meetings: the dial-in details, or the invitation text as `{"invite": "..."}`, to join by phone (`to` may then be left out) |
+| `dialIn` | Meetings: the dial-in details, or the invitation text as `{"invite": "..."}`, to join by phone (`to` may then be left out). For a Google Meet link, add it whenever the invitation has a phone number. |
 | `onBehalfOf` | The user's name, never your own or an app's, such as ChatGPT or Claude. The call opens with "Hi, I'm calling on behalf of NAME about…" and says during the call that it is NAME's AI assistant. Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
 | `context` | What you and the user have been working on that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |
@@ -32,7 +32,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `forRequest` | When this call does what someone on another call asked (phoning Arun because the meeting asked): `{"callId": "<that call>", "requestId": "r1"}`. The call then reports to them by itself: ringing, picked up, and the outcome or why it failed. If they cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye. |
 | `canDo` | What you will do for the people on the call when they ask, such as "look things up in the repo and edit the docs". Set it whenever you could help them, at least to answer questions about the user's work: then they can ask you through the voice (step 5). Name only what you can do and the user would approve. Without it nothing they ask reaches you, and the voice can only say the user will follow up. |
 
-Before a demo or a call that matters, run `check_call_brief` on the brief: for a phone call it also tests that the phone provider can reach this computer, so a network that blocks it shows up before anyone is waiting.
+Before a demo or a call that matters, run `check_call_brief` on the brief: for a phone call it also tests that the phone provider can reach this computer, so a network that blocks it shows up before anyone is waiting. Its `warnings` do not stop the call but may keep it from working, such as a Google Meet link without `dialIn`: fix them when you can.
 
 If something important is unknown, ask the user before calling. Never guess prices, dates, or commitments. Never put card numbers, passwords, or one-time codes in a brief.
 
@@ -78,8 +78,8 @@ Answer questions only with what the user would want these people to know. Keep f
 
 ## 6. Report the result
 
-Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say.
+Lead with the outcome in plain words, then the details the user needs later (confirmation numbers, times, prices), then any open questions or action items. Offer the transcript if they want it. Do not claim anything the result does not say. When the result has a `reason` and a `hint`, tell the user the reason and act on the hint: for a meeting the platform did not let Smitline into, that means asking the user for the invitation's phone details and starting again with them as `dialIn`.
 
 When later calls may need what this one learned, such as the next quote in a task, save a short note with `save_call_note`: the facts, not the conversation.
 
-Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call. If `doNotCall` is `true`, tell the user the person asked not to be called again and Smitline will not call them again.
+Outcomes: `achieved`, `partial`, `declined`, `not_reached` (nobody answered or the line was busy; for a meeting, Smitline never got in or never got to do what it came for), `voicemail` (voicemail answered; the summary says whether a message was left), `failed`, `canceled`. If `disclosureVerified` is `false`, tell the user the AI disclosure was not clearly heard on that call. If `doNotCall` is `true`, tell the user the person asked not to be called again and Smitline will not call them again.

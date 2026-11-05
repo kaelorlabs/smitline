@@ -155,7 +155,7 @@ class FakeTwilioSocket:
 class FakeSummarizer:
     calls = 0
 
-    async def summarize(self, brief, transcript, *, duration_seconds=0):
+    async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
         FakeSummarizer.calls += 1
         return {'outcome': 'achieved', 'summary': 'Booked.', 'details': [], 'decisions': [],
                 'actionItems': [], 'openQuestions': [], 'transcript': transcript,

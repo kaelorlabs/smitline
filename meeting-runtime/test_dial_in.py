@@ -368,9 +368,11 @@ class BrowserMeetings:
 
 class MeetingSummarizer:
     briefs = []
+    facts = []
 
-    async def summarize(self, brief, transcript, *, duration_seconds=0):
+    async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
         MeetingSummarizer.briefs.append(brief)
+        MeetingSummarizer.facts.append(list(facts))
         return {'outcome': 'achieved', 'summary': 'Took notes.', 'details': [], 'decisions': [],
                 'actionItems': [], 'openQuestions': [], 'transcript': transcript,
                 'durationSeconds': duration_seconds, 'source': 'summary_model'}
@@ -436,6 +438,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         FakeLive.instances = []
         MeetingSummarizer.briefs = []
+        MeetingSummarizer.facts = []
         self.temp = tempfile.TemporaryDirectory()
         # Meetings with a link join by phone here too (hosted, until each gets a VM of its own).
         self.h = DialHarness(self.temp.name, env={'SMITLINE_MEETING_DIAL_IN_FIRST': 'all'})
@@ -811,6 +814,62 @@ class WayInTests(unittest.IsolatedAsyncioTestCase):
         summary = done['result']['summary']
         self.assertIn('Smitline did not join by phone instead: +16505550123 is not a meeting', summary)
         self.assertIn('It can dial in at 8:00 AM there', summary)
+        # The agent reads why, and what it can do: the phone rules' own words (afterHours, when).
+        self.assertEqual(done['result']['outcome'], 'not_reached')
+        self.assertIn('did not join by phone instead', done['result']['reason'])
+        self.assertIn('It can dial in at 8:00 AM there', done['result']['hint'])
+        self.assertIn('afterHours', done['result']['hint'])
+
+    async def test_a_link_turned_away_without_dial_in_says_why_and_how_to_join_by_phone(self):
+        # What a meeting's handoff says when Google refuses the guest browser right after Join.
+        self.h.daemon.handoff = {
+            'summary': 'Take notes on the launch plan Meeting ended (authentication_required) with 0 '
+                       'transcript entries (partial).',
+            'endReason': 'authentication_required', 'joinRefused': 'guest_refused'}
+        record = await self.h.service.create(meeting_brief(to=MEET_LINK))
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        result = done['result']
+        self.assertEqual((done['status'], result['outcome']), ('completed', 'not_reached'))
+        self.assertEqual(result['reason'], 'Google Meet did not let Smitline in as a guest.')
+        # The summary says what happened, never the objective as if it were done.
+        self.assertEqual(result['summary'], result['reason'])
+        self.assertIn('Join by phone number and PIN', result['hint'])
+        self.assertIn('as dialIn and without the link', result['hint'])
+        self.assertEqual(self.h.twilio.created, [])
+        self.assertEqual(self.h.events(record, 'call.join_refused'),
+                         [{'platform': 'meet', 'kind': 'guest_refused'}])
+        self.assertEqual(self.h.events(record, 'call.dial_in_skipped'), [])
+
+    async def test_any_platform_that_turns_the_link_away_is_named_with_its_phone_details(self):
+        self.h.daemon.handoff = {'summary': '', 'endReason': 'authentication_required',
+                                 'joinRefused': 'restricted'}
+        record = await self.h.service.create(meeting_brief(
+            to='https://teams.microsoft.com/l/meetup-join/abc?context=x'))
+        result = (await self.h.service.wait(record['id'], timeout=5, owner='local'))['result']
+        self.assertEqual(result['reason'], 'Microsoft Teams lets only invited people into this '
+                         'meeting, so Smitline could not join from the link.')
+        self.assertIn('the phone number and phone conference ID', result['hint'])
+        self.assertEqual(self.h.events(record, 'call.join_refused'),
+                         [{'platform': 'teams', 'kind': 'restricted'}])
+
+    async def test_a_link_turned_away_where_this_installation_cannot_dial_in(self):
+        for key in ('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'):
+            self.h.env.pop(key)
+        problem = dial_in.phone_problem(self.h.phone, lambda name: self.h.hooks.credentials('local', name))
+        self.assertIsNotNone(problem)
+        self.h.daemon.handoff = {'summary': '', 'endReason': 'authentication_required',
+                                 'joinRefused': 'guest_refused'}
+        # With the dial-in: it could not dial, and says why.
+        record = await self.h.service.create(meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE}))
+        result = (await self.h.service.wait(record['id'], timeout=5, owner='local'))['result']
+        self.assertIn('this installation cannot dial in', result['reason'])
+        self.assertEqual(result['hint'], problem.message)
+        # Without it: the hint asks for the dial-in and says what joining by phone needs here.
+        record = await self.h.service.create(meeting_brief(to=MEET_LINK))
+        result = (await self.h.service.wait(record['id'], timeout=5, owner='local'))['result']
+        self.assertTrue(result['hint'].startswith('Ask the user for the Join by phone number'))
+        self.assertTrue(result['hint'].endswith(problem.message))
+        self.assertEqual(self.h.twilio.created, [])
 
     def test_the_way_in(self):
         linked = meeting_brief(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE})
@@ -850,10 +909,14 @@ class WayInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.h.twilio.created[0]['to'], '+16505550123')
         self.assertEqual(self.h.events(record, 'call.dial_in'),
                          [{'reason': 'platform_refused', 'number': '+16505550123', 'platform': 'meet'}])
+        # The refusal is on the call; a handoff from before the refusal kinds names none.
+        self.assertEqual(self.h.events(record, 'call.join_refused'), [{'platform': 'meet'}])
         session = self.h.phone.session(record['id'])
         await self.h.service.end(record['id'], owner='local')
-        await self.h.service.wait(record['id'], timeout=5, owner='local')
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
         self.assertTrue(session.canceled)
+        # It went in by phone instead, so the result has nothing to explain.
+        self.assertFalse({'reason', 'hint'} & set(done['result']))
 
     async def test_a_meeting_never_admitted_does_not_dial_in(self):
         # Not being let in is the host's choice, not the platform refusing the browser.
@@ -869,6 +932,27 @@ class WayInTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(checked['ok'], checked['problems'])
         self.assertEqual(checked['brief']['to'], '+14388097799')
         self.assertEqual(checked['brief']['dialIn']['keys'], ',,85951289482#,,,,*123456#')
+        self.assertEqual(checked['warnings'], [])
+
+    async def test_a_brief_check_warns_of_a_google_meet_link_without_its_dial_in(self):
+        checked = await self.h.service.check(meeting_brief(to=MEET_LINK))
+        # A warning never stops the call.
+        self.assertEqual((checked['ok'], checked['problems']), (True, []))
+        self.assertEqual(checked['warnings'], [dial_in.MEET_WITHOUT_DIAL_IN])
+        self.assertIn('dialIn', checked['warnings'][0])
+        for quiet in (meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE}),
+                      meeting_brief(to=ZOOM_LINK), meeting_brief(dialIn={'invite': MEET_INVITE})):
+            with self.subTest(brief=quiet):
+                self.assertEqual((await self.h.service.check(quiet))['warnings'], [])
+        # Where Smitline could not dial in anyway, the dial-in would not help: no warning.
+        for key in ('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'):
+            self.h.env.pop(key)
+        self.assertEqual((await self.h.service.check(meeting_brief(to=MEET_LINK)))['warnings'], [])
+
+    async def test_a_phone_call_check_has_no_warnings(self):
+        from test_phone import brief as phone_brief
+        checked = await self.h.service.check(phone_brief())
+        self.assertEqual(checked['warnings'], [])
 
 
 class MeetingMachineTests(unittest.IsolatedAsyncioTestCase):
@@ -1088,6 +1172,25 @@ class SurfaceTests(unittest.TestCase):
         # Agents read that a dial-in keeps calling hours, which afterHours lifts.
         self.assertIn('meetings with a dialIn', schemas['Brief']['properties']['afterHours']['description'])
         self.assertIn('calling hours and call limits included', schemas['Brief']['properties']['dialIn']['description'])
+        # And to pass it up front for Google Meet, which often turns guest browsers away.
+        for field in ('to', 'dialIn'):
+            self.assertIn('Google Meet', schemas['Brief']['properties'][field]['description'], field)
+
+    def test_the_api_schema_has_every_result_field_and_the_checks_warnings(self):
+        import json
+        from call_result import build_result, refused_join
+        spec = json.loads((Path(__file__).with_name('openapi.json')).read_text(encoding='utf-8'))
+        schemas = spec['components']['schemas']
+        result = schemas['Result']
+        # reason and hint: only when Smitline knows why a call got nowhere.
+        self.assertLessEqual({'reason', 'hint'}, set(result['properties']))
+        self.assertFalse({'reason', 'hint'} & set(result['required']))
+        refused = refused_join('meet', 'guest_refused')
+        produced = build_result(outcome='not_reached', summary=refused['summary'], do_not_call=True,
+                                reason=refused['reason'], hint=refused['hint'])
+        self.assertLessEqual(set(produced), set(result['properties']))
+        self.assertEqual(schemas['CheckResult']['properties']['warnings']['type'], 'array')
+        self.assertNotIn('warnings', schemas['CheckResult']['required'])
 
     def test_the_daemon_gives_its_meeting_line_the_phone_line(self):
         from daemon_main import build_app, build_parser
