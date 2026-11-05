@@ -23,6 +23,7 @@ from voice_core import append_event, backend_usage_from, function_call_from, fun
 import call_requests
 from meeting_control import ArchiveDoor, MeetingControl, add_routes, archive_grace, health_route
 from meeting_connection import joined_meeting
+from meeting_input import InputMonitor
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
     others_in, participants_note, speaker_note)
@@ -231,6 +232,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            room_input = InputMonitor()  # the room's audio as it goes to GPT-Live
             last_speech = [time.monotonic()]
             leaving = []
             # Asked to leave, then a goodbye: the meeting is left once that has been heard.
@@ -309,12 +311,19 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
             async def send_audio():
                 await ready.wait()
-                while not stop.is_set():
-                    chunk = await speaker.read()
-                    state['input_bytes'] += len(chunk.data)
-                    audio = base64.b64encode(chunk.data).decode()
-                    await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
-                    listening.push('meeting', audio)
+                try:
+                    while not stop.is_set():
+                        chunk = await speaker.read()
+                        room_input.feed(chunk.data)
+                        state['input_bytes'] += len(chunk.data)
+                        state['input'] = room_input.stats(speaker)
+                        audio = base64.b64encode(chunk.data).decode()
+                        await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
+                        listening.push('meeting', audio)
+                finally:
+                    # What came in, in the archive before it closes (a machine of its own hands
+                    # the archive over before process_stopped is written).
+                    record.event('input_audio', **room_input.stats(speaker))
 
             async def watch_microphone():
                 # Also accepts a host's explicit request to unmute (Participation.accept_host_unmute).
@@ -324,9 +333,15 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     actual = await adapter.get_microphone_state()
                     await gate.platform_microphone_changed(actual)
 
+            def last_heard():
+                # Someone talking in the room's audio, or their words: the words come a second or
+                # more after the audio, so going by them alone the hello cut in over people.
+                times = [at for at in (room_input.last_voiced_at, heard[0]) if at is not None]
+                return max(times) if times else None
+
             async def introduce_once():
                 if await introduce(ws.send_json, runtime, participation, ready, stop,
-                                   heard_at=lambda: heard[0],
+                                   heard_at=last_heard,
                                    takes_requests=bool(meeting_state.get('canDo'))):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
@@ -369,6 +384,9 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     state['activeSpeaker'] = name
                     if name:
                         state['lastSpeaker'] = name
+                    silent = room_input.speaker(name)
+                    if silent:  # the meeting shows people talking, and nothing comes in
+                        record.event('input_silent', **silent)
                     now = time.monotonic()
                     if name != current:
                         current, since = name, now
@@ -515,6 +533,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                             last_speech[0] = time.monotonic()
                         if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
                             heard[0] = time.monotonic()
+                            # Talked over, the voice stops, as on a phone call (participation).
+                            participation.heard(event.get('start_ms'), event.get('end_ms'))
+                        elif (event.get('delta') or '').strip():
+                            participation.said()
                         control.heard('agent' if kind == 'session.output_transcript.delta' else 'meeting',
                                       event.get('delta') or '')
                         transcript.note(event)
@@ -747,6 +769,23 @@ async def main():
                 await runner.cleanup()
 
 
+def process_stopped_details(state):
+    """The meeting process's last event: where it stopped, and what its audio did both ways.
+    `input` is what came in from the meeting (InputMonitor.stats): a meeting that heard nobody
+    shows voiced_ms 0."""
+    return {
+        'stage': state['stage'],
+        'finalized': state['finalized'],
+        'microphone_state': state.get('microphoneState'),
+        'generated_audio_bytes': state.get('generated_audio_bytes', 0),
+        'audible_audio_bytes': state.get('audible_audio_bytes', 0),
+        'discarded_audio_bytes': state.get('discarded_audio_bytes', 0),
+        'output_audio_bytes': state.get('output_bytes', 0),
+        'input': dict(state.get('input') or {'bytes': state.get('input_bytes', 0)}),
+        'interruptions_followed': state.get('interruptionsFollowed', 0),
+    }
+
+
 def close_record(runtime):
     """Close the meeting's record with what it used, once the meeting is over."""
     if archive_door.closed:
@@ -784,13 +823,4 @@ if __name__ == '__main__':
             asyncio.run(main())
     finally:
         if record:
-            record.event(
-                'process_stopped',
-                stage=state['stage'],
-                finalized=state['finalized'],
-                microphone_state=state.get('microphoneState'),
-                generated_audio_bytes=state.get('generated_audio_bytes', 0),
-                audible_audio_bytes=state.get('audible_audio_bytes', 0),
-                discarded_audio_bytes=state.get('discarded_audio_bytes', 0),
-                output_audio_bytes=state.get('output_bytes', 0),
-            )
+            record.event('process_stopped', **process_stopped_details(state))

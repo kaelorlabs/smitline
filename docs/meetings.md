@@ -19,6 +19,8 @@ Admit **Smitline AI** if it enters the waiting room. It joins quietly, like a pe
 
 It leaves by itself, after a short goodbye, when someone asks it to ("thanks, you can drop off now"), when the meeting is clearly over, or when the meeting has moved on and nobody needs it. It also leaves when it is the only one left, and when nobody has spoken for `SMITLINE_MEETING_IDLE_LEAVE_SECONDS` (default 600; `0` turns this off). Your agent can make it leave at any time with `end_call`. Leaving closes the voice session and stops the meeting container, so nothing is billed after it leaves. The call's `call.agent_left` event says why it left. `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 0` skips the disclosure; the backend settings are set the same way.
 
+Talked over, it stops, as on a phone call: once someone has spoken over it for half a second and the voice has stopped, the rest of what it was saying is dropped; a short "mhm" does not stop it. The hello waits for a real pause in the meeting's audio, not only in the transcript, which trails the words. Each meeting's archive says what came in from the meeting: `input_audio` (bytes, voiced milliseconds, the peak sample, and in a Daily room `dropped_ms`), the same as `input` in `process_stopped`, and `input_silent` once when the meeting showed someone speaking while nothing came in for 10 seconds.
+
 ## Daily rooms
 
 A [Daily](https://www.daily.co) room is a meeting your agent can start itself: people join from the link in any browser, with no account and no app. Make one with your Daily account's API key:
@@ -30,6 +32,17 @@ SMITLINE_DAILY_API_KEY=... python3 meeting-runtime/daily_rooms.py create --minut
 It prints the room's link; send Smitline there like to any meeting, and send the people the same link. An agent can also ask for a room in the brief itself: `channel: "meeting"` with `to: "new"` opens one with the installation's `SMITLINE_DAILY_API_KEY`, open for the meeting's `maxMinutes` plus 15 minutes, and the call returns its link as `to` for the agent to send people. The room is public, with no knocking, and expires after the minutes you gave it, when Daily ejects everyone. The link is the only key, so share it only with the people you invite. `daily_rooms.py delete <name>` removes a room sooner. A private room's link with a meeting token (`?t=...`) works too.
 
 In a Daily room Smitline joins without a browser: daily-python connects it, it hears everyone's microphones (never their video), and the meeting container draws its camera tile. It shows the still picture, or with `SMITLINE_MEETING_CAMERA_STYLE=mascot` the clips of the presence pack in `SMITLINE_MEETING_CAMERA_PACK` (the animated style needs a browser, so it shows the still picture here). The camera goes out as one full-size layer at the pack's frame rate (up to 1.5 Mbit/s), so nobody is sent a postage-stamp copy, and each frame is decoded as it is shown, so a change of clip never stalls the picture. It is usually in the room before the people you sent the link to, so it waits for the first of them (`waiting_for_admission`, up to 10 minutes, like a lobby) before its voice starts: nothing is billed for the wait. Notes for the chat go to the room's chat. It leaves as in any meeting, and when the room expires.
+
+### Check that Smitline hears a room
+
+`meeting-runtime/daily_hearing_check.py` joins a room twice: as a talker that plays five one-second bursts of a voice-like tone, and as a meeting does (the same `DailyRoom` and `DailySpeaker`). It prints one JSON line with what the bot heard: the bursts and how late each came in, the voiced milliseconds against those played, the level, and the speaker's own counts. It needs only the room's link, no API key, takes about half a minute, and exits 0 when every burst was heard, 2 when some were, 1 when nothing was, and 3 when it could not run:
+
+```bash
+docker run --rm --entrypoint /app/.venv/bin/python -e ROOM_URL=https://TEAM.daily.co/ROOM \
+  ghcr.io/kaelorlabs/smitline-meeting /meeting-runtime/daily_hearing_check.py
+```
+
+From a checkout, add `-v "$PWD/meeting-runtime:/meeting-runtime:ro"` to check your own changes.
 
 ## Joining by phone
 

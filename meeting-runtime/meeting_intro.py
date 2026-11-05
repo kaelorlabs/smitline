@@ -176,9 +176,10 @@ def intro_event(runtime, takes_requests=False):
 async def introduce(send, runtime, participation, ready, stop, poll=0.2, heard_at=None,
                     clock=time.monotonic, quiet=None, takes_requests=False):
     """Send the cue once the session is live, the meeting microphone can carry speech, and
-    nobody is talking: heard_at() is when someone in the meeting was last heard (None: not yet).
-    Joining in the middle of a sentence and talking over it is rude, so it waits for a pause
-    however long that takes; the name and the caption show it is an AI meanwhile."""
+    nobody is talking: heard_at() is when someone in the meeting was last heard (None: not yet),
+    in the room's audio or in their words (bridge's last_heard). Joining in the middle of a
+    sentence and talking over it is rude, so it waits for a pause however long that takes; the
+    name and the caption show it is an AI meanwhile."""
     event = intro_event(runtime, takes_requests)
     if event is None:
         return False
