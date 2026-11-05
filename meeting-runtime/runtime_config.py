@@ -52,6 +52,8 @@ class RuntimeConfig:
     camera_pack: str = ''
     # Leave after this many seconds without anyone speaking; 0 never does.
     idle_leave_seconds: int = 600
+    # Who the agent is in the meeting when it appears as a pack's character (the pack's persona).
+    persona: str = ''
 
     @classmethod
     def from_environ(cls, environ=None):

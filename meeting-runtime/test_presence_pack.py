@@ -141,6 +141,55 @@ class PresencePackTests(unittest.TestCase):
             load_presence_pack(self.root)
 
 
+class PersonaTests(unittest.TestCase):
+    PERSONA = ("You appear in this meeting as the Relay arch, Smitline's mascot.\n  Sound warm "
+               "and gentle.")
+
+    def test_a_pack_carries_its_character_tidied_to_one_paragraph(self):
+        with tempfile.TemporaryDirectory() as root:
+            manifest = write_pack(root)
+            manifest['persona'] = self.PERSONA.replace('\n', ' ')
+            Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            self.assertEqual(load_presence_pack(root).persona,
+                             "You appear in this meeting as the Relay arch, Smitline's mascot. "
+                             'Sound warm and gentle.')
+            for bad in ('x' * 801, 'two\nlines', 7):
+                with self.subTest(bad=str(bad)[:12]):
+                    manifest['persona'] = bad
+                    Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                    with self.assertRaisesRegex(ValueError, 'persona'):
+                        load_presence_pack(root)
+            del manifest['persona']
+            Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            self.assertEqual(load_presence_pack(root).persona, '')
+
+    def test_the_voice_is_given_the_character_it_appears_as(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
+        self.assertNotIn('Who you are in this meeting', bridge.build_session_config(runtime)['instructions'])
+        with tempfile.TemporaryDirectory() as root:
+            manifest = write_pack(root)
+            manifest['persona'] = 'You appear in this meeting as the Relay arch. Sound warm.'
+            Path(root, 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            pack = load_presence_pack(root)
+        self.assertIs(bridge.with_persona(runtime, None), runtime)
+        instructions = bridge.build_session_config(bridge.with_persona(runtime, pack))['instructions']
+        self.assertIn('Who you are in this meeting: You appear in this meeting as the Relay arch. '
+                      'Sound warm.', instructions)
+
+
+class SpeakerNoteTests(unittest.TestCase):
+    def test_says_who_is_speaking_and_marks_the_owner(self):
+        from meeting_intro import speaker_note
+        self.assertEqual(speaker_note('Priya Shah', 'Arun Raj'),
+                         'Priya Shah is speaking now. When you answer them, you can use their name. '
+                         'Do not announce this.')
+        self.assertTrue(speaker_note('Arun Raj', 'Arun Raj').startswith(
+            'Arun Raj (probably Arun, the person you work for) is speaking now.'))
+        self.assertTrue(speaker_note('  Priya   Shah ', '').startswith('Priya Shah is speaking now.'))
+
+
 class Writer:
     audio_format = object()
     chunk_size = 480
@@ -163,7 +212,7 @@ class CameraChoiceTests(unittest.TestCase):
             write_pack(root)
             runtime = dataclasses.replace(RuntimeConfig.from_environ({}), camera_style='mascot',
                                           camera_pack=root)
-            feed = bridge.camera_feed_for(runtime, Writer())
+            feed = bridge.camera_feed_for(runtime, Writer(), bridge.presence_pack_for(runtime))
         self.assertEqual(feed.style, 'mascot')
         self.assertEqual((feed.pack['fps'], feed.pack['arrival']), (12, 'arrive'))
 
@@ -177,7 +226,8 @@ class CameraChoiceTests(unittest.TestCase):
                 runtime = dataclasses.replace(RuntimeConfig.from_environ({}), camera_style='mascot',
                                               camera_pack=pack_path)
                 with patch('builtins.print') as printed:
-                    feed = bridge.camera_feed_for(runtime, Writer())
+                    pack = bridge.presence_pack_for(runtime)
+                    feed = bridge.camera_feed_for(runtime, Writer(), pack)
                 self.assertEqual(feed.style, 'still')
                 self.assertIsNone(feed.pack)
                 self.assertIn('still picture instead', printed.call_args.args[0])

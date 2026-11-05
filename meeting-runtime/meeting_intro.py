@@ -110,6 +110,17 @@ def participants_note(names, owner, own_name):
             'Use their names when it helps. Do not announce this list.')
 
 
+def speaker_note(name, owner):
+    """Quiet context: who is talking now, so a reply can go to the right person by name."""
+    name = _clean_name(name)
+    first = spoken_name(owner).casefold() if owner else ''
+    words = name.casefold().replace(',', ' ').split()
+    who = (f'{name} (probably {spoken_name(owner)}, the person you work for)'
+           if first and first in words else name)
+    return (f'{who} is speaking now. When you answer them, you can use their name. '
+            'Do not announce this.')
+
+
 def identity_instructions(owner):
     """Who the voice is, for when someone greets it or asks; it does not announce itself."""
     who = assistant_of(owner).replace('invited me', 'invited you')

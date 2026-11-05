@@ -640,6 +640,12 @@ _MASCOT_CAMERA_TEMPLATE = """\
         const blobs = {{}};
         const bitmaps = {{}};
         let clip = null, frame = 0, next = [], arrived = false;
+        // A new clip blends in over a quarter second from a snapshot of the last picture.
+        const snap = document.createElement('canvas');
+        snap.width = W; snap.height = H;
+        const snapCtx = snap.getContext('2d');
+        const BLEND = Math.max(1, Math.round(FPS / 4));
+        let fadeLeft = 0, drawn = false;
 
         function loops(name) {{
             return !!(pack && pack.clips[name] && pack.clips[name].loop);
@@ -657,6 +663,10 @@ _MASCOT_CAMERA_TEMPLATE = """\
                 .catch(() => {{ delete bitmaps[name]; }});
         }}
         function play(names) {{
+            if (drawn) {{
+                snapCtx.drawImage(c, 0, 0);
+                fadeLeft = BLEND;
+            }}
             const keep = new Set(names);
             Object.keys(bitmaps).forEach((n) => {{
                 if (!keep.has(n) && n !== clip && !loops(n)) release(n);
@@ -700,7 +710,14 @@ _MASCOT_CAMERA_TEMPLATE = """\
             if (!Array.isArray(frames) || !frames.length) return;
             ctx.globalAlpha = 1;
             ctx.drawImage(frames[Math.min(frame, frames.length - 1)], 0, 0, W, H);
+            if (fadeLeft > 0) {{
+                ctx.globalAlpha = fadeLeft / (BLEND + 1);
+                ctx.drawImage(snap, 0, 0);
+                ctx.globalAlpha = 1;
+                fadeLeft -= 1;
+            }}
             caption();
+            drawn = true;
             if (frame < frames.length - 1) {{
                 frame += 1;
             }} else if (next.length) {{

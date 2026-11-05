@@ -38,7 +38,12 @@ SPEAKER = 'smitline-speaker'
 CAMERA = 'smitline-camera'
 STILL_SIZE = (640, 360)
 STILL_FPS = 2
-MAX_DECODED_CLIPS = 3
+# A new clip blends in from the last one over this long, so a change of state never jumps.
+BLEND_SECONDS = 0.25
+# One sharp layer for the camera tile. With simulcast, a room can be sent the smallest layer
+# (160x90 for a 640x360 pack, seen in a test on 2026-11-05) and show it blown up. The cap leaves
+# the fleece room at 24 fps; WebRTC sends less when the network has less.
+CAMERA_BITRATE = 1_500_000
 # The agent listens: microphones and screen-share audio only, never anyone's video.
 SUBSCRIPTIONS = {'base': {'camera': 'unsubscribed', 'screenVideo': 'unsubscribed',
                           'microphone': 'subscribed', 'screenAudio': 'subscribed'}}
@@ -95,6 +100,8 @@ class DailyRoom(MeetingPlatformAdapter):
     """A Daily room through daily-python: the adapter methods the voice loop and Participation use."""
     platform_id = 'daily'
     capabilities = Capabilities(text_chat=True, participant_discovery=True, camera=True)
+    # Daily says who is speaking without a page to read, so the voice loop can ask often.
+    speaker_poll_seconds = 0.4
 
     def __init__(self, stop, stage, *, sdk=None, camera_size=STILL_SIZE):
         super().__init__(None, stop, stage)
@@ -201,6 +208,30 @@ class DailyRoom(MeetingPlatformAdapter):
         (error,) = await done.wait(CALL_TIMEOUT)
         if error:
             raise RuntimeError(f'Daily refused the change: {str(error)[:200]}')
+
+    async def send_one_sharp_layer(self, fps):
+        """Publish the camera as a single full-size layer instead of simulcast's three, so nobody
+        is sent the 160x90 one. Best effort: Daily keeps its defaults if it refuses."""
+        if self.camera_device is None:
+            return False
+        # Daily numbers layers up from "low"; one layer is "low" alone, at full size.
+        settings = {'camera': {'sendSettings': {
+            'maxQuality': 'low',
+            'allowAdaptiveLayers': False,
+            'encodings': {'low': {
+                'maxBitrate': CAMERA_BITRATE, 'maxFramerate': fps, 'scaleResolutionDownBy': 1}},
+        }}}
+        done = _Completion(self.loop)
+        try:
+            self.client.update_publishing(settings, completion=done)
+            answer = await done.wait(CALL_TIMEOUT)
+            error = answer[-1] if answer else None
+        except Exception as exc:
+            error = exc
+        if error:
+            self.errors.append(f'camera publishing: {str(error)[:200]}')
+            return False
+        return True
 
     def _input_enabled(self, kind):
         try:
@@ -484,9 +515,10 @@ class DailyCamera:
 
     It stands where CameraFeed stands for a browser: Presence calls set_visual_state, and run_voice
     writes the voice through audio_writer. With a presence pack it plays the pack's clips; without
-    one (or for the animated style, which needs a browser) it shows the still mark. Frames are
-    decoded with Pillow one clip at a time, the caption drawn on once, and written from a thread of
-    their own at the pack's frame rate."""
+    one (or for the animated style, which needs a browser) it shows the still mark. Each frame is
+    decoded as it is shown (a few milliseconds), so a change of clip never stalls the picture, and
+    a new clip blends in over BLEND_SECONDS. Frames go out from a thread of their own at the pack's
+    frame rate."""
 
     def __init__(self, device, writer, *, enabled=True, pack=None, caption=None):
         self.device = device
@@ -497,12 +529,17 @@ class DailyCamera:
         self.player = ClipPlayer(pack) if pack is not None else None
         self.fps = pack.fps if pack is not None else STILL_FPS
         self.size = (pack.width, pack.height) if pack is not None else STILL_SIZE
+        self.blend_frames = max(1, round(BLEND_SECONDS * self.fps))
         self.failures = 0
         self._state = 'joining'
         self._lock = threading.Lock()
         self._closed = threading.Event()
-        self._decoded = {}
         self._still = None
+        self._caption_layer = None
+        self._shown = None          # (clip, index) last shown
+        self._last_picture = None   # its picture, before the caption
+        self._fade_from = None      # the picture a new clip blends in over
+        self._fade_left = 0
 
     def start(self):
         if self.enabled:
@@ -526,14 +563,32 @@ class DailyCamera:
             return self._still_frame()
         self.player.set_state(state)
         clip, index = self.player.tick()
-        return self._frames(clip)[index]
+        if self._shown is not None and clip != self._shown[0] and self._last_picture is not None:
+            # A new clip blends in from wherever the last one was.
+            self._fade_from, self._fade_left = self._last_picture, self.blend_frames
+        self._shown = (clip, index)
+        picture = self._decode(self.pack.clips[clip].frames[index])
+        self._last_picture = picture
+        if self._fade_left > 0 and self._fade_from is not None:
+            from PIL import Image
+            weight = 1 - self._fade_left / (self.blend_frames + 1)
+            picture = Image.blend(self._fade_from, picture, weight)
+            self._fade_left -= 1
+        return self._with_caption(picture)
 
     def _run(self):
         period = 1 / self.fps
         due = time.monotonic()
+        last = None
+        self.frames_written, self.late_frames, self.longest_gap = 0, 0, 0.0
         while not self._closed.is_set():
             try:
                 self.device.write_frame(self.next_frame())
+                now = time.monotonic()
+                if last is not None:
+                    self.longest_gap = max(self.longest_gap, now - last)
+                last = now
+                self.frames_written += 1
             except Exception:
                 self.failures += 1
             due += period
@@ -541,36 +596,43 @@ class DailyCamera:
             if delay > 0:
                 self._closed.wait(delay)
             else:
+                if delay < -period:
+                    self.late_frames += 1
                 due = time.monotonic()
+        # One line for the container log: whether the picture kept its pace.
+        print(f'camera: {self.frames_written} frames at {self.fps} fps, {self.late_frames} late, '
+              f'longest gap {self.longest_gap * 1000:.0f} ms, {self.failures} failed writes', flush=True)
 
-    def _frames(self, clip):
-        frames = self._decoded.get(clip)
-        if frames is None:
-            frames = [self._compose(data) for data in self.pack.clips[clip].frames]
-            self._decoded[clip] = frames
-            for older in list(self._decoded)[:-MAX_DECODED_CLIPS]:
-                del self._decoded[older]
-        return frames
-
-    def _compose(self, data):
+    def _decode(self, data):
         from PIL import Image
         picture = Image.open(io.BytesIO(data)).convert('RGBA')
         if picture.size != self.size:
             picture = picture.resize(self.size)
-        self._draw_caption(picture, (self.pack.caption_color if self.pack else None) or '#FFFFFF')
+        return picture
+
+    def _with_caption(self, picture):
+        """The frame's RGBA bytes with the caption drawn on (the layer is made once)."""
+        if self.caption:
+            if self._caption_layer is None:
+                colour = (self.pack.caption_color if self.pack else None) or '#FFFFFF'
+                self._caption_layer = self._caption_picture(colour)
+            picture = picture.copy()
+            picture.alpha_composite(self._caption_layer)
         return picture.tobytes()
 
-    def _draw_caption(self, picture, colour):
-        if not self.caption:
-            return
+    def _caption_picture(self, colour):
         from PIL import Image, ImageDraw
-        width, height = picture.size
-        layer = Image.new('RGBA', picture.size, (0, 0, 0, 0))
+        width, height = self.size
+        layer = Image.new('RGBA', self.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(layer)
         red, green, blue = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
         draw.text((width / 2, height * 0.9), self.caption, font=_caption_font(round(height * 0.06)),
                   fill=(red, green, blue, 217), anchor='mm')
-        picture.alpha_composite(layer)
+        return layer
+
+    def _draw_caption(self, picture, colour):
+        if self.caption:
+            picture.alpha_composite(self._caption_picture(colour))
 
     def _still_frame(self):
         """The still mark, like the browser's still style: three bars on slate, the caption below."""
@@ -590,16 +652,25 @@ class DailyCamera:
         return self._still
 
 
+_LOAD_PACK = object()
+
+
 @asynccontextmanager
-async def joined_room(url, runtime, stop, stage, state, *, caption=None, sdk=None):
-    """Join a Daily room for bridge.main; yields (room, speaker, camera) and always leaves."""
-    pack = None
-    if runtime.camera_enabled and runtime.camera_style == 'mascot' and runtime.camera_pack:
-        try:
-            pack = load_presence_pack(runtime.camera_pack)
-        except ValueError as error:
-            # A pack that cannot be read leaves the still picture, not the meeting without a camera.
-            state['cameraPackError'] = str(error)[:300]
+async def joined_room(url, runtime, stop, stage, state, *, pack=_LOAD_PACK, caption=None, sdk=None):
+    """Join a Daily room for bridge.main; yields (room, speaker, camera) and always leaves.
+
+    `pack` is the presence pack bridge.main already read (None for none); left out, it is read
+    here from the runtime's settings."""
+    if pack is _LOAD_PACK:
+        pack = None
+        if runtime.camera_style == 'mascot' and runtime.camera_pack:
+            try:
+                pack = load_presence_pack(runtime.camera_pack)
+            except ValueError as error:
+                # A pack that cannot be read leaves the still picture, not the meeting without a camera.
+                state['cameraPackError'] = str(error)[:300]
+    if not runtime.camera_enabled:
+        pack = None
     size = (pack.width, pack.height) if pack is not None else STILL_SIZE
     room = DailyRoom(stop, stage, sdk=sdk, camera_size=size if runtime.camera_enabled else None)
     state['capabilities'] = room.capabilities.public()
@@ -612,6 +683,7 @@ async def joined_room(url, runtime, stop, stage, state, *, caption=None, sdk=Non
     camera.start()
     try:
         await room.join(url, runtime.participant_name)
+        state['cameraOneLayer'] = await room.send_one_sharp_layer(camera.fps)
         speaker.start()
         yield room, speaker, camera
     finally:

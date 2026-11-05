@@ -111,6 +111,12 @@ class FakeCallClient:
             self.inputs_now[kind] = {**self.inputs_now.get(kind, {}), **value}
         self._complete(completion, None)
 
+    publishing_error = None
+
+    def update_publishing(self, settings, completion=None):
+        self.calls.append(('update_publishing', settings))
+        self._complete(completion, self.publishing_error)
+
     def participants(self):
         return self.people
 
@@ -211,6 +217,25 @@ class DailyRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['cameraState'], 'on')
         await room.disable_camera()
         self.assertEqual(await room.get_camera_state(), 'off')
+
+    async def test_sends_the_camera_as_one_sharp_layer(self):
+        # With simulcast's three layers a room was sent the 160x90 one (2026-11-05).
+        room, client = self.make_room()
+        await room.join(ROOM, 'Smitline AI')
+        self.assertTrue(await room.send_one_sharp_layer(24))
+        (_kind, settings), = [call for call in client.calls if call[0] == 'update_publishing']
+        send = settings['camera']['sendSettings']
+        # Daily's one-layer form: "low" alone, at full size, and nothing above it.
+        self.assertEqual(send['maxQuality'], 'low')
+        self.assertFalse(send['allowAdaptiveLayers'])
+        self.assertEqual(list(send['encodings']), ['low'])
+        self.assertEqual(send['encodings']['low']['maxFramerate'], 24)
+        self.assertEqual(send['encodings']['low']['scaleResolutionDownBy'], 1)
+        client.publishing_error = 'not allowed'
+        self.assertFalse(await room.send_one_sharp_layer(24))
+        self.assertIn('camera publishing: not allowed', room.errors)
+        audio_only, _client = self.make_room(camera_size=None)
+        self.assertFalse(await audio_only.send_one_sharp_layer(24))
 
     async def test_without_a_camera_device_the_room_is_audio_only(self):
         room, _client = self.make_room(camera_size=None)
@@ -461,13 +486,29 @@ class DailyCameraTests(unittest.TestCase):
         offset = ((height // 2) * width + width // 2) * 4
         return tuple(frame[offset:offset + 3])
 
-    def test_plays_the_pack_for_the_presence_state(self):
+    def test_plays_the_pack_for_the_presence_state_blending_into_each_clip(self):
         camera = DailyCamera(FakeDevice('camera', 'cam'), None, pack=self.pack())
+        self.assertEqual(camera.blend_frames, 3)  # a quarter second at 12 fps
         self.assertEqual(self.centre(camera.next_frame()), (0, 0, 0))
         camera.set_visual_state('listening')
-        frames = [self.centre(camera.next_frame()) for _ in range(4)]
-        self.assertEqual(frames, [(255, 0, 0), (255, 0, 0), (0, 255, 0), (0, 255, 0)])
+        frames = [self.centre(camera.next_frame()) for _ in range(8)]
+        # The arrival (red) fades in from the empty stage, the listening clip (green) from it.
+        self.assertLess(frames[0][0], frames[1][0])
+        self.assertEqual(frames[1][1], 0)
+        self.assertTrue(any(red > 0 and green > 0 for red, green, _ in frames[2:5]))
+        self.assertEqual(frames[-1], (0, 255, 0))
         self.assertEqual(len(camera.next_frame()), 64 * 36 * 4)
+
+    def test_a_change_of_state_mid_loop_blends_instead_of_jumping(self):
+        camera = DailyCamera(FakeDevice('camera', 'cam'), None, pack=self.pack())
+        camera.set_visual_state('listening')
+        for _ in range(8):
+            camera.next_frame()
+        camera.set_visual_state('ended')  # back to the empty stage (black)
+        greens = [self.centre(camera.next_frame())[1] for _ in range(5)]
+        self.assertEqual(greens, sorted(greens, reverse=True))
+        self.assertGreater(greens[0], 0)
+        self.assertEqual(greens[-1], 0)
 
     def test_draws_the_caption_under_the_picture(self):
         pack = self.pack(size=(320, 180))

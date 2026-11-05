@@ -25,6 +25,8 @@ A pack is a folder holding manifest.json and the frames, as WebP or PNG files:
   live), before that state's clip: people see it walk in rather than appear.
 - "captionColor", optional, is the colour of the caption under the picture ("Arun's AI
   assistant"); white otherwise.
+- "persona", optional, says who the character is and how it sounds, in a few sentences. The agent
+  appears as the character, so the voice is given it as part of its instructions.
 
 Frames are pictures only: the camera adds the caption itself, so a pack holds no names or text.
 """
@@ -41,6 +43,7 @@ MAX_FRAME_BYTES = 512 * 1024
 MAX_PACK_BYTES = 16 * 1024 * 1024
 MAX_FRAMES_PER_CLIP = 360
 MAX_CLIPS = 32
+MAX_PERSONA = 800
 MEDIA_TYPES = {'.webp': 'image/webp', '.png': 'image/png'}
 _CLIP_NAME = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
 _COLOUR = re.compile(r'^#[0-9A-Fa-f]{6}$')
@@ -63,6 +66,7 @@ class PresencePack:
     states: dict
     arrival: object = None
     caption_color: object = None
+    persona: str = ''
 
     def clip_for(self, state):
         """The clip a presence state shows; listening's for states the pack leaves out."""
@@ -195,4 +199,9 @@ def load_presence_pack(path):
     caption_color = manifest.get('captionColor')
     if caption_color is not None and not (isinstance(caption_color, str) and _COLOUR.match(caption_color)):
         _fail('"captionColor" must be a colour like #2E2B3A')
-    return PresencePack(name, width, height, fps, clips, states, arrival, caption_color)
+    persona = manifest.get('persona') or ''
+    if not isinstance(persona, str) or len(persona) > MAX_PERSONA or any(
+            ord(char) < 32 for char in persona):
+        _fail(f'"persona" must be one paragraph of at most {MAX_PERSONA} characters')
+    return PresencePack(name, width, height, fps, clips, states, arrival, caption_color,
+                        ' '.join(persona.split()))

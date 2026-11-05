@@ -619,7 +619,7 @@ class BridgeNameTests(unittest.IsolatedAsyncioTestCase):
 class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
     """The meeting agent leaves by itself; leaving closes GPT-Live, so its costs stop."""
 
-    async def _run(self, runtime, script, microphone=None):
+    async def _run(self, runtime, script, microphone=None, adapter=None):
         import copy
         import bridge
         socket = FakeLiveSocket(bridge)
@@ -645,7 +645,7 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bridge, 'stage', stage), \
                 patch.object(bridge, 'stop', stop):
             task = asyncio.create_task(bridge.run_voice(
-                IdleSpeaker(), microphone or Mic(), None, 'test-only', runtime, Adapter()))
+                IdleSpeaker(), microphone or Mic(), None, 'test-only', runtime, adapter or Adapter()))
             try:
                 await socket.events.put({'type': 'session.started'})
                 await script(socket, wait_until)
@@ -731,6 +731,46 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.state['endReason'], 'left_asked_to_leave')
         self.assertIn(('goodbye_leave', {}), run.record.events)
         self.assertIn(('agent_left', {'reason': 'asked_to_leave'}), run.record.events)
+
+    async def test_the_voice_is_told_who_is_speaking_and_the_transcript_names_them(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0',
+                                              'SMITLINE_OWNER_NAME': 'Arun Raj'})
+        # Arun talks, pauses, talks again (told once), then Priya takes the floor.
+        speakers = iter(['Arun Raj'] * 4 + [None] * 3 + ['Arun Raj'] * 4 + ['Priya'] * 4
+                        + ['Smitline AI'] * 4)
+
+        class SpeakingAdapter(Adapter):
+            speaker_poll_seconds = .05
+
+            async def get_active_speaker(self):
+                return next(speakers, None)
+
+        def told(socket):
+            return [e['content'] for e in socket.sent
+                    if e.get('type') == 'session.thinking.append' and 'is speaking now' in e['content']]
+
+        async def script(socket, wait_until):
+            await wait_until(lambda: len(told(socket)) >= 2, 5)
+            await asyncio.sleep(.5)  # the agent's own name never counts as a speaker
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Thanks, everyone.', 'start_ms': 0, 'end_ms': 500,
+                                     'event_id': 'in-9'})
+            await asyncio.sleep(.2)
+            await socket.events.put(self.leave_call('completed'))
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0), \
+                patch.object(bridge, 'SPEAKER_HOLD_SECONDS', .1):
+            run = await self._run(runtime, script, adapter=SpeakingAdapter())
+        notes = told(run.socket)
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(notes[0].startswith(
+            'Arun Raj (probably Arun, the person you work for) is speaking now.'))
+        self.assertTrue(notes[1].startswith('Priya is speaking now.'))
+        meeting_lines = [extra for speaker, _text, _muted, extra in run.record.transcripts
+                         if speaker == 'meeting']
+        self.assertEqual(meeting_lines[-1].get('name'), 'Priya')
+        self.assertEqual(run.state['captions'][-1].get('name'), 'Priya')
 
     async def test_a_second_leave_call_is_ignored_and_unknown_reasons_are_other(self):
         from runtime_config import RuntimeConfig
