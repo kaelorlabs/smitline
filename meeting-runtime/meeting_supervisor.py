@@ -494,7 +494,8 @@ class ProductionMeetingSupervisor:
     def _start_package(self, session, payload, values):
         """What a remote meeting's machine needs to run it, handed to the launcher's up(): the
         runtime state the container reads, its whole environment (the owner's settings and
-        provider key, as a pool meeting's env file would hold them) and the meeting's token.
+        provider key, as a pool meeting's env file would hold them) and the meeting's token,
+        with the meeting's time limit when it has one (maxMinutes), for the machine's lifetime.
         No setting or key of it is written to disk here."""
         environment = dict(values or {})
         environment.update({
@@ -505,7 +506,7 @@ class ProductionMeetingSupervisor:
             'SMITLINE_HEALTH_TOKEN': '1',
             'SMITLINE_ARCHIVE_GRACE': str(ARCHIVE_GRACE),
         })
-        return {
+        package = {
             'meetingId': session.id,
             'owner': getattr(session, 'owner', 'local'),
             'meetingUrl': session.meeting_url,
@@ -513,6 +514,9 @@ class ProductionMeetingSupervisor:
             'environment': environment,
             'controlToken': self._control_token,
         }
+        if getattr(session, 'max_minutes', None):
+            package['maxMinutes'] = session.max_minutes
+        return package
 
     async def start(self, session, camera_settings=None):
         if self.local_only and getattr(session, 'owner', 'local') != 'local':
@@ -1241,6 +1245,9 @@ class MeetingPool:
     async def _remove_project(self, name):
         await self.runner.run(['docker', 'compose', '-p', name, 'down', '--remove-orphans'], env=None)
 
+    # A meeting's files in .smitline/active-meetings: its claim (and a remote meeting's token).
+    CLAIM_SUFFIXES = ('.json',)
+
     async def reconcile(self, daemon=None):
         """After a restart: follow every pool meeting of this installation still running and
         remove its other pool containers, then write the handoff of meetings that no container
@@ -1250,9 +1257,27 @@ class MeetingPool:
         daemon = daemon or self.daemon
         if daemon is None:
             return
+        adopted = await self._adopt_running(daemon)
+        if adopted is None:
+            return
+        self._drop_claims(keep=adopted)
+        await self._finisher._finish_unfinished(daemon, skip=adopted)
+
+    def _drop_claims(self, keep, suffixes=None):
+        """Remove the claim files of every meeting not in `keep`."""
+        claims = control_root(self.project_root) / POOL_ACTIVE_DIR
+        suffixes = self.CLAIM_SUFFIXES if suffixes is None else suffixes
+        for path in claims.iterdir() if claims.is_dir() else ():
+            if path.suffix in suffixes and path.stem not in keep:
+                path.unlink(missing_ok=True)
+
+    async def _adopt_running(self, daemon):
+        """reconcile()'s first half: follow the meetings whose containers still run and remove the
+        other containers of this installation. The ids it adopted, or None when Docker's state is
+        unknown (then nothing may change)."""
         projects = await self._projects()
         if projects is None:
-            return
+            return None
         adopted = set()
         for name, running in sorted(projects.items()):
             meeting_id = name[len(POOL_PROJECT_PREFIX):]
@@ -1278,11 +1303,7 @@ class MeetingPool:
                 adopted.add(meeting_id)
             else:
                 await self._remove_project(name)
-        claims = control_root(self.project_root) / POOL_ACTIVE_DIR
-        for path in claims.glob('*.json') if claims.is_dir() else ():
-            if path.stem not in adopted:
-                path.unlink(missing_ok=True)
-        await self._finisher._finish_unfinished(daemon, skip=adopted)
+        return adopted
 
     async def shutdown(self):
         # Containers keep running; the next start follows them again (reconcile).
@@ -1311,8 +1332,9 @@ def load_launcher(spec, **kwargs):
 
 class RemoteMeetingPool(MeetingPool):
     """Meetings on machines of their own, from a launcher plugin (SMITLINE_MEETING_LAUNCHER), such
-    as a cloud VM for each meeting. The plugin's create(environ=, project_root=, runtime_root=)
-    returns a provider with:
+    as a cloud VM for each meeting: every meeting, or with SMITLINE_MEETING_LAUNCHER_PLATFORMS
+    only those platforms' (MeetingRouter runs the others here). The plugin's
+    create(environ=, project_root=, runtime_root=) returns a provider with:
 
     - machine(meeting_id, owner): the machine for one meeting, at once (no I/O). After a restart
       it is asked again for a machine that still runs, and then stands for that one. It has:
@@ -1321,8 +1343,10 @@ class RemoteMeetingPool(MeetingPool):
           the machine is asked for; the daemon then waits for inspect() and /health. The package
           (ProductionMeetingSupervisor._start_package) holds the meeting id, its runtime state
           (the container reads it at SMITLINE_RUNTIME_STATE), the container's whole environment
-          (the owner's settings and provider key, SMITLINE_CONTROL_TOKEN) and the meeting's
-          token: hand it to the machine over a private channel, never in instance metadata. A
+          (the owner's settings and provider key, SMITLINE_CONTROL_TOKEN), the meeting's token
+          and, when the meeting has one, its time limit (maxMinutes; the call ends it then, so
+          a machine may be given a lifetime a little longer): hand it to the machine over a
+          private channel, never in instance metadata. A
           meeting ended while it starts interrupts up() (the task is cancelled), then stop();
         - async stop(): delete the machine, also one that never finished starting; a machine
           never serves a second meeting;
@@ -1379,18 +1403,18 @@ class RemoteMeetingPool(MeetingPool):
         self._meetings[meeting_id] = meeting
         return meeting
 
-    async def reconcile(self, daemon=None):
-        """After a restart: adopt every meeting of this installation whose machine still runs,
-        with the token kept beside its claim, and delete the machines of meetings that ended. A machine
-        this installation knows nothing about (no claim, no meeting record) is left alone. Then
-        write the handoff of meetings no machine runs any more."""
-        daemon = daemon or self.daemon
-        if daemon is None:
-            return
+    CLAIM_SUFFIXES = ('.json', '.token')
+
+    # reconcile() (MeetingPool's): adopt every meeting of this installation whose machine still
+    # runs, with the token kept beside its claim, and delete the machines of meetings that ended.
+    # A machine this installation knows nothing about (no claim, no meeting record) is left
+    # alone. Then write the handoff of meetings no machine runs any more.
+
+    async def _adopt_running(self, daemon):
         try:
             machines = await self.provider.running()
         except Exception:
-            return
+            return None
         adopted = set()
         for meeting_id, running in sorted((machines or {}).items()):
             session, claim, known = None, {}, False
@@ -1415,8 +1439,156 @@ class RemoteMeetingPool(MeetingPool):
                     await self.provider.remove(meeting_id)
                 except Exception:
                     pass
-        claims = control_root(self.project_root) / POOL_ACTIVE_DIR
-        for path in claims.iterdir() if claims.is_dir() else ():
-            if path.suffix in ('.json', '.token') and path.stem not in adopted:
-                path.unlink(missing_ok=True)
-        await self._finisher._finish_unfinished(daemon, skip=adopted)
+        return adopted
+
+
+def launcher_platforms(environ=None):
+    """SMITLINE_MEETING_LAUNCHER_PLATFORMS: the platforms whose meetings run on the launcher's
+    machines, of zoom, teams, meet and daily. None (unset, or all four): every meeting does. The
+    others run in this computer's meeting pool, such as Smitline rooms (daily), which need no
+    browser and start in seconds."""
+    from agent_sessions import MEETING_PLATFORMS
+    env = os.environ if environ is None else environ
+    text = str(env.get('SMITLINE_MEETING_LAUNCHER_PLATFORMS') or '')
+    found = {item.strip().lower() for item in text.replace(',', ' ').split() if item.strip()}
+    if not found:
+        return None
+    unknown = sorted(found - set(MEETING_PLATFORMS))
+    if unknown:
+        raise ValueError(f'SMITLINE_MEETING_LAUNCHER_PLATFORMS takes {", ".join(MEETING_PLATFORMS)}, '
+                         f'not {unknown[0][:20]!r}')
+    return None if found >= set(MEETING_PLATFORMS) else frozenset(found)
+
+
+class MeetingRouter:
+    """Two meeting pools behind one, chosen by each meeting's platform: the launcher's machines
+    (RemoteMeetingPool) for the platforms in SMITLINE_MEETING_LAUNCHER_PLATFORMS, and containers
+    on this computer (MeetingPool) for the others, such as Smitline rooms, which need no browser
+    and start in seconds.
+
+    SMITLINE_MAX_MEETINGS and SMITLINE_MAX_MEETINGS_PER_OWNER count every meeting, wherever it
+    runs. A meeting on a machine starts in the background, as on RemoteMeetingPool; one here
+    starts at once, as on MeetingPool. Both pools keep their claims in the same folder, so a
+    restart adopts both kinds of meeting before it finishes the ones neither still runs."""
+    local_only = False
+
+    def __init__(self, local, remote, *, remote_platforms, max_meetings, per_owner=None):
+        self.local = local
+        self.remote = remote
+        self.remote_platforms = frozenset(remote_platforms)
+        self.max_meetings = max_meetings
+        self.per_owner = per_owner
+        self.daemon = None
+        self._lock = asyncio.Lock()
+        # Meetings between the count and their pool's own record of them: id -> owner.
+        self._starting = {}
+
+    @property
+    def pools(self):
+        return (self.local, self.remote)
+
+    @property
+    def owner_environment(self):
+        return self.local.owner_environment
+
+    @owner_environment.setter
+    def owner_environment(self, value):
+        for pool in self.pools:
+            pool.owner_environment = value
+
+    def bind_daemon(self, daemon):
+        self.daemon = daemon
+        for pool in self.pools:
+            pool.bind_daemon(daemon)
+        return self
+
+    def pool_for(self, platform):
+        return self.remote if platform in self.remote_platforms else self.local
+
+    def starts_in_background(self, session):
+        """A meeting on a machine of its own starts in the background (RuntimeDaemon)."""
+        return self.pool_for(getattr(session, 'platform', None)) is self.remote
+
+    def _holder(self, meeting_id):
+        """The pool running `meeting_id`; for a meeting neither runs, the one its platform names."""
+        for pool in self.pools:
+            if meeting_id in pool._meetings:
+                return pool
+        try:
+            record = self.daemon.meetings.get(meeting_id)
+            platform = None if record is None else record.session.platform
+        except Exception:
+            platform = None
+        return self.pool_for(platform)
+
+    def _owners(self):
+        """Every meeting either pool runs or starts, with its owner."""
+        owners = dict(self._starting)
+        for pool in self.pools:
+            pool._prune()
+            owners.update({meeting_id: meeting['owner'] for meeting_id, meeting in pool._meetings.items()})
+        return owners
+
+    def _count_problem(self, owner, owners):
+        if len(owners) >= self.max_meetings:
+            return 409, 'capacity_exceeded', f'all {self.max_meetings} meeting agents are busy'
+        if owner != 'local' and self.per_owner is not None and sum(
+                1 for item in owners.values() if item == owner) >= self.per_owner:
+            return 409, 'owner_capacity_exceeded', f'this owner already has {self.per_owner} meetings running'
+        return None
+
+    def capacity_problem(self, owner):
+        """Why a meeting for `owner` cannot start now, wherever it would run, else None. start()
+        decides again, for meetings that race."""
+        return self._count_problem(owner, self._owners())
+
+    async def start(self, session, camera_settings=None):
+        owner = getattr(session, 'owner', 'local')
+        pool = self.pool_for(session.platform)
+        async with self._lock:
+            owners = self._owners()
+            if session.id not in owners:
+                problem = self._count_problem(owner, owners)
+                if problem:
+                    raise DaemonError(*problem)
+            self._starting[session.id] = owner
+        try:
+            await pool.start(session, camera_settings=camera_settings)
+        finally:
+            self._starting.pop(session.id, None)
+
+    async def add_context(self, meeting_id, context):
+        await self._holder(meeting_id).add_context(meeting_id, context)
+
+    async def cancel(self, meeting_id, reason='cancelled'):
+        await self._holder(meeting_id).cancel(meeting_id, reason)
+
+    def control_headers(self, meeting_id):
+        return self._holder(meeting_id).control_headers(meeting_id)
+
+    async def control(self, meeting_id, message):
+        return await self._holder(meeting_id).control(meeting_id, message)
+
+    def listen_url(self, meeting_id):
+        return self._holder(meeting_id).listen_url(meeting_id)
+
+    def active_ids(self):
+        return tuple(meeting_id for pool in self.pools for meeting_id in pool.active_ids())
+
+    async def reconcile(self, daemon=None):
+        """After a restart: each pool adopts its meetings still running, then the claims and
+        handoffs are settled once, keeping both pools' meetings. If either pool cannot tell what
+        runs, nothing more changes, as in MeetingPool.reconcile."""
+        daemon = daemon or self.daemon
+        if daemon is None:
+            return
+        found = [await pool._adopt_running(daemon) for pool in self.pools]
+        if any(adopted is None for adopted in found):
+            return
+        adopted = set().union(*found)
+        self.local._drop_claims(keep=adopted, suffixes=RemoteMeetingPool.CLAIM_SUFFIXES)
+        await self.local._finisher._finish_unfinished(daemon, skip=adopted)
+
+    async def shutdown(self):
+        for pool in self.pools:
+            await pool.shutdown()

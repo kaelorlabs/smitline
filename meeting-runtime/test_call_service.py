@@ -397,8 +397,11 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
                         if e['type'] == 'call.status']
             self.assertEqual(statuses[:4], ['connecting', 'waiting', 'in_progress', 'summarizing'])
             payload = daemon.created[0]
-            self.assertEqual(set(payload), {'meetingUrl', 'context', 'onBehalfOf'})
+            self.assertEqual(set(payload), {'meetingUrl', 'context', 'onBehalfOf', 'maxMinutes'})
             self.assertEqual(payload['onBehalfOf'], 'Robin')
+            # The meeting's own time limit (the core's default for meetings, 120 minutes), which a
+            # launcher plugin gives the meeting's machine its lifetime from.
+            self.assertEqual(payload['maxMinutes'], 120)
             self.assertEqual(payload['context']['summary'], 'Q3 sales review')
             self.assertEqual(h.summarizer.calls, 0)
             await h.service.shutdown()

@@ -27,7 +27,7 @@ from schema_validation import reject_secrets, reject_unknown_fields, require_enu
 
 # onBehalfOf names the owner in the spoken AI disclosure; voice picks a GPT-Live voice.
 # canDo: what the agent that started the meeting does when people ask (call_requests.py).
-CREATE_FIELDS = ('meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice', 'canDo')
+CREATE_FIELDS = ('meetingUrl', 'context', 'camera', 'onBehalfOf', 'voice', 'canDo', 'maxMinutes')
 LIFECYCLE_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 FORWARD_TRANSITIONS = {
     'joining': frozenset({'waiting_for_admission', 'live', 'ended'}),
@@ -306,6 +306,7 @@ class RuntimeDaemon:
                 'visualState': 'joining',
                 'owner': owner,
                 'canDo': optional_can_do(payload.get('canDo')),
+                'maxMinutes': payload.get('maxMinutes'),
             })
         except (TypeError, ValueError) as error:
             raise DaemonError(422, 'invalid_request', str(error)) from error
@@ -328,7 +329,11 @@ class RuntimeDaemon:
                                  visualState=session.visual_state)
                 phase = 'start'
                 started = True
-                if getattr(self.supervisor, 'starts_in_background', False):
+                background = getattr(self.supervisor, 'starts_in_background', False)
+                if callable(background):
+                    # Decided per meeting (MeetingRouter: on a machine, or here).
+                    background = background(session)
+                if background:
                     # A machine of its own takes a minute or more to start: the meeting is joining
                     # meanwhile, and ending it never waits behind the start.
                     task = asyncio.create_task(self._start_in_background(session, camera_settings),
