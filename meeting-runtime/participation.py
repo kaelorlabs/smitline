@@ -5,6 +5,7 @@ import contextlib
 import time
 
 from speech_gate import SpeechGate
+from voice_activity import VoiceActivity
 
 
 def audible_pcm(data, threshold=160):
@@ -18,6 +19,13 @@ class Participation:
                  on_presence=None, record=None):
         self.adapter, self.state = adapter, state
         self.gate = SpeechGate(microphone, clock=clock)
+        # The talking picture (floorState) follows the voice as the meeting hears it: the
+        # microphone's VoiceActivity, fed by each chunk it writes, or else what the gate writes.
+        self.voice = getattr(microphone, 'voice', None)
+        if self.voice is None:
+            self.voice = VoiceActivity()
+            self.gate.on_written = self.voice.feed
+        self.voice.on_speaking.append(self._voice_changed)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.on_presence = on_presence
@@ -124,19 +132,15 @@ class Participation:
             self.on_presence()
         return True
 
-    def _follow_voice(self):
-        """Keep floorState on audible speech while the gate is open.
-
-        GPT-Live keeps streaming silence between replies, so the queue rarely runs dry
-        and the quiet-time mute above may never come; the floor still returns to
-        listening once the voice has been quiet for quiet_seconds.
-        """
-        quiet = self.clock() - self.last_output_audio > self.quiet_seconds
+    def _voice_changed(self, speaking):
+        """floorState is speaking from the first audible chunk written to the meeting until
+        voice_activity.RELEASE_SECONDS after the last, whatever GPT-Live has delivered: it
+        delivers faster than real time and streams silence between replies."""
         floor = self.state.get('floorState')
-        if floor == 'speaking' and quiet:
-            self.state['floorState'] = 'listening'
-        elif floor == 'listening' and not quiet:
+        if speaking and floor != 'speaking':
             self.state['floorState'] = 'speaking'
+        elif not speaking and floor == 'speaking':
+            self.state['floorState'] = 'listening'
         else:
             return
         if self.on_presence:
@@ -216,12 +220,9 @@ class Participation:
                             continue
                         if self.gate.muted:
                             await self.gate.set_muted(False)
-                            self.state.update(muted=False, floorState='speaking')
-                            if self.on_presence:
-                                self.on_presence()
+                            self.state['muted'] = False
                         # The gate counts this piece of speech from here on.
                         self.gate.offer(data, audible=audible)
-                        self._follow_voice()
                 finally:
                     if audible:
                         self.audible_queued = max(0, self.audible_queued - 1)

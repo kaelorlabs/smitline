@@ -152,7 +152,9 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
         try:
             await stream(voice, .05)
             self.assertEqual(state['floorState'], 'speaking')
-            await stream(silence, .15)
+            # The talking picture ends voice_activity.RELEASE_SECONDS (0.2 s) after the last
+            # audible audio written.
+            await stream(silence, .3)
             self.assertEqual(state['floorState'], 'listening')
             self.assertFalse(participation.gate.muted)
             await stream(voice, .05)
@@ -191,6 +193,48 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    async def test_the_talking_picture_follows_the_voice_as_played_not_as_delivered(self):
+        # GPT-Live delivers a reply faster than it plays and then streams silence. The talking
+        # picture used to end 0.8 s after the last audio delivered, here before the reply had
+        # played; it now follows the 10 ms chunks the microphone writes to the meeting.
+        import time
+        from daily_room import DailyMicrophone
+        from voice_activity import RELEASE_SECONDS, VoiceActivity
+
+        class Device:
+            def write_frames(self, frames, completion=None):
+                return len(frames) // 2
+
+        microphone = DailyMicrophone(Device())
+        VoiceActivity().attach(microphone)
+        microphone.start()
+        state, changes = {}, []
+        participation = Participation(
+            Adapter(), microphone, state,
+            on_presence=lambda: changes.append((time.monotonic(), state.get('floorState'))))
+        task = asyncio.create_task(participation.run())
+        voice = struct.pack('<2400h', *([3000] * 2400))  # 100 ms at 24 kHz
+        silence = bytes(4800)
+        try:
+            await asyncio.sleep(.05)
+            started = time.monotonic()
+            for _ in range(15):  # a 1.5 s reply, delivered in 0.3 s
+                participation.offer(voice)
+                await asyncio.sleep(.02)
+            for _ in range(20):  # then silence, in real time
+                participation.offer(silence)
+                await asyncio.sleep(.1)
+            on = next(at for at, floor in changes if floor == 'speaking') - started
+            off = next(at for at, floor in changes if floor == 'listening') - started
+            self.assertLess(on, .05)  # with the first chunk written
+            self.assertGreater(off, 1.5)  # not before the reply has played
+            self.assertLess(off, 1.5 + .35)  # and soon after: RELEASE_SECONDS, with some slack
+            self.assertEqual(RELEASE_SECONDS, .2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await microphone.close()
 
     async def test_audible_speech_still_waiting_counts_however_long_it_waits(self):
         # A reply can arrive faster than it plays: it is speech until it has been written.

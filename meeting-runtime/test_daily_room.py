@@ -12,7 +12,7 @@ import daily_room
 from daily_room import (
     CAMERA, MICROPHONE, SUBSCRIPTIONS, ClipPlayer, DailyCamera, DailyMicrophone, DailyRoom,
     DailySpeaker, joined_room, room_and_token)
-from presence_pack import Clip, PresencePack
+from presence_pack import Clip, Mouth, PresencePack
 from visual_presence import VISUAL_STATES, apply_platform_camera
 
 try:
@@ -231,11 +231,36 @@ class DailyRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(send['encodings']), ['low'])
         self.assertEqual(send['encodings']['low']['maxFramerate'], 24)
         self.assertEqual(send['encodings']['low']['scaleResolutionDownBy'], 1)
+        self.assertEqual(send['encodings']['low']['maxBitrate'], 1_500_000)
         client.publishing_error = 'not allowed'
         self.assertFalse(await room.send_one_sharp_layer(24))
         self.assertIn('camera publishing: not allowed', room.errors)
         audio_only, _client = self.make_room(camera_size=None)
         self.assertFalse(await audio_only.send_one_sharp_layer(24))
+
+    async def test_a_1280x720_camera_gets_the_bitrate_it_needs(self):
+        room, client = self.make_room(camera_size=(1280, 720))
+        await room.join(ROOM, 'Smitline AI')
+        self.assertTrue(await room.send_one_sharp_layer(24))
+        (_kind, settings), = [call for call in client.calls if call[0] == 'update_publishing']
+        self.assertEqual(settings['camera']['sendSettings']['encodings']['low']['maxBitrate'], 2_500_000)
+        self.assertEqual(daily_room.camera_bitrate(640, 360), 1_500_000)
+
+    async def test_turns_its_camera_off_while_in_the_room_only(self):
+        room, client = self.make_room()
+        await room.turn_camera_off()  # not in the room yet: nothing
+        await room.join(ROOM, 'Smitline AI')
+        await room.enable_camera()
+        await room.turn_camera_off()
+        self.assertEqual(await room.get_camera_state(), 'off')
+        self.assertEqual(client.calls[-1], ('update_inputs', {'camera': {'isEnabled': False}}))
+        await room.leave()
+        calls = len(client.calls)
+        await room.turn_camera_off()  # left: nothing
+        self.assertEqual(len(client.calls), calls)
+        audio_only, _client = self.make_room(camera_size=None)
+        await audio_only.join(ROOM, 'Smitline AI')
+        await audio_only.turn_camera_off()
 
     async def test_without_a_camera_device_the_room_is_audio_only(self):
         room, _client = self.make_room(camera_size=None)
@@ -403,6 +428,19 @@ class DailyAudioTests(unittest.IsolatedAsyncioTestCase):
         speaker.next_chunk()
         self.assertLessEqual(len(speaker._pending), 960 * 10)  # never more than ten chunks behind
 
+    async def test_the_microphone_shows_each_chunk_and_the_ones_queued_behind_it(self):
+        device = FakeDevice('microphone', 'mic')
+        microphone = DailyMicrophone(device)
+        seen = []
+        microphone.on_chunk = lambda chunk, upcoming: seen.append((chunk[:1], [c[:1] for c in upcoming]))
+        await microphone._queue.put(b'\x01' * 480)
+        await microphone._queue.put(b'\x02' * 480)
+        microphone.start()
+        await microphone.drain()
+        await microphone.close()
+        self.assertEqual(seen, [(b'\x01', [b'\x02']), (b'\x02', [])])
+        self.assertEqual(len(device.written), 2)
+
     async def test_a_speaker_reader_that_falls_behind_loses_the_oldest_audio(self):
         speaker = DailySpeaker(FakeDevice('speaker', 'speaker'), max_chunks=2)
         for value in (b'a', b'b', b'c'):
@@ -474,6 +512,38 @@ class ClipPlayerTests(unittest.TestCase):
                                     {'listening': 'listening', 'speaking': 'speaking'}))
         player.set_state('speaking')
         self.assertEqual(play(player, 2), ['s0', 's0'])
+
+    def test_a_character_that_never_arrived_stays_off_stage_when_the_meeting_ends(self):
+        for last in ('finalizing', 'ended'):
+            with self.subTest(last=last):
+                player = ClipPlayer(PACK)
+                player.set_state(last)
+                self.assertEqual(play(player, 2), ['o', 'o'])
+                self.assertTrue(player.settled)
+
+    def test_a_goodbye_two_states_share_plays_once(self):
+        pack = pack_of(
+            {'offstage': (['o'], True), 'listening': (['l0'], True), 'leave': (['g0', 'g1', 'g2'], False)},
+            {'joining': 'offstage', 'listening': 'listening', 'finalizing': 'leave', 'ended': 'leave'})
+        player = ClipPlayer(pack)
+        player.set_state('listening')
+        play(player, 2)
+        player.set_state('finalizing')
+        self.assertEqual(play(player, 2), ['g0', 'g1'])
+        self.assertFalse(player.settled)
+        player.set_state('ended')
+        self.assertEqual(play(player, 3), ['g2', 'g2', 'g2'])
+        self.assertTrue(player.settled)
+
+    def test_settles_once_a_clip_has_played_to_its_end(self):
+        player = ClipPlayer(PACK)
+        player.set_state('listening')
+        play(player, 3)  # the arrival
+        self.assertFalse(player.settled)
+        play(player, 1)
+        self.assertFalse(player.settled)
+        play(player, 1)  # the listening loop's last frame
+        self.assertTrue(player.settled)
 
 
 @unittest.skipUnless(HAS_PILLOW, 'needs Pillow')
@@ -551,6 +621,154 @@ class DailyCameraTests(unittest.TestCase):
         self.assertGreaterEqual(count, 3)
         self.assertLessEqual(len(device.written), count + 1)
 
+    class Voice:
+        """A VoiceActivity as the camera sees it: the mouth picture for the voice now."""
+        level = 0
+
+        def mouth(self, levels):
+            return min(levels, self.level)
+
+    def mouth_pack(self, fps=24, size=(64, 36)):
+        body, listen = solid_webp((0, 255, 0), size), solid_webp((0, 0, 255), size)
+        shapes = (solid_webp((255, 0, 0), (8, 6)), solid_webp((255, 255, 0), (8, 6)))
+        return PresencePack(
+            name='test', width=size[0], height=size[1], fps=fps,
+            clips={'listening': Clip((listen,), ('image/webp',), True),
+                   'speaking': Clip((body, body), ('image/webp',) * 2, True,
+                                    Mouth(10, 12, 8, 6, shapes, ('image/webp',) * 2))},
+            states={state: 'speaking' if state == 'speaking' else 'listening' for state in VISUAL_STATES},
+            version=2)
+
+    @staticmethod
+    def pixel(frame, x, y, width=64):
+        offset = (y * width + x) * 4
+        return tuple(frame[offset:offset + 3])
+
+    def test_draws_the_mouth_the_voice_has_into_its_box(self):
+        voice = self.Voice()
+        camera = DailyCamera(FakeDevice('camera', 'cam'), None, pack=self.mouth_pack(), voice=voice)
+        camera.set_visual_state('speaking')
+        for _ in range(4):
+            camera.next_frame()  # past the blend into the clip
+        frame = camera.next_frame()
+        self.assertEqual(self.pixel(frame, 12, 14), (0, 255, 0))  # closed: the clip's own frame
+        voice.level = 2
+        frame = camera.next_frame()
+        self.assertEqual(self.pixel(frame, 12, 14), (255, 255, 0))  # the loudest mouth
+        self.assertEqual(self.pixel(frame, 17, 17), (255, 255, 0))  # its box's far corner
+        self.assertEqual(self.pixel(frame, 18, 14), (0, 255, 0))    # and nothing outside it
+        self.assertEqual(self.pixel(frame, 12, 18), (0, 255, 0))
+        voice.level = 1
+        self.assertEqual(self.pixel(camera.next_frame(), 12, 14), (255, 0, 0))
+        camera.set_visual_state('listening')  # the listening clip has no mouth
+        for _ in range(4):
+            frame = camera.next_frame()
+        self.assertEqual(self.pixel(frame, 12, 14), (0, 0, 255))
+
+    def test_blends_quickly_into_and_out_of_a_clip_with_a_mouth(self):
+        camera = DailyCamera(FakeDevice('camera', 'cam'), None, pack=self.mouth_pack(), voice=self.Voice())
+        self.assertEqual((camera.quick_blend_frames, camera.blend_frames), (2, 6))
+        camera.next_frame()
+        camera.set_visual_state('speaking')
+        greens = [self.pixel(camera.next_frame(), 30, 20)[1] for _ in range(3)]
+        self.assertTrue(0 < greens[0] < greens[1] < 255, greens)
+        self.assertEqual(greens[2], 255)
+        camera.set_visual_state('listening')
+        blues = [self.pixel(camera.next_frame(), 30, 20)[2] for _ in range(3)]
+        self.assertEqual(blues[2], 255)
+
+    def test_decodes_the_speaking_clip_and_its_mouths_once(self):
+        decoded = []
+
+        class Counting(DailyCamera):
+            def _decode(self, data, size=None):
+                decoded.append(len(data))
+                return super()._decode(data, size)
+        voice = self.Voice()
+        camera = Counting(FakeDevice('camera', 'cam'), None, pack=self.mouth_pack(), voice=voice)
+        camera._prepare()
+        self.assertEqual(len(decoded), 4)  # the body, two mouths, and the listening clip it starts on
+        camera.set_visual_state('speaking')
+        for level in (0, 1, 2, 1, 0, 2, 2, 1):
+            voice.level = level
+            camera.next_frame()
+        self.assertEqual(len(decoded), 4)
+
+    def test_the_still_picture_goes_off_a_moment_after_the_end(self):
+        camera = DailyCamera(FakeDevice('camera', 'cam'), None)
+        camera.next_frame()
+        self.assertFalse(camera.finished())
+        camera.set_visual_state('ended')
+        camera.next_frame()
+        self.assertFalse(camera.finished())
+        camera.next_frame()  # a second at 2 frames a second
+        self.assertTrue(camera.finished())
+
+
+def solid_webp(colour, size):
+    out = io.BytesIO()
+    Image.new('RGB', size, colour).save(out, 'WEBP', lossless=True)
+    return out.getvalue()
+
+
+@unittest.skipUnless(HAS_PILLOW, 'needs Pillow')
+class DailyCameraEndTests(unittest.IsolatedAsyncioTestCase):
+    def pack(self):
+        frames = {name: solid_webp(colour, (64, 36)) for name, colour in
+                  (('offstage', (0, 0, 0)), ('arrive', (255, 0, 0)), ('listening', (0, 255, 0)))}
+        return PresencePack(
+            name='test', width=64, height=36, fps=30,
+            clips={'offstage': Clip((frames['offstage'],), ('image/webp',), True),
+                   'arrive': Clip((frames['arrive'],) * 2, ('image/webp',) * 2, False),
+                   'listening': Clip((frames['listening'],), ('image/webp',), True)},
+            states={state: 'offstage' if state in ('joining', 'ended') else 'listening'
+                    for state in VISUAL_STATES},
+            arrival='arrive')
+
+    async def test_turns_the_room_camera_off_once_the_meeting_has_ended(self):
+        turned_off = []
+
+        async def turn_off():
+            turned_off.append(True)
+        device = FakeDevice('camera', 'cam')
+        camera = DailyCamera(device, None, pack=self.pack(), turn_off=turn_off)
+        camera.start()
+        camera.set_visual_state('listening')
+        await asyncio.sleep(0.15)
+        self.assertFalse(camera.off)
+        camera.set_visual_state('ended')  # the empty stage blends in, then the camera goes off
+        for _ in range(50):
+            if turned_off:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(turned_off, [True])
+        self.assertTrue(camera.off)
+        count = len(device.written)
+        await asyncio.sleep(0.1)
+        self.assertEqual(len(device.written), count)  # no more frames
+        self.assertEqual(self.centre(device.written[-1]), (0, 0, 0))  # the last was the empty stage
+        await camera.stop()
+        self.assertEqual(turned_off, [True])  # once
+
+    @staticmethod
+    def centre(frame):
+        offset = (18 * 64 + 32) * 4
+        return tuple(frame[offset:offset + 3])
+
+    async def test_stopping_turns_the_camera_off_unless_the_end_did(self):
+        turned_off = []
+
+        async def turn_off():
+            turned_off.append(True)
+        camera = DailyCamera(FakeDevice('camera', 'cam'), None, turn_off=turn_off)
+        camera.start()
+        await camera.stop()
+        await camera.stop()
+        self.assertEqual(turned_off, [True])
+        audio_only = DailyCamera(None, None, turn_off=turn_off)
+        await audio_only.stop()
+        self.assertEqual(turned_off, [True])
+
 
 class JoinedRoomTests(unittest.IsolatedAsyncioTestCase):
     def runtime(self, **changes):
@@ -567,7 +785,16 @@ class JoinedRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(camera.audio_writer.device, sdk.Daily.devices['microphone'])
             self.assertIs(speaker.device, sdk.Daily.devices['speaker'])
             self.assertEqual(state['capabilities']['camera'], True)
+            # The camera's mouth and the talking picture follow what the microphone writes, and
+            # the camera can turn the room's camera off at the end.
+            self.assertIs(camera.voice, camera.audio_writer.voice)
+            self.assertEqual(camera.audio_writer.on_chunk, camera.voice.feed)
+            self.assertEqual(camera.turn_off, room.turn_camera_off)
+            await room.enable_camera()
+        # Out of the room first, so the tile goes with it: turning the camera off is then
+        # skipped, and daily-python is released last.
         self.assertEqual([call[0] for call in room.client.calls[-2:]], ['leave', 'release'])
+        self.assertNotIn(('update_inputs', {'camera': {'isEnabled': False}}), room.client.calls)
         self.assertEqual(state['leaveState'], 'left')
 
     async def test_it_leaves_the_room_before_its_devices_stop(self):

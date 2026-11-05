@@ -21,6 +21,7 @@ from adapters_base import Capabilities, MeetingPlatformAdapter, leave_meeting
 from joinly.types import AudioChunk, AudioFormat
 from presence_pack import load_presence_pack
 from visual_presence import VISUAL_STATES
+from voice_activity import VoiceActivity
 
 SAMPLE_RATE = 24000
 BYTE_DEPTH = 2
@@ -30,6 +31,7 @@ MIC_CHUNK_MS = 10
 MIC_LEAD_SECONDS = 0.04       # how far ahead of real time the voice is handed to daily-python
 JOIN_TIMEOUT = 60
 CALL_TIMEOUT = 10
+CAMERA_OFF_TIMEOUT = 3
 # The browser adapters wait this long in a lobby; a room waits as long for its first person.
 ADMISSION_TIMEOUT = 600
 ADMISSION_POLL = 0.5
@@ -38,12 +40,20 @@ SPEAKER = 'smitline-speaker'
 CAMERA = 'smitline-camera'
 STILL_SIZE = (640, 360)
 STILL_FPS = 2
-# A new clip blends in from the last one over this long, so a change of state never jumps.
+# A new clip blends in from the last one over this long, so a change of state never jumps; into and
+# out of a clip with a mouth (speaking) it is quicker, so the mouth moves with the first word.
 BLEND_SECONDS = 0.25
+QUICK_BLEND_SECONDS = 0.08
+# A looping clip with at most this many distinct pictures (the speaking clip) is decoded once and
+# kept; other frames are decoded as they are shown, which keeps a 1280x720 pack's memory small.
+KEEP_PICTURES = 12
+# With no presence pack, the still picture stays this long once the meeting has ended.
+ENDED_HOLD_SECONDS = 1.0
 # One sharp layer for the camera tile. With simulcast, a room can be sent the smallest layer
 # (160x90 for a 640x360 pack, seen in a test on 2026-11-05) and show it blown up. The cap leaves
-# the fleece room at 24 fps; WebRTC sends less when the network has less.
+# the fleece room at 24 fps; WebRTC sends less when the network has less. A 1280x720 pack gets more.
 CAMERA_BITRATE = 1_500_000
+CAMERA_BITRATE_HD = 2_500_000
 # The agent listens: microphones and screen-share audio only, never anyone's video.
 SUBSCRIPTIONS = {'base': {'camera': 'unsubscribed', 'screenVideo': 'unsubscribed',
                           'microphone': 'subscribed', 'screenAudio': 'subscribed'}}
@@ -55,6 +65,11 @@ MICROPHONE_INPUT = {'isEnabled': True,
 FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 _initialized = False
+
+
+def camera_bitrate(width, height):
+    """The camera's one layer: CAMERA_BITRATE up to 640x360, CAMERA_BITRATE_HD above."""
+    return CAMERA_BITRATE_HD if width * height > 640 * 360 else CAMERA_BITRATE
 
 
 def daily_sdk():
@@ -113,6 +128,7 @@ class DailyRoom(MeetingPlatformAdapter):
             SPEAKER, sample_rate=SAMPLE_RATE, channels=1, non_blocking=True)
         daily.select_speaker_device(SPEAKER)
         self.camera_device = None
+        self.camera_size = camera_size
         if camera_size:
             width, height = camera_size
             self.camera_device = daily.create_camera_device(
@@ -220,7 +236,8 @@ class DailyRoom(MeetingPlatformAdapter):
             'maxQuality': 'low',
             'allowAdaptiveLayers': False,
             'encodings': {'low': {
-                'maxBitrate': CAMERA_BITRATE, 'maxFramerate': fps, 'scaleResolutionDownBy': 1}},
+                'maxBitrate': camera_bitrate(*self.camera_size), 'maxFramerate': fps,
+                'scaleResolutionDownBy': 1}},
         }}}
         done = _Completion(self.loop)
         try:
@@ -278,6 +295,16 @@ class DailyRoom(MeetingPlatformAdapter):
 
     async def disable_camera(self):
         await self._update_inputs({'camera': {'isEnabled': False}})
+
+    async def turn_camera_off(self):
+        """The camera goes off when the agent is done, so nobody is left looking at a still frame.
+        Only while in the room and not leaving; never raises."""
+        if self.camera_device is None or self.call_state != 'joined' or self.leaving:
+            return
+        if self._input_enabled('camera') is False:
+            return  # already off
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.disable_camera(), CAMERA_OFF_TIMEOUT)
 
     async def get_participant_count(self):
         if self.call_state != 'joined':
@@ -409,7 +436,7 @@ class DailyMicrophone:
     write() returns once its audio is queued, at most two 10 ms chunks ahead, so the speech gate's
     "writing" follows what is playing. Chunks go to daily-python's non-blocking microphone no more
     than MIC_LEAD_SECONDS ahead of real time; between turns nothing is written and Daily sends
-    silence."""
+    silence. on_chunk, like VirtualMicrophone's, sees each chunk as it goes to Daily."""
 
     def __init__(self, device, *, chunk_ms=MIC_CHUNK_MS, queue_size=2, lead=MIC_LEAD_SECONDS):
         self.device = device
@@ -417,6 +444,7 @@ class DailyMicrophone:
         self.chunk_size = SAMPLE_RATE * chunk_ms // 1000 * BYTE_DEPTH
         self.period = chunk_ms / 1000
         self.lead = lead
+        self.on_chunk = None
         self._queue = asyncio.Queue(maxsize=queue_size)
         self._task = None
 
@@ -456,10 +484,18 @@ class DailyMicrophone:
                 playhead = max(playhead, now)
                 if playhead - now > self.lead:
                     await asyncio.sleep(playhead - now - self.lead)
+                if self.on_chunk is not None:
+                    # The chunks queued behind it are read from the queue's deque, not taken.
+                    with contextlib.suppress(Exception):
+                        self.on_chunk(chunk, tuple(getattr(self._queue, '_queue', ())))
                 self.device.write_frames(chunk)
                 playhead += self.period
             finally:
                 self._queue.task_done()
+
+
+# The states in which the character is on stage; the first of them brings it on with the arrival.
+PRESENT_STATES = frozenset({'listening', 'working', 'speaking', 'needs_attention'})
 
 
 class ClipPlayer:
@@ -467,8 +503,11 @@ class ClipPlayer:
 
     A state's clip starts from its first frame and a looping clip repeats. A one-shot clip (the
     arrival, a goodbye) is never cut short: the newest state's clip waits until it ends, and with
-    nothing after it the last frame holds. The arrival plays once, the first time the agent leaves
-    "joining". The browser camera (camera_feed.py) follows the same rules."""
+    nothing after it the last frame holds. A state that shows the clip already on screen lets it
+    carry on. The arrival plays once, the first time the agent is present; a character that never
+    arrived stays off stage when the meeting ends. `settled` is true once the clip shown last has
+    played to its end with nothing after it. The browser camera (camera_feed.py) follows the same
+    rules."""
 
     def __init__(self, pack):
         self.pack = pack
@@ -477,6 +516,7 @@ class ClipPlayer:
         self.index = 0
         self.queue = []
         self.arrived = False
+        self.settled = False
 
     def _length(self, clip):
         return len(self.pack.clips[clip].frames)
@@ -484,26 +524,37 @@ class ClipPlayer:
     def _one_shot_running(self):
         return not self.pack.clips[self.clip].loop and self.index + 1 < self._length(self.clip)
 
+    def _clips_for(self, state):
+        if state in PRESENT_STATES:
+            clips = [self.pack.clip_for(state)]
+            if not self.arrived:
+                self.arrived = True
+                if self.pack.arrival:
+                    clips.insert(0, self.pack.arrival)
+            return clips
+        if not self.arrived:
+            return [self.pack.clip_for('joining')]  # it never walked in, so it cannot leave
+        return [self.pack.clip_for(state)]
+
     def set_state(self, state):
         if state == self.state:
             return
         self.state = state
-        clips = [self.pack.clip_for(state)]
-        if not self.arrived and state != 'joining':
-            self.arrived = True
-            if self.pack.arrival:
-                clips.insert(0, self.pack.arrival)
-        if self._one_shot_running():
+        self.settled = False
+        clips = self._clips_for(state)
+        if clips[0] == self.clip:
+            self.queue = clips[1:]  # carries on: a loop where it is, a one-shot to its end
+        elif self._one_shot_running():
             self.queue = clips
-        elif clips[0] != self.clip or not self.pack.clips[self.clip].loop:
-            self.clip, self.index, self.queue = clips[0], 0, clips[1:]
         else:
-            self.queue = clips[1:]  # the same looping clip carries on where it is
+            self.clip, self.index, self.queue = clips[0], 0, clips[1:]
 
     def tick(self):
         """The (clip, frame index) to show now; then moves on by one frame."""
         shown = (self.clip, self.index)
-        if self.index + 1 < self._length(self.clip):
+        last = self.index + 1 >= self._length(self.clip)
+        self.settled = last and not self.queue
+        if not last:
             self.index += 1
         elif self.queue:
             self.clip, self.index = self.queue.pop(0), 0
@@ -525,41 +576,65 @@ class DailyCamera:
 
     It stands where CameraFeed stands for a browser: Presence calls set_visual_state, and run_voice
     writes the voice through audio_writer. With a presence pack it plays the pack's clips; without
-    one (or for the animated style, which needs a browser) it shows the still mark. Each frame is
-    decoded as it is shown (a few milliseconds), so a change of clip never stalls the picture, and
-    a new clip blends in over BLEND_SECONDS. Frames go out from a thread of their own at the pack's
-    frame rate."""
+    one (or for the animated style, which needs a browser) it shows the still mark. Frames are
+    decoded as they are shown (a few milliseconds), so a change of clip never stalls the picture;
+    a small looping clip with a mouth (speaking) and its mouth pictures are decoded once, before the
+    first frame, so the first word never waits. A new clip blends in over BLEND_SECONDS, or
+    QUICK_BLEND_SECONDS into and out of a clip with a mouth. While such a clip shows, `voice` (a
+    VoiceActivity) picks each frame's mouth picture. Once the meeting has ended and its last clip has
+    played, the frames stop and `turn_off` turns the room's camera off, so nobody is left with a
+    still frame. Frames go out from a thread of their own at the pack's frame rate."""
 
-    def __init__(self, device, writer, *, enabled=True, pack=None, caption=None):
+    def __init__(self, device, writer, *, enabled=True, pack=None, caption=None, voice=None,
+                 turn_off=None):
         self.device = device
         self.audio_writer = writer
         self.enabled = bool(enabled and device is not None)
         self.pack = pack
         self.caption = caption
+        self.voice = voice
+        self.turn_off = turn_off
         self.player = ClipPlayer(pack) if pack is not None else None
         self.fps = pack.fps if pack is not None else STILL_FPS
         self.size = (pack.width, pack.height) if pack is not None else STILL_SIZE
         self.blend_frames = max(1, round(BLEND_SECONDS * self.fps))
+        self.quick_blend_frames = max(1, round(QUICK_BLEND_SECONDS * self.fps))
         self.failures = 0
+        self.off = False
+        self.frames_written, self.late_frames, self.longest_gap = 0, 0, 0.0
         self._state = 'joining'
+        self._ended_frames = 0      # frames shown since the meeting ended
         self._lock = threading.Lock()
         self._closed = threading.Event()
+        self._loop = None
+        self._kept = {}             # picture bytes -> its decoded picture, for clips decoded once
+        self._mouths = {}           # clip -> its decoded mouth pictures
         self._still = None
-        self._caption_layer = None
+        self._caption_band = None   # (top, layer): the caption over the frame's bottom band
         self._shown = None          # (clip, index) last shown
         self._last_picture = None   # its picture, before the caption
         self._fade_from = None      # the picture a new clip blends in over
         self._fade_left = 0
+        self._fade_frames = self.blend_frames
+        self._blended = False       # whether the last frame was a blend of two clips
 
     def start(self):
         if self.enabled:
+            with contextlib.suppress(RuntimeError):
+                self._loop = asyncio.get_running_loop()
             threading.Thread(target=self._run, name='daily-camera', daemon=True).start()
 
     async def install(self, _page):
         return None
 
     async def stop(self):
+        """No more frames, and the room's camera off unless the end of the meeting turned it off."""
         self._closed.set()
+        if not self.off:
+            self.off = True
+            if self.enabled and self.turn_off is not None:
+                with contextlib.suppress(Exception):
+                    await self.turn_off()
 
     def set_visual_state(self, name):
         with self._lock:
@@ -569,28 +644,44 @@ class DailyCamera:
         """The RGBA bytes to show now."""
         with self._lock:
             state = self._state
+        self._ended_frames = self._ended_frames + 1 if state == 'ended' else 0
         if self.player is None:
             return self._still_frame()
         self.player.set_state(state)
         clip, index = self.player.tick()
         if self._shown is not None and clip != self._shown[0] and self._last_picture is not None:
-            # A new clip blends in from wherever the last one was.
-            self._fade_from, self._fade_left = self._last_picture, self.blend_frames
+            # A new clip blends in from wherever the last one was; quickly to or from a mouth.
+            quick = self._mouth(clip) is not None or self._mouth(self._shown[0]) is not None
+            self._fade_frames = self.quick_blend_frames if quick else self.blend_frames
+            self._fade_from, self._fade_left = self._last_picture, self._fade_frames
         self._shown = (clip, index)
-        picture = self._decode(self.pack.clips[clip].frames[index])
+        picture = self._with_mouth(clip, self._picture(self.pack.clips[clip].frames[index]))
         self._last_picture = picture
-        if self._fade_left > 0 and self._fade_from is not None:
+        self._blended = self._fade_left > 0 and self._fade_from is not None
+        if self._blended:
             from PIL import Image
-            weight = 1 - self._fade_left / (self.blend_frames + 1)
+            weight = 1 - self._fade_left / (self._fade_frames + 1)
             picture = Image.blend(self._fade_from, picture, weight)
             self._fade_left -= 1
         return self._with_caption(picture)
 
+    def finished(self):
+        """The meeting has ended and the last clip has played, its last frame shown unblended
+        (the still picture: for a moment)."""
+        if not self._ended_frames:
+            return False
+        if self.player is None:
+            return self._ended_frames >= ENDED_HOLD_SECONDS * self.fps
+        return self.player.settled and not self._blended
+
     def _run(self):
+        try:
+            self._prepare()
+        except Exception:
+            self.failures += 1
         period = 1 / self.fps
         due = time.monotonic()
         last = None
-        self.frames_written, self.late_frames, self.longest_gap = 0, 0, 0.0
         while not self._closed.is_set():
             try:
                 self.device.write_frame(self.next_frame())
@@ -601,6 +692,9 @@ class DailyCamera:
                 self.frames_written += 1
             except Exception:
                 self.failures += 1
+            if self.finished():
+                self._switch_off()
+                break
             due += period
             delay = due - time.monotonic()
             if delay > 0:
@@ -611,24 +705,90 @@ class DailyCamera:
                 due = time.monotonic()
         # One line for the container log: whether the picture kept its pace.
         print(f'camera: {self.frames_written} frames at {self.fps} fps, {self.late_frames} late, '
-              f'longest gap {self.longest_gap * 1000:.0f} ms, {self.failures} failed writes', flush=True)
+              f'longest gap {self.longest_gap * 1000:.0f} ms, {self.failures} failed writes'
+              + (', then off' if self.off else ''), flush=True)
 
-    def _decode(self, data):
+    def _switch_off(self):
+        """From the camera's thread: no more frames, and the room's camera goes off."""
+        if self.off:
+            return
+        self.off = True
+        loop = self._loop
+        if self.turn_off is not None and loop is not None and not loop.is_closed():
+            with contextlib.suppress(RuntimeError):
+                asyncio.run_coroutine_threadsafe(self.turn_off(), loop)
+
+    def _mouth(self, clip):
+        return getattr(self.pack.clips[clip], 'mouth', None)
+
+    def _prepare(self):
+        """Decode, before the first frame, the clips kept decoded: a small looping clip with a mouth
+        and the empty stage the camera starts on, and the mouth pictures."""
+        if self.pack is None:
+            return
+        first = self.pack.clip_for('joining')
+        for name, clip in self.pack.clips.items():
+            mouth = self._mouth(name)
+            keep = clip.loop and (mouth is not None or name == first)
+            if keep and len(set(clip.frames)) <= KEEP_PICTURES:
+                for data in clip.frames:
+                    if data not in self._kept:
+                        self._kept[data] = self._decode(data)
+            if mouth is not None:
+                self._mouths[name] = self._mouth_pictures(mouth)
+
+    def _mouth_pictures(self, mouth):
+        return [self._decode(data, (mouth.width, mouth.height)) for data in mouth.levels]
+
+    def _picture(self, data):
+        picture = self._kept.get(data)
+        return picture if picture is not None else self._decode(data)
+
+    def _with_mouth(self, clip, picture):
+        """The frame with the mouth the voice has now (the frame's own mouth is the closed one)."""
+        mouth = self._mouth(clip)
+        if mouth is None or self.voice is None:
+            return picture
+        level = self.voice.mouth(len(mouth.levels))
+        if not level:
+            return picture
+        shapes = self._mouths.get(clip)
+        if shapes is None:
+            shapes = self._mouths[clip] = self._mouth_pictures(mouth)
+        picture = picture.copy()
+        picture.paste(shapes[level - 1], (mouth.x, mouth.y))
+        return picture
+
+    def _decode(self, data, size=None):
         from PIL import Image
+        size = size or self.size
         picture = Image.open(io.BytesIO(data)).convert('RGBA')
-        if picture.size != self.size:
-            picture = picture.resize(self.size)
+        if picture.size != size:
+            picture = picture.resize(size)
         return picture
 
     def _with_caption(self, picture):
-        """The frame's RGBA bytes with the caption drawn on (the layer is made once)."""
+        """The frame's RGBA bytes with the caption drawn over its bottom band (made once)."""
         if self.caption:
-            if self._caption_layer is None:
+            if self._caption_band is None:
                 colour = (self.pack.caption_color if self.pack else None) or '#FFFFFF'
-                self._caption_layer = self._caption_picture(colour)
-            picture = picture.copy()
-            picture.alpha_composite(self._caption_layer)
+                self._caption_band = self._caption_over_band(colour)
+            top, layer = self._caption_band
+            if layer is not None:
+                band = picture.crop((0, top, self.size[0], self.size[1]))
+                band.alpha_composite(layer)
+                picture = picture.copy()
+                picture.paste(band, (0, top))
         return picture.tobytes()
+
+    def _caption_over_band(self, colour):
+        """(top, layer): the caption, cut to the band of the frame it covers."""
+        layer = self._caption_picture(colour)
+        box = layer.getbbox()
+        if box is None:
+            return 0, None
+        top = max(0, box[1] - 2)
+        return top, layer.crop((0, top, self.size[0], self.size[1]))
 
     def _caption_picture(self, colour):
         from PIL import Image, ImageDraw
@@ -687,8 +847,11 @@ async def joined_room(url, runtime, stop, stage, state, *, pack=_LOAD_PACK, capt
     state['authenticationState'] = 'guest'
     speaker = DailySpeaker(room.speaker_device)
     microphone = DailyMicrophone(room.microphone_device)
+    # The talking picture and the mouth follow the voice as it goes into the room.
+    voice = VoiceActivity()
+    voice.attach(microphone)
     camera = DailyCamera(room.camera_device, microphone, enabled=runtime.camera_enabled,
-                         pack=pack, caption=caption)
+                         pack=pack, caption=caption, voice=voice, turn_off=room.turn_camera_off)
     microphone.start()
     camera.start()
     try:

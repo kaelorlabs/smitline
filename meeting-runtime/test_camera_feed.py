@@ -81,8 +81,12 @@ class CameraFeedScriptTests(unittest.TestCase):
             audio_format = object()
             chunk_size = 480
         writer = Writer()
+        writer.voice = object()
         self.assertIs(CameraFeed(writer, style='still').audio_writer, writer)
-        self.assertIsNot(CameraFeed(writer, style='animated').audio_writer, writer)
+        wrapped = CameraFeed(writer, style='animated').audio_writer
+        self.assertIsNot(wrapped, writer)
+        # The voice the microphone follows is still found through the wrapper.
+        self.assertIs(wrapped.voice, writer.voice)
 
     def test_unknown_style_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -91,18 +95,26 @@ class CameraFeedScriptTests(unittest.TestCase):
             CameraFeed(object(), style='video')
 
     @staticmethod
-    def _pack():
-        frame = {'type': 'image/webp', 'data': 'U0VDUkVULUZSQU1F'}
-        return {
+    def _pack(mouth=False):
+        pictures = [{'type': 'image/webp', 'data': 'U0VDUkVULUZSQU1F'},
+                    {'type': 'image/png', 'data': 'TU9VVEg='}, {'type': 'image/png', 'data': 'T1BFTg=='}]
+        pack = {
             'width': 640, 'height': 360, 'fps': 12, 'arrival': 'arrive',
             'captionColor': '#2E2B3A',
             'states': {'joining': 'offstage', 'listening': 'listening', 'working': 'listening',
                        'speaking': 'listening', 'finalizing': 'offstage',
                        'needs_attention': 'listening', 'ended': 'offstage'},
-            'clips': {'offstage': {'loop': True, 'frames': [frame]},
-                      'arrive': {'loop': False, 'frames': [frame, frame]},
-                      'listening': {'loop': True, 'frames': [frame]}},
+            'clips': {'offstage': {'loop': True, 'frames': [0]},
+                      'arrive': {'loop': False, 'frames': [0, 0]},
+                      'listening': {'loop': True, 'frames': [0]}},
+            'pictures': pictures[:1],
         }
+        if mouth:
+            pack['clips']['speaking'] = {'loop': True, 'frames': [0], 'mouth': {
+                'x': 300, 'y': 100, 'width': 40, 'height': 30, 'levels': [1, 2]}}
+            pack['states']['speaking'] = 'speaking'
+            pack['pictures'] = pictures
+        return pack
 
     def test_mascot_style_plays_a_pack_it_asks_for_without_carrying_it(self):
         pack = self._pack()
@@ -136,7 +148,7 @@ class CameraFeedScriptTests(unittest.TestCase):
 
         class Page:
             async def expose_function(self, name, function):
-                calls.append(('expose', name, function()))
+                calls.append(('expose', name, function(), function(1, 3), function(0, 999)))
 
             async def add_init_script(self, script):
                 calls.append(('script', '__smitlinePresencePack' in script))
@@ -144,12 +156,99 @@ class CameraFeedScriptTests(unittest.TestCase):
         class Writer:
             audio_format = object()
             chunk_size = 480
-        pack = self._pack()
+        pack = self._pack(mouth=True)
         asyncio.run(CameraFeed(Writer(), style='mascot', pack=pack).install(Page()))
-        self.assertEqual(calls, [('expose', '__smitlinePresencePack', pack), ('script', True)])
+        # Asked with nothing, the function gives the manifest, with the number of pictures; asked
+        # for a range, those pictures, at most 24 at a time.
+        manifest = {k: v for k, v in pack.items() if k != 'pictures'}
+        manifest['pictures'] = 3
+        self.assertEqual(calls, [('expose', '__smitlinePresencePack', manifest, pack['pictures'][1:3],
+                                  pack['pictures']), ('script', True)])
         calls.clear()
         asyncio.run(CameraFeed(Writer(), style='still', pack=pack).install(Page()))
         self.assertEqual(calls, [('script', False)])
+
+    def test_every_style_marks_its_tracks_as_detail_and_can_turn_them_off(self):
+        for style, pack in (('still', None), ('animated', None), ('mascot', self._pack())):
+            with self.subTest(style=style):
+                script = build_camera_override_script(style=style, pack=pack)
+                self.assertIn("track.contentHint = 'detail';", script)
+                self.assertIn('handedOut.forEach((track) => track.stop());', script)
+                self.assertIn('window.__smitlineCameraOff = cameraOff;', script)
+                self.assertNotIn('_initCanvas().clone()', script.replace(
+                    'const track = _initCanvas().clone();', ''))
+        for style in ('still', 'animated'):
+            with self.subTest(style=style):
+                self.assertIn("if (name === 'ended') setTimeout(cameraOff, 1500);",
+                              build_camera_override_script(style=style))
+
+    def test_the_mascot_page_draws_the_mouth_the_voice_asks_for(self):
+        script = build_camera_override_script(style='mascot', pack=self._pack(mouth=True))
+        self.assertIn('window.__setMouth = (level) =>', script)
+        self.assertIn('ctx.drawImage(open, m.x, m.y, m.width, m.height);', script)
+        # A quick blend into and out of a clip with a mouth, a quarter second otherwise.
+        self.assertIn('const BLEND = Math.max(1, Math.round(FPS * 0.25));', script)
+        self.assertIn('const QUICK_BLEND = Math.max(1, Math.round(FPS * 0.08));', script)
+        self.assertIn('fadeOf = hasMouth(clip) || hasMouth(names[0]) ? QUICK_BLEND : BLEND;', script)
+        # Once the meeting has ended and the last clip has played, the camera goes off.
+        self.assertIn("if (window.__visualState === 'ended' && settled && !blended)", script)
+
+    def test_the_mouth_follows_the_voice_level_without_flooding_the_page(self):
+        from voice_activity import VoiceActivity
+
+        class Page:
+            def __init__(self):
+                self.sent = []
+
+            def is_closed(self):
+                return False
+
+            async def evaluate(self, expression):
+                self.sent.append(expression)
+
+        class Writer:
+            audio_format = object()
+            chunk_size = 480
+
+        async def run():
+            voice = VoiceActivity()
+            plain = CameraFeed(Writer(), style='mascot', pack=self._pack(), voice=voice)
+            feed = CameraFeed(Writer(), style='mascot', pack=self._pack(mouth=True), voice=voice)
+            self.assertEqual(voice.on_level, [feed._on_level])  # only a pack with a mouth listens
+            page = feed._meeting_page = Page()
+            plain._meeting_page = Page()
+            feed._on_level(0.0)          # closed, as it already is: nothing sent
+            feed._on_level(1.0)          # wide open: the second of two pictures
+            feed._on_level(0.8)          # still the second: nothing sent
+            feed._on_level(0.3)          # the first, but within 30 ms of the last: not yet
+            await asyncio.sleep(0.04)
+            feed._on_level(0.3)
+            feed._on_level(0.0)          # closing is never held back
+            await asyncio.sleep(0)
+            self.assertEqual(page.sent, ['window.__setMouth?.(2)', 'window.__setMouth?.(1)',
+                                         'window.__setMouth?.(0)'])
+        asyncio.run(run())
+
+    def test_turning_off_stops_the_tracks_on_the_page(self):
+        class Page:
+            def __init__(self):
+                self.sent = []
+
+            def is_closed(self):
+                return False
+
+            async def evaluate(self, expression):
+                self.sent.append(expression)
+
+        class Writer:
+            audio_format = object()
+            chunk_size = 480
+        feed = CameraFeed(Writer(), style='still')
+        page = feed._meeting_page = Page()
+        asyncio.run(feed.stop())
+        self.assertEqual(page.sent, ['window.__smitlineCameraOff?.()'])
+        self.assertIsNone(feed._meeting_page)
+        asyncio.run(feed.turn_off())  # no page any more: nothing to do
 
     def test_joinly_effects_map_onto_visual_states(self):
         from joinly.providers.browser.camera_feed import _JOINLY_EFFECT_TO_VISUAL

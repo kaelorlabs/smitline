@@ -19,6 +19,9 @@ class SpeechGate:
         self.audible_queued = 0
         self.writing_audible = False
         self.last_audible_written = float('-inf')
+        # Called with each piece once the microphone has taken it (for a microphone that cannot
+        # say itself what it writes; see Participation).
+        self.on_written = None
 
     def offer(self, data, audible=False):
         if not self.muted:
@@ -66,6 +69,9 @@ class SpeechGate:
                     self.output_bytes += len(data)
                     if audible:
                         self.last_audible_written = self.clock()
+                    if self.on_written is not None:
+                        with contextlib.suppress(Exception):  # never let it stop the voice
+                            self.on_written(data)
                 except asyncio.CancelledError:
                     if asyncio.current_task().cancelling():
                         raise
