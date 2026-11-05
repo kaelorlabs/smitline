@@ -100,7 +100,8 @@ class SessionConfigTests(unittest.TestCase):
 
 
 class MeetingIntroTests(unittest.TestCase):
-    INTRO = "Hi everyone, {}'s AI assistant here."
+    INTRO = ("Hey, this is {}'s AI assistant. I'm here to answer any questions. I'll be here taking "
+             'notes, so let me know if you need anything.')
 
     def write_state(self, directory, payload):
         path = Path(directory) / 'runtime.json'
@@ -162,8 +163,20 @@ class MeetingIntroTests(unittest.TestCase):
 
     def test_missing_name_uses_the_person_who_invited_me(self):
         runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': 'on'})
-        self.assertIn("Hi everyone, I'm an AI assistant for the person who invited me.",
-                      intro_event(runtime)['content'])
+        self.assertIn("Hey, I'm an AI assistant for the person who invited me. I'm here to answer "
+                      'any questions.', intro_event(runtime)['content'])
+
+    def test_it_offers_to_do_work_only_when_the_agent_takes_requests(self):
+        from meeting_intro import intro_line
+        self.assertEqual(intro_line('Raj', takes_requests=True),
+                         "Hey, this is Raj's AI assistant. I'm here to answer any questions or do "
+                         "any work. I'll be here taking notes, so let me know if you need anything.")
+        self.assertNotIn('do any work', intro_line('Raj'))
+        runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
+        with_requests = build_session_config(runtime, {'canDo': ['Look up order status']})
+        self.assertIn('answer any questions or do any work', with_requests['instructions'])
+        self.assertNotIn('do any work', build_session_config(runtime)['instructions'])
+        self.assertIn('or do any work', intro_event(runtime, takes_requests=True)['content'])
 
     def test_people_are_named_as_people_say_them(self):
         from meeting_intro import spoken_name
@@ -229,7 +242,7 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
         ready.set()
         task = asyncio.create_task(introduce(
             send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
-            heard_at=lambda: heard[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
+            heard_at=lambda: heard[0], clock=lambda: now[0], quiet=2.0))
         for _ in range(5):  # someone keeps talking: no intro over them
             now[0] += 1.0
             heard[0] = now[0]
@@ -239,21 +252,25 @@ class IntroduceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await asyncio.wait_for(task, 1))
         self.assertEqual(len(sent), 1)
 
-    async def test_a_meeting_that_never_pauses_still_hears_the_disclosure(self):
+    async def test_it_never_talks_over_people_however_long_they_talk(self):
         runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
         ready, stop, sent = asyncio.Event(), asyncio.Event(), []
-        now = [100.0]
+        now, heard = [100.0], [100.0]
 
         async def send(event):
             sent.append(event)
         ready.set()
         task = asyncio.create_task(introduce(
             send, runtime, SimpleNamespace(platform_ready=True), ready, stop, poll=.01,
-            heard_at=lambda: now[0], clock=lambda: now[0], quiet=2.0, max_wait=45.0))
-        await asyncio.sleep(.03)
+            heard_at=lambda: heard[0], clock=lambda: now[0], quiet=2.0))
+        for _ in range(10):  # ten minutes of somebody talking, a minute at a time
+            now[0] += 60
+            heard[0] = now[0]
+            await asyncio.sleep(.02)
         self.assertEqual(sent, [])
-        now[0] += 46
+        now[0] += 2.0  # the first pause
         self.assertTrue(await asyncio.wait_for(task, 1))
+        self.assertEqual(len(sent), 1)
         # Nobody heard yet: a quiet room gets it after the quiet time.
         sent.clear()
         now[0] = 0.0

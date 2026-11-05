@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +11,7 @@ from api_tokens import ApiTokenStore
 from call_brief import CallBrief
 from call_hooks import CallRefused, DefaultCallHooks
 from call_service import CallError, CallService
-from call_store import CallStore
+from call_store import CallStore, new_call_id
 from meeting_line import MeetingLine, meeting_payload
 from runtime_daemon import create_app, require_server_bind
 
@@ -472,6 +472,124 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             CallBrief.from_dict(brief(channel='meeting', to=ZOOM,
                                       agentSession={'provider': 'codex', 'sessionId': 'thread-1'}))
+
+
+class MeetingRestartTests(unittest.IsolatedAsyncioTestCase):
+    """A daemon that stops without ending its meetings (a crash, a forced restart) leaves their
+    containers running, and the next daemon's meeting supervisor adopts them. Their calls must be
+    followed again: billed from when the meeting went live, and still ended at maxMinutes."""
+
+    def harness(self, temp, states):
+        self.clock = [1000.0]
+
+        async def ten_seconds_later(_seconds):
+            self.clock[0] += 10
+            await asyncio.sleep(0)
+        self.daemon = FakeDaemon()
+        self.daemon.states = list(states)
+        line = MeetingLine(self.daemon, sleep=ten_seconds_later, monotonic=lambda: self.clock[0])
+        h = ServiceHarness(temp, lines={'meeting': line})
+        self.usage = []
+        record_usage = h.hooks.record_usage
+
+        def counted(owner, call, usage):
+            self.usage.append((call['id'], dict(usage)))
+            return record_usage(owner, call, usage)
+        h.hooks.record_usage = counted
+        return h
+
+    async def left_open(self, h, *, live_for=None, max_minutes=30, status='in_progress',
+                        meeting_id='mtg-1'):
+        """A meeting call the last daemon left open; its meeting went live live_for seconds ago."""
+        parsed, _ = await h.service._brief('local', brief(channel='meeting', to=ZOOM,
+                                                           maxMinutes=max_minutes))
+        now = h.store.now()
+        record = {'version': 1, 'id': new_call_id(), 'owner': 'local', 'channel': 'meeting',
+                  'direction': 'outbound', 'status': status, 'brief': parsed.to_dict(),
+                  'createdAt': now, 'updatedAt': now, 'result': None, 'usage': {},
+                  'line': {'meetingId': meeting_id, 'platform': 'zoom'} if meeting_id else {}}
+        if live_for is not None:
+            went_live = datetime.fromisoformat(now.replace('Z', '+00:00')) - timedelta(seconds=live_for)
+            record['answeredAt'] = went_live.isoformat().replace('+00:00', 'Z')
+        return h.store.create(record)
+
+    async def test_a_meeting_still_running_after_a_restart_is_billed_from_when_it_went_live(self):
+        with tempfile.TemporaryDirectory() as temp:
+            # running() reads the first state; the call then sees two more looks, then the end.
+            h = self.harness(temp, ['live', 'live', 'live', 'ended'])
+            left = await self.left_open(h, live_for=120)
+            self.assertEqual(h.service.reconcile(), [])
+            self.assertEqual(h.store.get(left['id'])['status'], 'in_progress')
+            self.assertEqual(await h.service.resume_meetings(), [left['id']])
+            done = await h.service.wait(left['id'], timeout=5, owner='local')
+            self.assertEqual((done['status'], done['endReason']), ('completed', 'meeting_ended'))
+            # Live 120 s before the restart and 20 s after it (two looks, 10 s apart).
+            self.assertIn(done['usage']['voiceSeconds'], (140, 141))
+            self.assertEqual([call_id for call_id, _ in self.usage], [left['id']])
+            self.assertIn('call.resumed', [e['type'] for e in h.service.events(left['id'])])
+            await h.service.shutdown()
+
+    async def test_a_resumed_meeting_still_ends_at_max_minutes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['live', 'live'])
+            left = await self.left_open(h, live_for=31 * 60, max_minutes=30)
+            h.service.reconcile()
+            await h.service.resume_meetings()
+            done = await h.service.wait(left['id'], timeout=5, owner='local')
+            self.assertEqual(done['endReason'], 'max_duration')
+            self.assertEqual(self.daemon.canceled, ['mtg-1'])
+            self.assertIn('call.max_duration', [e['type'] for e in h.service.events(left['id'])])
+            await h.service.shutdown()
+
+    async def test_a_meeting_that_went_live_after_the_restart_counts_from_then(self):
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['waiting_for_admission', 'live', 'live', 'ended'])
+            left = await self.left_open(h, status='waiting')
+            h.service.reconcile()
+            self.assertEqual(await h.service.resume_meetings(), [left['id']])
+            done = await h.service.wait(left['id'], timeout=5, owner='local')
+            self.assertEqual(done['usage']['voiceSeconds'], 20)
+            await h.service.shutdown()
+
+    async def test_a_meeting_gone_after_the_restart_is_closed_as_before(self):
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['ended'])
+            left = await self.left_open(h, live_for=60)
+            self.assertEqual(h.service.reconcile(), [])
+            self.assertEqual(await h.service.resume_meetings(), [])
+            closed = h.store.get(left['id'])
+            self.assertEqual((closed['status'], closed['error']),
+                             ('failed', 'The daemon stopped before the call finished.'))
+            for _ in range(50):
+                if self.usage:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual([call_id for call_id, _ in self.usage], [left['id']])
+            self.assertEqual(await h.service.resume_meetings(), [])
+            self.assertEqual(len(self.usage), 1)
+            await h.service.shutdown()
+
+    async def test_a_meeting_call_that_never_got_a_meeting_is_closed_at_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['live'])
+            left = await self.left_open(h, status='connecting', meeting_id=None)
+            self.assertEqual(h.service.reconcile(), [left['id']])
+            self.assertEqual(await h.service.resume_meetings(), [])
+            await h.service.shutdown()
+
+    async def test_meetings_are_followed_again_even_if_reconcile_did_not_run_first(self):
+        # Whatever the startup order, a meeting call left open is never left open for good.
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['live', 'live', 'ended'])
+            left = await self.left_open(h, live_for=60)
+            phone = h.store.create(dict(h.store.get(left['id']), id=new_call_id(), channel='phone',
+                                        line={}, brief=brief()))
+            self.assertEqual(await h.service.resume_meetings(), [left['id']])
+            self.assertEqual(h.store.get(phone['id'])['status'], 'failed')   # closed as before
+            done = await h.service.wait(left['id'], timeout=5, owner='local')
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(h.service.reconcile(), [])                        # nothing left to do
+            await h.service.shutdown()
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
