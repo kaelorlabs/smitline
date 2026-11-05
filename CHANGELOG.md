@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.8 — 2026-11-05
 
 - **Agents see that Smitline can start a meeting.** These now say plainly that a meeting brief with `to: "new"` starts a room people join from a link, ready in seconds: `start_call`'s description, its `channel` and `to` fields, the MCP server's instructions and the call-with-smitline skill. Joining someone's meeting by its link can take a minute or two while a hosted service starts a machine for it; `get_call` says this where it explains `connecting`. Before this, ChatGPT, connected before rooms existed, offered only to join a Zoom, Teams or Meet link and said it couldn't make one.
 
