@@ -1,15 +1,29 @@
 """Phone menus: a brief with phoneMenus lets the voice press keys ("press 2 for billing")."""
+import base64
+import json
 import math
+import tempfile
 import unittest
 
 from call_brief import CallBrief
 from call_recorder import ULAW
-from phone_keys import FREQUENCIES, key_audio, menu_keys, shown_keys
+from phone_keys import FREQUENCIES, key_audio, key_payload, menu_keys, shown_keys
+from phone_line import SILENT_FRAME_DB
 from phone_prompts import (
     PRESS_KEYS_TOOL, backend_instructions, delegation_config, machine_hint, opening_cue,
     voice_instructions,
 )
-from test_phone import brief
+from barge_in import frame_level_db
+from test_phone import (
+    SIP_ENV, FakeLive, FakeSideband, FakeSipClient, PhoneHarness, brief, until,
+)
+
+
+def press(keys, call_id='fc-keys'):
+    return {'type': 'response.event', 'delegation_id': 'dlg-1',
+            'event': {'type': 'response.output_item.done',
+                      'item': {'type': 'function_call', 'call_id': call_id, 'name': 'press_keys',
+                               'arguments': json.dumps({'keys': keys})}}}
 
 
 def goertzel(samples, frequency, rate=8000):
@@ -96,6 +110,135 @@ class KeyTests(unittest.TestCase):
             power = {band: goertzel(samples, band) for band in bands}
             self.assertEqual(sorted(sorted(power, key=power.get)[-2:]), list(FREQUENCIES[key]))
             self.assertEqual(set(audio[800:]), {0xFF})
+
+
+class RelayedKeyTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name)
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def call(self, **overrides):
+        record, session = await self.h.dial(phoneMenus=True, **overrides)
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        return record, session, ws, live, task
+
+    def events(self, record, kind):
+        return [e['data'] for e in self.h.service.events(record['id']) if e['type'] == kind]
+
+    async def test_signalwire_presses_keys_on_the_stream(self):
+        self.h.twilio.flavor = 'signalwire'
+        record, session, ws, live, task = await self.call()
+        live.push(press('1w2'))
+        await until(lambda: live.outputs, 4)
+        self.assertEqual(live.outputs, [('fc-keys', json.dumps({'ok': True, 'pressed': '12'}))])
+        sent = [m for m in ws.sent if m['event'] in ('clear', 'dtmf')]
+        self.assertEqual(sent, [{'event': 'clear', 'streamSid': 'MZ1'},
+                                {'event': 'dtmf', 'dtmf': {'digit': '1'}, 'streamSid': 'MZ1'},
+                                {'event': 'dtmf', 'dtmf': {'digit': '2'}, 'streamSid': 'MZ1'}])
+        self.assertEqual(self.events(record, 'call.keys_pressed'), [{'keys': '12'}])
+        ws.push({'event': 'stop'})
+        await task
+
+    async def test_an_account_number_is_not_kept_in_the_record(self):
+        self.h.twilio.flavor = 'signalwire'
+        record, session, ws, live, task = await self.call()
+        live.push(press('4085551212#'))
+        await until(lambda: live.outputs, 6)
+        self.assertEqual(json.loads(live.outputs[0][1]), {'ok': True, 'pressed': '11 keys'})
+        self.assertEqual(self.events(record, 'call.keys_pressed'), [{'keys': '11 keys'}])
+        self.assertNotIn('4085551212', json.dumps(self.h.service.events(record['id'])))
+        ws.push({'event': 'stop'})
+        await task
+
+    async def test_twilio_plays_the_tones_and_nothing_talks_over_them(self):
+        record, session, ws, live, task = await self.call()
+        live.push(press('11'))
+        await until(lambda: session.keying)
+        # The voice starting to talk, and the menu talking on, change nothing while keys play.
+        live.push({'type': 'session.output_audio.delta',
+                   'delta': base64.b64encode(b'\x2a' * 1600).decode()})
+        loud = base64.b64encode(b'\x9a' * 160).decode()
+        for _ in range(20):
+            ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': loud}})
+        await until(lambda: live.outputs, 6)
+        self.assertEqual(json.loads(live.outputs[0][1]), {'ok': True, 'pressed': '11'})
+        self.assertEqual([m['event'] for m in ws.sent].count('clear'), 1)
+        frames = [base64.b64decode(m['media']['payload']) for m in ws.sent if m['event'] == 'media']
+        heard = b''.join(f for f in frames if frame_level_db(f) >= SILENT_FRAME_DB)
+        tone = base64.b64decode(key_payload('1'))[:800]
+        self.assertEqual(heard, tone + tone)  # two separate presses of 1, and nothing else
+        self.assertEqual(self.events(record, 'call.keys_pressed'), [{'keys': '11'}])
+        ws.push({'event': 'stop'})
+        await task
+
+    async def test_keys_that_are_not_keys_are_refused(self):
+        self.h.twilio.flavor = 'signalwire'
+        record, session, ws, live, task = await self.call()
+        live.push(press('one two'))
+        await until(lambda: live.outputs)
+        result = json.loads(live.outputs[0][1])
+        self.assertFalse(result['ok'])
+        self.assertIn('only digits', result['error'])
+        self.assertFalse([m for m in ws.sent if m['event'] == 'dtmf'])
+        self.assertEqual(self.events(record, 'call.keys_pressed'), [])
+        ws.push({'event': 'stop'})
+        await task
+
+    async def test_without_phone_menus_nothing_is_pressed(self):
+        self.h.twilio.flavor = 'signalwire'
+        record, session = await self.h.dial()
+        ws, live, task = await self.h.connect(record, session)
+        live.push({'type': 'session.started', 'session': {}})
+        live.push(press('2'))
+        live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello?'})
+        await until(lambda: session._other_turn)
+        self.assertFalse([m for m in ws.sent if m['event'] == 'dtmf'])
+        self.assertEqual(live.outputs, [])
+        ws.push({'event': 'stop'})
+        await task
+
+
+class SidebandWithSend(FakeSideband):
+    def __init__(self, key, session_id):
+        super().__init__(key, session_id)
+        self.sent = []
+
+    async def send(self, payload):
+        self.sent.append(payload)
+        return True
+
+
+class SipKeyTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        FakeLive.instances = []
+        FakeSideband.instances = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.h = PhoneHarness(self.temp.name, env=dict(SIP_ENV))
+        self.h.line.sip_client_factory = lambda key: FakeSipClient()
+        self.h.line.sideband_factory = SidebandWithSend
+
+    async def asyncTearDown(self):
+        await self.h.service.shutdown()
+        self.temp.cleanup()
+
+    async def test_openai_sends_the_keys_on_the_sip_call(self):
+        record = await self.h.service.create(brief(phoneMenus=True))
+        await until(lambda: FakeSideband.instances)
+        side = FakeSideband.instances[-1]
+        side.push({'type': 'transport.answered', 'event_id': 'e2'})
+        await until(lambda: self.h.store.get(record['id'])['status'] == 'in_progress')
+        side.push(press('3#'))
+        await until(lambda: side.outputs, 4)
+        self.assertEqual(json.loads(side.outputs[0][1]), {'ok': True, 'pressed': '3#'})
+        self.assertEqual([p for p in side.sent if p['type'] == 'transport.dtmf.send'],
+                         [{'type': 'transport.dtmf.send', 'event': '3'},
+                          {'type': 'transport.dtmf.send', 'event': '#'}])
 
 
 if __name__ == '__main__':

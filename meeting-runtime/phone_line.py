@@ -23,6 +23,7 @@ from meeting_lifecycle import (
 )
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
+from phone_keys import KEY_GAP_SECONDS, PAUSE, PAUSE_SECONDS, key_payload, menu_keys, shown_keys
 from phone_prompts import (
     DEFAULT_BACKEND_MODEL, HANGUP_YIELDED, delegation_config, disclosure_reminder, goodbye_cue,
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
@@ -577,6 +578,10 @@ class PhoneSession:
         # A person on the other side has spoken: not only a voicemail or call-screening prompt.
         self.person_heard = False
         self._other_turn = ''  # the other side's words since they last started talking
+        # Phone menus (briefs with phoneMenus): one run of keys at a time, and while it plays,
+        # neither the voice nor the other side's talking interrupts it.
+        self._keys_lock = asyncio.Lock()
+        self.keying = False
 
     # Configuration -------------------------------------------------------
 
@@ -840,7 +845,7 @@ class PhoneSession:
         if change == 'end':
             self._hello_heard.set()
         if change == 'start':
-            if (self._barge is None and not self._hanging_up
+            if (self._barge is None and not self._hanging_up and not self.keying
                     and self.pacer.unplayed_seconds() >= BARGE_MIN_QUEUED):
                 self.pacer.pause()
                 await self._twilio_send({'event': 'clear'})
@@ -883,6 +888,8 @@ class PhoneSession:
         if (self._barge == 'dropped' and self._dropped_at is not None
                 and now - self._dropped_at < BARGE_STALE_SECONDS):
             return  # the rest of what they interrupted, still arriving
+        if self.keying:
+            return  # keys are playing: nothing is said over them
         if self._awaiting_reply_since is not None:
             self.stats['responseDelaysMs'].append(int((now - self._awaiting_reply_since) * 1000))
             self._awaiting_reply_since = None
@@ -902,6 +909,9 @@ class PhoneSession:
             call = function_call_from(event)
             if call and call['name'] == 'ask_agent' and self.desk is not None:
                 self._ask_agent(call)
+            elif (call and call['name'] == 'press_keys' and self.brief.phone_menus
+                  and not self.inbound):
+                self._spawn(self._press_keys(call))
             elif call and call['name'] == 'end_call':
                 # Hanging up needs no tool result or further backend turn.
                 reason = call['arguments'].get('reason')
@@ -935,6 +945,49 @@ class PhoneSession:
             self.ctx.request(message)
         if self.live is not None:
             self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
+
+    async def _press_keys(self, call):
+        """The backend presses keys in a phone menu; its tool result says whether they went out."""
+        try:
+            keys = menu_keys(call['arguments'].get('keys'))
+        except ValueError as error:
+            output = {'ok': False, 'error': str(error)}
+        else:
+            shown = shown_keys(keys)
+            async with self._keys_lock:
+                self.keying = True
+                try:
+                    await self._send_keys(keys)
+                except Exception as error:
+                    self.ctx.event('call.keys_failed', keys=shown, code=_error_code(error))
+                    output = {'ok': False, 'error': 'The keys could not be pressed.'}
+                else:
+                    self.ctx.event('call.keys_pressed', keys=shown)
+                    output = {'ok': True, 'pressed': shown}
+                finally:
+                    self.keying = False
+                    self.last_activity = time.monotonic()
+        if self.live is not None:
+            await self.live.submit_function_output(call['call_id'], tool_output(output))
+
+    async def _send_keys(self, keys):
+        """Press `keys` (menu_keys) on a relayed call. SignalWire takes each key as a dtmf message
+        on the media stream. Twilio's stream cannot send DTMF, so its keys play as tones, one key
+        at a time: the pacer shortens long silences, which would run the same key twice into one."""
+        if self.pacer is not None:  # whatever the voice was saying stops for the keys
+            self.pacer.flush()
+            await self._twilio_send({'event': 'clear'})
+        signalwire = getattr(self.twilio, 'flavor', 'twilio') == 'signalwire'
+        for key in keys:
+            if key == PAUSE:
+                await asyncio.sleep(PAUSE_SECONDS)
+            elif signalwire:
+                await self._twilio_send({'event': 'dtmf', 'dtmf': {'digit': key}})
+                await asyncio.sleep(KEY_GAP_SECONDS)
+            else:
+                self.pacer.offer(key_payload(key))
+                await self.pacer.speech_finished()
+                await self.pacer.drained(KEY_GAP_SECONDS)
 
     async def deliver(self, note):
         """A note about a request, for the voice (call_requests.appends). An answer the person must
@@ -1065,8 +1118,8 @@ class PhoneSession:
         person has talked for a moment and no new audio follows, the rest is dropped here
         and at the provider. A short backchannel ("mhm") does not count.
         """
-        if self._barge is not None:
-            return  # the local detector is already handling it
+        if self._barge is not None or self.keying:
+            return  # the local detector is already handling it, or keys are playing
         if self.pacer is None or self.pacer.unplayed_seconds() < INTERRUPT_MIN_QUEUED:
             return
         span = self._other_span or [None, None]
@@ -1632,6 +1685,16 @@ class SipPhoneSession(PhoneSession):
             if self.last_output_at is None or time.monotonic() - self.last_output_at >= SIP_SPEECH_TAIL:
                 return
             await asyncio.sleep(0.1)
+
+    async def _send_keys(self, keys):
+        """OpenAI sends the keys on the SIP call itself, one transport.dtmf.send per key."""
+        for key in keys:
+            if key == PAUSE:
+                await asyncio.sleep(PAUSE_SECONDS)
+                continue
+            if not await self.live.send({'type': 'transport.dtmf.send', 'event': key}):
+                raise RuntimeError('the voice session did not take the key')
+            await asyncio.sleep(KEY_GAP_SECONDS)
 
     async def _end_call(self):
         if self.session_id:
