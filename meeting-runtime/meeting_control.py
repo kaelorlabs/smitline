@@ -2,7 +2,7 @@
 
 The daemon reaches a running meeting through POST /control on the container's health server,
 with the meeting's own token (SMITLINE_CONTROL_TOKEN): notes for the voice (request updates,
-send_call_instruction) and whether the agent that started the meeting is following it.
+send_call_instruction), whether the agent that started the meeting is following it, and stop.
 Requests the voice passes on leave through /health, numbered by seq, as captions do.
 """
 import asyncio
@@ -17,6 +17,11 @@ from call_requests import (
 MAX_NOTE_TEXT = 4000
 # Requests /health carries; the daemon reads it every second, so it never falls this far behind.
 HEALTH_REQUESTS = 100
+# A meeting on a machine of its own (SMITLINE_MEETING_LAUNCHER) is reached over a network rather
+# than the daemon's loopback. There SMITLINE_HEALTH_TOKEN=1 makes /health need the meeting's token
+# too, and the archive leaves through GET /archive, since the daemon cannot read that machine's
+# disk. SMITLINE_ARCHIVE_GRACE keeps the server up that many seconds for the daemon to fetch it.
+MAX_ARCHIVE_GRACE = 600
 # An answer to tell (a note's `say`) is cued at the next pause: call_requests.TELL_QUIET,
 # TELL_MAX_WAIT and pause_cue, shared with phone calls. In a quiet meeting an answer once sat
 # unsaid until someone asked.
@@ -38,6 +43,10 @@ class MeetingControl:
         self.claims = ClaimWatch(self.desk) if self.desk is not None else None
         # quiet(): seconds since anyone, the voice included, was last heard; set by the bridge.
         self.quiet = None
+        # stop(): end the meeting as SIGTERM would; set by the bridge. A daemon on another
+        # machine cannot signal the container, so it asks here (type stop) before it takes the
+        # archive and deletes the machine.
+        self.stop = None
         self.clock = time.monotonic
         self.tell_quiet = TELL_QUIET
         self.tell_max_wait = TELL_MAX_WAIT
@@ -109,8 +118,13 @@ class MeetingControl:
         if payload.get('type') == 'following':
             self.following = payload.get('value') is True
             return 200, {'following': self.following}
+        if payload.get('type') == 'stop':
+            if self.stop is None:
+                return 409, {'error': 'the meeting cannot be stopped from here'}
+            self.stop()
+            return 200, {'stopping': True}
         if payload.get('type') != 'note':
-            return 422, {'error': 'type must be note or following'}
+            return 422, {'error': 'type must be note, following or stop'}
         kind, text = payload.get('kind'), payload.get('text')
         if kind not in NOTE_KINDS or not isinstance(text, str) or not text.strip():
             return 422, {'error': 'a note has a kind and text'}
@@ -146,9 +160,65 @@ class MeetingControl:
         return 200, {'delivered': delivered, 'chat': chat_posted}
 
 
-def add_routes(app, control, listening):
-    """/listen (live audio) and /control on the container's health server: for the daemon that
-    started the meeting alone, by its token."""
+def archive_tarball(directory):
+    """A meeting archive's files as a gzipped tar: its top-level regular files only (none for a
+    meeting that never had an archive)."""
+    import io
+    import tarfile
+    from pathlib import Path
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w:gz') as tar:
+        for path in sorted(Path(directory).iterdir()) if directory else ():
+            if path.is_file() and not path.is_symlink():
+                tar.add(path, arcname=path.name, recursive=False)
+    return buffer.getvalue()
+
+
+def archive_grace(environ):
+    """Seconds the server stays up after the meeting for the daemon to fetch the archive."""
+    text = str(environ.get('SMITLINE_ARCHIVE_GRACE') or '').strip()
+    return min(int(text), MAX_ARCHIVE_GRACE) if text.isdigit() else 0
+
+
+class ArchiveDoor:
+    """GET /archive in the container: the meeting's archive once it is closed, for the daemon."""
+
+    def __init__(self):
+        self.directory = None
+        self.closed = False
+        self.fetched = asyncio.Event()
+
+    def close(self, directory=None):
+        """The meeting is over and its archive (None: it had none) is complete."""
+        self.directory = directory
+        self.closed = True
+
+    async def wait_fetched(self, seconds):
+        """Keep the server up until the daemon has the archive, at most `seconds`."""
+        if seconds <= 0:
+            return False
+        try:
+            await asyncio.wait_for(self.fetched.wait(), seconds)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+
+def health_route(control, public_state, *, token_required=False):
+    """GET /health: the meeting's state for the daemon. On a network (token_required) only the
+    daemon that started the meeting may read it: it carries live captions and requests."""
+    from aiohttp import web
+
+    async def status(request):
+        if token_required and not control.authorized(request.headers.get('Authorization')):
+            return web.json_response({'error': 'forbidden'}, status=403)
+        return web.json_response(public_state(), headers={'Cache-Control': 'no-store'})
+    return status
+
+
+def add_routes(app, control, listening, archive=None):
+    """/listen (live audio), /control and, given an ArchiveDoor, /archive on the container's
+    health server: for the daemon that started the meeting alone, by its token."""
     from aiohttp import web
     from listening import ndjson
 
@@ -174,3 +244,17 @@ def add_routes(app, control, listening):
 
     app.router.add_get('/listen', listen)
     app.router.add_post('/control', control_message)
+
+    if archive is not None:
+        async def archive_files(request):
+            if not control.authorized(request.headers.get('Authorization')):
+                return web.json_response({'error': 'forbidden'}, status=403)
+            if not archive.closed:
+                # The meeting is still writing it; the daemon asks again.
+                return web.json_response({'error': 'not_closed'}, status=409,
+                                         headers={'Cache-Control': 'no-store'})
+            body = await asyncio.to_thread(archive_tarball, archive.directory)
+            archive.fetched.set()
+            return web.Response(body=body, content_type='application/gzip',
+                                headers={'Cache-Control': 'no-store'})
+        app.router.add_get('/archive', archive_files)

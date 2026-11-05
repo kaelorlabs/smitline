@@ -21,7 +21,7 @@ from transcript_assembler import TranscriptAssembler
 from listening import AudioTap
 from voice_core import append_event, backend_usage_from, function_call_from, function_output_events
 import call_requests
-from meeting_control import MeetingControl, add_routes
+from meeting_control import ArchiveDoor, MeetingControl, add_routes, archive_grace, health_route
 from meeting_connection import joined_meeting
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
@@ -57,6 +57,8 @@ PARTICIPANTS_EVERY = 20.0
 listening = AudioTap('pcm16', 24000)
 # The daemon's way in (/control) and the voice's requests out; main() sets it up.
 control = MeetingControl('', state, owner='')
+# GET /archive: the closed archive for a daemon that cannot read this machine's disk.
+archive_door = ArchiveDoor()
 
 
 def _sync_presence():
@@ -646,6 +648,7 @@ async def main():
     control = MeetingControl(os.environ.get('SMITLINE_CONTROL_TOKEN'), state,
                              owner=runtime.owner_name or 'the person who invited them',
                              can_do=meeting_state.get('canDo'))
+    control.stop = stop.set  # what SIGTERM does, for a daemon on another machine
     meeting_id = meeting_state.get('meetingId')
     try:
         record = CallRecord(
@@ -667,14 +670,18 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     app = web.Application()
-    async def status(_request):
+
+    def public_state():
         payload = dict(state)
         payload.update(presence_public_fields(state))
-        return web.json_response(payload, headers={'Cache-Control': 'no-store'})
-    app.router.add_get('/health', status)
+        return payload
+    # On a machine of its own the port is reachable over a network, so /health takes the token.
+    app.router.add_get('/health', health_route(
+        control, public_state, token_required=os.environ.get('SMITLINE_HEALTH_TOKEN') == '1'))
 
-    # /listen and /control: for the daemon that started this meeting alone (meeting_control.py).
-    add_routes(app, control, listening)
+    # /listen, /control and /archive: for the daemon that started this meeting alone
+    # (meeting_control.py).
+    add_routes(app, control, listening, archive=archive_door)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
@@ -698,11 +705,17 @@ async def main():
             state['error'] = type(exc).__name__ + ': ' + str(exc)[:300]
             stage('needs_attention')
             print(state['error'], flush=True)
+            if archive_grace(os.environ):
+                close_record(runtime)  # a daemon elsewhere fetches it before stopping this one
             await stop.wait()
         finally:
             listening.close()
-            await runner.cleanup()
-            close_record(runtime)
+            # The archive is complete before the server stops, so /archive can hand it over.
+            try:
+                close_record(runtime)
+                await archive_door.wait_fetched(archive_grace(os.environ))
+            finally:
+                await runner.cleanup()
         return
     # The browser and display subprocesses do not inherit project secrets.
     env = browser_environment(os.environ)
@@ -740,19 +753,28 @@ async def main():
             state['error'] = type(exc).__name__ + ': ' + str(exc).split('Call log:')[0][:300]
             stage('authentication_required' if isinstance(exc, AuthenticationRequired) else 'needs_attention')
             print(state['error'], flush=True)
+            if archive_grace(os.environ):
+                close_record(runtime)  # a daemon elsewhere fetches it before stopping this one
             await stop.wait()
         finally:
             listening.close()
             drain_task.cancel()
             viewer.terminate()
             await viewer.wait()
-            await runner.cleanup()
-            close_record(runtime)
+            # The archive is complete before the server stops, so /archive can hand it over.
+            try:
+                close_record(runtime)
+                await archive_door.wait_fetched(archive_grace(os.environ))
+            finally:
+                await runner.cleanup()
 
 
 def close_record(runtime):
     """Close the meeting's record with what it used, once the meeting is over."""
+    if archive_door.closed:
+        return
     if not record:
+        archive_door.close(None)
         return
     usage = {'usageSeconds': state.get('usage_seconds', 0)}
     tokens = state.get('backend_tokens') or {}
@@ -768,6 +790,7 @@ def close_record(runtime):
     if isinstance(archive, dict):
         archive['closed'] = True
         archive['handoffStatus'] = 'local'
+    archive_door.close(record.directory)
 
 
 if __name__ == '__main__':

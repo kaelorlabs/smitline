@@ -161,6 +161,8 @@ class RuntimeDaemon:
         self._write_locks = {}
         self._captions = {}
         self._requests = {}
+        # Meetings starting on machines of their own (supervisor.starts_in_background).
+        self._start_tasks = set()
 
     def close(self):
         for store in (self.meetings, self.events):
@@ -326,10 +328,42 @@ class RuntimeDaemon:
                                  visualState=session.visual_state)
                 phase = 'start'
                 started = True
+                if getattr(self.supervisor, 'starts_in_background', False):
+                    # A machine of its own takes a minute or more to start: the meeting is joining
+                    # meanwhile, and ending it never waits behind the start.
+                    task = asyncio.create_task(self._start_in_background(session, camera_settings),
+                                               name='meeting-start-' + meeting_id)
+                    self._start_tasks.add(task)
+                    task.add_done_callback(self._start_tasks.discard)
+                    return session
                 await self.supervisor.start(session, camera_settings=camera_settings)
                 return session
             except Exception as error:
                 await self._abort_create(session, started, phase, error)
+
+    async def _start_in_background(self, session, camera_settings):
+        """Start a meeting the supervisor runs on a machine of its own. A start that fails ends
+        the meeting with a partial handoff (supervisor_start_failed), so its call ends in an
+        error; one ended while it started (end_call) was finished by cancel_meeting."""
+        try:
+            with self._serialize_writes(session.id):
+                record = self.meetings.get(session.id)
+            if record is None or record.session.state == 'ended':
+                return  # ended before its start began: no machine for it
+            await self.supervisor.start(session, camera_settings=camera_settings)
+        except asyncio.CancelledError:
+            raise  # the daemon is stopping; the next one adopts or finishes the meeting
+        except Exception as error:
+            if isinstance(error, DaemonError) and error.code == 'canceled':
+                return
+            try:
+                await self.supervisor.cancel(session.id, reason='supervisor_start_failed')
+            except Exception:
+                pass
+            with self._serialize_writes(session.id):
+                record = self.meetings.get(session.id)
+                if record is None or record.session.state != 'ended':
+                    self._persist_create_abort(session, 'supervisor_start_failed')
 
     async def get_meeting(self, meeting_id, *, owner=None):
         return self._record(meeting_id, owner).session
