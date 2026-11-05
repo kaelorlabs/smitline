@@ -1,10 +1,10 @@
 # Meetings
 
-Smitline joins Zoom, Microsoft Teams, and Google Meet meetings as a participant that listens and speaks. An agent starts a meeting the same way as a phone call, and you can also start one by hand in the console.
+Smitline joins Zoom, Microsoft Teams, and Google Meet meetings, and Daily rooms, as a participant that listens and speaks. An agent starts a meeting the same way as a phone call, and you can also start one by hand in the console.
 
 ## Join a meeting from an agent
 
-An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, or Google Meet link. From the CLI:
+An agent joins a meeting through the calls API: `start_call` with `channel: "meeting"` and `to` set to the Zoom, Teams, Google Meet, or Daily link. From the CLI:
 
 ```bash
 docker exec smitline smitline call --meeting "https://us05web.zoom.us/j/YOUR_MEETING_ID" \
@@ -15,9 +15,21 @@ docker exec smitline smitline call --meeting "https://us05web.zoom.us/j/YOUR_MEE
 
 The first meeting downloads the meeting image, `ghcr.io/kaelorlabs/smitline-meeting` (about 1.8 GB of disk). From a checkout it is built instead.
 
-Admit **Smitline AI** if it enters the waiting room. It joins quietly, like a person who comes in to listen: its name and the caption on its camera tile ("Arun's AI assistant") show everyone, also people who join later, that it is an AI and whose. It unmutes its meeting microphone once and listens continuously; if someone greets it or asks who it is, it says so in a few words. It reads who is in the meeting from the platform's participant list (Zoom, Teams, Google Meet) when it joins and every 20 seconds, and gets the names as quiet context, with a note on which one is probably the person it works for, so "I'm Arun" makes sense to it. It answers when someone addresses it and hands harder questions to the backend model (`SMITLINE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `SMITLINE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 1` adds a short spoken hello at the first pause ("Hi everyone, Arun's AI assistant here."), for meetings where people may not see its tile; `SMITLINE_PARTICIPANT_NAME` changes its name. The backend settings are set the same way.
+Admit **Smitline AI** if it enters the waiting room. It joins quietly, like a person who comes in to listen: its name and the caption on its camera tile ("Arun's AI assistant") show everyone, also people who join later, that it is an AI and whose. It unmutes its meeting microphone once and listens continuously; if someone greets it or asks who it is, it says so in a few words. It reads who is in the meeting from the platform's participant list (Zoom, Teams, Google Meet) when it joins and every 20 seconds, and gets the names as quiet context, with a note on which one is probably the person it works for, so "I'm Arun" makes sense to it. Where the meeting shows who is speaking (Daily rooms, Teams and Google Meet; not Zoom yet), it is also told who has the floor once they have held it for a moment, so it can answer people by name, and the meeting's transcript names them (best effort: the words arrive a moment after they are said). It answers when someone addresses it and hands harder questions to the backend model (`SMITLINE_MEETING_BACKEND_MODEL`, default `gpt-5.6-terra`; `SMITLINE_MEETING_WEB_SEARCH=1` adds OpenAI web search). Between replies a local audio gate sends silence, so the platform shows it unmuted; it mutes the microphone when it leaves. `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 1` adds a short spoken hello at the first pause ("Hi everyone, Arun's AI assistant here."), for meetings where people may not see its tile; `SMITLINE_PARTICIPANT_NAME` changes its name. The backend settings are set the same way.
 
 It leaves by itself, after a short goodbye, when someone asks it to ("thanks, you can drop off now"), when the meeting is clearly over, or when the meeting has moved on and nobody needs it. It also leaves when it is the only one left, and when nobody has spoken for `SMITLINE_MEETING_IDLE_LEAVE_SECONDS` (default 600; `0` turns this off). Your agent can make it leave at any time with `end_call`. Leaving closes the voice session and stops the meeting container, so nothing is billed after it leaves. The call's `call.agent_left` event says why it left. `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 0` skips the disclosure; the backend settings are set the same way.
+
+## Daily rooms
+
+A [Daily](https://www.daily.co) room is a meeting your agent can start itself: people join from the link in any browser, with no account and no app. Make one with your Daily account's API key:
+
+```bash
+SMITLINE_DAILY_API_KEY=... python3 meeting-runtime/daily_rooms.py create --minutes 60
+```
+
+It prints the room's link; send Smitline there like to any meeting, and send the people the same link. The room is public, with no knocking, and expires after the minutes you gave it, when Daily ejects everyone. The link is the only key, so share it only with the people you invite. `daily_rooms.py delete <name>` removes a room sooner. A private room's link with a meeting token (`?t=...`) works too.
+
+In a Daily room Smitline joins without a browser: daily-python connects it, it hears everyone's microphones (never their video), and the meeting container draws its camera tile. It shows the still picture, or with `SMITLINE_MEETING_CAMERA_STYLE=mascot` the clips of the presence pack in `SMITLINE_MEETING_CAMERA_PACK` (the animated style needs a browser, so it shows the still picture here). The camera goes out as one full-size layer at the pack's frame rate (up to 1.5 Mbit/s), so nobody is sent a postage-stamp copy, and each frame is decoded as it is shown, so a change of clip never stalls the picture. It is usually in the room before the people you sent the link to, so it waits for the first of them (`waiting_for_admission`, up to 10 minutes, like a lobby) before its voice starts: nothing is billed for the wait. Notes for the chat go to the room's chat. It leaves as in any meeting, and when the room expires.
 
 ## The meetings console
 
@@ -42,6 +54,10 @@ While a meeting runs, the daemon reaches it through `POST /control` on the same 
 ## Appearing in the meeting
 
 A virtual camera shows Smitline listening, working, or speaking, and never displays task text. Turn it off in the console to join audio-only. By default the camera is a still picture that changes with the state, which costs almost no CPU. `SMITLINE_MEETING_CAMERA_STYLE=animated` switches to the animated camera, which redraws at 30 frames a second and needs about a full CPU core more. Private context added in the console reaches the voice and its backend as background.
+
+`SMITLINE_MEETING_CAMERA_STYLE=mascot` plays a presence pack instead: a character that walks in once Smitline is admitted, stands and listens, thinks while it waits on its backend, talks while it speaks, and waves and hops off when it leaves. `SMITLINE_MEETING_CAMERA_PACK` names the pack's folder, which must be readable inside the meeting container (copy it into a meeting image of your own). A pack is a `manifest.json` and WebP or PNG frames: clips that loop or play once, the clip each presence state shows, and an optional arrival clip; [presence_pack.py](../meeting-runtime/presence_pack.py) describes the format. The frames are pictures only; the camera adds the caption. A new clip blends in over a quarter of a second, so a change of state never jumps. A 640x360 pack at 12 frames a second needs about a tenth of a CPU core more than the still picture in a browser and sends about 0.8 Mbit/s; at 24 frames a second it needs somewhat more. A pack that cannot be read leaves the still picture.
+
+A pack may also say who its character is (`persona`, a few sentences) and give it a GPT-Live `voice`: Smitline appears as that character, so its voice is given the persona with its instructions, and the meeting uses the character's voice unless the brief names one. `SMITLINE_VOICE` still sets the voice for phone calls and for meetings without such a pack.
 
 ## Debugging from a checkout
 

@@ -17,6 +17,13 @@ class Mic:
         self.data.append(data)
 
 
+class PacedMic(Mic):
+    """Takes audio in real time, as the virtual microphone does once its buffer is full."""
+    async def write(self, data):
+        self.data.append(data)
+        await asyncio.sleep(len(data) / 48000)
+
+
 class WrappedMic:
     """Matches Joinly's amplitude writer: no private queue on the wrapper."""
     def __init__(self):
@@ -151,6 +158,51 @@ class ParticipationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    async def test_silence_streaming_after_speech_does_not_count_as_speaking(self):
+        # GPT-Live streams silence between replies. In the 2026-11-05 Zoom trial the queue and
+        # the paced writer never ran dry, so the bot never counted as done speaking and never
+        # left after its goodbye.
+        adapter, microphone, state = Adapter(), PacedMic(), {}
+        participation = Participation(adapter, microphone, state, quiet_seconds=.05)
+        task = asyncio.create_task(participation.run())
+        voice = struct.pack('<480h', *([500] * 480))
+        silence = bytes(960)
+        try:
+            for _ in range(5):
+                participation.offer(voice)
+                await asyncio.sleep(.02)
+            self.assertTrue(participation.speaking())
+            quiet_after = None
+            for frame in range(40):
+                participation.offer(silence)
+                await asyncio.sleep(.02)
+                if quiet_after is None and not participation.speaking():
+                    quiet_after = frame
+            self.assertIsNotNone(quiet_after, 'still speaking after 0.8 s of streamed silence')
+            self.assertLess(quiet_after, 15)
+            # The gate stays open for the next reply, as before.
+            self.assertFalse(participation.gate.muted)
+            participation.offer(voice)
+            self.assertTrue(participation.speaking())
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_audible_speech_still_waiting_counts_however_long_it_waits(self):
+        # A reply can arrive faster than it plays: it is speech until it has been written.
+        clock = [100.0]
+        participation = Participation(Adapter(), Mic(), {}, quiet_seconds=.5,
+                                      clock=lambda: clock[0])
+        voice = struct.pack('<480h', *([500] * 480))
+        for _ in range(3):
+            participation.offer(voice)
+        participation.offer(bytes(960))
+        clock[0] += 30
+        self.assertTrue(participation.speaking())
+        participation._discard_pending()
+        self.assertFalse(participation.speaking())
+        self.assertEqual(participation.audible_queued, 0)
 
     async def test_external_platform_mute_is_respected(self):
         adapter, microphone, state = Adapter(), Mic(), {}
@@ -567,7 +619,7 @@ class BridgeNameTests(unittest.IsolatedAsyncioTestCase):
 class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
     """The meeting agent leaves by itself; leaving closes GPT-Live, so its costs stop."""
 
-    async def _run(self, runtime, script):
+    async def _run(self, runtime, script, microphone=None, adapter=None):
         import copy
         import bridge
         socket = FakeLiveSocket(bridge)
@@ -593,7 +645,7 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bridge, 'stage', stage), \
                 patch.object(bridge, 'stop', stop):
             task = asyncio.create_task(bridge.run_voice(
-                IdleSpeaker(), Mic(), None, 'test-only', runtime, Adapter()))
+                IdleSpeaker(), microphone or Mic(), None, 'test-only', runtime, adapter or Adapter()))
             try:
                 await socket.events.put({'type': 'session.started'})
                 await script(socket, wait_until)
@@ -646,6 +698,79 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(run.state['finalized'])
         self.assertEqual(run.state['usage_seconds'], 42)
         self.assertEqual(sum(e['type'] == 'session.close' for e in run.socket.sent), 1)
+
+    async def test_leaves_after_its_goodbye_while_gpt_live_streams_silence(self):
+        # The 2026-11-05 Zoom trial: asked to hang up, the voice said goodbye without asking its
+        # backend to leave, and GPT-Live went on streaming silence. The goodbye alone must end it.
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
+        # 200 ms pieces arriving a little faster than they play, as GPT-Live's do: the paced
+        # writer never runs dry, which kept the gate open for the whole trial meeting.
+        speech = base64.b64encode(struct.pack('<4800h', *([900] * 4800))).decode()
+        silence = base64.b64encode(bytes(9600)).decode()
+
+        async def script(socket, _wait_until):
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Hmm, okay. Hang up, please. You can hang up now.',
+                                     'start_ms': 0, 'end_ms': 900, 'event_id': 'in-1'})
+            for number, words in enumerate((' Got it', ', leaving now.', ' Bye.')):
+                await socket.events.put({'type': 'session.output_transcript.delta', 'delta': words,
+                                         'start_ms': 1000 + number * 200,
+                                         'end_ms': 1200 + number * 200, 'event_id': f'out-{number}'})
+                await socket.events.put({'type': 'session.output_audio.delta', 'delta': speech})
+                await asyncio.sleep(.18)
+            for _ in range(45):  # 8 s of GPT-Live's silence
+                if any(e['type'] == 'session.close' for e in socket.sent):
+                    break
+                await socket.events.put({'type': 'session.output_audio.delta', 'delta': silence})
+                await asyncio.sleep(.18)
+            # It must leave while the silence still streams, not once it stops.
+            self.assertTrue(any(e['type'] == 'session.close' for e in socket.sent),
+                            'still in the meeting after 8 s of streamed silence')
+        run = await self._run(runtime, script, microphone=PacedMic())
+        self.assertEqual(run.state['endReason'], 'left_asked_to_leave')
+        self.assertIn(('goodbye_leave', {}), run.record.events)
+        self.assertIn(('agent_left', {'reason': 'asked_to_leave'}), run.record.events)
+
+    async def test_the_voice_is_told_who_is_speaking_and_the_transcript_names_them(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0',
+                                              'SMITLINE_OWNER_NAME': 'Arun Raj'})
+        # Arun talks, pauses, talks again (told once), then Priya takes the floor.
+        speakers = iter(['Arun Raj'] * 4 + [None] * 3 + ['Arun Raj'] * 4 + ['Priya'] * 4
+                        + ['Smitline AI'] * 4)
+
+        class SpeakingAdapter(Adapter):
+            speaker_poll_seconds = .05
+
+            async def get_active_speaker(self):
+                return next(speakers, None)
+
+        def told(socket):
+            return [e['content'] for e in socket.sent
+                    if e.get('type') == 'session.thinking.append' and 'is speaking now' in e['content']]
+
+        async def script(socket, wait_until):
+            await wait_until(lambda: len(told(socket)) >= 2, 5)
+            await asyncio.sleep(.5)  # the agent's own name never counts as a speaker
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Thanks, everyone.', 'start_ms': 0, 'end_ms': 500,
+                                     'event_id': 'in-9'})
+            await asyncio.sleep(.2)
+            await socket.events.put(self.leave_call('completed'))
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0), \
+                patch.object(bridge, 'SPEAKER_HOLD_SECONDS', .1):
+            run = await self._run(runtime, script, adapter=SpeakingAdapter())
+        notes = told(run.socket)
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(notes[0].startswith(
+            'Arun Raj (probably Arun, the person you work for) is speaking now.'))
+        self.assertTrue(notes[1].startswith('Priya is speaking now.'))
+        meeting_lines = [extra for speaker, _text, _muted, extra in run.record.transcripts
+                         if speaker == 'meeting']
+        self.assertEqual(meeting_lines[-1].get('name'), 'Priya')
+        self.assertEqual(run.state['captions'][-1].get('name'), 'Priya')
 
     async def test_a_second_leave_call_is_ignored_and_unknown_reasons_are_other(self):
         from runtime_config import RuntimeConfig

@@ -17,13 +17,15 @@ class Participation:
     def __init__(self, adapter, microphone, state, quiet_seconds=.8, clock=time.monotonic,
                  on_presence=None, record=None):
         self.adapter, self.state = adapter, state
-        self.gate = SpeechGate(microphone)
+        self.gate = SpeechGate(microphone, clock=clock)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.on_presence = on_presence
         self.record = record
         self.last_output_audio = float('-inf')
+        # Queued as (audio, audible); audible_queued counts the pieces of speech among them.
         self.queue = asyncio.Queue(maxsize=500)
+        self.audible_queued = 0
         self.lock = asyncio.Lock()
         self.platform_ready = False
         self.state.update(
@@ -46,14 +48,19 @@ class Participation:
         if not audible and self.queue.empty() and self.gate.muted:
             return
         try:
-            self.queue.put_nowait(data)
+            self.queue.put_nowait((data, audible))
         except asyncio.QueueFull:
             self.state['discarded_audio_bytes'] += len(data)
+            return
+        if audible:
+            self.audible_queued += 1
 
     def _discard_pending(self):
         while not self.queue.empty():
-            data = self.queue.get_nowait()
+            data, audible = self.queue.get_nowait()
             self.state['discarded_audio_bytes'] += len(data)
+            if audible:
+                self.audible_queued = max(0, self.audible_queued - 1)
 
     def _arm_platform_microphone(self):
         self.platform_ready = True
@@ -136,9 +143,16 @@ class Participation:
             self.on_presence()
 
     def speaking(self):
-        """Speech is still queued, being written, or was heard within quiet_seconds."""
-        return (not self.queue.empty() or not self.gate.queue.empty() or self.gate.writing
-                or self.clock() - self.last_output_audio <= self.quiet_seconds)
+        """Speech is still waiting, being written, or was produced or written within quiet_seconds.
+
+        Only audible audio counts. GPT-Live streams silence between replies, which keeps the
+        queues and the paced writer busy; counting that as speech meant a meeting agent that
+        said goodbye never left (the 2026-11-05 Zoom trial).
+        """
+        gate = self.gate
+        last_speech = max(self.last_output_audio, gate.last_audible_written)
+        return (self.audible_queued > 0 or gate.audible_queued > 0 or gate.writing_audible
+                or self.clock() - last_speech <= self.quiet_seconds)
 
     async def finish_speaking(self, timeout, settle=1.0):
         """Wait for what the voice is saying (a goodbye) to be heard, at most `timeout` seconds.
@@ -166,7 +180,7 @@ class Participation:
         try:
             while True:
                 try:
-                    data = await asyncio.wait_for(self.queue.get(), .05)
+                    data, audible = await asyncio.wait_for(self.queue.get(), .05)
                 except TimeoutError:
                     if (self.clock() - self.last_output_audio > self.quiet_seconds and
                             self.gate.queue.empty() and not self.gate.writing and not self.gate.muted):
@@ -181,28 +195,33 @@ class Participation:
                                 if self.on_presence:
                                     self.on_presence()
                     continue
-                async with self.lock:
-                    actual = await self.adapter.get_microphone_state()
-                    if actual == 'open' and not self.platform_ready:
-                        self._arm_platform_microphone()
-                    if not self.platform_ready:
-                        self.state['discarded_audio_bytes'] += len(data)
-                        continue
-                    if actual != 'open':
-                        self.platform_ready = False
-                        self.state['discarded_audio_bytes'] += len(data)
-                        self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
-                        self.state['error'] = 'The meeting microphone was muted. Smitline will not override it.'
-                        if self.on_presence:
-                            self.on_presence()
-                        continue
-                    if self.gate.muted:
-                        await self.gate.set_muted(False)
-                        self.state.update(muted=False, floorState='speaking')
-                        if self.on_presence:
-                            self.on_presence()
-                    self.gate.offer(data)
-                    self._follow_voice()
+                try:
+                    async with self.lock:
+                        actual = await self.adapter.get_microphone_state()
+                        if actual == 'open' and not self.platform_ready:
+                            self._arm_platform_microphone()
+                        if not self.platform_ready:
+                            self.state['discarded_audio_bytes'] += len(data)
+                            continue
+                        if actual != 'open':
+                            self.platform_ready = False
+                            self.state['discarded_audio_bytes'] += len(data)
+                            self.state.update(muted=True, microphoneState=actual, floorState='platform_muted')
+                            self.state['error'] = 'The meeting microphone was muted. Smitline will not override it.'
+                            if self.on_presence:
+                                self.on_presence()
+                            continue
+                        if self.gate.muted:
+                            await self.gate.set_muted(False)
+                            self.state.update(muted=False, floorState='speaking')
+                            if self.on_presence:
+                                self.on_presence()
+                        # The gate counts this piece of speech from here on.
+                        self.gate.offer(data, audible=audible)
+                        self._follow_voice()
+                finally:
+                    if audible:
+                        self.audible_queued = max(0, self.audible_queued - 1)
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:
             await self.stop_output(mute_platform=True)

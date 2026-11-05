@@ -69,8 +69,12 @@ class CallRecord:
 
     def transcript(self, speaker, text, muted, **extra):
         self.event('transcript', speaker=speaker, text=text, muted=muted, **extra)
-        label = 'Meeting' if speaker == 'meeting' else 'Agent (generated, playback not guaranteed)'
-        key = (speaker, muted)
+        name = extra.get('name') if speaker == 'meeting' else None
+        if speaker == 'meeting':
+            label = f'Meeting ({name})' if name else 'Meeting'
+        else:
+            label = 'Agent (generated, playback not guaranteed)'
+        key = (speaker, name, muted)
         prefix = '' if key == self.last_speaker else '\n\n' + label + (' [muted]' if muted else '') + ': '
         self.append('transcript.txt', prefix + text)
         self.last_speaker = key

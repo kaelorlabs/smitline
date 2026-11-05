@@ -14,6 +14,10 @@ class UrlTests(unittest.TestCase):
         self.assertEqual(platform_for_url('https://meet.google.com/abc-defg-hij?authuser=0'), 'meet')
         self.assertEqual(normalize_url('https://zoom.us/j/123?pwd=x'), 'https://zoom.us/wc/join/123?pwd=x')
         self.assertEqual(normalize_url('https://meet.google.com/aaa-bbbb-ccc'), 'https://meet.google.com/aaa-bbbb-ccc')
+        for url in ('https://kaelor.daily.co/Tq9-room_2', 'https://kaelor-labs.daily.co/abc/',
+                    'https://kaelor.daily.co/abc?t=token'):
+            self.assertEqual(platform_for_url(url), 'daily')
+        self.assertEqual(normalize_url('https://kaelor.daily.co/abc?t=x#y'), 'https://kaelor.daily.co/abc?t=x')
     def test_rejects_unsafe_and_unsupported(self):
         for url in (
             'http://zoom.us/j/123', 'https://zoom.us.evil.com/j/123',
@@ -32,6 +36,11 @@ class UrlTests(unittest.TestCase):
             'https://meet.google.com/aaa-bbbb-ccc/event',
             'https://workspace.google.com/meet/aaa-bbbb-ccc',
             'https://stream.meet.google.com/aaa-bbbb-ccc',
+            'http://kaelor.daily.co/abc', 'https://daily.co/abc', 'https://www.daily.co/pricing/',
+            'https://kaelor.daily.co/', 'https://kaelor.daily.co/abc/def',
+            'https://kaelor.daily.co.evil.org/abc', 'https://a.b.daily.co/abc',
+            'https://user:pass@kaelor.daily.co/abc', 'https://kaelor.daily.co:8443/abc',
+            'https://kaelor.daily.co/abc%2Fdef', 'https://-bad.daily.co/abc',
         ):
             with self.subTest(url=url), self.assertRaises(ValueError): platform_for_url(url)
 

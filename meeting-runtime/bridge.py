@@ -5,6 +5,7 @@ old_names.adopt_old_settings()
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import os
 import re
 import signal
@@ -24,10 +25,11 @@ from meeting_control import MeetingControl, add_routes
 from meeting_connection import joined_meeting
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
-    others_in, participants_note)
+    others_in, participants_note, speaker_note)
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
+from presence_pack import load_presence_pack
 from meeting_lifecycle import (
     BACKEND_LEAVING, LEAVE_ASK_SECONDS, LEAVE_MEETING_TOOL, LEAVING_INSTRUCTIONS, AloneWatch,
     LeaveJudge,
@@ -99,6 +101,10 @@ class MeetingTranscript:
         if entry is None:
             return None
         speaker = 'meeting' if entry.source == 'input' else 'agent'
+        # Who said it, when the meeting shows who is speaking (follow_speakers): best effort, as
+        # the words arrive a moment after they are said.
+        name = self.state.get('lastSpeaker') if speaker == 'meeting' else None
+        named = {'name': name} if name else {}
         if self.record is not None:
             self.record.transcript(
                 speaker,
@@ -108,6 +114,7 @@ class MeetingTranscript:
                 end_ms=entry.end_offset_ms,
                 source=entry.source,
                 event_id=entry.id,
+                **named,
             )
         captions = self.state.setdefault('captions', [])
         captions.append({
@@ -116,6 +123,7 @@ class MeetingTranscript:
             'text': entry.text,
             'start_ms': entry.start_offset_ms,
             'end_ms': entry.end_offset_ms,
+            **named,
         })
         self.state['captions'] = captions[-200:]
         self.count += 1
@@ -210,6 +218,8 @@ Languages: speak the language of the person talking to you. When someone asks yo
     if runtime.meeting_intro:
         config['instructions'] += intro_instructions(runtime.owner_name,
                                                      bool(meeting_state.get('canDo')))
+    if runtime.persona:
+        config['instructions'] += '\nWho you are in this meeting: ' + runtime.persona
     if runtime.meeting_instructions:
         config['instructions'] += (
             '\nOrganizer-provided meeting guidance: ' + runtime.meeting_instructions +
@@ -222,6 +232,10 @@ Languages: speak the language of the person talking to you. When someone asks yo
 
 # Seconds a goodbye gets to be heard before the agent leaves.
 LEAVE_SPEECH_TIMEOUT = 10.0
+# Who is speaking: asked this often (an adapter may set speaker_poll_seconds), and told to the
+# voice once someone has held the floor this long, so a passing "yeah" does not count.
+SPEAKER_POLL_SECONDS = 1.0
+SPEAKER_HOLD_SECONDS = 0.8
 
 
 async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meeting_state=None):
@@ -358,6 +372,32 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                             names, runtime.owner_name, runtime.participant_name)):
                         record.event('participants', count=len(names))
 
+            async def follow_speakers():
+                """Tell the voice who is speaking once that has held for a moment, so a reply can
+                go to the right person by name; the transcript names them too (lastSpeaker)."""
+                await ready.wait()
+                poll = getattr(adapter, 'speaker_poll_seconds', SPEAKER_POLL_SECONDS)
+                current, since, told = None, 0.0, None
+                while not stop.is_set():
+                    await asyncio.sleep(poll)
+                    try:
+                        name = await adapter.get_active_speaker()
+                    except Exception:
+                        name = None
+                    if not isinstance(name, str) or not name.strip() or name == runtime.participant_name:
+                        name = None
+                    state['activeSpeaker'] = name
+                    if name:
+                        state['lastSpeaker'] = name
+                    now = time.monotonic()
+                    if name != current:
+                        current, since = name, now
+                        continue
+                    if name and name != told and now - since >= SPEAKER_HOLD_SECONDS:
+                        if await send_note('thinking', speaker_note(name, runtime.owner_name)):
+                            told = name
+                            record.event('speaker_noted')
+
             async def watch_meeting():
                 await ready.wait()
                 alone = AloneWatch()
@@ -460,6 +500,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 ('microphone_monitor', watch_microphone),
                 ('ai_disclosure', introduce_once),
                 ('meeting_lifecycle', watch_meeting),
+                ('speaker_notes', follow_speakers),
                 ('leave_after_goodbye', leave_after_goodbye),
                 ('request_safety_net', pass_on_claims),
                 ('session_closer', closer),
@@ -541,12 +582,60 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 await asyncio.gather(*tasks, *requests, *leaving, return_exceptions=True)
 
 
+def presence_pack_for(runtime):
+    """The presence pack for the mascot style, or None. A pack that cannot be read leaves the
+    still picture: a meeting never fails over its picture."""
+    if runtime.camera_style != 'mascot':
+        return None
+    try:
+        if not runtime.camera_pack:
+            raise ValueError('SMITLINE_MEETING_CAMERA_STYLE=mascot needs SMITLINE_MEETING_CAMERA_PACK, '
+                             'the folder of a presence pack')
+        return load_presence_pack(runtime.camera_pack)
+    except ValueError as exc:
+        print(f'{exc}. The camera shows the still picture instead.', flush=True)
+        return None
+
+
+def with_persona(runtime, pack, meeting_state=None):
+    """The agent appears as the pack's character, so it takes the character's persona, and its
+    voice unless the brief named one (a brief's voice reaches the meeting as `voice`)."""
+    if pack is None:
+        return runtime
+    changes = {}
+    if pack.persona:
+        changes['persona'] = pack.persona
+    if pack.voice and not (meeting_state or {}).get('voice'):
+        from call_brief import available_voices
+        if pack.voice in available_voices(os.environ):
+            changes['voice'] = pack.voice
+        else:
+            print(f'The presence pack names voice {pack.voice!r}, which GPT-Live does not have; '
+                  'the meeting keeps its own.', flush=True)
+    return dataclasses.replace(runtime, **changes) if changes else runtime
+
+
+def camera_feed_for(runtime, microphone, pack=None):
+    """The browser meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE)."""
+    style = runtime.camera_style if runtime.camera_style != 'mascot' or pack else 'still'
+    return CameraFeed(
+        microphone,
+        enabled=runtime.camera_enabled,
+        logo_src=runtime.camera_logo_data_uri or None,
+        style=style,
+        caption=camera_caption(runtime.owner_name),
+        pack=pack.page_payload() if pack is not None else None,
+    )
+
+
 async def main():
     global record, presence, control
     runtime = RuntimeConfig.from_environ()
     # Meet and Teams find the active speaker by skipping the bot's own tile, by this name.
     os.environ['JOINLY_NAME'] = runtime.participant_name
     meeting_state = meeting_state_from_environ()
+    pack = presence_pack_for(runtime)
+    runtime = with_persona(runtime, pack, meeting_state)
     state['participant_name'] = runtime.participant_name
     state['meeting_guidance_configured'] = bool(runtime.meeting_instructions)
     state['cameraEnabled'] = runtime.camera_enabled
@@ -589,6 +678,32 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
+    if state['platform'] == 'daily':
+        # A Daily room needs no browser, display or PulseAudio: daily-python joins it (daily_room.py).
+        from daily_room import joined_room
+        try:
+            async with joined_room(url, runtime, stop, stage, state, pack=pack,
+                                   caption=camera_caption(runtime.owner_name)) as (adapter, speaker, camera_feed):
+                presence = Presence(state, camera_feed)
+                presence.sync()
+                state['admissionState'] = 'admitted'
+                await apply_platform_camera(adapter, enabled=runtime.camera_enabled,
+                                            default_on=runtime.camera_default_on, state=state)
+                presence.sync()
+                stage('connecting_audio')
+                await adapter.connect_audio()
+                state['chatAvailable'] = await adapter.chat_available()
+                await run_voice(speaker, camera_feed.audio_writer, None, api_key, runtime, adapter, meeting_state)
+        except Exception as exc:
+            state['error'] = type(exc).__name__ + ': ' + str(exc)[:300]
+            stage('needs_attention')
+            print(state['error'], flush=True)
+            await stop.wait()
+        finally:
+            listening.close()
+            await runner.cleanup()
+            close_record(runtime)
+        return
     # The browser and display subprocesses do not inherit project secrets.
     env = browser_environment(os.environ)
     async with AsyncExitStack() as stack:
@@ -596,13 +711,7 @@ async def main():
         await stack.enter_async_context(VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900))
         speaker = await stack.enter_async_context(VirtualSpeaker(env=env, sample_rate=24000, byte_depth=2, frames_per_chunk=480))
         microphone = await stack.enter_async_context(VirtualMicrophone(env=env, sample_rate=24000, byte_depth=2))
-        camera_feed = CameraFeed(
-            microphone,
-            enabled=runtime.camera_enabled,
-            logo_src=runtime.camera_logo_data_uri or None,
-            style=runtime.camera_style,
-            caption=camera_caption(runtime.owner_name),
-        )
+        camera_feed = camera_feed_for(runtime, microphone, pack)
         presence = Presence(state, camera_feed)
         presence.sync()
         viewer = await asyncio.create_subprocess_exec('/usr/bin/websockify', '--web=/usr/share/novnc', '6080', '127.0.0.1:5900', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
@@ -638,21 +747,27 @@ async def main():
             viewer.terminate()
             await viewer.wait()
             await runner.cleanup()
-            if record:
-                usage = {'usageSeconds': state.get('usage_seconds', 0)}
-                tokens = state.get('backend_tokens') or {}
-                if any(tokens.values()):
-                    usage['backendTokens'] = dict(tokens)
-                    usage['backendModel'] = runtime.backend_model
-                record.close(
-                    usage=usage,
-                    end_reason=state.get('endReason') or state.get('stage'),
-                    stage=state.get('stage'),
-                )
-                archive = state.get('archive')
-                if isinstance(archive, dict):
-                    archive['closed'] = True
-                    archive['handoffStatus'] = 'local'
+            close_record(runtime)
+
+
+def close_record(runtime):
+    """Close the meeting's record with what it used, once the meeting is over."""
+    if not record:
+        return
+    usage = {'usageSeconds': state.get('usage_seconds', 0)}
+    tokens = state.get('backend_tokens') or {}
+    if any(tokens.values()):
+        usage['backendTokens'] = dict(tokens)
+        usage['backendModel'] = runtime.backend_model
+    record.close(
+        usage=usage,
+        end_reason=state.get('endReason') or state.get('stage'),
+        stage=state.get('stage'),
+    )
+    archive = state.get('archive')
+    if isinstance(archive, dict):
+        archive['closed'] = True
+        archive['handoffStatus'] = 'local'
 
 
 if __name__ == '__main__':

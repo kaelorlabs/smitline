@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 
 try:
@@ -88,6 +89,67 @@ class CameraFeedScriptTests(unittest.TestCase):
             build_camera_override_script(style='video')
         with self.assertRaises(ValueError):
             CameraFeed(object(), style='video')
+
+    @staticmethod
+    def _pack():
+        frame = {'type': 'image/webp', 'data': 'U0VDUkVULUZSQU1F'}
+        return {
+            'width': 640, 'height': 360, 'fps': 12, 'arrival': 'arrive',
+            'captionColor': '#2E2B3A',
+            'states': {'joining': 'offstage', 'listening': 'listening', 'working': 'listening',
+                       'speaking': 'listening', 'finalizing': 'offstage',
+                       'needs_attention': 'listening', 'ended': 'offstage'},
+            'clips': {'offstage': {'loop': True, 'frames': [frame]},
+                      'arrive': {'loop': False, 'frames': [frame, frame]},
+                      'listening': {'loop': True, 'frames': [frame]}},
+        }
+
+    def test_mascot_style_plays_a_pack_it_asks_for_without_carrying_it(self):
+        pack = self._pack()
+        script = build_camera_override_script(style='mascot', pack=pack,
+                                              caption="Arun's AI assistant")
+        self.assertIn('W = 640, H = 360, FPS = 12', script)
+        self.assertIn('captureStream(FPS)', script)
+        self.assertIn('window.__smitlinePresencePack', script)
+        self.assertIn('__setVisualState', script)
+        # The frames reach the page through the exposed function, never in this script, which
+        # every frame of the meeting page runs.
+        self.assertNotIn('U0VDUkVULUZSQU1F', script)
+        self.assertIn('const CAPTION = "Arun\'s AI assistant";', script)
+        self.assertIn('const CAPTION_COLOR = "#2E2B3A";', script)
+        self.assertEqual(script.count('fillText('), 1)
+        self.assertNotIn('__CAPTION', script)
+        self.assertNotIn('{device_patch}', script)
+        self.assertIn('md.getUserMedia = async', script)
+        tricky = build_camera_override_script(style='mascot', pack=pack,
+                                              caption='"); alert(1); ("')
+        self.assertIn(r'const CAPTION = "\"); alert(1); (\"";', tricky)
+
+    def test_mascot_style_needs_a_pack(self):
+        with self.assertRaises(ValueError):
+            build_camera_override_script(style='mascot')
+        with self.assertRaises(ValueError):
+            CameraFeed(object(), style='mascot')
+
+    def test_mascot_feed_offers_its_pack_to_the_page_before_its_script(self):
+        calls = []
+
+        class Page:
+            async def expose_function(self, name, function):
+                calls.append(('expose', name, function()))
+
+            async def add_init_script(self, script):
+                calls.append(('script', '__smitlinePresencePack' in script))
+
+        class Writer:
+            audio_format = object()
+            chunk_size = 480
+        pack = self._pack()
+        asyncio.run(CameraFeed(Writer(), style='mascot', pack=pack).install(Page()))
+        self.assertEqual(calls, [('expose', '__smitlinePresencePack', pack), ('script', True)])
+        calls.clear()
+        asyncio.run(CameraFeed(Writer(), style='still', pack=pack).install(Page()))
+        self.assertEqual(calls, [('script', False)])
 
     def test_joinly_effects_map_onto_visual_states(self):
         from joinly.providers.browser.camera_feed import _JOINLY_EFFECT_TO_VISUAL

@@ -47,9 +47,13 @@ class RuntimeConfig:
     backend_model: str = ''
     web_search: bool = False
     # 'still' (default): one picture per state, almost no CPU. 'animated': the 30 fps canvas.
+    # 'mascot': the clips of a presence pack (camera_pack, presence_pack.py), a few frames a second.
     camera_style: str = 'still'
+    camera_pack: str = ''
     # Leave after this many seconds without anyone speaking; 0 never does.
     idle_leave_seconds: int = 600
+    # Who the agent is in the meeting when it appears as a pack's character (the pack's persona).
+    persona: str = ''
 
     @classmethod
     def from_environ(cls, environ=None):
@@ -73,8 +77,11 @@ class RuntimeConfig:
         if len(meeting_instructions) > 2000 or any(ord(char) < 32 for char in meeting_instructions):
             raise ValueError('SMITLINE_MEETING_INSTRUCTIONS must contain at most 2000 printable characters')
         camera_style = (env.get('SMITLINE_MEETING_CAMERA_STYLE') or 'still').strip().lower()
-        if camera_style not in ('still', 'animated'):
-            raise ValueError("SMITLINE_MEETING_CAMERA_STYLE must be 'still' or 'animated'")
+        if camera_style not in ('still', 'animated', 'mascot'):
+            raise ValueError("SMITLINE_MEETING_CAMERA_STYLE must be 'still', 'animated' or 'mascot'")
+        # The pack is read when the meeting starts (bridge.camera_for); one that cannot be read
+        # leaves the still picture rather than the meeting without a camera.
+        camera_pack = (env.get('SMITLINE_MEETING_CAMERA_PACK') or '').strip()
         idle_leave_seconds = _idle_leave_seconds(env.get('SMITLINE_MEETING_IDLE_LEAVE_SECONDS'))
         camera_enabled = True
         camera_default_on = True
@@ -102,6 +109,7 @@ class RuntimeConfig:
                    backend_model=backend_model or DEFAULT_BACKEND_MODEL,
                    web_search=web_search,
                    camera_style=camera_style,
+                   camera_pack=camera_pack,
                    idle_leave_seconds=idle_leave_seconds)
 
 
