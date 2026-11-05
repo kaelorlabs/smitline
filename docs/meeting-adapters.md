@@ -1,6 +1,6 @@
 # Meeting adapters
 
-Smitline runs Zoom, Microsoft Teams, and Google Meet through a shared browser/audio runtime in one Docker container, from the `ghcr.io/kaelorlabs/smitline-meeting` image (built as `smitline-meeting:local` from a checkout). An agent joins with `start_call` on the `meeting` channel and the invite URL as `to` (see [calls](calls.md)); you can also paste the invitation into the console. Platform detection is automatic. Government Teams is not enabled.
+Smitline runs Zoom, Microsoft Teams, and Google Meet through a shared browser/audio runtime in one Docker container, from the `ghcr.io/kaelorlabs/smitline-meeting` image (built as `smitline-meeting:local` from a checkout). Daily rooms run in the same container without the browser ([below](#daily-rooms)). An agent joins with `start_call` on the `meeting` channel and the invite URL as `to` (see [calls](calls.md)); you can also paste the invitation into the console. Platform detection is automatic. Government Teams is not enabled.
 
 ## Operation
 
@@ -36,6 +36,20 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 The bridge (`meeting-runtime/bridge.py`) owns the GPT-Live connection, Responses delegation, virtual devices, transcripts, and the selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
 Adapters do not share a screen and do not read shared screens.
+
+## Daily rooms
+
+`daily_room.DailyRoom` is the one adapter without a browser. daily-python joins the room with a virtual microphone, speaker, and camera, and `bridge.main` skips PulseAudio, Xvfb, Chromium, and the viewer for it; the voice loop, transcript, and leaving are the same. It subscribes to microphones and screen-share audio only, so no remote video is ever decoded.
+
+- **Hearing.** A reader thread takes 20 ms chunks from daily-python's speaker and hands them to GPT-Live; if it falls behind, the oldest audio goes first.
+- **Speaking.** The voice is paced into daily-python's non-blocking microphone at most 40 ms ahead of real time. Between turns nothing is written, and Daily sends silence.
+- **Camera.** `DailyCamera` draws the tile with Pillow: a presence pack's clips at the pack's frame rate, or the still mark at two frames a second, with the caption. `ClipPlayer` follows the browser camera's rules: the arrival plays once, and a one-shot clip is never cut short.
+- **Waiting.** In an empty room it reports `waiting_for_admission` until someone else joins, for up to 10 minutes like a lobby, so the voice starts only when someone is there; `AloneWatch` then leaves as usual once they go. Hidden participants (Daily's recorders) don't count.
+- **Mute.** A room owner turning Smitline's microphone off counts as a host mute.
+- **Chat** goes to Daily Prebuilt's chat.
+- **Ending.** A room that expires or ejects Smitline ends the meeting.
+
+`daily_rooms.py` makes and removes rooms through Daily's REST API with `SMITLINE_DAILY_API_KEY`; joining a room needs no key.
 
 ## Troubleshooting
 

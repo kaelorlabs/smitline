@@ -11,7 +11,7 @@ from schema_validation import (
 )
 
 
-MEETING_PLATFORMS = ('zoom', 'teams', 'meet')
+MEETING_PLATFORMS = ('zoom', 'teams', 'meet', 'daily')
 MEETING_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 MEETING_SESSION_FIELDS = (
     'id', 'platform', 'meetingUrl', 'context', 'onBehalfOf', 'voice', 'state', 'startedAt',

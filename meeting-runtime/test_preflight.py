@@ -33,7 +33,7 @@ class PreflightTests(unittest.TestCase):
                 validate(root)
             message = str(caught.exception)
             self.assertIn('OPENAI_API_KEY', message)
-            self.assertIn('HTTPS Zoom, Teams, or Google Meet', message)
+            self.assertIn('HTTPS Zoom, Teams, Google Meet, or Daily', message)
             self.assertIn('SMITLINE_MEETING_INSTRUCTIONS', message)
             self.assertNotIn('replace_with_your_project_api_key', message)
 
