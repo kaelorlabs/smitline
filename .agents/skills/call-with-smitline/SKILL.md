@@ -1,20 +1,20 @@
 ---
 name: call-with-smitline
-description: Place a phone call or join a video meeting for the user with Smitline, then report the result. Use when the user says "call", "phone", "ring", "book by phone", "leave a message", "join this meeting", or pastes a Zoom, Teams, or Google Meet link for someone to attend.
+description: Place a phone call, join a video meeting, or start a new meeting room for the user with Smitline, then report the result. Use when the user says "call", "phone", "ring", "book by phone", "leave a message", "join this meeting", "start a meeting", or pastes a Zoom, Teams, or Google Meet link for someone to attend.
 ---
 
 # Calls with Smitline
 
 Smitline talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `smitline call ... --wait`. When Smitline runs in its Docker container, as it does after a normal setup, the CLI is `docker exec smitline smitline call ... --wait`.
 
-Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`. When the user has the meeting's dial-in details, usually in the invitation, add them as `dialIn` (`{"invite": "<the pasted invitation>"}` works): Smitline then joins by phone if the platform turns it away, or when there is only a number.
+Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`. When the user has the meeting's dial-in details, usually in the invitation, add them as `dialIn` (`{"invite": "<the pasted invitation>"}` works): Smitline then joins by phone if the platform turns it away, or when there is only a number. To start a meeting of its own, set `to` to `"new"`: Smitline opens a room people join from a link in any browser, ready in seconds, and the call returns that link as `to` for you to send them. Joining someone's meeting by its link can take a minute or two, for example while a hosted service starts a machine for it; the call is `connecting` meanwhile.
 
 ## 1. Write a complete brief
 
 | Field | What to put |
 | --- | --- |
-| `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link |
-| `to` | E.164 number such as `+14155550142`, or the invite URL |
+| `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link, or a new room |
+| `to` | E.164 number such as `+14155550142`, the invite URL, or `"new"` for a new room |
 | `dialIn` | Meetings: the dial-in details, or the invitation text as `{"invite": "..."}`, to join by phone (`to` may then be left out) |
 | `onBehalfOf` | The user's name, never your own or an app's, such as ChatGPT or Claude. The call opens with "Hi, I'm calling on behalf of NAME about…" and says during the call that it is NAME's AI assistant. Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
