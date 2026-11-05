@@ -351,6 +351,8 @@ class DefaultCallHooks:
 
     def precheck(self, owner, brief):
         if brief.channel != 'phone':
+            if getattr(brief, 'dial_in', None):
+                self.check_dial_in(owner, brief.dial_in['number'])
             return
         env = self.settings(owner)
         if brief.rehearsal:
@@ -383,6 +385,23 @@ class DefaultCallHooks:
                 # Only this owner's calls count toward its limits.
                 check_repeats(brief.to, self.store.list(owner=owner, limit=None), now, env,
                               own_number=own_number)
+        except PolicyProblem as problem:
+            raise CallRefused(problem.code, problem.message) from problem
+
+    def check_dial_in(self, owner, number):
+        """A meeting's dial-in number gets the phone guardrails against cost and unwanted calls:
+        the calling codes, premium and satellite numbers, and the do-not-call list. Not calling
+        hours or the per-number limit: one bridge number serves every meeting on it."""
+        env = self.settings(owner)
+        allowed = _country_prefixes(env.get('SMITLINE_ALLOWED_CALLING_CODES'))
+        if allowed and not number.startswith(allowed):
+            raise CallRefused(
+                'destination_not_allowed', "The meeting's dial-in number is in a country that is not "
+                'in SMITLINE_ALLOWED_CALLING_CODES for this installation.')
+        from call_policy import PolicyProblem, check_cost, check_do_not_call
+        try:
+            check_cost(number, env)
+            check_do_not_call(number, self.do_not_call_list(owner).entries())
         except PolicyProblem as problem:
             raise CallRefused(problem.code, problem.message) from problem
 

@@ -20,8 +20,12 @@ BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
     'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom', 'canDo',
-    'forRequest',
+    'forRequest', 'dialIn',
 )
+# A meeting's `to` that is neither a link, "new", nor its dial-in number.
+MEETING_TO_ERROR = ('to must be a Zoom, Teams, Google Meet, or Daily meeting link, "new", or the '
+                    "meeting's dial-in number in E.164 form, such as +14155550142 (dialIn then "
+                    'gives the meeting ID).')
 NOTIFY_FIELDS = ('webhookUrl',)
 # A task ties calls toward one goal together, such as "roof repair quotes"; the agent names it.
 TASK_FIELDS = ('id', 'title')
@@ -225,6 +229,15 @@ class CallBrief:
     can_do: str = None
     # {'callId', 'requestId'}: a request on another call this call serves; see FOR_REQUEST_FIELDS.
     for_request: dict = field(default=None, compare=False)
+    # Meetings only: the phone way in, {'number', 'meetingId', 'keys', 'passcode'?, 'platform'?}
+    # (dial_in_details.resolve). A meeting whose `to` is this number joins by phone; one with a
+    # link can (dial_in.py).
+    dial_in: dict = field(default=None, compare=False)
+
+    @property
+    def joins_by_phone(self):
+        """A meeting brief with no link: its `to` is the meeting's dial-in number."""
+        return self.channel == 'meeting' and self.to.startswith('+')
 
     @property
     def session_context(self):
@@ -240,6 +253,8 @@ class CallBrief:
     def platform(self):
         if self.channel != 'meeting':
             return 'phone'
+        if self.joins_by_phone:
+            return (self.dial_in or {}).get('platform')  # zoom, teams, meet, or None: unknown
         return 'daily' if self.to == NEW_ROOM else platform_for_url(self.to)
 
     def to_dict(self):
@@ -269,6 +284,7 @@ class CallBrief:
             'carryFrom': self.carry_from,
             'canDo': self.can_do,
             'forRequest': self.for_request,
+            'dialIn': dict(self.dial_in) if self.dial_in else None,
         }
         return {key: value for key, value in data.items() if value is not None}
 
@@ -279,20 +295,22 @@ class CallBrief:
         reject_secrets(data, 'brief')
         missing = [name for name in ('channel', 'to', 'objective', 'onBehalfOf')
                    if not isinstance(data.get(name), str) or not data.get(name).strip()]
+        if 'to' in missing and data.get('channel') == 'meeting' and isinstance(data.get('dialIn'), dict):
+            missing.remove('to')  # a meeting joined by its dial-in alone: dialIn has the number
         if missing:
             raise BriefIncomplete(missing)
         channel = require_enum(data['channel'], 'channel', CHANNELS)
+        dial_in = None
         if channel == 'phone':
+            if optional_field(data, 'dialIn') is not None:
+                raise ValueError('dialIn is only for meetings')
             if emergency_number(data['to']):
                 raise ValueError('Smitline never calls emergency or crisis numbers. If someone '
                                  'needs help, call the number yourself now.')
             to = normalize_phone(data['to'])
         else:
-            to = require_string(data['to'], 'to', max_length=2048)
-            if to.strip().casefold() == NEW_ROOM:
-                to = NEW_ROOM
-            else:
-                platform_for_url(to)
+            to, dial_in = _meeting_to(optional_field(data, 'to'), optional_field(data, 'dialIn'),
+                                      environ)
         language = optional_field(data, 'language')
         if language is not None and not LANGUAGE.fullmatch(require_string(language, 'language', max_length=16)):
             raise ValueError('language must be a language tag such as en or pt-BR')
@@ -416,7 +434,35 @@ class CallBrief:
             carry_from=carry_from,
             can_do=can_do,
             for_request=for_request,
+            dial_in=dial_in,
         )
+
+
+def _meeting_to(to, dial_in, environ):
+    """A meeting brief's `to` and the dial-in it may join by (dial_in.resolve; None without one).
+    `to` is the meeting's link, "new", or its dial-in number, which a one-tap number gives with
+    its keys; without `to` the dial-in's number is it."""
+    if isinstance(to, str) and to.strip().casefold() == NEW_ROOM:
+        if dial_in is not None:
+            raise ValueError('dialIn is for joining a meeting that already exists; leave it out '
+                             'with to "new".')
+        return NEW_ROOM, None
+    import dial_in_details as dialing
+    by_phone = False
+    if isinstance(to, str) and not to.strip() and dial_in is not None:
+        to = None
+    if to is not None:
+        to = require_string(to, 'to', max_length=2048)
+        by_phone = dialing.phone_address(to) is not None
+        if not by_phone:
+            try:
+                platform_for_url(to)
+            except ValueError:
+                raise ValueError(MEETING_TO_ERROR) from None
+            if dial_in is None:
+                return to, None
+    dial = dialing.resolve(dial_in, to=to, settings=environ)
+    return (dial['number'] if to is None or by_phone else to), dial
 
 
 def available_voices(environ=None):

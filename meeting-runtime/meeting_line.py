@@ -4,6 +4,7 @@ import asyncio
 from briefing import EARLIER_CALLS_HEADING
 from call_brief import NEW_ROOM
 from call_hooks import LOCAL_OWNER, CallRefused, owner_settings, read_env_file
+import dial_in
 from meeting_lifecycle import AGENT_ENDINGS
 
 # What an owner's settings give its meeting container, over the shared .env.
@@ -163,8 +164,10 @@ class MeetingLine:
     channel = 'meeting'
 
     def __init__(self, daemon, *, poll_interval=2.0, handoff_timeout=120.0,
-                 sleep=asyncio.sleep, monotonic=None, transcript=None, pieces=None):
+                 sleep=asyncio.sleep, monotonic=None, transcript=None, pieces=None, phone=None):
         self.daemon = daemon
+        # The phone line, for meetings joined by their dial-in number (dial_in.py).
+        self.phone = phone
         # transcript(meeting_id): the finished meeting's transcript entries, read from its archive.
         self._transcript = transcript or (lambda _meeting_id: [])
         # pieces(meeting_id): its transcript pieces, piece i being the live caption with seq i.
@@ -178,7 +181,14 @@ class MeetingLine:
         self._starting = set()
         self._over_time = set()
 
+    def _by_phone(self, call_id):
+        """A meeting this line joined by phone, now running on the phone line."""
+        return self.phone is not None and self.phone.session(call_id) is not None
+
     def ready(self, hooks, owner, brief):
+        credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731
+        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials)[0] == 'phone':
+            return dial_in.ready(getattr(self, 'phone', None), credentials)
         # No meeting container for it (the one container runs the local owner's meetings only,
         # or is busy; the pool is full, or out of ports): refused now, with the code, rather
         # than after the call was accepted. The supervisor checks again when it starts, for
@@ -197,7 +207,17 @@ class MeetingLine:
             return self._monotonic()
         return asyncio.get_running_loop().time()
 
+    async def preflight(self, hooks, owner, brief):
+        """For a brief check: a meeting that would join by phone tests the phone line's tunnel."""
+        credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731
+        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials)[0] == 'phone':
+            return await dial_in.preflight(self.phone)
+        return None
+
     async def start(self, ctx):
+        way, why = dial_in.way_in(self, ctx.settings(), ctx.owner, ctx.brief, ctx.credentials)
+        if way == 'phone':
+            return await dial_in.join_by_phone(self.phone, ctx, why)
         ctx.set_status('connecting')
         self._starting.add(ctx.call_id)
         try:
@@ -270,6 +290,9 @@ class MeetingLine:
                 await self.daemon.cancel_meeting(meeting_id)
             await self._sleep(self.poll_interval)
         handoff = await self._await_handoff(meeting_id, ctx.owner)
+        if started is None and dial_in.fall_back(self, ctx, handoff):
+            # The platform turned the browser away: join by its dial-in number instead.
+            return await dial_in.join_by_phone(self.phone, ctx, 'platform_refused')
         # The result is judged from what was said, so the call gets the meeting's transcript:
         # what was not followed live yet comes from the archive.
         if live.seq >= 0:
@@ -318,6 +341,8 @@ class MeetingLine:
         return None
 
     def listen(self, call_id):
+        if self._by_phone(call_id):
+            return self.phone.listen(call_id)
         meeting_id = self._meetings.get(call_id)
         supervisor = getattr(self.daemon, 'supervisor', None)
         locate = getattr(supervisor, 'listen_url', None)
@@ -338,6 +363,8 @@ class MeetingLine:
 
     async def deliver(self, call_id, note):
         """A note for the voice, sent into the meeting; True once the voice has it."""
+        if self._by_phone(call_id):
+            return await self.phone.deliver(call_id, note)
         meeting_id = self._meetings.get(call_id)
         if meeting_id is None:
             return False
@@ -349,7 +376,15 @@ class MeetingLine:
         return await self.deliver(call_id, {'kind': 'thinking' if silent else 'instructions',
                                             'text': text})
 
+    async def provider_price(self, credentials, record):
+        """What the phone provider charged for a meeting joined by phone; None for any other."""
+        if self.phone is None or (record.get('line') or {}).get('joinedBy') != 'phone':
+            return None
+        return await self.phone.provider_price(credentials, record)
+
     async def end(self, call_id):
+        if self._by_phone(call_id):
+            return await self.phone.end(call_id)
         meeting_id = self._meetings.get(call_id)
         if meeting_id is None:
             if call_id not in self._starting:

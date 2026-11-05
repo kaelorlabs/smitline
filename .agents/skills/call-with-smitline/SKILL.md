@@ -7,7 +7,7 @@ description: Place a phone call or join a video meeting for the user with Smitli
 
 Smitline talks with people in real time, on the phone or in a video meeting, and returns a structured result. Use the MCP tools (`start_call`, `wait_for_call`, and the rest) when they are available; otherwise the CLI: `smitline call ... --wait`. When Smitline runs in its Docker container, as it does after a normal setup, the CLI is `docker exec smitline smitline call ... --wait`.
 
-Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`.
+Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Meet meeting, set `channel` to `meeting` and `to` to the invite URL (CLI: `smitline call --meeting <url> --objective "..." --wait`). Smitline joins as a participant, listens, answers when spoken to, and returns the summary, decisions, action items, and transcript when the meeting ends or you call `end_call`. When the user has the meeting's dial-in details, usually in the invitation, add them as `dialIn` (`{"invite": "<the pasted invitation>"}` works): Smitline then joins by phone if the platform turns it away, or when there is only a number.
 
 ## 1. Write a complete brief
 
@@ -15,6 +15,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | --- | --- |
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link |
 | `to` | E.164 number such as `+14155550142`, or the invite URL |
+| `dialIn` | Meetings: the dial-in details, or the invitation text as `{"invite": "..."}`, to join by phone (`to` may then be left out) |
 | `onBehalfOf` | The user's name, never your own or an app's, such as ChatGPT or Claude. The call opens with "Hi, I'm calling on behalf of NAME about…" and says during the call that it is NAME's AI assistant. Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
 | `context` | What you and the user have been working on that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |

@@ -86,6 +86,19 @@ test('notes for later calls, contacts, and list filters reach the SDK', async ()
   assert.deepEqual(Object.keys(start.inputSchema.properties.carryFrom.properties), ['task', 'contact', 'calls']);
 });
 
+test('a meeting brief can carry its dial-in, and start_call passes it on', async () => {
+  const start = TOOL_DEFINITIONS.find((tool) => tool.name === 'start_call');
+  const dialIn = start.inputSchema.properties.dialIn;
+  assert.equal(dialIn.additionalProperties, false);
+  assert.deepEqual(Object.keys(dialIn.properties).sort(), ['invite', 'keys', 'meetingId', 'number', 'passcode', 'platform']);
+  assert.match(start.inputSchema.properties.to.description, /dial-in number/);
+  const briefs = [];
+  const session = createMcpSession({ colleague: { async startCall(brief) { briefs.push(brief); return { id: 'call-0123456789abcdef', status: 'queued' }; } }, log() {} });
+  const brief = { channel: 'meeting', objective: 'Take notes', dialIn: { invite: 'Meeting ID: 859 5128 9482\n+14388097799,,85951289482#' } };
+  await call(session, 'tools/call', { name: 'start_call', arguments: brief });
+  assert.deepEqual(briefs, [brief]);
+});
+
 test('startup errors are mapped without leaking tokens', async () => {
   const colleague = {
     async startCall() {

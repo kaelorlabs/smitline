@@ -29,7 +29,9 @@ export interface CallBrief {
   /** 'phone' places a call; 'meeting' joins Zoom, Teams, Google Meet or Daily, or starts a room. */
   channel: 'phone' | 'meeting';
   /** E.164 phone number, the meeting invite URL, or "new" for a meeting Smitline starts itself
-   * (its link comes back as the call's `to`). Omit only for a rehearsal. */
+   * (its link comes back as the call's `to`); for a meeting joined by phone, its dial-in number,
+   * also as a one-tap number ("+14388097799,,85951289482#,,,,*123456#"). Omit only for a
+   * rehearsal, or a meeting whose `dialIn` has the number. */
   to?: string;
   /** Name spoken in the opening: "Hi, I'm calling on behalf of NAME about…", and in the AI disclosure that follows. Defaults to the name given at setup. */
   onBehalfOf?: string;
@@ -60,6 +62,18 @@ export interface CallBrief {
   forRequest?: { callId: string; requestId: string };
   /** What the calling agent does for the people on the call when they ask; requests are off without it. */
   canDo?: string;
+  /** Meetings only: joining by phone. The dial-in number, the meeting ID (Teams: phone conference
+   * ID; Google Meet: PIN) and Zoom's numeric phone passcode, or the invitation text they come in.
+   * With a link in `to`, Smitline dials in when the platform turns its browser away; without one,
+   * always. `keys` (one-tap form, a comma per 2-second pause) is rarely needed. */
+  dialIn?: {
+    number?: string;
+    meetingId?: string;
+    passcode?: string;
+    platform?: 'zoom' | 'teams' | 'meet';
+    keys?: string;
+    invite?: string;
+  };
 }
 
 /** Something a person on the call asked the calling agent for. */
