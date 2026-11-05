@@ -4,6 +4,8 @@ Before Smitline dials, it checks that the number is not premium-rate or satellit
 person has not asked not to be called again, that it is daytime where they are, and that the
 number has not been called too often already. Emergency numbers are refused earlier, when the
 brief is read (call_brief.emergency_number). Rehearsals ring the owner and skip these checks.
+A meeting's dial-in number gets them too, unless it is a meeting platform's published bridge
+(call_hooks.check_dial_in).
 """
 from datetime import datetime, time, timedelta, timezone
 import json
@@ -26,6 +28,10 @@ DEFAULT_HOURS = (time(8), time(21))
 DEFAULT_MAX_PER_NUMBER = 5
 DEFAULT_MAX_PER_HOUR = 20
 HOURS = re.compile(r'^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$')
+# For a refused dial-in: what dials in without calling hours or limits.
+BRIDGE_HINT = ("Zoom's own dial-in numbers have no calling hours or call limits: if this is a Zoom "
+               'meeting, dial in with one of the numbers its invitation lists (dialIn.number, or '
+               'the whole invitation as dialIn.invite).')
 
 
 class PolicyProblem(Exception):
@@ -97,12 +103,23 @@ def recipient_zones(number):
     return tuple(zones)
 
 
-def check_hours(number, now, env):
+def _next_start(start, local):
+    """(how long until calling hours begin again in one of the zones, that moment there)."""
+    waits = []
+    for moment in local:
+        day = moment + timedelta(days=1) if moment.time() >= start else moment
+        begin = day.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        waits.append((begin.astimezone(timezone.utc) - moment.astimezone(timezone.utc), begin))
+    return min(waits, key=lambda wait: wait[0])
+
+
+def check_hours(number, now, env, *, dial_in=False):
     """Refuse a call when it is outside calling hours in every zone the number may ring in.
 
     A number with one zone (most landlines, North American mobiles) is checked exactly. For
     one that spans zones, such as a Russian or Australian mobile, the call goes ahead while it
-    is daytime in any of them.
+    is daytime in any of them. `dial_in`: the number is a meeting's dial-in number, which is not
+    a published bridge; the refusal says when it can dial in and what has no calling hours.
     """
     hours = calling_hours(env)
     zones = recipient_zones(number)
@@ -116,6 +133,15 @@ def check_hours(number, now, env):
         where = f'It is {_clock(local[0])} for {number} ({zones[0].key}).'
     else:
         where = f'It is outside those hours in every time zone {number} may ring in.'
+    if dial_in:
+        wait, begin = _next_start(start, local)
+        when = f'at {_clock(begin)} there, {_in_hours(wait)}' if len(local) == 1 else _in_hours(wait)
+        raise PolicyProblem('outside_calling_hours',
+                            f"{number} is not a meeting platform's published dial-in number, so "
+                            'Smitline dials it as it calls a person: between '
+                            f'{_clock(start)} and {_clock(end)} where it rings. {where} It can dial '
+                            f'in {when}. {BRIDGE_HINT} Or set afterHours to true if the user '
+                            'confirms this is the meeting\'s number and the meeting is on now.')
     raise PolicyProblem('outside_calling_hours',
                         f'Smitline calls people between {_clock(start)} and {_clock(end)} their '
                         f'time. {where} Try again later, or set afterHours to true if the user '
@@ -153,11 +179,23 @@ def never_placed(record):
     return record.get('endReason') == 'refused' or not (line.get('providerCallSid') or line.get('liveSessionId'))
 
 
-def check_repeats(number, records, now, env, *, own_number=False):
+def dialed_number(record):
+    """The number a call dialed: a phone call's `to`, or the dial-in number of a meeting that
+    joined by phone; None for any other call."""
+    brief = record.get('brief') or {}
+    if record.get('channel') == 'phone':
+        return brief.get('to')
+    if (record.get('line') or {}).get('joinedBy') == 'phone':
+        return (brief.get('dialIn') or {}).get('number')
+    return None
+
+
+def check_repeats(number, records, now, env, *, own_number=False, dial_in=False):
     """Limit calls to one number per 24 hours, and outbound calls per hour.
 
-    `records` are earlier calls; rehearsals, incoming calls, and calls that never reached the
-    phone provider do not count. The owner's own phone has no per-number limit.
+    `records` are earlier calls, meetings joined by phone included; rehearsals, incoming calls,
+    and calls that never reached the phone provider do not count. The owner's own phone has no
+    per-number limit. `dial_in`: the number is a meeting's dial-in number, not a published bridge.
     """
     per_number = _limit(env, 'SMITLINE_MAX_CALLS_PER_NUMBER', DEFAULT_MAX_PER_NUMBER)
     per_hour = _limit(env, 'SMITLINE_MAX_CALLS_PER_HOUR', DEFAULT_MAX_PER_HOUR)
@@ -165,7 +203,8 @@ def check_repeats(number, records, now, env, *, own_number=False):
     to_number, last_hour = [], []
     for record in records:
         brief = record.get('brief') or {}
-        if record.get('channel') != 'phone' or record.get('direction') != 'outbound' or \
+        dialed = dialed_number(record)
+        if dialed is None or record.get('direction') != 'outbound' or \
                 brief.get('rehearsal') or never_placed(record):
             continue
         created = _created(record)
@@ -173,18 +212,19 @@ def check_repeats(number, records, now, env, *, own_number=False):
             continue
         if created > hour_ago:
             last_hour.append(created)
-        if brief.get('to') == number and created > day_ago:
+        if dialed == number and created > day_ago:
             to_number.append(created)
+    hint = f' {BRIDGE_HINT}' if dial_in else ''
     if per_number and not own_number and len(to_number) >= per_number:
         raise PolicyProblem('too_many_calls_to_number',
                             f'Smitline has called {number} {len(to_number)} times in the last 24 '
                             'hours, the most SMITLINE_MAX_CALLS_PER_NUMBER allows. It can call '
-                            f'again {_in_hours(min(to_number) + timedelta(days=1) - now)}.')
+                            f'again {_in_hours(min(to_number) + timedelta(days=1) - now)}.{hint}')
     if per_hour and len(last_hour) >= per_hour:
         raise PolicyProblem('too_many_calls',
                             f'Smitline has placed {len(last_hour)} calls in the last hour, the most '
                             'SMITLINE_MAX_CALLS_PER_HOUR allows. It can call again '
-                            f'{_in_hours(min(last_hour) + timedelta(hours=1) - now)}.')
+                            f'{_in_hours(min(last_hour) + timedelta(hours=1) - now)}.{hint}')
 
 
 class DoNotCallList:

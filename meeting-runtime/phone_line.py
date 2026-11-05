@@ -491,6 +491,10 @@ def voicemail_max_seconds(env):
 class PhoneSession:
     """One phone call bridged to GPT-Live."""
 
+    # Whether the other side may be a voicemail (its greeting and beep end the call); not on a
+    # meeting's phone line (dial_in.py), whose "say your name after the tone" is a bridge's.
+    voicemail_possible = True
+
     def __init__(self, line, ctx, *, api_key, twilio, from_number, token, inbound=False,
                  recording=False, owner_phone=None):
         self.line = line
@@ -688,7 +692,7 @@ class PhoneSession:
         self.started_at = time.monotonic()
         self.last_activity = self.started_at
         self.connected.set()
-        self.ctx.set_status('in_progress')
+        self._stream_started()
         if self.line.environ().get('SMITLINE_AUDIO_TRACE') == '1':
             self._trace, self._trace_start = [], time.monotonic()
         # The provider's clock paces the assistant's speech: this computer's may run fast or slow.
@@ -726,6 +730,11 @@ class PhoneSession:
                 await asyncio.wait(list(self._hangups), timeout=5)
             self._write_trace()
             self.finished.set()
+
+    def _stream_started(self):
+        """The media stream connected: the person is on the line (a meeting joined by phone waits
+        for the bridge to let it in instead, dial_in.DialInSession)."""
+        self.ctx.set_status('in_progress')
 
     def connected_seconds(self):
         """Connected time measured here: from when the media stream connected to its end."""
@@ -1087,7 +1096,8 @@ class PhoneSession:
                 self._other_turn += delta
                 gap = '' if self._last_speaker == 'other' else ' '
                 self._other_recent = (self._other_recent + gap + delta)[-200:]
-                if not self.voicemail_heard and voicemail_prompt(self._other_recent):
+                if (self.voicemail_possible and not self.voicemail_heard
+                        and voicemail_prompt(self._other_recent)):
                     self.voicemail_heard = True
                     self.ctx.event('call.voicemail_heard')
                     self._watch_voicemail()

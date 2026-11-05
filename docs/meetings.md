@@ -1,6 +1,6 @@
 # Meetings
 
-Smitline joins Zoom, Microsoft Teams, and Google Meet meetings, and Daily rooms, as a participant that listens and speaks. An agent starts a meeting the same way as a phone call, and you can also start one by hand in the console.
+Smitline joins Zoom, Microsoft Teams, and Google Meet meetings, and Daily rooms, as a participant that listens and speaks, by link or [by phone](#joining-by-phone). An agent starts a meeting the same way as a phone call, and you can also start one by hand in the console.
 
 ## Join a meeting from an agent
 
@@ -30,6 +30,44 @@ SMITLINE_DAILY_API_KEY=... python3 meeting-runtime/daily_rooms.py create --minut
 It prints the room's link; send Smitline there like to any meeting, and send the people the same link. An agent can also ask for a room in the brief itself: `channel: "meeting"` with `to: "new"` opens one with the installation's `SMITLINE_DAILY_API_KEY`, open for the meeting's `maxMinutes` plus 15 minutes, and the call returns its link as `to` for the agent to send people. The room is public, with no knocking, and expires after the minutes you gave it, when Daily ejects everyone. The link is the only key, so share it only with the people you invite. `daily_rooms.py delete <name>` removes a room sooner. A private room's link with a meeting token (`?t=...`) works too.
 
 In a Daily room Smitline joins without a browser: daily-python connects it, it hears everyone's microphones (never their video), and the meeting container draws its camera tile. It shows the still picture, or with `SMITLINE_MEETING_CAMERA_STYLE=mascot` the clips of the presence pack in `SMITLINE_MEETING_CAMERA_PACK` (the animated style needs a browser, so it shows the still picture here). The camera goes out as one full-size layer at the pack's frame rate (up to 1.5 Mbit/s), so nobody is sent a postage-stamp copy, and each frame is decoded as it is shown, so a change of clip never stalls the picture. It is usually in the room before the people you sent the link to, so it waits for the first of them (`waiting_for_admission`, up to 10 minutes, like a lobby) before its voice starts: nothing is billed for the wait. Notes for the chat go to the room's chat. It leaves as in any meeting, and when the room expires.
+
+## Joining by phone
+
+Smitline can also join a meeting by its phone number: Zoom meetings, Teams meetings whose organizer has audio conferencing, and Workspace Google Meet meetings all have one. Smitline dials the number, the phone provider keys in the meeting ID and passcode, and the meeting voice takes part by audio. It needs your phone provider (Twilio or SignalWire) set up, as for phone calls, but no meeting container, no [machine of its own](#each-meeting-on-a-machine-of-its-own) and no browser, so it joins in seconds and takes no meeting seat (`SMITLINE_MAX_MEETINGS`).
+
+Give the dial-in in the brief's `dialIn`: the `number`, the `meetingId` (Teams: the phone conference ID, not the Teams meeting ID; Google Meet: the PIN) and, for Zoom, the numeric phone `passcode` printed with the dial-in numbers. Or paste the invitation itself as `dialIn.invite`, and Smitline reads them from it: its one-tap lines (`+14388097799,,85951289482#,,,,*123456#`), `tel:` links, the dial-in numbers, "Meeting ID", "Phone conference ID", "PIN" and the passcode. It dials the first number the installation may call (`SMITLINE_ALLOWED_CALLING_CODES`), preferring a published bridge ([below](#calling-hours-and-limits)). `to` can be the dial-in number itself, also as a one-tap number, or be left out:
+
+```json
+{
+  "channel": "meeting",
+  "to": "https://us06web.zoom.us/j/85951289482?pwd=...",
+  "dialIn": { "invite": "Join Zoom Meeting ... One tap mobile +14388097799,,85951289482#,,,,*123456# Canada ..." },
+  "objective": "Take notes on the launch plan"
+}
+```
+
+When it dials in:
+
+- **No link** (`to` is the number, or missing): always by phone.
+- **A link and its dial-in**: by link, and by phone when the platform turns the browser away (the join ends `authentication_required` before it got in, as Google Meet does to most guests), or when no meeting seat is free. `SMITLINE_MEETING_DIAL_IN_FIRST=zoom,teams,meet` (or `all`) joins those platforms by phone first: an installation that runs no meeting browser, for example. Each only while the number passes the phone rules ([below](#calling-hours-and-limits)); otherwise it stays with the link. A meeting nobody let in is not joined again by phone: that was the host's choice.
+
+How the call runs:
+
+- **The keys.** The phone provider plays them with its own DTMF (`<Play digits>`, which Twilio and SignalWire both document) once the call is answered, before the voice comes on the line, so the voice never hears or answers the bridge's prompts. They are timed like the platform's one-tap number, where each comma is a two-second pause: Zoom `,,MEETINGID#,,,,*PASSCODE#`, Teams and Google Meet `,,ID#`. A one-tap number in the invitation is dialed exactly as printed. `dialIn.keys` overrides it for an unusual bridge. The stored brief keeps what was dialed (`number`, `meetingId`, `passcode`, `platform` and `keys`), never the invitation text.
+- **In, or waiting.** What the bridge says next decides. A waiting room, a lobby or a host who has not started ("Please wait, the meeting host will let you in soon") makes the call `waiting`: that time is not meeting time, and after 10 minutes it gives up (`not_admitted`). People talking, or 8 seconds of quiet, means it is in (`in_progress`). A bridge that refuses the ID or passcode ("The meeting ID you entered is invalid") ends the call at once (`dial_in_refused`). A bridge asking for more ("press pound to skip") is neither.
+- **The voice.** The same participation policy as in a browser meeting: it listens, answers when someone addresses it by name, hands harder questions to `SMITLINE_MEETING_BACKEND_MODEL`, and takes requests with `canDo`. Nobody sees a name or a camera tile, so it says it is an AI out loud, always: once it is in, at the first real pause, the hello ("Hey, this is NAME's AI assistant. I'm here to answer any questions. I'll be here taking notes, so let me know if you need anything."), never over anyone; if someone speaks to it first, it says so as it answers. The audio is the phone line's (G.711), as on phone calls.
+- **Leaving.** As in a browser meeting: when someone asks it to and it has said goodbye, when the leave check says the meeting is over, when nobody has spoken for `SMITLINE_MEETING_IDLE_LEAVE_SECONDS`, at `maxMinutes` counted from when it got in, on `end_call`, or when the meeting ends and the bridge hangs up. It has no participant list, so it does not notice being alone.
+- **Never recorded**, and no answering-machine check.
+
+The call is a meeting's: `channel` `meeting`, the meeting summary, and `endReason` `meeting_ended`, `max_duration`, `canceled`, `not_admitted`, `dial_in_refused`, or `busy` or `no_answer` when the number did not answer. `line.joinedBy` is `"phone"`, with the platform when known. `usage.voiceSeconds` is the time in the meeting, as for any meeting; the phone line's `phoneSeconds` and its provider's price are in the call's [cost](calls.md#cost). Listening in, `send_call_instruction` and requests work as in any meeting.
+
+### Calling hours and limits
+
+A dial-in number is dialed like a phone number, with the phone [guardrails](phone.md#guardrails): the calling codes, premium and satellite numbers and the do-not-call list always, and calling hours (`SMITLINE_CALLING_HOURS`) and the call limits (`SMITLINE_MAX_CALLS_PER_NUMBER`, `SMITLINE_MAX_CALLS_PER_HOUR`) unless it is a meeting platform's published dial-in number. Anyone can put a number in a brief, and a number that is not a bridge may be someone's phone; a published bridge serves every meeting on it, so it is dialed at any hour and as often as meetings need. Meetings joined by phone count toward the limits as calls do.
+
+- **The published numbers.** Smitline ships Zoom's own US and Canada dial-in numbers in [`meeting-runtime/dial_in_bridges.json`](../meeting-runtime/dial_in_bridges.json), copied from the "Find your local number" pages that Zoom invitations link to (<https://zoom.us/u/actuuYsofT> and <https://zoom.us/u/adtBZPAIK7>, read on 2026-11-05). Teams and Google Meet numbers keep the phone rules for now: Teams' belong to each organizer's audio conferencing, and Google Meet's come from a pool.
+- **`SMITLINE_DIAL_IN_BRIDGES`** changes the list: comma-separated `published` (the shipped list, also what an unset setting means), E.164 numbers, or `none`. Numbers alone replace the published list; with `published` they extend it (`published,+15145550100`). Anything else is skipped, so a mistake only keeps a number under the phone rules.
+- **When a rule stops it.** A meeting with no link is refused before anything rings, `outside_calling_hours` with when it can dial in, or `too_many_calls_to_number`; the message says that a Zoom number from the invitation has no such limits. `afterHours: true` dials outside calling hours when the user confirms the meeting is on now and the number is its own. A meeting with a link joins by its link instead, and if the platform then turns the browser away, the result says it did not dial in and why.
 
 ## The meetings console
 

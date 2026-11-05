@@ -6,6 +6,7 @@ webhook signatures (keyed with its signing key), and the same media stream.
 import base64
 import hashlib
 import hmac
+import re
 from urllib.parse import urlencode
 from xml.sax.saxutils import escape, quoteattr
 
@@ -37,13 +38,20 @@ def valid_signature(auth_token, url, params, provided):
     return hmac.compare_digest(expected, provided)
 
 
-def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna', realtime=False):
+def stream_twiml(stream_url, parameters, *, say=None, say_voice='Polly.Joanna', realtime=False,
+                 digits=None):
     """<Connect><Stream> keeps the call on our WebSocket; it ends when the socket closes.
 
     realtime (SignalWire only): its player manages packet delays and bursts itself instead
     of playing buffered audio with delay.
+    digits: keys the provider plays as touch tones once the call is answered, before the stream
+    starts (<Play digits>; w is half a second), such as a meeting's ID and passcode.
     """
     parts = ['<?xml version="1.0" encoding="UTF-8"?><Response>']
+    if digits:
+        if not re.fullmatch(r'[0-9*#w]+', digits):
+            raise ValueError('digits are 0-9, *, # and w')
+        parts.append(f'<Play digits={quoteattr(digits)}/>')
     if say:
         parts.append(f'<Say voice={quoteattr(say_voice)}>{escape(say)}</Say>')
     extra = ' realtime="true"' if realtime else ''

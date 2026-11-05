@@ -63,7 +63,7 @@ Before dialing, the daemon checks the number. A refused call never rings, and th
 | Repeat calls | `too_many_calls_to_number`, `too_many_calls` | At most 5 calls to one number in 24 hours (`SMITLINE_MAX_CALLS_PER_NUMBER`) and 20 calls an hour (`SMITLINE_MAX_CALLS_PER_HOUR`), so a looping agent cannot ring someone again and again. A call that never reached the phone provider (refused when it started, or failed or canceled before it was dialed) does not count. |
 | Country allow-list | `destination_not_allowed` | With `SMITLINE_ALLOWED_CALLING_CODES` set, only those countries. |
 
-Rehearsals ring only your own phone and skip these checks. Your own phone (`SMITLINE_OWNER_PHONE`) has no calling hours and no per-number limit.
+Rehearsals ring only your own phone and skip these checks. Your own phone (`SMITLINE_OWNER_PHONE`) has no calling hours and no per-number limit. A meeting joined by phone gets these checks for its dial-in number, except calling hours and the call limits for a meeting platform's published dial-in number: see [Joining by phone](meetings.md#calling-hours-and-limits).
 
 ## Providers
 

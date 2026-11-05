@@ -30,8 +30,8 @@ export const BRIEF_SCHEMA = {
   // when they cannot, the daemon answers brief_incomplete with a question to ask.
   required: ['channel', 'objective'],
   properties: {
-    channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join Zoom, Teams, or Google Meet' },
-    to: { type: 'string', description: "E.164 phone number such as +14155550142; the meeting invite URL (Zoom, Teams, Google Meet or Daily); or \"new\" for a meeting Smitline starts itself, a room people join from a link in any browser with no account: the call then carries the room's link as to, for you to send them. Omit only for a rehearsal, which rings the user's own phone." },
+    channel: { enum: ['phone', 'meeting'], description: 'phone to place a call; meeting to join a Zoom, Teams, Google Meet or Daily meeting, by link or by phone, or to start a new meeting room (to "new")' },
+    to: { type: 'string', description: "E.164 phone number such as +14155550142; the meeting invite URL (Zoom, Teams, Google Meet or Daily; joining by link can take a minute or two, while a hosted service starts a machine for the meeting); \"new\" for a meeting Smitline starts itself, a room people join from a link in any browser with no account, ready in seconds: the call then carries the room's link as to, for you to send them; or, to join a meeting by phone, its dial-in number, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). Omit only for a rehearsal, which rings the user's own phone, or a meeting whose dialIn has the number." },
     onBehalfOf: { type: 'string', description: "The person the call is for, normally the user's own name, spoken in the opening: Hi, I'm calling on behalf of NAME about... Never an AI, model, or app name such as ChatGPT or Claude. Defaults to the name given at setup; a hosted service may set it to the account holder." },
     objective: { type: 'string', description: 'What the call must achieve, in one or two sentences' },
     context: {
@@ -73,7 +73,7 @@ export const BRIEF_SCHEMA = {
     rehearsal: { type: 'boolean', description: "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal." },
     record: { type: 'boolean', description: "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
     phoneMenus: { type: 'boolean', description: "Phone only: let the assistant press keys in an automated phone menu (\"press 2 for billing\", \"enter your account number\") for a call to a business, such as a bank, utility or airline. Off by default; turn it on only when the call needs it, because menus make calls longer and cost more. The assistant keys in menu choices and numbers the brief gives for this call, never card numbers, PINs or passwords." },
-    afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
+    afterHours: { type: 'boolean', description: 'Phone calls, and meetings with dialIn: call even though it is outside calling hours (8 AM to 9 PM) where the number rings. Set only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own.' },
     notify: {
       type: 'object',
       additionalProperties: false,
@@ -104,6 +104,19 @@ export const BRIEF_SCHEMA = {
         requestId: { type: 'string', pattern: '^r[1-9][0-9]{0,2}$' },
       },
     },
+    dialIn: {
+      type: 'object',
+      additionalProperties: false,
+      description: "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in. Zoom's own dial-in numbers can be dialed any time; any other number keeps the calling hours and call limits of a phone call.",
+      properties: {
+        invite: { type: 'string', maxLength: 12000, description: 'The meeting invitation, as pasted: its one-tap lines, dial-in numbers, meeting ID or PIN, and passcode' },
+        number: { type: 'string', description: "The meeting's dial-in number in E.164 form, such as +14388097799" },
+        meetingId: { type: 'string', description: "What the phone line asks for: Zoom's meeting ID, Teams' phone conference ID (not the Teams meeting ID), or Google Meet's PIN" },
+        passcode: { type: 'string', description: "Zoom's numeric phone passcode, printed with the dial-in numbers (not the web passcode). Teams and Meet dial-ins have none." },
+        platform: { enum: ['zoom', 'teams', 'meet'], description: 'Whose meeting it is, when neither to nor invite says' },
+        keys: { type: 'string', pattern: '^[0-9*#,]{1,64}$', description: 'Rarely needed: the keys to press once the call is answered, as in a one-tap number, a comma for each 2-second pause. Defaults to the platform\'s own timing.' },
+      },
+    },
     carryFrom: {
       type: 'object',
       additionalProperties: false,
@@ -127,7 +140,7 @@ export const CALL_TOOL_DEFINITIONS = [
     title: "Start a phone call or join a meeting",
     _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    description: "Place a phone call or join a video meeting for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call with since: \"\" to follow the call live and supervise it. With canDo, people on the call can ask you for things; follow the call to answer them.",
+    description: "Place a phone call, join a video meeting, or start a new meeting room for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass what you and the user have been working on as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. Returns immediately; then call wait_for_call with since: \"\" to follow the call live and supervise it. With canDo, people on the call can ask you for things; follow the call to answer them.",
     inputSchema: BRIEF_SCHEMA,
   },
   {
@@ -160,7 +173,7 @@ export const CALL_TOOL_DEFINITIONS = [
     title: "Get call details",
     _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A finished call includes its result (outcome, summary, details, transcript) and what it cost: cost, at your providers' prices, when self-hosted; on a hosted service such as Smitline Cloud, charge, what the service billed for the call. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
+    description: "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A meeting joined by its link may stay connecting for a minute or two on a hosted service, while a machine starts for it; a new room starts in seconds. A finished call includes its result (outcome, summary, details, transcript) and what it cost: cost, at your providers' prices, when self-hosted; on a hosted service such as Smitline Cloud, charge, what the service billed for the call. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
     inputSchema: { type: 'object', additionalProperties: false, required: ['callId'], properties: { callId: CALL_ID_SCHEMA } },
   },
   {
@@ -295,7 +308,7 @@ export const TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS;
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
-export const CALLS_INSTRUCTIONS = "To phone someone or join a meeting for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. With canDo in the brief, people on the call can ask you for things: they arrive in live.requests and you answer each with reply_to_call_request (status as you work, then done); keep following the call while you work, for example with a subagent, and never stop following it to fix something else. Following live also watches your other calls: requests from them come back in live.otherRequests, so answer them too. When you place a call because someone on a call asked, pass forRequest so it reports to them by itself. Questions the voice cannot answer reach you even outside canDo: answer only with what the user would want these people to know. If what they asked for fails, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, Google Meet or Daily meeting use channel 'meeting' with the invite URL as to, or to \"new\" to start a meeting of its own and send people the link the call returns as to.";
+export const CALLS_INSTRUCTIONS = "To phone someone, join a meeting, or start a new meeting room for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context), then follow it with wait_for_call until it finishes, and report the outcome. Follow it live: pass since (\"\" the first time, then live.cursor) and read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. With canDo in the brief, people on the call can ask you for things: they arrive in live.requests and you answer each with reply_to_call_request (status as you work, then done); keep following the call while you work, for example with a subagent, and never stop following it to fix something else. Following live also watches your other calls: requests from them come back in live.otherRequests, so answer them too. When you place a call because someone on a call asked, pass forRequest so it reports to them by itself. Questions the voice cannot answer reach you even outside canDo: answer only with what the user would want these people to know. If what they asked for fails, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, Google Meet or Daily meeting use channel 'meeting' with the invite URL as to, or to \"new\" to start a meeting of its own and send people the link the call returns as to. When the user has a meeting's dial-in details, add them as dialIn (the invitation text works): Smitline joins by phone if it cannot join by link, or when it has only the number.";
 
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {

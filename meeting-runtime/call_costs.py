@@ -136,7 +136,8 @@ def call_cost(record, environ=None):
     environ = environ or {}
     usage = record.get('usage') or {}
     items = []
-    if record.get('channel') == 'phone':
+    # A meeting joined by its dial-in number pays for its phone line too.
+    if record.get('channel') == 'phone' or (record.get('line') or {}).get('joinedBy') == 'phone':
         items.append(_phone_item(record, environ))
     items.append(_voice_item(usage))
     backend_model = usage.get('backendModel') or environ.get('SMITLINE_PHONE_BACKEND_MODEL') \
