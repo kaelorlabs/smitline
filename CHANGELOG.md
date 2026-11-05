@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6 — 2026-11-05
 
 - **Each meeting on a machine of its own, for hosted installations.** `SMITLINE_MEETING_LAUNCHER=package.module:create` names a launcher plugin, and the daemon runs each meeting on a machine the plugin makes for it, such as a cloud VM, instead of in a container on its own Docker host. The meeting starts in the background: its call is `connecting` while the machine boots (about 80 seconds on Google Cloud), `end_call` ends it at once, and a machine that never comes up fails the call. The machine gets the meeting's runtime state, environment and token by value, so no key is written on the daemon's side. Its meeting checks the token on every route, `/health` too, and hands its archive back at `GET /archive` before the handoff is written. A restarted daemon adopts the machines still running, with their tokens (kept in `.smitline/active-meetings/<meeting id>.token`). Without the setting nothing changes. See [Each meeting on a machine of its own](docs/meetings.md#each-meeting-on-a-machine-of-its-own).
 - **Machines for some platforms, this computer for the others.** `SMITLINE_MEETING_LAUNCHER_PLATFORMS=zoom,teams,meet` gives only those meetings a machine of their own and keeps Smitline rooms in the local meeting pool, where they start in seconds; `SMITLINE_MAX_MEETINGS` and `SMITLINE_MAX_MEETINGS_PER_OWNER` count both kinds together, and a restart adopts both. A launcher's start package now carries the meeting's `maxMinutes`, so a cloud VM can be given a lifetime a little longer than its meeting.

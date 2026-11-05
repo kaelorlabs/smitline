@@ -1,4 +1,4 @@
-"""Smitline Python SDK 0.3.5."""
+"""Smitline Python SDK 0.3.6."""
 
 from .client import (
     SCHEMA_VERSION,
