@@ -26,6 +26,7 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `mustNotShare` | What must never be said, such as payment details |
 | `successCriteria` | How to tell the call worked |
 | `record` | `true` only when the user asks to record the call. The assistant tells the other person the call is recorded; make sure the user has their agreement. |
+| `phoneMenus` | `true` when the call is to a business likely to answer with an automated menu (a bank, a utility, an airline) and the user wants it handled. The assistant then presses menu keys and keys in numbers the brief gives for this call, such as an account or order number. Off by default: menus make calls longer and cost more. |
 | `task` | For several calls toward one goal, such as quotes from five roofers: the same `{"id": "roof-quotes", "title": "Roof repair quotes"}` on each |
 | `carryFrom` | Start with notes from earlier calls: `{"task": true}`, `{"contact": true}` (same number), or `{"calls": [...]}`. Only what this call needs: the assistant may mention it, so do not carry one business's details to another unless the objective calls for it. |
 | `forRequest` | When this call does what someone on another call asked (phoning Arun because the meeting asked): `{"callId": "<that call>", "requestId": "r1"}`. The call then reports to them by itself: ringing, picked up, and the outcome or why it failed. If they cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye. |

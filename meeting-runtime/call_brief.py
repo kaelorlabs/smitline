@@ -19,8 +19,8 @@ NEW_ROOM = 'new'
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'record', 'notify', 'camera', 'task', 'carryFrom', 'canDo',
-    'forRequest', 'dialIn',
+    'rehearsal', 'afterHours', 'record', 'phoneMenus', 'notify', 'camera', 'task', 'carryFrom',
+    'canDo', 'forRequest', 'dialIn',
 )
 # A meeting's `to` that is neither a link, "new", nor its dial-in number.
 MEETING_TO_ERROR = ('to must be a Zoom, Teams, Google Meet, or Daily meeting link, "new", or the '
@@ -213,6 +213,8 @@ class CallBrief:
     rehearsal: bool = False
     after_hours: bool = False
     record: bool = False
+    # Phone only, off unless the brief turns it on: the voice may press keys in a phone menu.
+    phone_menus: bool = False
     webhook_url: str = None
     # Meetings only: {'enabled', 'defaultOn', 'avatarDataUri'}, as the meeting daemon takes it.
     camera: dict = field(default=None, compare=False)
@@ -276,6 +278,7 @@ class CallBrief:
             'rehearsal': self.rehearsal,
             'afterHours': True if self.after_hours else None,
             'record': True if self.record else None,
+            'phoneMenus': True if self.phone_menus else None,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
             # The avatar image stays out of the stored brief, which every call listing returns.
             'camera': ({'enabled': self.camera['enabled'], 'defaultOn': self.camera['defaultOn']}
@@ -337,6 +340,10 @@ class CallBrief:
         record = False if record is None else require_bool(record, 'record')
         if record and channel != 'phone':
             raise ValueError('record is only for phone calls')
+        phone_menus = optional_field(data, 'phoneMenus')
+        phone_menus = False if phone_menus is None else require_bool(phone_menus, 'phoneMenus')
+        if phone_menus and channel != 'phone':
+            raise ValueError('phoneMenus is only for phone calls')
         notify = optional_field(data, 'notify')
         webhook_url = None
         if notify is not None:
@@ -429,6 +436,7 @@ class CallBrief:
             rehearsal=rehearsal,
             after_hours=after_hours,
             record=record,
+            phone_menus=phone_menus,
             webhook_url=webhook_url,
             camera=camera,
             task=task,

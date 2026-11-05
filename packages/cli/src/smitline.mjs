@@ -65,7 +65,7 @@ function requestInterrupt() {
 const USAGE = `Usage:
   smitline call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
-               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--webhook <url>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--phone-menus] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--task <id> [--task-title <text>]] [--carry-task] [--carry-contact | --no-carry-contact]
                [--carry-call <id,id>] [--can-do <what you do when people ask>] [--for-request <call id>:<r1>]
@@ -261,6 +261,7 @@ async function briefFromArgs(args, root) {
     rehearsal: args.rehearsal === true ? true : undefined,
     afterHours: args['after-hours'] === true ? true : undefined,
     record: args.record === true ? true : undefined,
+    phoneMenus: args['phone-menus'] === true ? true : undefined,
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
     task: text(args.task) ? { id: text(args.task), ...(text(args['task-title']) ? { title: text(args['task-title']) } : {}) } : undefined,
     carryFrom: carryFromArgs(args, text),
