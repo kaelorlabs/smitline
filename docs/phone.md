@@ -47,7 +47,7 @@ Off by default. A brief with `phoneMenus: true` (CLI `--phone-menus`) lets the a
   - Direct SIP: OpenAI sends each key on the SIP call (`transport.dtmf.send` on the session's sideband).
   - Twilio: its media stream cannot send keys, so Smitline plays the key tones as audio (100 ms each). Most menus hear them, but a menu that only takes keys sent outside the audio will not.
   While keys play, the voice's speech is held back and the menu talking on does not interrupt them.
-- **What the record keeps.** A `call.keys_pressed` event for each run of keys, or `call.keys_failed` with an error code. A menu choice of up to 3 keys shows as it is ("2"); a longer entry shows only as its length ("11 keys"), so account numbers stay out of the record and the summary.
+- **What the record keeps.** A `call.keys_pressed` event for each run of keys, or `call.keys_failed` with an error code. A menu choice of up to 3 keys shows as it is ("2"); a longer entry shows only as its length ("11 keys"), so the events do not repeat an account number. The number is still in the brief that the call record keeps, and in the transcript and the result if the assistant says it aloud, for example when a person asks for it after the menu.
 - **Cost.** A menu adds the time spent listening to it, at the call's usual rates. Waiting on hold is not handled yet: the assistant checks after 12 quiet seconds whether anyone is there, and a long hold can end the call (see [Not yet verified](#not-yet-verified)).
 
 ## Guardrails
