@@ -84,8 +84,9 @@ class Listener:
             self._quiet_ms += ms
 
 
-def report(played, listener, speaker=None, seconds=BURST_SECONDS, failure=None):
-    """The JSON report and the exit status (see the module's docstring)."""
+def report(played, listener, speaker=None, seconds=BURST_SECONDS, failure=None, bursts=None):
+    """The JSON report and the exit status (see the module's docstring). A run cut short (fewer
+    than `bursts` played) never passes."""
     latencies = []
     for each in played:
         start = each['start']
@@ -94,8 +95,9 @@ def report(played, listener, speaker=None, seconds=BURST_SECONDS, failure=None):
         latencies.append(None if onset is None else max(0, round((onset - start) * 1000)))
     heard = [ms for ms in latencies if ms is not None]
     monitor = listener.monitor
+    complete = bursts is None or len(played) >= bursts
     result = {
-        'heard': bool(played) and len(heard) == len(played),
+        'heard': bool(played) and complete and len(heard) == len(played),
         'bursts_played': len(played),
         'bursts_heard': len(heard),
         'latency_ms': latencies,
@@ -199,7 +201,7 @@ async def check(url, *, start_talker=start_talker_process, sdk=None, bursts=BURS
         follower.cancel()
         await asyncio.gather(follower, return_exceptions=True)
         await talker.stop()
-    return report(played, listener, speaker_stats, seconds, '; '.join(problems) or None)
+    return report(played, listener, speaker_stats, seconds, '; '.join(problems) or None, bursts)
 
 
 async def talk(url, bursts, seconds, gap, out=sys.stdout):

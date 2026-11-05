@@ -48,6 +48,9 @@ class ReportTests(unittest.TestCase):
         result, code = hearing.report([], deaf, failure='the talker could not join: no room')
         self.assertEqual(code, 3)
         self.assertIn('no room', result['failure'])
+        # The talker stopped after one burst of five: what it played was heard, but never a pass.
+        result, code = hearing.report(played[:1], half, failure='the talker stopped (1)', bursts=5)
+        self.assertEqual((code, result['heard'], result['bursts_heard']), (2, False, 1))
 
 
 class CheckTests(unittest.IsolatedAsyncioTestCase):
