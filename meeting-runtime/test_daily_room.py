@@ -314,8 +314,23 @@ class DailyRoomTests(unittest.IsolatedAsyncioTestCase):
         await room.leave()
         await room.leave()
         self.assertEqual([call for call in client.calls if call[0] in ('leave', 'release')],
-                         [('leave',), ('release',)])
+                         [('leave',)])
         self.assertFalse(await room.has_ended())  # we left; nothing ended it from outside
+        room.release()
+        room.release()
+        self.assertEqual([call for call in client.calls if call[0] in ('leave', 'release')],
+                         [('leave',), ('release',)])
+
+    async def test_a_leave_daily_refuses_says_why(self):
+        room, client = self.make_room()
+        await room.join(ROOM, 'Smitline AI')
+
+        def refused(completion=None):
+            client.calls.append(('leave',))
+            client._complete(completion, 'not in a call')
+        client.leave = refused
+        with self.assertRaisesRegex(RuntimeError, 'did not let Smitline leave the room: not in a call'):
+            await room.leave()
 
     async def test_chat_goes_to_the_prebuilt_chat_under_its_name(self):
         room, client = self.make_room()
@@ -553,6 +568,24 @@ class JoinedRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(speaker.device, sdk.Daily.devices['speaker'])
             self.assertEqual(state['capabilities']['camera'], True)
         self.assertEqual([call[0] for call in room.client.calls[-2:]], ['leave', 'release'])
+        self.assertEqual(state['leaveState'], 'left')
+
+    async def test_it_leaves_the_room_before_its_devices_stop(self):
+        # A tile must go at once, not freeze as the camera and microphone stop first (2026-11-05).
+        sdk = fake_sdk()
+        seen = {}
+        async with joined_room(ROOM, self.runtime(), asyncio.Event(), lambda _stage: None, {},
+                               caption='AI assistant', sdk=sdk) as (room, speaker, camera):
+            leave = room.client.leave
+
+            def leaving(completion=None):
+                seen.update(camera=not camera._closed.is_set(),
+                            microphone=camera.audio_writer._task is not None,
+                            speaker=speaker._task is not None)
+                return leave(completion=completion)
+            room.client.leave = leaving
+        self.assertEqual(seen, {'camera': True, 'microphone': True, 'speaker': True})
+        self.assertEqual(room.client.calls[-1], ('release',))
 
     async def test_a_pack_that_cannot_be_read_leaves_the_still_picture(self):
         state = {}

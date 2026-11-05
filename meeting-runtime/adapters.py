@@ -11,6 +11,61 @@ from zoom_join import join_zoom, connect_audio
 async def visible(locator):
     return await locator.count() > 0 and await locator.first.is_visible()
 
+
+async def first_visible(locator):
+    """The first visible match of a locator, or None."""
+    for item in await locator.all():
+        with contextlib.suppress(Exception):
+            if await item.is_visible():
+                return item
+    return None
+
+
+async def until(check, seconds, every=0.1):
+    """Ask check() every `every` seconds: True once it is true, False when `seconds` pass first."""
+    deadline = asyncio.get_running_loop().time() + seconds
+    while True:
+        with contextlib.suppress(Exception):
+            if await check():
+                return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(every)
+
+
+def text_says(text, phrases):
+    return any(phrase in text for phrase in phrases)
+
+
+async def page_text(page):
+    with contextlib.suppress(Exception):
+        return (await page.locator('body').inner_text(timeout=1000)).lower()
+    return ''
+
+
+# Seconds a platform gets, once Leave is pressed, to show its confirmation, and then to show that
+# Smitline is out (adapters_base.LEAVE_TIMEOUT bounds the whole leave).
+LEAVE_CONFIRM_SECONDS = 2.0
+LEAVE_OUT_SECONDS = 3.0
+# Zoom's toolbar button, then the confirmation it opens. A host's confirmation also offers "End
+# Meeting for All", which is never clicked.
+ZOOM_LEAVE = re.compile(r'^leave(?: meeting)?(?:\s*\([^)]*\))?$', re.I)
+ZOOM_CONFIRM_LEAVE = re.compile(r'^leave meeting$', re.I)
+# What the Zoom page says once Smitline is out of the meeting; has_ended's words count too.
+ZOOM_ENDED = ('meeting has been ended', 'meeting has ended', 'removed by the host',
+              'you have been removed')
+ZOOM_OUT = ZOOM_ENDED + ('you have left the meeting', 'you left the meeting')
+# In the meeting, Zoom's toolbar holds these (hidden ones too: the toolbar hides when idle).
+ZOOM_IN_MEETING = re.compile(r'^(?:leave|mute|unmute)\b', re.I)
+# Teams' and Google Meet's leave buttons, and what they show once Smitline is out.
+TEAMS_LEAVE = re.compile(r'^leave(?:\s|$)', re.I)
+TEAMS_OUT = ('meeting has ended', 'you left the meeting', 'you were removed', 'you have been removed',
+             'rejoin')
+MEET_LEAVE = re.compile(r'^leave(?: call)?(?:\s|$)', re.I)
+MEET_OUT = ('the meeting has ended', 'meeting has ended', 'you left the meeting',
+            "you've been removed", 'you were removed', 'you have been removed',
+            'return to home screen', 'rejoin')
+
 class ZoomAdapter(MeetingPlatformAdapter):
     platform_id = 'zoom'
     capabilities = Capabilities(participant_discovery=True, camera=True)
@@ -156,10 +211,58 @@ class ZoomAdapter(MeetingPlatformAdapter):
         return seen
     async def has_ended(self):
         body = (await self.page.locator('body').inner_text()).lower()
-        return any(x in body for x in ('meeting has been ended', 'meeting has ended', 'removed by the host', 'you have been removed'))
+        return text_says(body, ZOOM_ENDED)
+    async def _reveal_toolbar(self):
+        # Zoom hides its toolbar when idle; pointer movement brings it back (as in _set_mute).
+        # Two points, so the pointer moves even when it already rests where _set_mute left it.
+        viewport = self.page.viewport_size or {'width': 1280, 'height': 720}
+        x, bottom = viewport['width'] / 2, max(1, viewport['height'] - 8)
+        await self.page.mouse.move(x, max(1, bottom - 40))
+        await self.page.mouse.move(x, bottom)
+    async def _out(self, *, controls=True):
+        """The page shows Smitline is no longer in the meeting: Zoom says so, its address left the
+        meeting, or (controls) none of the meeting's toolbar is on the page any more."""
+        if text_says(await page_text(self.page), ZOOM_OUT):
+            return True
+        url = (self.page.url or '').lower()
+        if '/leave' in url or 'postattendee' in url:
+            return True
+        if not controls:
+            return False
+        toolbar = self.page.get_by_role('button', name=ZOOM_IN_MEETING, include_hidden=True)
+        return not await toolbar.count()
     async def leave(self):
-        button = self.page.get_by_role('button', name=re.compile(r'^leave', re.I)).first
-        if await visible(button): await button.click(timeout=2000)
+        """Leave the meeting: the toolbar's Leave, then Leave Meeting in the confirmation Zoom
+        shows. Raises unless the page then shows Smitline is out. Once out, returns at once.
+        Before, a hidden toolbar or the unanswered confirmation kept the bot in the meeting until
+        its browser was killed, and Zoom showed its frozen tile for minutes (2026-11-05)."""
+        if await self._out(controls=False):
+            return
+        confirm = self.page.get_by_role('button', name=ZOOM_CONFIRM_LEAVE)
+        for _attempt in range(2):
+            await self._reveal_toolbar()
+            # Leave Meeting, when the confirmation is open already; the last one, as Zoom draws
+            # its popover after the toolbar.
+            if not await self._click_confirmation(confirm):
+                button = await first_visible(self.page.get_by_role('button', name=ZOOM_LEAVE))
+                if button is not None:
+                    await button.click(timeout=2000)
+                else:
+                    await self.page.keyboard.press('Alt+Q')  # Zoom's shortcut, as Alt+A mutes
+                # A meeting without the question lets Smitline out at once.
+                await until(lambda: self._confirmation_or_out(confirm), LEAVE_CONFIRM_SECONDS)
+                await self._click_confirmation(confirm)
+            if await until(self._out, LEAVE_OUT_SECONDS):
+                return
+        raise RuntimeError('Zoom still showed the meeting after Leave and Leave Meeting')
+    async def _click_confirmation(self, confirm):
+        buttons = [item for item in await confirm.all() if await item.is_visible()]
+        if not buttons:
+            return False
+        await buttons[-1].click(timeout=2000)
+        return True
+    async def _confirmation_or_out(self, confirm):
+        return bool([item for item in await confirm.all() if await item.is_visible()]) or await self._out()
 
 class TeamsAdapter(MeetingPlatformAdapter):
     platform_id = 'teams'
@@ -281,7 +384,24 @@ class TeamsAdapter(MeetingPlatformAdapter):
         return {'status': 'submitted', 'delivery_confirmed': False}
     async def has_ended(self):
         body = (await self.page.locator('body').inner_text()).lower()
-        return any(x in body for x in ('meeting has ended', 'you left the meeting', 'you were removed', 'you have been removed', 'rejoin'))
+        return text_says(body, TEAMS_OUT)
+    async def _out(self):
+        """Teams says Smitline left (or the meeting ended), or its Leave button is gone."""
+        if text_says(await page_text(self.page), TEAMS_OUT):
+            return True
+        return not await self.page.get_by_role('button', name=TEAMS_LEAVE, include_hidden=True).count()
+    async def leave(self):
+        """Leave, and raise unless Teams then shows Smitline left. Once out, returns at once."""
+        if await self._out():
+            return
+        problem = None
+        try:
+            await self.controller.leave(self.page)
+        except Exception as error:
+            problem = error
+        if not await until(self._out, LEAVE_OUT_SECONDS):
+            detail = f': {(str(problem).splitlines() or [""])[0][:120]}' if problem else ''
+            raise RuntimeError(f'Teams still showed the meeting after Leave{detail}')
     async def get_participant_count(self):
         # Read only the meeting toolbar, never chat text or lobby roster entries.
         buttons = self.page.get_by_role('button', name=re.compile(r'^(?:people|participants|show participants)\b', re.I))
@@ -293,7 +413,6 @@ class TeamsAdapter(MeetingPlatformAdapter):
             if match and int(match[1]) >= 1:
                 return int(match[1])
         return None
-    async def leave(self): await self.controller.leave(self.page)
     async def get_active_speaker(self): return self.controller.active_speaker
     async def get_participant_names(self):
         return [participant.name for participant in await self.controller.get_participants(self.page)]
@@ -473,11 +592,12 @@ class MeetAdapter(MeetingPlatformAdapter):
         return {'status': 'submitted', 'delivery_confirmed': False}
     async def has_ended(self):
         body = (await self.page.locator('body').inner_text()).lower()
-        return any(x in body for x in (
-            'the meeting has ended', 'meeting has ended', 'you left the meeting',
-            "you've been removed", 'you were removed', 'you have been removed',
-            'return to home screen', 'rejoin',
-        ))
+        return text_says(body, MEET_OUT)
+    async def _out(self):
+        """Meet says Smitline left (or the meeting ended), or its Leave call button is gone."""
+        if text_says(await page_text(self.page), MEET_OUT):
+            return True
+        return not await self.page.get_by_role('button', name=MEET_LEAVE, include_hidden=True).count()
     async def get_participant_count(self):
         buttons = self.page.get_by_role(
             'button', name=re.compile(r'^(?:people|show everyone|participants)\b', re.I))
@@ -491,12 +611,20 @@ class MeetAdapter(MeetingPlatformAdapter):
                 return int(match[1])
         return None
     async def leave(self):
-        with contextlib.suppress(Exception):
-            await self.controller.leave(self.page)
+        """Leave, and raise unless Meet then shows Smitline left. Once out, returns at once."""
+        if await self._out():
             return
-        button = self.page.get_by_role('button', name=re.compile(r'^leave', re.I)).first
-        if await visible(button):
-            await button.click(timeout=2000)
+        # Meet can hide its toolbar while the pointer is still.
+        viewport = self.page.viewport_size or {'width': 1280, 'height': 720}
+        await self.page.mouse.move(viewport['width'] / 2, max(1, viewport['height'] - 8))
+        problem = None
+        try:
+            await self.controller.leave(self.page)
+        except Exception as error:
+            problem = error
+        if not await until(self._out, LEAVE_OUT_SECONDS):
+            detail = f': {(str(problem).splitlines() or [""])[0][:120]}' if problem else ''
+            raise RuntimeError(f'Google Meet still showed the meeting after Leave call{detail}')
     async def get_active_speaker(self):
         return self.controller.active_speaker
     async def get_participant_names(self):

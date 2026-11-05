@@ -73,6 +73,9 @@ class Adapter:
     async def get_participant_count(self):
         return 2
 
+    async def leave(self):
+        self.left = True
+
 
 class ParticipationTests(unittest.IsolatedAsyncioTestCase):
     async def test_wrapped_microphone_drains_without_private_queue_access(self):

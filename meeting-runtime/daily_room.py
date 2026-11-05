@@ -17,7 +17,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
-from adapters_base import Capabilities, MeetingPlatformAdapter
+from adapters_base import Capabilities, MeetingPlatformAdapter, leave_meeting
 from joinly.types import AudioChunk, AudioFormat
 from presence_pack import load_presence_pack
 from visual_presence import VISUAL_STATES
@@ -124,6 +124,7 @@ class DailyRoom(MeetingPlatformAdapter):
         self.call_state = 'initialized'
         self.ended = False
         self.leaving = False
+        self.released = False
         self.errors = []
         room = self
 
@@ -313,15 +314,24 @@ class DailyRoom(MeetingPlatformAdapter):
         return self.ended
 
     async def leave(self):
-        """Leave once and free daily-python's resources; never raises."""
-        if self.leaving:
+        """Leave the room; raises when Daily does not confirm it. Once out (left, ejected, never
+        in), returns at once. release() frees daily-python after the devices have stopped."""
+        self.leaving = True  # from here a 'left' call state is ours, not an ejection
+        if self.loop is None or self.call_state not in ('joining', 'joined'):
             return
-        self.leaving = True
-        if self.loop is not None and self.call_state in ('joining', 'joined'):
-            done = _Completion(self.loop)
-            with contextlib.suppress(Exception):
-                self.client.leave(completion=done)
-                await done.wait(CALL_TIMEOUT)
+        done = _Completion(self.loop)
+        self.client.leave(completion=done)
+        answer = await done.wait(CALL_TIMEOUT)
+        error = answer[-1] if answer else None
+        if error:
+            raise RuntimeError(f'Daily did not let Smitline leave the room: {str(error)[:200]}')
+        self.call_state = 'left'
+
+    def release(self):
+        """Free daily-python's resources, once; never raises."""
+        if self.released:
+            return
+        self.released = True
         with contextlib.suppress(Exception):
             self.client.release()
 
@@ -687,7 +697,10 @@ async def joined_room(url, runtime, stop, stage, state, *, pack=_LOAD_PACK, capt
         speaker.start()
         yield room, speaker, camera
     finally:
+        # Out of the room first (bridge.run_voice has usually left it already), so the agent's
+        # tile goes at once rather than freezing as its devices stop; daily-python goes last.
+        await leave_meeting(room, state)
         speaker.close()
         await camera.stop()
         await microphone.close()
-        await room.leave()
+        room.release()

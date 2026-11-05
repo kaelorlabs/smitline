@@ -1,6 +1,56 @@
 """Meeting platform contract; browser mechanics stay outside voice orchestration."""
 from abc import ABC, abstractmethod
+import asyncio
+import contextlib
 from dataclasses import dataclass, asdict
+
+# Seconds a meeting platform gets to let the agent out (its Leave button, then a confirmation)
+# before the rest of the meeting's teardown goes on without it.
+LEAVE_TIMEOUT = 8.0
+
+
+async def leave_meeting(adapter, state, *, record=None, page=None, timeout=None):
+    """Leave the meeting on its platform and say how it went; True once the agent is out.
+
+    Once per meeting: a later call waits for the first and gets its answer, so the platform is
+    never asked twice. state['leaveState'] goes 'leaving', then 'left' or 'leave_failed' (the reason
+    in state['leaveError']): /health carries it, and the daemon waits for it before it stops the
+    meeting, as a Zoom bot killed before it left kept its tile there for four minutes (2026-11-05).
+    record (the archive's event log) gets `left`, or `leave_failed` with the reason. The platform
+    gets `timeout` seconds (LEAVE_TIMEOUT). After a leave that failed, the browser's meeting page is
+    unloaded (about:blank), so the platform sees the page go rather than a connection that froze.
+    Never raises."""
+    task = getattr(adapter, '_leaving', None)
+    if task is None:
+        seconds = LEAVE_TIMEOUT if timeout is None else timeout
+        task = asyncio.ensure_future(_leave(adapter, state, record, page, seconds))
+        adapter._leaving = task
+    return await asyncio.shield(task)
+
+
+async def _leave(adapter, state, record, page, timeout):
+    state['leaveState'] = 'leaving'
+    try:
+        await asyncio.wait_for(adapter.leave(), timeout)
+    except Exception as error:
+        if isinstance(error, TimeoutError):
+            reason = f'the platform did not let Smitline out within {timeout:g} seconds'
+        else:
+            reason = f'{type(error).__name__}: {(str(error).splitlines() or [""])[0][:200]}'
+        state.update(leaveState='leave_failed', leaveError=reason)
+        if record is not None:
+            record('leave_failed', reason=reason)
+        print(f'Leaving the meeting could not be confirmed ({reason}); unloading its page.', flush=True)
+        if page is not None:
+            with contextlib.suppress(Exception):
+                await page.goto('about:blank', timeout=5000)
+        return False
+    adapter.left_meeting = True
+    state['leaveState'] = 'left'
+    if record is not None:
+        record('left')
+    return True
+
 
 class AuthenticationRequired(RuntimeError):
     pass
@@ -21,6 +71,8 @@ class MeetingPlatformAdapter(ABC):
     platform_id: str
     capabilities = Capabilities()
     signed_in_profile = None
+    # True once leave_meeting() saw the platform let the agent out: nothing is left to mute.
+    left_meeting = False
     def __init__(self, page, stop, stage):
         self.page, self.stop, self.stage = page, stop, stage
     def validate_url(self, url):
@@ -46,7 +98,9 @@ class MeetingPlatformAdapter(ABC):
     @abstractmethod
     async def has_ended(self): ...
     @abstractmethod
-    async def leave(self): ...
+    async def leave(self):
+        """Leave the meeting, and raise unless the platform shows the agent is out. Safe to call
+        again: once out, it returns at once. The runtime calls it through leave_meeting()."""
     async def get_active_speaker(self):
         return None
     async def chat_available(self):

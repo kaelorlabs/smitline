@@ -2,7 +2,7 @@
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from adapters import create_adapter
-from adapters_base import AuthenticationRequired
+from adapters_base import AuthenticationRequired, leave_meeting
 from joinly.providers.browser.browser_session import BrowserSession
 
 @asynccontextmanager
@@ -51,7 +51,7 @@ async def joined_meeting(url, name, passcode, env, stop, stage, state,
         try:
             yield page, adapter
         finally:
-            # Closing the browser also leaves if the explicit leave button fails.
-            import contextlib
-            with contextlib.suppress(Exception):
-                await adapter.leave()
+            # bridge.run_voice has left the meeting by now; this covers a way out before the voice
+            # started. Killing the browser is no way to leave: Zoom kept a frozen tile for minutes.
+            # A leave that failed unloads the page (about:blank) before the browser closes.
+            await leave_meeting(adapter, state, page=page)

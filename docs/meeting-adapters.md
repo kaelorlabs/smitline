@@ -33,6 +33,8 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 `MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams and Google Meet reuse Joinly controllers for chat and leave, with explicit admission and microphone checks in Smitline. Signed-in fallback is declared on the adapter (`signed_in_profile`); the join path does not branch on platform id.
 
+`leave()` raises unless the page then shows the agent is out, and returns at once when it is out already. Zoom brings its hidden toolbar back, clicks **Leave**, then **Leave Meeting** in the confirmation; Google Meet answers a host's question with **Just leave the call**. Nothing ever ends the meeting for everyone. The runtime leaves once, through `adapters_base.leave_meeting`, before the voice session closes: it gives the platform 8 seconds, records `left` or `leave_failed` with the reason, and after a failure unloads the meeting page before the browser closes. A killed browser looks like a dropped connection, and Zoom then keeps a frozen tile for minutes.
+
 The bridge (`meeting-runtime/bridge.py`) owns the GPT-Live connection, Responses delegation, virtual devices, transcripts, and the selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
 Adapters do not share a screen and do not read shared screens.
@@ -47,7 +49,7 @@ Adapters do not share a screen and do not read shared screens.
 - **Waiting.** In an empty room it reports `waiting_for_admission` until someone else joins, for up to 10 minutes like a lobby, so the voice starts only when someone is there; `AloneWatch` then leaves as usual once they go. Hidden participants (Daily's recorders) don't count.
 - **Mute.** A room owner turning Smitline's microphone off counts as a host mute.
 - **Chat** goes to Daily Prebuilt's chat.
-- **Ending.** A room that expires or ejects Smitline ends the meeting.
+- **Ending.** A room that expires or ejects Smitline ends the meeting. Leaving takes Smitline out of the room before its camera and microphone stop.
 
 `daily_rooms.py` makes and removes rooms through Daily's REST API with `SMITLINE_DAILY_API_KEY`; joining a room needs no key.
 
