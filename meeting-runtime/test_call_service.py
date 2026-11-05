@@ -994,6 +994,83 @@ class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(supervisor.started), 2)
 
 
+class RoomLine(FakeLine):
+    """A meeting line that checks what MeetingLine.ready checks, the Daily key among it."""
+    channel = 'meeting'
+    daemon = None
+    ready = MeetingLine.ready
+
+
+class AgentRoomTests(unittest.IsolatedAsyncioTestCase):
+    """An agent asks Smitline to start a meeting itself (to: "new"): Smitline opens a Daily room
+    and the call carries the room's link for the agent to send people."""
+    LINK = 'https://smitline.daily.co/AbC123'
+
+    def harness(self, key='dk-test'):
+        # The folder outlives the service: cleanups run last first, so it shuts down, then goes.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.temp = temp.name
+        environ = {'OPENAI_API_KEY': 'sk-test'}
+        if key:
+            environ['SMITLINE_DAILY_API_KEY'] = key
+        h = ServiceHarness(temp.name, environ=environ, lines={'meeting': RoomLine()})
+        self.addAsyncCleanup(h.service.shutdown)
+        return h
+
+    def test_a_brief_may_ask_for_a_new_room(self):
+        parsed = CallBrief.from_dict(brief(channel='meeting', to=' New '))
+        self.assertEqual((parsed.to, parsed.platform), ('new', 'daily'))
+        with self.assertRaises(ValueError):
+            CallBrief.from_dict(brief(channel='meeting', to='newer'))
+
+    async def test_new_opens_a_room_and_the_call_carries_its_link(self):
+        from unittest.mock import patch
+        made = []
+
+        def create_room(key, minutes):
+            made.append((key, minutes))
+            return self.LINK, 'AbC123'
+        with patch('daily_rooms.create_room', create_room):
+            h = self.harness()
+            record = await h.service.create(brief(channel='meeting', to='new', maxMinutes=30))
+            self.assertEqual(record['brief']['to'], self.LINK)
+            self.assertEqual(made, [('dk-test', 45)])  # the meeting, the wait for people, a margin
+            events = [event for event in h.service.events(record['id'])
+                      if event['type'] == 'call.room_created']
+            self.assertEqual([event['data'] for event in events], [{'meetingUrl': self.LINK}])
+            await asyncio.sleep(0)
+            self.assertEqual(h.service._contexts[record['id']].brief.to, self.LINK)
+
+    async def test_without_a_daily_key_it_is_refused_before_any_room(self):
+        from unittest.mock import patch
+        with patch('daily_rooms.create_room', side_effect=AssertionError('no room expected')):
+            h = self.harness(key='')
+            with self.assertRaises(CallError) as refused:
+                await h.service.create(brief(channel='meeting', to='new'))
+            self.assertEqual((refused.exception.status, refused.exception.code),
+                             (503, 'not_configured'))
+            self.assertIn('SMITLINE_DAILY_API_KEY', str(refused.exception.message))
+            checked = await h.service.check(brief(channel='meeting', to='new'))
+            self.assertTrue(any('SMITLINE_DAILY_API_KEY' in problem for problem in checked['problems']))
+
+    async def test_daily_failing_says_so_and_leaves_no_call(self):
+        from unittest.mock import patch
+        with patch('daily_rooms.create_room', side_effect=RuntimeError('Daily answered 500')):
+            h = self.harness()
+            with self.assertRaises(CallError) as failed:
+                await h.service.create(brief(channel='meeting', to='new'))
+            self.assertEqual((failed.exception.status, failed.exception.code), (502, 'room_unavailable'))
+            self.assertEqual(list((Path(self.temp) / 'calls').glob('call-*')), [])
+
+    async def test_a_link_is_joined_as_before_with_no_room_made(self):
+        from unittest.mock import patch
+        with patch('daily_rooms.create_room', side_effect=AssertionError('no room expected')):
+            h = self.harness(key='')
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            self.assertEqual(record['brief']['to'], ZOOM)
+
+
 class ServerModeTests(unittest.TestCase):
     def test_server_bind_requires_a_token(self):
         with tempfile.TemporaryDirectory() as temp:

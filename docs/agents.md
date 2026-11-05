@@ -16,7 +16,7 @@ The easiest path is to paste the setup prompt from the README into the agent; it
 
 ## Local MCP server
 
-The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with a local bearer token, and `smitline mcp` serves the same tools over stdio. These are the tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, or Google Meet link as `to`.
+The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with a local bearer token, and `smitline mcp` serves the same tools over stdio. These are the tools. A meeting is a call with `channel: "meeting"` and the Zoom, Teams, Google Meet or Daily link as `to`. With `to: "new"`, Smitline starts the meeting itself: it opens a Daily room, waits there, and the call carries the room's link as `to` (and in a `call.room_created` event) for the agent to send people, who join from any browser with no account. This needs `SMITLINE_DAILY_API_KEY`.
 
 | Tool | Purpose |
 | --- | --- |

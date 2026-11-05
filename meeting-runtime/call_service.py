@@ -7,7 +7,7 @@ import os
 import re
 import time
 
-from call_brief import BriefIncomplete, CallBrief, person_on_behalf_of
+from call_brief import NEW_ROOM, BriefIncomplete, CallBrief, person_on_behalf_of
 from call_costs import call_cost, spend, with_cost
 from call_hooks import (
     LOCAL_OWNER, CallRefused, LineNotReady, MissingCredentials, maybe_await, owner_settings,
@@ -25,6 +25,9 @@ from call_store import TERMINAL, CallNotFound, new_call_id
 
 
 MAX_WAIT_SECONDS = 300
+# A room Smitline starts itself stays open for the meeting's maxMinutes and the 10 minutes it may
+# wait in it for the first person (daily_room.ADMISSION_TIMEOUT), and a little more.
+ROOM_EXTRA_MINUTES = 15
 # Following a call live: once something new is said, wait this long for more before answering,
 # so one answer carries a whole exchange rather than a line.
 LIVE_SETTLE_SECONDS = 2.0
@@ -522,12 +525,37 @@ class CallService:
             raise CallError(503, 'not_configured', str(error),
                             provider=error.provider, missing=list(error.missing)) from error
         self._check_served(owner, brief)
+        room = None
+        if brief.channel == 'meeting' and brief.to == NEW_ROOM:
+            brief = await self._open_room(owner, brief)
+            room = brief.to
         # Outbound calls only: an incoming caller ID can be faked, so no earlier call is read to it.
         carried = self._carried(owner, brief)
         if carried:
             brief = dataclasses.replace(brief, carried=tuple(note_line(item) for item in carried))
-        return await self._launch(brief, owner, line.start, direction='outbound', carried=carried,
-                                  corrected=corrected)
+        record = await self._launch(brief, owner, line.start, direction='outbound', carried=carried,
+                                    corrected=corrected)
+        if room:
+            # The link the agent gives people: the call's brief carries it as `to` too.
+            self._event(record['id'], 'call.room_created', meetingUrl=room)
+        return record
+
+    async def _open_room(self, owner, brief):
+        """A meeting Smitline starts itself (to: "new"): a Daily room of its own, open for the
+        meeting and the wait for its first person. The brief then carries the room's link."""
+        import daily_rooms
+        try:
+            key = (await maybe_await(self.hooks.credentials(owner, 'daily')))['apiKey']
+        except MissingCredentials as error:
+            raise CallError(503, 'not_configured', str(error), provider=error.provider,
+                            missing=list(error.missing)) from error
+        minutes = min(daily_rooms.MAX_MINUTES, brief.max_minutes + ROOM_EXTRA_MINUTES)
+        try:
+            url, _name = await asyncio.to_thread(daily_rooms.create_room, key, minutes)
+        except Exception as error:
+            raise CallError(502, 'room_unavailable',
+                            f'Daily could not open a room just now: {str(error)[:200]}') from error
+        return dataclasses.replace(brief, to=url)
 
     async def create_inbound(self, brief, owner, start):
         """Record a call someone else placed to us; `start(ctx)` runs it on the line."""

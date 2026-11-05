@@ -26,9 +26,10 @@ export interface CallContext {
 }
 
 export interface CallBrief {
-  /** 'phone' places a call; 'meeting' joins Zoom, Teams, or Google Meet. */
+  /** 'phone' places a call; 'meeting' joins Zoom, Teams, Google Meet or Daily, or starts a room. */
   channel: 'phone' | 'meeting';
-  /** E.164 phone number, or the meeting invite URL. Omit only for a rehearsal. */
+  /** E.164 phone number, the meeting invite URL, or "new" for a meeting Smitline starts itself
+   * (its link comes back as the call's `to`). Omit only for a rehearsal. */
   to?: string;
   /** Name spoken in the opening: "Hi, I'm calling on behalf of NAME about…", and in the AI disclosure that follows. Defaults to the name given at setup. */
   onBehalfOf?: string;

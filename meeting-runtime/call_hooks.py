@@ -301,6 +301,10 @@ class DefaultCallHooks:
         if provider == 'openai':
             names = ('OPENAI_API_KEY',)
             values = {'apiKey': env.get('OPENAI_API_KEY', '').strip()}
+        elif provider == 'daily':
+            # For meetings Smitline starts itself (to: "new"); joining a Daily room needs no key.
+            names = ('SMITLINE_DAILY_API_KEY',)
+            values = {'apiKey': env.get('SMITLINE_DAILY_API_KEY', '').strip()}
         elif provider == 'sip':
             return _sip_credentials(env)
         elif provider == 'twilio' and phone_provider(env) == 'signalwire':
