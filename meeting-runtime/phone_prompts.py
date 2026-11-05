@@ -33,9 +33,9 @@ END_CALL_TOOL = {
 PRESS_KEYS_TOOL = {
     'type': 'function',
     'name': 'press_keys',
-    'description': ('Press keys on the phone keypad: a choice in an automated phone menu ("press 2 '
-                    'for billing"), or a number the menu asks to be keyed in. keys holds digits 0-9, '
-                    '* and #; w is a half-second pause, for example "1" or "w4085551212#".'),
+    'description': ('Press keys on the phone keypad: the key an automated phone menu gives for the '
+                    'option that fits the call, or a number the menu asks to be keyed in. keys holds '
+                    'digits 0-9, * and #, in the order to press them; w is a half-second pause.'),
     'parameters': {
         'type': 'object',
         'properties': {'keys': {'type': 'string'}},
@@ -93,18 +93,19 @@ def identity_rule(who):
 
 def phone_menus_rule(who):
     """How the voice gets through an automated phone menu (briefs with phoneMenus)."""
-    return ('Phone menus: an automated phone menu is a recording that lists options, such as "for '
-            'billing, press 2". You cannot press keys yourself, and saying a number out loud does '
+    return ('Phone menus: an automated phone menu is a recording that lists options and the key '
+            'to press for each. You cannot press keys yourself, and saying a number out loud does '
             'not press it: only your backend can. As soon as you hear the option that fits why you '
-            'are calling, hand it to your backend right away, saying which key to press, for '
-            'example "press 2 for billing". Say nothing to a menu: do not greet it, introduce '
+            'are calling, hand it to your backend right away, saying which key the menu gave for '
+            'it. Say nothing to a menu: do not greet it, introduce '
             'yourself, or ask whether anyone is there. When the menu asks you to say an option, say '
             'it. When it asks for a number that your brief or notes give for this call, such as an '
             'account, order, or reference number, hand that to your backend to key in the same way. '
             'Say nothing while keys are pressed. Never key in a card number, a PIN, or a password, '
             'or anything under "Never share", and never press a key that agrees to something you '
-            'may not agree to. If no option fits, choose the one for an agent or a representative, '
-            f'or press 0. When a person comes on, greet them, say you are calling on behalf of {who} '
+            'may not agree to. If no option fits, choose the one for an agent or a representative; '
+            'if the menu offers none, try 0, which reaches a person on many menus. When a person '
+            f'comes on, greet them, say you are calling on behalf of {who} '
             'and why, and carry on as usual.')
 
 

@@ -91,6 +91,17 @@ class PromptTests(unittest.TestCase):
         self.assertIn('an automated phone menu', machine_hint(on))
 
 
+    def test_no_example_keys_steer_the_model(self):
+        # Menus differ from call to call: the key comes from what the menu says, and a number from
+        # the brief. An example key or number in these texts could be copied instead.
+        import re
+        on = parsed(phoneMenus=True)
+        texts = [PRESS_KEYS_TOOL['description'], backend_instructions(on), voice_instructions(on)]
+        for text in texts:
+            self.assertFalse(re.search(r'press \d', text), text)
+            self.assertEqual(re.findall(r'\d{2,}', text.replace('0-9', '')), [], text)
+
+
 class KeyTests(unittest.TestCase):
     def test_keys_are_digits_star_hash_and_pauses(self):
         self.assertEqual(menu_keys('2'), '2')
