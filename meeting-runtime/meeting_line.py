@@ -159,6 +159,8 @@ def meeting_payload(brief):
         payload['camera'] = {key: value for key, value in brief.camera.items() if value is not None}
     if getattr(brief, 'can_do', None):
         payload['canDo'] = brief.can_do
+    if getattr(brief, 'max_minutes', None):
+        payload['maxMinutes'] = brief.max_minutes  # a launcher's machine lives a little longer
     return payload
 
 

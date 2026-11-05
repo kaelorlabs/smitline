@@ -6,7 +6,7 @@ from context_handoff import ContextHandoff
 from meeting_urls import platform_for_url
 from schema_validation import (
     omit_none, optional_bool, optional_field, reject_unknown_fields,
-    require_enum, require_field, require_mapping, require_meeting_id,
+    require_enum, require_field, require_int, require_mapping, require_meeting_id,
     require_string, require_timestamp,
 )
 
@@ -16,6 +16,7 @@ MEETING_STATES = ('joining', 'waiting_for_admission', 'live', 'ended')
 MEETING_SESSION_FIELDS = (
     'id', 'platform', 'meetingUrl', 'context', 'onBehalfOf', 'voice', 'state', 'startedAt',
     'cameraEnabled', 'cameraState', 'visualState', 'degradedReason', 'owner', 'canDo',
+    'maxMinutes',
 )
 # Fields older snapshots stored for coding-agent sessions; ignored when read back.
 LEGACY_SESSION_FIELDS = ('agentSession', 'permissions')
@@ -63,6 +64,15 @@ def optional_can_do(value):
     return text or None
 
 
+def optional_max_minutes(value):
+    """The meeting's time limit in minutes (the brief's maxMinutes), or None. The call ends it
+    then (meeting_line.py); a launcher plugin gives the meeting's machine a lifetime from it."""
+    if value is None:
+        return None
+    from call_brief import MAX_MINUTES
+    return require_int(value, 'maxMinutes', min_value=1, max_value=MAX_MINUTES['meeting'])
+
+
 def optional_owner(value):
     """The owner a meeting belongs to; records written before owners belong to 'local'."""
     from call_hooks import LOCAL_OWNER, valid_owner
@@ -106,6 +116,7 @@ class MeetingSession:
     degraded_reason: str = None
     owner: str = 'local'
     can_do: str = None
+    max_minutes: int = None
 
     def to_dict(self):
         return omit_none({
@@ -124,6 +135,7 @@ class MeetingSession:
             # The local owner's meetings are stored and shown exactly as before owners existed.
             'owner': None if self.owner == 'local' else self.owner,
             'canDo': self.can_do,
+            'maxMinutes': self.max_minutes,
         })
 
     @classmethod
@@ -159,4 +171,5 @@ class MeetingSession:
                                            'degradedReason', DEGRADED_REASONS),
             owner=optional_owner(optional_field(payload, 'owner')),
             can_do=optional_can_do(optional_field(payload, 'canDo')),
+            max_minutes=optional_max_minutes(optional_field(payload, 'maxMinutes')),
         )

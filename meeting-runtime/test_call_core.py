@@ -679,14 +679,16 @@ class MeetingPayloadTests(unittest.TestCase):
             "objective": "Take notes", "voice": "cinder",
         })
         payload = meeting_payload(brief)
-        self.assertEqual(set(payload), {"meetingUrl", "context", "onBehalfOf", "voice"})
+        # maxMinutes: the core's default for a meeting (120) when the brief names none.
+        self.assertEqual(set(payload), {"meetingUrl", "context", "onBehalfOf", "voice", "maxMinutes"})
+        self.assertEqual(payload["maxMinutes"], 120)
         self.assertEqual(payload["onBehalfOf"], "Sam")
         self.assertEqual(payload["voice"], "cinder")
         self.assertEqual(environ_from_state({"voice": "cinder"})["SMITLINE_VOICE"], "cinder")
         plain = meeting_payload(CallBrief.from_dict({
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
             "objective": "Take notes"}))
-        self.assertEqual(set(plain), {"meetingUrl", "context", "onBehalfOf"})
+        self.assertEqual(set(plain), {"meetingUrl", "context", "onBehalfOf", "maxMinutes"})
         avatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4='
         shown = CallBrief.from_dict({
             "channel": "meeting", "to": "https://zoom.us/j/1234567890", "onBehalfOf": "Sam",
