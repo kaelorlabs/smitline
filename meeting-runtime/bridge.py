@@ -28,6 +28,7 @@ from meeting_intro import (
 from adapters_base import AuthenticationRequired
 from meeting_urls import platform_for_url
 from participation import Participation
+from presence_pack import load_presence_pack
 from meeting_lifecycle import (
     BACKEND_LEAVING, LEAVE_ASK_SECONDS, LEAVE_MEETING_TOOL, LEAVING_INSTRUCTIONS, AloneWatch,
     LeaveJudge,
@@ -541,6 +542,35 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 await asyncio.gather(*tasks, *requests, *leaving, return_exceptions=True)
 
 
+def presence_pack_for(runtime):
+    """The presence pack's page payload for the mascot style, or None. A pack that cannot be
+    read leaves the still picture: a meeting never fails over its picture."""
+    if runtime.camera_style != 'mascot':
+        return None
+    try:
+        if not runtime.camera_pack:
+            raise ValueError('SMITLINE_MEETING_CAMERA_STYLE=mascot needs SMITLINE_MEETING_CAMERA_PACK, '
+                             'the folder of a presence pack')
+        return load_presence_pack(runtime.camera_pack).page_payload()
+    except ValueError as exc:
+        print(f'{exc}. The camera shows the still picture instead.', flush=True)
+        return None
+
+
+def camera_feed_for(runtime, microphone):
+    """The meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE)."""
+    pack = presence_pack_for(runtime)
+    style = runtime.camera_style if runtime.camera_style != 'mascot' or pack else 'still'
+    return CameraFeed(
+        microphone,
+        enabled=runtime.camera_enabled,
+        logo_src=runtime.camera_logo_data_uri or None,
+        style=style,
+        caption=camera_caption(runtime.owner_name),
+        pack=pack,
+    )
+
+
 async def main():
     global record, presence, control
     runtime = RuntimeConfig.from_environ()
@@ -596,13 +626,7 @@ async def main():
         await stack.enter_async_context(VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900))
         speaker = await stack.enter_async_context(VirtualSpeaker(env=env, sample_rate=24000, byte_depth=2, frames_per_chunk=480))
         microphone = await stack.enter_async_context(VirtualMicrophone(env=env, sample_rate=24000, byte_depth=2))
-        camera_feed = CameraFeed(
-            microphone,
-            enabled=runtime.camera_enabled,
-            logo_src=runtime.camera_logo_data_uri or None,
-            style=runtime.camera_style,
-            caption=camera_caption(runtime.owner_name),
-        )
+        camera_feed = camera_feed_for(runtime, microphone)
         presence = Presence(state, camera_feed)
         presence.sync()
         viewer = await asyncio.create_subprocess_exec('/usr/bin/websockify', '--web=/usr/share/novnc', '6080', '127.0.0.1:5900', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)

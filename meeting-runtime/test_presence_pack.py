@@ -141,5 +141,47 @@ class PresencePackTests(unittest.TestCase):
             load_presence_pack(self.root)
 
 
+class Writer:
+    audio_format = object()
+    chunk_size = 480
+
+
+class CameraChoiceTests(unittest.TestCase):
+    def test_settings_choose_the_mascot_style_and_its_pack(self):
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_CAMERA_STYLE': 'Mascot',
+                                              'SMITLINE_MEETING_CAMERA_PACK': ' /packs/relay-arch '})
+        self.assertEqual((runtime.camera_style, runtime.camera_pack), ('mascot', '/packs/relay-arch'))
+        with self.assertRaises(ValueError):
+            RuntimeConfig.from_environ({'SMITLINE_MEETING_CAMERA_STYLE': 'video'})
+
+    def test_a_readable_pack_gives_the_mascot_camera(self):
+        import dataclasses
+        import bridge
+        from runtime_config import RuntimeConfig
+        with tempfile.TemporaryDirectory() as root:
+            write_pack(root)
+            runtime = dataclasses.replace(RuntimeConfig.from_environ({}), camera_style='mascot',
+                                          camera_pack=root)
+            feed = bridge.camera_feed_for(runtime, Writer())
+        self.assertEqual(feed.style, 'mascot')
+        self.assertEqual((feed.pack['fps'], feed.pack['arrival']), (12, 'arrive'))
+
+    def test_a_pack_that_cannot_be_read_leaves_the_still_picture(self):
+        import dataclasses
+        from unittest.mock import patch
+        import bridge
+        from runtime_config import RuntimeConfig
+        for pack_path in ('', '/nowhere/at/all'):
+            with self.subTest(pack_path=pack_path):
+                runtime = dataclasses.replace(RuntimeConfig.from_environ({}), camera_style='mascot',
+                                              camera_pack=pack_path)
+                with patch('builtins.print') as printed:
+                    feed = bridge.camera_feed_for(runtime, Writer())
+                self.assertEqual(feed.style, 'still')
+                self.assertIsNone(feed.pack)
+                self.assertIn('still picture instead', printed.call_args.args[0])
+
+
 if __name__ == '__main__':
     unittest.main()

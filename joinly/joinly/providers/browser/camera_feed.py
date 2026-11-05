@@ -12,10 +12,12 @@ Patches ``enumerateDevices`` to include a virtual camera so
 platforms that check for camera hardware still show a video toggle.
 
 The camera canvas renders the Smitline mark (or a validated
-local avatar) directly. Two styles: ``still`` shows one picture per
+local avatar) directly. Three styles: ``still`` shows one picture per
 presence state at a few frames a second, which costs almost no CPU;
 ``animated`` redraws at 30 fps, with an equalizer driven by the voice's
-amplitude. Presence uses ``set_visual_state``.
+amplitude; ``mascot`` plays a presence pack's clips (a character walking
+in, listening, thinking, speaking and leaving) at the pack's frame rate.
+Presence uses ``set_visual_state``.
 """
 
 import asyncio
@@ -607,19 +609,172 @@ _STILL_CAMERA_TEMPLATE = """\
     {device_patch}
 }})();"""
 
-CAMERA_STYLES = ("still", "animated")
+# The mascot style: the clips of a presence pack (meeting-runtime/presence_pack.py), one per
+# presence state, at the pack's frame rate. The frames are not in this script, which every frame
+# of the meeting page runs: the page asks for them once through an exposed function and decodes
+# them into bitmaps from memory (no URL, so the meeting site's content policy has no say).
+# Looping clips stay decoded once used; one-shot clips (walking in, leaving) are let go after.
+# Inserted through str.format, so its own braces are doubled.
+_MASCOT_CAMERA_TEMPLATE = """\
+(() => {{
+    const W = {w}, H = {h}, FPS = {fps};
+    const VISUAL_STATES = new Set(__VISUAL_STATES__);
+    const CAPTION = __CAPTION__;
+    const CAPTION_COLOR = __CAPTION_COLOR__;
+
+    if (window.__camOrigGUM) return;
+
+    let camTrack = null;
+    window.__visualState = 'joining';
+
+    function _initCanvas() {{
+        if (camTrack) return camTrack;
+
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#30323b';
+        ctx.fillRect(0, 0, W, H);
+
+        let pack = null;
+        const blobs = {{}};
+        const bitmaps = {{}};
+        let clip = null, frame = 0, next = [], arrived = false;
+
+        function loops(name) {{
+            return !!(pack && pack.clips[name] && pack.clips[name].loop);
+        }}
+        function release(name) {{
+            const frames = bitmaps[name];
+            if (Array.isArray(frames)) frames.forEach((b) => b.close && b.close());
+            delete bitmaps[name];
+        }}
+        function decode(name) {{
+            if (bitmaps[name] || !blobs[name]) return;
+            bitmaps[name] = 'decoding';
+            Promise.all(blobs[name].map((b) => createImageBitmap(b)))
+                .then((frames) => {{ bitmaps[name] = frames; }})
+                .catch(() => {{ delete bitmaps[name]; }});
+        }}
+        function play(names) {{
+            const keep = new Set(names);
+            Object.keys(bitmaps).forEach((n) => {{
+                if (!keep.has(n) && n !== clip && !loops(n)) release(n);
+            }});
+            clip = names[0];
+            next = names.slice(1);
+            frame = 0;
+            names.forEach(decode);
+        }}
+        function show(state) {{
+            if (!pack) return;
+            const target = pack.states[state] || pack.states.listening;
+            const frames = bitmaps[clip];
+            const walkingIn = clip === pack.arrival
+                && !(Array.isArray(frames) && frame >= frames.length - 1);
+            if (!arrived && state !== 'joining' && pack.arrival) {{
+                arrived = true;
+                play([pack.arrival, target]);
+            }} else if (walkingIn) {{
+                // Let it finish walking in, then show what it is doing by then.
+                next = [target];
+                decode(target);
+            }} else if (target !== clip) {{
+                if (state !== 'joining') arrived = true;
+                play([target]);
+            }}
+        }}
+        function caption() {{
+            if (!CAPTION) return;
+            ctx.save();
+            ctx.globalAlpha = 0.9;
+            ctx.fillStyle = CAPTION_COLOR;
+            ctx.font = '600 ' + Math.round(H * 0.06) + 'px "DejaVu Sans", Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(CAPTION, W / 2, H * 0.92);
+            ctx.restore();
+        }}
+        function tick() {{
+            const frames = clip ? bitmaps[clip] : null;
+            if (!Array.isArray(frames) || !frames.length) return;
+            ctx.globalAlpha = 1;
+            ctx.drawImage(frames[Math.min(frame, frames.length - 1)], 0, 0, W, H);
+            caption();
+            if (frame < frames.length - 1) {{
+                frame += 1;
+            }} else if (next.length) {{
+                play(next);
+            }} else if (loops(clip)) {{
+                frame = 0;
+            }}
+        }}
+
+        window.__setVisualState = (name) => {{
+            if (!VISUAL_STATES.has(name) || name === window.__visualState) return;
+            window.__visualState = name;
+            show(name);
+        }};
+
+        const load = window.__smitlinePresencePack;
+        if (typeof load === 'function') {{
+            Promise.resolve(load()).then((payload) => {{
+                if (!payload || !payload.clips || !payload.states) return;
+                for (const [name, entry] of Object.entries(payload.clips)) {{
+                    blobs[name] = entry.frames.map((f) => {{
+                        const raw = atob(f.data);
+                        const bytes = new Uint8Array(raw.length);
+                        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+                        return new Blob([bytes], {{type: f.type}});
+                    }});
+                }}
+                pack = payload;
+                show(window.__visualState);
+            }}).catch(() => {{}});
+        }}
+        setInterval(tick, Math.round(1000 / FPS));
+
+        camTrack = c.captureStream(FPS).getVideoTracks()[0];
+        return camTrack;
+    }}
+
+    {device_patch}
+}})();"""
+
+CAMERA_STYLES = ("still", "animated", "mascot")
 _STILL_WIDTH = 640
 _STILL_HEIGHT = 360
 _STILL_FPS = 5
 _STILL_REPAINT_MS = 400
+# The exposed function the mascot page calls, once, for its presence pack.
+PRESENCE_PACK_BINDING = "__smitlinePresencePack"
 
 
 def build_camera_override_script(
-    *, logo_src: str | None = None, style: str = "animated", caption: str | None = None
+    *,
+    logo_src: str | None = None,
+    style: str = "animated",
+    caption: str | None = None,
+    pack: dict | None = None,
 ) -> str:
-    """Build the getUserMedia override script without interpolating untrusted braces."""
+    """Build the getUserMedia override script without interpolating untrusted braces.
+
+    ``pack`` is a presence pack's page payload (``PresencePack.page_payload()``); the
+    mascot style needs one and uses only its size and frame rate here.
+    """
     caption_draw = _CAPTION_DRAW if caption else ""
-    if style == "still":
+    caption_color = "#ffffff"
+    if style == "mascot":
+        if not pack:
+            raise ValueError("The mascot camera style needs a presence pack")
+        script = _MASCOT_CAMERA_TEMPLATE.format(
+            w=int(pack["width"]),
+            h=int(pack["height"]),
+            fps=int(pack["fps"]),
+            device_patch=_DEVICE_PATCH,
+        )
+        caption_color = pack.get("captionColor") or caption_color
+    elif style == "still":
         script = _STILL_CAMERA_TEMPLATE.format(
             w=_STILL_WIDTH,
             h=_STILL_HEIGHT,
@@ -649,6 +804,7 @@ def build_camera_override_script(
     return (
         script.replace("__LOGO_SRC__", json.dumps(logo_src or _LOGO_SVG))
         .replace("__VISUAL_STATES__", json.dumps(list(_VISUAL_STATES)))
+        .replace("__CAPTION_COLOR__", json.dumps(caption_color))
         .replace("__CAPTION__", json.dumps(caption or ""))
     )
 
@@ -670,13 +826,20 @@ class CameraFeed:
         logo_src: str | None = None,
         style: str = "animated",
         caption: str | None = None,
+        pack: dict | None = None,
     ) -> None:
-        """Initialize with the underlying audio writer."""
+        """Initialize with the underlying audio writer.
+
+        ``pack``, for the mascot style, is a presence pack's page payload.
+        """
         if style not in CAMERA_STYLES:
             raise ValueError(f"Unknown camera style {style!r}")
+        if style == "mascot" and not pack:
+            raise ValueError("The mascot camera style needs a presence pack")
         self.enabled = enabled
         self.style = style
         self.caption = caption
+        self.pack = pack if style == "mascot" else None
         self._logo_src = logo_src or _LOGO_SVG
         self._meeting_page: Page | None = None
         self._last_band_time: float = 0
@@ -691,9 +854,13 @@ class CameraFeed:
         self._meeting_page = meeting_page
         if not self.enabled:
             return
+        if self.pack is not None:
+            pack = self.pack
+            # Registered on this page for all its frames, before any of them asks.
+            await meeting_page.expose_function(PRESENCE_PACK_BINDING, lambda: pack)
         await meeting_page.add_init_script(
             build_camera_override_script(
-                logo_src=self._logo_src, style=self.style, caption=self.caption
+                logo_src=self._logo_src, style=self.style, caption=self.caption, pack=self.pack
             )
         )
 

@@ -43,6 +43,8 @@ While a meeting runs, the daemon reaches it through `POST /control` on the same 
 
 A virtual camera shows Smitline listening, working, or speaking, and never displays task text. Turn it off in the console to join audio-only. By default the camera is a still picture that changes with the state, which costs almost no CPU. `SMITLINE_MEETING_CAMERA_STYLE=animated` switches to the animated camera, which redraws at 30 frames a second and needs about a full CPU core more. Private context added in the console reaches the voice and its backend as background.
 
+`SMITLINE_MEETING_CAMERA_STYLE=mascot` plays a presence pack instead: a character that walks in once Smitline is admitted, stands and listens, thinks while it waits on its backend, talks while it speaks, and waves and hops off when it leaves. `SMITLINE_MEETING_CAMERA_PACK` names the pack's folder, which must be readable inside the meeting container (copy it into a meeting image of your own). A pack is a `manifest.json` and WebP or PNG frames: clips that loop or play once, the clip each presence state shows, and an optional arrival clip; [presence_pack.py](../meeting-runtime/presence_pack.py) describes the format. The frames are pictures only; the camera adds the caption. A 640x360 pack at 12 frames a second needs about a tenth of a CPU core more than the still picture and sends about 0.8 Mbit/s. A pack that cannot be read leaves the still picture.
+
 ## Debugging from a checkout
 
 To launch a meeting participant without the daemon:
