@@ -319,10 +319,7 @@ class CallBrief:
             raise ValueError('language must be a language tag such as en or pt-BR')
         voice = optional_field(data, 'voice')
         if voice is not None:
-            voice = require_string(voice, 'voice', max_length=32)
-            voices = available_voices(environ)
-            if not VOICE.fullmatch(voice) or voice not in voices:
-                raise ValueError('voice must be one of: ' + ', '.join(voices))
+            voice = check_voice(voice, environ)
         max_minutes = optional_field(data, 'maxMinutes')
         max_minutes = (DEFAULT_MAX_MINUTES[channel] if max_minutes is None else
                        require_int(max_minutes, 'maxMinutes', min_value=1,
@@ -483,8 +480,19 @@ def available_voices(environ=None):
     return tuple(dict.fromkeys(GPT_LIVE_VOICES + tuple(names)))
 
 
+def check_voice(value, environ=None, name='voice'):
+    """A voice this installation has (available_voices); otherwise ValueError naming them."""
+    voice = require_string(value, name, max_length=32)
+    voices = available_voices(environ)
+    if not VOICE.fullmatch(voice) or voice not in voices:
+        raise ValueError(f'{name} must be one of: ' + ', '.join(voices))
+    return voice
+
+
 def default_voice(environ=None):
-    """SMITLINE_VOICE when it names a known voice; otherwise GPT-Live's default."""
+    """SMITLINE_VOICE when it names a known voice; otherwise GPT-Live's default. Phone calls speak
+    with it when the brief names no voice, and meetings when no meeting voice is set either
+    (meeting_line.meeting_voice)."""
     import os
     from voice_core import DEFAULT_VOICE
     env = environ if environ is not None else os.environ

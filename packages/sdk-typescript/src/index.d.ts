@@ -215,12 +215,19 @@ export interface ProfilePerson {
   notes?: string;
 }
 
+/** The voice each kind of call speaks with when its brief names none. */
+export interface VoiceDefaults {
+  phone: string;
+  meeting: string;
+}
+
 export interface Profile {
   version: number;
   about?: string;
   style?: string;
   boundaries?: string[];
   people?: ProfilePerson[];
+  voices?: VoiceDefaults;
 }
 
 export interface ProfileUpdate {
@@ -229,6 +236,15 @@ export interface ProfileUpdate {
   boundaries?: string[];
   people?: ProfilePerson[];
   removePeople?: string[];
+  /** New default voices: a name from listVoices, or '' to go back to the default. */
+  voices?: Partial<VoiceDefaults>;
+}
+
+export interface Voices {
+  /** The phone calls' default, as before there were two: defaults.phone. */
+  default: string;
+  defaults: VoiceDefaults;
+  voices: string[];
 }
 
 export interface DoNotCallEntry {
@@ -263,7 +279,7 @@ export interface DaemonTransport {
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
-  listVoices(): Promise<{ default: string; voices: string[] }>;
+  listVoices(): Promise<Voices>;
 }
 
 export interface SmitlineOptions {
@@ -312,7 +328,7 @@ export class Smitline {
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
-  listVoices(): Promise<{ default: string; voices: string[] }>;
+  listVoices(): Promise<Voices>;
 }
 
 export function createLoopbackTransport(options?: {

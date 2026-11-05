@@ -355,6 +355,8 @@ class Smitline:
         return self._transport.get_profile()
 
     async def update_profile(self, update):
+        """Merge into the profile: fields replace, people upsert by name, removePeople drops names,
+        and {'voices': {'phone': ..., 'meeting': ...}} sets the default voices ('' for the default)."""
         return self._transport.update_profile(update)
 
     async def get_do_not_call(self):
@@ -372,6 +374,7 @@ class Smitline:
         return self._transport.transfer_call(call_id)
 
     async def list_voices(self):
+        """{'voices': [...], 'defaults': {'phone': ..., 'meeting': ...}, 'default': the phone one}."""
         return self._transport.list_voices()
 
 

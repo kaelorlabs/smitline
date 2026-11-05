@@ -223,9 +223,9 @@
     "/v1/voices": {
       "parameters": [{ "$ref": "#/components/parameters/Owner" }],
       "get": {
-        "summary": "List GPT-Live voices",
+        "summary": "List GPT-Live voices and the owner's default voices",
         "operationId": "listVoices",
-        "responses": { "200": { "description": "Voices", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "voices"] } } } } }
+        "responses": { "200": { "description": "Voices; default is defaults.phone", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "defaults": { "$ref": "#/components/schemas/VoiceDefaults" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "defaults", "voices"] } } } } }
       }
     },
     "/v1/profile": {
@@ -244,6 +244,7 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProfileUpdate" } } } },
         "responses": {
           "200": { "description": "The saved profile", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Profile" } } } },
+          "409": { "$ref": "#/components/responses/Error" },
           "422": { "$ref": "#/components/responses/Error" },
           "501": { "$ref": "#/components/responses/Error" }
         }
@@ -430,20 +431,33 @@
           "about": { "type": "string", "maxLength": 2000 },
           "style": { "type": "string", "maxLength": 600 },
           "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
-          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 }
+          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
+          "voices": { "$ref": "#/components/schemas/VoiceDefaults" }
         }
       },
       "ProfileUpdate": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Fields present replace the saved ones; people are added or updated by name (ignoring case); removePeople drops names.",
+        "description": "Fields present replace the saved ones; people are added or updated by name (ignoring case); removePeople drops names. voices sets the default voices (saved with the call hooks' save_voices: 501 without it); a brief's voice still wins.",
         "properties": {
           "about": { "type": "string", "maxLength": 2000 },
           "style": { "type": "string", "maxLength": 600 },
           "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
-          "removePeople": { "type": "array", "items": { "type": "string" } }
+          "removePeople": { "type": "array", "items": { "type": "string" } },
+          "voices": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "A voice from GET /v1/voices, or \"\" to go back to the default.",
+            "properties": { "phone": { "type": "string", "maxLength": 32 }, "meeting": { "type": "string", "maxLength": 32 } }
+          }
         }
+      },
+      "VoiceDefaults": {
+        "type": "object",
+        "description": "The voice each kind of call speaks with when its brief names none: phone (SMITLINE_VOICE, else marin) and meeting, joined by link or by phone (SMITLINE_MEETING_VOICE, else the phone one).",
+        "required": ["phone", "meeting"],
+        "properties": { "phone": { "type": "string" }, "meeting": { "type": "string" } }
       },
       "DoNotCallList": {
         "type": "object",

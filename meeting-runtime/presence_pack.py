@@ -28,7 +28,8 @@ A pack is a folder holding manifest.json and the frames, as WebP or PNG files:
 - "persona", optional, says who the character is and how it sounds, in a few sentences. The agent
   appears as the character, so the voice is given it as part of its instructions.
 - "voice", optional, is the character's GPT-Live voice. It is used for the meeting unless the
-  brief names a voice, before the installation's SMITLINE_VOICE (which phone calls keep using).
+  brief names a voice or the owner set a meeting voice (SMITLINE_MEETING_VOICE), before the
+  installation's SMITLINE_VOICE (the phone calls' voice).
 
 Frames are pictures only: the camera adds the caption itself, so a pack holds no names or text.
 """

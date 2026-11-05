@@ -30,8 +30,8 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | `reply_to_call_request` | Answer a [request from the call](#requests-from-the-call): `status` as you work, then `done`. |
 | `end_call` | Wrap up politely, or cancel a call that has not connected. |
 | `transfer_call_to_me` | Hand a connected phone call to `SMITLINE_OWNER_PHONE`. |
-| `list_voices` | GPT-Live voices. |
-| `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. |
+| `list_voices` | GPT-Live voices, and the default voices for phone calls and for meetings. |
+| `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. `voices` changes the default voice for phone calls or meetings; a call keeps its voice until it ends. |
 
 In the image, `docker exec smitline smitline setup register --json` prints the URL and header and, for each agent, what to run on this computer: a `claude mcp add --transport http --scope user smitline ...` command for Claude Code, a `[mcp_servers.smitline]` block with `url` and `http_headers` for `~/.codex/config.toml`, an entry with `url` and `headers` for `~/.cursor/mcp.json`, and the `docker exec -i smitline smitline mcp` entry for Claude Desktop. It also says how to copy the skill out of the container with `docker cp`. The container cannot write those files itself.
 
