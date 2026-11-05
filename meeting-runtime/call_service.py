@@ -29,12 +29,23 @@ MAX_WAIT_SECONDS = 300
 # wait in it for the first person (daily_room.ADMISSION_TIMEOUT), and a little more.
 ROOM_EXTRA_MINUTES = 15
 # Following a call live: once something new is said, wait this long for more before answering,
-# so one answer carries a whole exchange rather than a line.
-LIVE_SETTLE_SECONDS = 2.0
-# Events that wake a live wait: what was said, and status changes.
-LIVE_EVENTS = frozenset({'call.transcript', 'call.status'})
-# A request from the call wakes a live wait at once, without settling.
+# so one answer carries an exchange or two (a person's turn and the voice's reply take about 5 to
+# 10 seconds on a phone call) rather than a line. Every answer costs the agent a tool call, and in
+# apps that ask before each tool call a click, and each one is a chance for the agent to stop
+# following: 2 seconds meant about 20 a minute, 12 seconds at most about 5. Nothing the agent must
+# act on waits for it: a request, a status change and the end answer at once, so answers to people
+# on the call are as fast as before. Only stepping in on what was said (send_call_instruction)
+# comes up to 12 seconds later, and with canDo the voice passes on what it cannot answer anyway.
+LIVE_SETTLE_SECONDS = 12.0
+# What was said: gathered for LIVE_SETTLE_SECONDS before a live wait answers.
+TALK_EVENTS = frozenset({'call.transcript'})
+# A request from the call wakes a live wait at once, without gathering talk.
 REQUEST_EVENTS = frozenset({'call.request'})
+# So do these status changes (not for only='requests'): ringing, waiting to be let into a meeting
+# (or for the first person in a room), and connected. Not connecting, which start_call has just
+# reported, nor summarizing: the conversation is over, and the end, which wakes the wait too,
+# follows in seconds with the result. Each wake is one more tool call for the agent.
+WAKING_STATUSES = frozenset({'ringing', 'waiting', 'in_progress'})
 # An agent counts as following a call while it waits on it live, and this many seconds after
 # its last contact (a wait, a reply): long enough to act on what a wait brought back.
 FOLLOW_GRACE = 90.0
@@ -1014,8 +1025,13 @@ class CallService:
         """The call once it is terminal or the timeout passes. With `since` (an event cursor,
         '' for the start), it also comes back once something new was said, with `live`: the
         transcript lines and requests after the cursor, and the cursor to pass next time. A
-        request comes back at once. only='requests' comes back for requests alone and leaves out
-        the transcript, for long meetings. While an agent waits live, it follows the call.
+        request or a status change (WAKING_STATUSES) comes back at once; what was said comes
+        LIVE_SETTLE_SECONDS after its first new line, with whatever else was said meanwhile.
+        From the start (since ''), what was already there when the wait began is gathered like
+        talk, and only what happens during the wait comes back at once: an agent that keeps
+        passing '' (or, through MCP, leaves since out) is answered every LIVE_SETTLE_SECONDS
+        rather than at once each time. only='requests' comes back for requests alone and leaves
+        out the transcript, for long meetings. While an agent waits live, it follows the call.
 
         others=True (live only) also watches the owner's other calls in progress: a new request
         on any of them comes back at once, and `live.otherRequests` lists every request on them
@@ -1033,16 +1049,33 @@ class CallService:
         if others:
             self._watching[owner] = self._watching.get(owner, 0) + 1
             asked = self._owner_requests.get(owner, 0)
+
+        def at_once(event):
+            if event['type'] in REQUEST_EVENTS:
+                return True
+            return (only != 'requests' and event['type'] == 'call.status'
+                    and (event.get('data') or {}).get('status') in WAKING_STATUSES)
+
+        def talk(event):
+            return only != 'requests' and event['type'] in TALK_EVENTS
+
+        # From the start: the last event there before this wait (later ones happen during it).
+        before = None
+        if live and since == '':
+            existing = self.events(call_id)
+            before = int(existing[-1]['id']) if existing else 0
         try:
             while True:
                 record = self.get(call_id, owner=owner)
                 remaining = deadline - loop.time()
                 if live and record['status'] not in TERMINAL:
                     events = self.events(call_id, after=since or None)
-                    if any(event['type'] in REQUEST_EVENTS for event in events):
+                    old = [] if before is None else [e for e in events if int(e['id']) <= before]
+                    new = events[len(old):]
+                    if any(at_once(event) for event in new):
                         remaining = 0
-                    elif (only != 'requests' and settle_until is None
-                          and any(event['type'] in LIVE_EVENTS for event in events)):
+                    elif settle_until is None and (any(talk(event) for event in new) or any(
+                            at_once(event) or talk(event) for event in old)):
                         settle_until = min(deadline, loop.time() + LIVE_SETTLE_SECONDS)
                 if others and self._owner_requests.get(owner, 0) != asked:
                     remaining = 0  # a request on another of the owner's calls
