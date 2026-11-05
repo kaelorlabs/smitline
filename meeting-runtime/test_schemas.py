@@ -159,6 +159,18 @@ class SchemaValidationTests(unittest.TestCase):
         self.assertEqual(extra.handoff_id, 'hnd-mtg-abc123')
         with self.assertRaises(ValueError):
             MeetingHandoff.from_dict(handoff_payload(git={'branch': 'main'}))
+        # How the platform refused the browser, and who the meeting showed: both optional.
+        seen = self.assert_round_trip(MeetingHandoff, handoff_payload(
+            joinRefused='guest_refused', participants={'count': 2, 'names': ['Ana', 'Ben']}))
+        self.assertEqual(seen.join_refused, 'guest_refused')
+        self.assertEqual(seen.to_dict()['participants'], {'count': 2, 'names': ['Ana', 'Ben']})
+        self.assertNotIn('joinRefused', parsed.to_dict())
+        self.assertNotIn('participants', parsed.to_dict())
+        for bad in ({'joinRefused': 'banned'}, {'participants': {'count': -1}},
+                    {'participants': {'names': ['x' * 81]}}, {'participants': {'who': []}},
+                    {'participants': {'names': ['Ana\x07']}}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                MeetingHandoff.from_dict(handoff_payload(**bad))
         samples = [
             event_payload('meeting.joining'),
             event_payload('meeting.waiting_for_admission', id='evt-2'),

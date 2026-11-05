@@ -178,7 +178,9 @@ class TeamsAdapter(MeetingPlatformAdapter):
             body = (await self.page.locator('body').inner_text()).lower()
             if urlsplit(self.page.url).hostname in ('login.microsoftonline.com', 'login.live.com'):
                 raise AuthenticationRequired('Teams requires Microsoft sign-in')
-            if any(x in body for x in ('sign in to join', 'sign in to this meeting', 'anonymous users', 'only people with access', 'sign in with a different account')):
+            if any(x in body for x in ('anonymous users', 'only people with access')):
+                raise AuthenticationRequired('Teams lets only people with access into this meeting', kind='restricted')
+            if any(x in body for x in ('sign in to join', 'sign in to this meeting', 'sign in with a different account')):
                 raise AuthenticationRequired('Teams requires an authorized Microsoft account')
             if any(x in body for x in ('meeting has ended', 'you were removed', 'you have been removed', 'request to join was denied')):
                 raise RuntimeError('Teams meeting ended or admission was denied')
@@ -318,10 +320,10 @@ class MeetAdapter(MeetingPlatformAdapter):
             if host in ('calendar.google.com', 'workspace.google.com', 'stream.meet.google.com'):
                 raise RuntimeError('Unsupported Google Meet event or webinar variant')
             body = (await self.page.locator('body').inner_text()).lower()
-            if any(x in body for x in (
-                'sign in to join', 'you need to sign in', 'sign in to continue',
-                'only people invited by the host', 'this meeting is restricted',
-            )):
+            if any(x in body for x in ('only people invited by the host', 'this meeting is restricted')):
+                raise AuthenticationRequired('Google Meet lets only invited people into this meeting',
+                                             kind='restricted')
+            if any(x in body for x in ('sign in to join', 'you need to sign in', 'sign in to continue')):
                 raise AuthenticationRequired('Google Meet requires an authorized Google account')
             if "you can't join this video call" in body or 'you cannot join this video call' in body:
                 if await self._signed_in_ui():

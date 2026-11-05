@@ -772,6 +772,49 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meeting_lines[-1].get('name'), 'Priya')
         self.assertEqual(run.state['captions'][-1].get('name'), 'Priya')
 
+    async def test_the_archive_says_who_the_meeting_showed(self):
+        # The call's result says who was there, also people who never spoke, from the archive.
+        import bridge
+        from runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0'})
+
+        class Listed(Adapter):
+            counted = 0
+
+            async def get_participant_names(self):
+                return ['Smitline AI', 'Ana Diaz (Host)']
+
+            async def get_participant_count(self):
+                Listed.counted += 1
+                return 2  # everyone, itself included
+        adapter = Listed()
+
+        async def script(socket, wait_until):
+            await wait_until(lambda: Listed.counted >= 2, 8)  # two readings, one count recorded
+            await socket.events.put(self.leave_call('completed'))
+        with patch.object(bridge, 'LEAVE_SPEECH_TIMEOUT', 1.0):
+            run = await self._run(runtime, script, adapter=adapter)
+        self.assertIn(('participants', {'count': 1, 'names': ['Ana Diaz']}), run.record.events)
+        counts = [data for kind, data in run.record.events if kind == 'participant_count']
+        self.assertEqual(counts, [{'count': 2}])
+
+    async def test_a_refused_join_is_noted_as_a_word_for_the_result(self):
+        import copy
+        import bridge
+        from adapters_base import AuthenticationRequired, GuestRefused
+        record, state = RecordingArchive(), copy.deepcopy(bridge.state)
+        with patch.object(bridge, 'record', record), patch.object(bridge, 'state', state):
+            self.assertIsNone(bridge.note_join_refused(RuntimeError('Zoom meeting ended or is invalid')))
+            self.assertNotIn('joinRefused', state)
+            self.assertEqual(bridge.note_join_refused(GuestRefused("Google said: You can't join")),
+                             'guest_refused')
+            self.assertEqual(state['joinRefused'], 'guest_refused')
+            self.assertEqual(bridge.note_join_refused(
+                AuthenticationRequired('Teams lets only people with access in', kind='restricted')),
+                'restricted')
+        self.assertEqual(record.events, [('join_refused', {'refusal': 'guest_refused'}),
+                                         ('join_refused', {'refusal': 'restricted'})])
+
     async def test_a_second_leave_call_is_ignored_and_unknown_reasons_are_other(self):
         from runtime_config import RuntimeConfig
         import bridge

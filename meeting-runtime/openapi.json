@@ -291,7 +291,7 @@
         "required": ["channel", "to", "objective", "onBehalfOf"],
         "properties": {
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
-          "to": { "type": "string", "description": "E.164 phone number for phone calls. For meetings: a Zoom, Teams, Google Meet, or Daily invite URL; \"new\" for a room Smitline opens; or the meeting's dial-in number to join by phone, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). A meeting with dialIn may leave it out." },
+          "to": { "type": "string", "description": "E.164 phone number for phone calls. For meetings: a Zoom, Teams, Google Meet, or Daily invite URL; \"new\" for a room Smitline opens; or the meeting's dial-in number to join by phone, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). A meeting with dialIn may leave it out. With a Google Meet link, also pass dialIn when the invitation has a phone number: Google often turns guest bots away." },
           "onBehalfOf": { "type": "string", "maxLength": 120, "description": "The person the call is for, never an AI, model or app. Spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows. A name such as ChatGPT or Claude is replaced with the owner's name (SMITLINE_OWNER_NAME), or the brief is refused (422 invalid_request)." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
@@ -349,7 +349,7 @@
           },
           "dialIn": {
             "type": "object", "additionalProperties": false,
-            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
+            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. For Google Meet, give it whenever the invitation has a Join by phone number: Google often turns guest browsers away, and then Smitline joins by phone by itself. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
             "properties": {
               "number": { "type": "string", "description": "The meeting's dial-in number in E.164 form; a one-tap number, with its keys after commas, works too." },
               "meetingId": { "type": "string", "description": "What the bridge asks for: Zoom's meeting ID, Teams' phone conference ID, or Google Meet's PIN. Digits; spaces and dashes are dropped." },
@@ -488,6 +488,7 @@
           "ok": { "type": "boolean" },
           "brief": { "$ref": "#/components/schemas/Brief" },
           "problems": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" }, "description": "What may keep the call from working without stopping it, such as a Google Meet link without dialIn: ok stays true." },
           "carried": { "type": "integer", "description": "How many earlier calls' notes the call would start with." }
         }
       },
@@ -619,7 +620,9 @@
           "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
           "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the agent was heard during the call saying it is an AI calling for onBehalfOf; false when the call ended without it; null when the agent never spoke." },
           "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." },
-          "openRequests": { "type": "array", "description": "Requests nobody finished during the call: follow-ups. replyToRequest with done still records an answer.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "kind": { "type": "string" }, "text": { "type": "string" }, "askedBy": { "type": "string" } } } }
+          "openRequests": { "type": "array", "description": "Requests nobody finished during the call: follow-ups. replyToRequest with done still records an answer.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "kind": { "type": "string" }, "text": { "type": "string" }, "askedBy": { "type": "string" } } } },
+          "reason": { "type": "string", "description": "Why the call got nowhere, in plain words, when Smitline knows: for example, a meeting's platform did not let Smitline in from its link, and why it did not join by phone instead." },
+          "hint": { "type": "string", "description": "What the agent can do about it, such as asking the user for the invitation's phone details and starting again with them as dialIn." }
         }
       },
       "Error": {

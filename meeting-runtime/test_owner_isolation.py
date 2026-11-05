@@ -888,7 +888,7 @@ class UsageIsRecordedOnceTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
 
         class Slow(FakeSummarizer):
-            async def summarize(self, brief, transcript, *, duration_seconds=0):
+            async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
                 await gate.wait()
         self.d.service._summarizer_factory = lambda owner: Slow()
         self.d.service.shutdown_grace = 0.3
