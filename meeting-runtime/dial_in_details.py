@@ -1,9 +1,12 @@
 """A meeting's dial-in details: reading them from an invitation or a one-tap number, the keys to
-press and their timing, and what the meeting's phone line says before Smitline is in.
+press and their timing, which numbers are meeting platforms' published bridges, and what the
+meeting's phone line says before Smitline is in.
 
 Pure functions, with no phone line behind them: call_brief.py reads a brief's dialIn with them
 (the meeting container imports that module too), and dial_in.py joins by phone.
 """
+import json
+from pathlib import Path
 import re
 import unicodedata
 
@@ -35,8 +38,8 @@ ONE_TAP_KEYS = {
 # Reading an invitation ---------------------------------------------------------------------------
 
 # Format characters that invitations put around numbers (Google Meet wraps them in bidi marks).
-_INVISIBLE = re.compile('[­​-‏‪-‮⁠-⁤﻿]')
-_DASHES = re.compile('[‐-―−]')
+_INVISIBLE = re.compile('[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]')
+_DASHES = re.compile('[\u2010-\u2015\u2212]')
 # A number and the keys a phone dials after it, as invitations print them for one tap:
 # +14388097799,,85951289482#,,,,*123456#   +1 323-849-4874,,123456789#   tel:+1-650-555-0123;123456789#
 ONE_TAP = re.compile(r'(?<![\w+])(?:tel:)?(\+?[(\d][\d ().-]{5,22}\d)[ ]?([,;][\d*#,;]*[\d#])')
@@ -170,6 +173,56 @@ def keys_for(platform, meeting_id, passcode=None):
     return keys
 
 
+# Published meeting bridges ------------------------------------------------------------------------
+
+# The meeting platforms' own dial-in numbers, as their published lists give them; the file says
+# where and when each list was read. A bridge serves every meeting on it, so dialing one keeps no
+# calling hours or per-number limit. Any other dial-in number may be someone's phone and gets a
+# phone call's (call_hooks.check_dial_in).
+BRIDGES_FILE = Path(__file__).with_name('dial_in_bridges.json')
+_published = {}
+
+
+def published_bridges():
+    """The numbers in dial_in_bridges.json; none when the file is missing or damaged, so every
+    dial-in number then keeps the phone rules."""
+    if BRIDGES_FILE not in _published:
+        numbers = set()
+        try:
+            data = json.loads(BRIDGES_FILE.read_text(encoding='utf-8'))
+            for platform in PLATFORMS:
+                for group in data.get(platform) or ():
+                    numbers.update(entry['number'] for entry in group['numbers'])
+        except (OSError, ValueError, AttributeError, KeyError, TypeError):
+            numbers = set()
+        _published[BRIDGES_FILE] = frozenset(
+            number for number in numbers if isinstance(number, str) and _e164(number) == number)
+    return _published[BRIDGES_FILE]
+
+
+def bridge_numbers(settings=None):
+    """The dial-in numbers that are meeting bridges. SMITLINE_DIAL_IN_BRIDGES lists them, comma-
+    separated: published (the platforms' published numbers, which an unset setting means too),
+    E.164 numbers, and none (no bridges). Numbers alone replace the published list; with published
+    they extend it. Anything else is skipped, so a mistake only keeps numbers under phone rules."""
+    raw = str((settings or {}).get('SMITLINE_DIAL_IN_BRIDGES') or '').strip()
+    if not raw:
+        return published_bridges()
+    numbers = set()
+    for item in raw.split(','):
+        item = item.strip()
+        if item.lower() == 'published':
+            numbers |= published_bridges()
+        elif item.startswith('+') and (number := _e164(item)):
+            numbers.add(number)
+    return frozenset(numbers)
+
+
+def is_bridge(number, settings=None):
+    """Whether a dial-in number is a meeting platform's bridge (bridge_numbers)."""
+    return number in bridge_numbers(settings)
+
+
 def _calling_codes(settings):
     """SMITLINE_ALLOWED_CALLING_CODES as prefixes; entries that are not codes are skipped here,
     since the precheck refuses such a list anyway (call_hooks._country_prefixes)."""
@@ -197,15 +250,17 @@ def _allowed(number, settings):
 
 def pick_number(numbers, meeting_id=None, settings=None):
     """The number to dial among an invitation's: the first one the installation may call,
-    preferring a one-tap line for this meeting ID. The first one when none may be called, so the
-    refusal names it."""
+    preferring a published bridge (it keeps no calling hours), then a one-tap line for this
+    meeting ID. The first one when none may be called, so the refusal names it."""
     if not numbers:
         return None, None
+    bridges = bridge_numbers(settings)
 
     def rank(item):
         number, keys = item
+        allowed = _allowed(number, settings)
         mine = bool(keys) and bool(meeting_id) and meeting_id in re.sub(r'\D', '', keys)
-        return (not _allowed(number, settings), not mine, not keys)
+        return (not allowed, allowed and number not in bridges, not mine, not keys)
     return sorted(numbers, key=rank)[0]
 
 

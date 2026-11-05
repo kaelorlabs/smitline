@@ -309,7 +309,7 @@
           "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "description": "Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120)." },
           "rehearsal": { "type": "boolean", "description": "Phone only: practice the call on the owner's own phone." },
           "record": { "type": "boolean", "description": "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel; the assistant says the call is recorded. Download it from /v1/calls/{callId}/recording." },
-          "afterHours": { "type": "boolean", "description": "Phone only: call even though it is outside calling hours (default 8 AM to 9 PM) where the person is. Set it only when the user confirms the person expects a call now." },
+          "afterHours": { "type": "boolean", "description": "Phone calls, and meetings with a dialIn: call even though it is outside calling hours (default 8 AM to 9 PM) where the number rings. Set it only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own." },
           "notify": { "type": "object", "additionalProperties": false, "properties": { "webhookUrl": { "type": "string", "format": "uri" } } },
           "camera": {
             "type": "object", "additionalProperties": false,
@@ -348,7 +348,7 @@
           },
           "dialIn": {
             "type": "object", "additionalProperties": false,
-            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. The dial-in number gets the phone guardrails (calling codes, premium numbers, the do-not-call list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
+            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
             "properties": {
               "number": { "type": "string", "description": "The meeting's dial-in number in E.164 form; a one-tap number, with its keys after commas, works too." },
               "meetingId": { "type": "string", "description": "What the bridge asks for: Zoom's meeting ID, Teams' phone conference ID, or Google Meet's PIN. Digits; spaces and dashes are dropped." },

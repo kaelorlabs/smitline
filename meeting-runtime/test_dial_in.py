@@ -3,7 +3,7 @@ the meeting voice on the phone line, and the call's result. No real call: the ph
 GPT-Live are the fakes test_phone.py uses."""
 import asyncio
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,9 +73,14 @@ MEET_INVITE = """Smitline sync
 Wednesday, November 5 · 3:00 – 3:30pm
 Google Meet joining info
 Video call link: https://meet.google.com/abc-defg-hij
-Or dial: ‪(US) +1 650-555-0123‬ PIN: ‪123 456 789‬#
+Or dial: \u202a(US) +1 650-555-0123\u202c PIN: \u202a123 456 789\u202c#
 More phone numbers: https://tel.meet/abc-defg-hij?pin=4458722187937
 """
+MEET_LINK = 'https://meet.google.com/abc-defg-hij'
+# A Teams organizer's audio conferencing number, in Los Angeles: not a published bridge.
+TEAMS_NUMBER = '+13238494874'
+NIGHT = datetime(2026, 11, 5, 8, 0, tzinfo=timezone.utc)  # 3 AM in New York, midnight in Los Angeles
+DAY = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)   # 1 PM in New York, 10 AM in Los Angeles
 
 
 def meeting_brief(**overrides):
@@ -150,6 +155,12 @@ class InviteTests(unittest.TestCase):
         # With none allowed, the first, so the refusal names it.
         self.assertEqual(dial_in_details.pick_number(numbers, settings={'SMITLINE_ALLOWED_CALLING_CODES': '33'})[0],
                          '+19005550100')
+        # A published bridge before another number, even its one-tap line: it keeps no calling hours.
+        numbers = [(TEAMS_NUMBER, ',,85951289482#'), ('+16469313860', None)]
+        self.assertEqual(dial_in_details.pick_number(numbers, '85951289482', settings={})[0], '+16469313860')
+        self.assertEqual(dial_in_details.pick_number(numbers, '85951289482',
+                                                     settings={'SMITLINE_DIAL_IN_BRIDGES': 'none'})[0],
+                         TEAMS_NUMBER)
 
     def test_a_north_american_number_without_plus_counts_only_where_the_line_says_so(self):
         found = dial_in_details.parse_invite('Call 646 931 3860 for the meeting\nMeeting ID: 5551234')
@@ -210,7 +221,68 @@ class InviteTests(unittest.TestCase):
                 self.assertEqual(dial_in_details.bridge_says(sentence), meaning)
 
 
+class BridgeTests(unittest.TestCase):
+    """Published meeting bridges keep no calling hours or call limits; any other number does."""
+
+    def test_the_published_list_is_zooms_own_us_and_canada_numbers_with_their_source(self):
+        import json
+        import re
+        data = json.loads(dial_in_details.BRIDGES_FILE.read_text(encoding='utf-8'))
+        # Teams and Google Meet numbers belong to an organizer or a pool: they keep the phone rules.
+        self.assertEqual(set(data) - {'about'}, {'zoom'})
+        numbers = set()
+        for group in data['zoom']:
+            self.assertRegex(group['source'], r'^https://zoom\.us/u/\w+$')
+            self.assertEqual(group['read'], '2026-11-05')
+            for entry in group['numbers']:
+                self.assertIn(entry['country'], ('US', 'CA'))
+                self.assertIn(entry['kind'], ('toll', 'toll-free'))
+                self.assertRegex(entry['number'], r'^\+1[2-9]\d{9}$')
+                # The number is the page's own, as shown there.
+                self.assertEqual(re.sub(r'\D', '', entry['shown'])[-10:], entry['number'][-10:])
+                numbers.add(entry['number'])
+        self.assertEqual(len(numbers), 32)
+        self.assertLessEqual({'+16469313860', '+14388097799', '+16473744685', '+18335480276'}, numbers)
+        self.assertNotIn(TEAMS_NUMBER, numbers)
+        self.assertEqual(dial_in_details.published_bridges(), frozenset(numbers))
+
+    def test_the_setting_extends_or_replaces_the_list(self):
+        published = dial_in_details.published_bridges()
+        bridges = dial_in_details.bridge_numbers
+        self.assertEqual(bridges({}), published)
+        self.assertEqual(bridges({'SMITLINE_DIAL_IN_BRIDGES': 'published, +1 514 555 0100'}),
+                         published | {'+15145550100'})
+        self.assertEqual(bridges({'SMITLINE_DIAL_IN_BRIDGES': '+15145550100'}), {'+15145550100'})
+        self.assertEqual(bridges({'SMITLINE_DIAL_IN_BRIDGES': 'none'}), frozenset())
+        # A mistake never makes a number a bridge: it only keeps numbers under the phone rules.
+        self.assertEqual(bridges({'SMITLINE_DIAL_IN_BRIDGES': 'publishd, 15145550100, all'}), frozenset())
+        self.assertTrue(dial_in_details.is_bridge('+16469313860', {}))
+        self.assertFalse(dial_in_details.is_bridge('+16469313860', {'SMITLINE_DIAL_IN_BRIDGES': 'none'}))
+        self.assertFalse(dial_in_details.is_bridge(TEAMS_NUMBER, {}))
+
+    def test_a_missing_or_damaged_list_leaves_every_number_under_the_phone_rules(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for name, content in (('missing.json', None), ('broken.json', 'not json'),
+                                  ('odd.json', '{"zoom": [{"numbers": [{"number": "16469313860"}]}]}'),
+                                  ('shape.json', '{"zoom": {"numbers": []}}')):
+                path = Path(temp) / name
+                if content is not None:
+                    path.write_text(content, encoding='utf-8')
+                with mock.patch.object(dial_in_details, 'BRIDGES_FILE', path):
+                    self.assertEqual(dial_in_details.published_bridges(), frozenset(), name)
+                    self.assertFalse(dial_in_details.is_bridge('+16469313860'), name)
+
+
 class BriefTests(unittest.TestCase):
+    def test_after_hours_is_for_phone_calls_and_meetings_with_a_dial_in(self):
+        self.assertTrue(CallBrief.from_dict(meeting_brief(to=TEAMS_NUMBER + ',,123456789#',
+                                                          afterHours=True)).after_hours)
+        self.assertTrue(CallBrief.from_dict(meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE},
+                                                          afterHours=True)).after_hours)
+        with self.assertRaises(ValueError) as refused:
+            CallBrief.from_dict(meeting_brief(to=ZOOM_LINK, afterHours=True))
+        self.assertIn('meetings with a dialIn', str(refused.exception))
+
     def test_to_can_be_the_dial_in_number_itself(self):
         brief = CallBrief.from_dict(meeting_brief(to='+14388097799,,85951289482#,,,,*123456#'))
         self.assertEqual(brief.to, '+14388097799')
@@ -310,9 +382,9 @@ class DialHarness:
         self.twilio = FakeTwilio()
         self.twilio.flavor = flavor
         self.store = CallStore(Path(temp) / 'calls')
-        # 3 AM in New York: outside calling hours, which a meeting's bridge does not keep.
-        self.hooks = DefaultCallHooks(environ=self.env, store=self.store,
-                                      clock=lambda: datetime(2026, 11, 5, 8, 0, tzinfo=timezone.utc))
+        # Daytime where every test number rings; a test sets NIGHT to be outside calling hours.
+        self.now = DAY
+        self.hooks = DefaultCallHooks(environ=self.env, store=self.store, clock=lambda: self.now)
 
         async def public_url():
             return PUBLIC
@@ -692,7 +764,53 @@ class WayInTests(unittest.IsolatedAsyncioTestCase):
     def way(self, brief, settings=None):
         brief = CallBrief.from_dict(brief)
         return dial_in.way_in(self.h.meeting, settings or {}, 'local', brief,
-                              lambda provider: self.h.hooks.credentials('local', provider))
+                              lambda provider: self.h.hooks.credentials('local', provider), self.h.hooks)
+
+    def test_a_link_meeting_dials_in_only_while_its_number_may_be_dialed(self):
+        meet = meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE})
+        first = {'SMITLINE_MEETING_DIAL_IN_FIRST': 'all'}
+        self.assertEqual(self.way(meet, first), ('phone', 'dial_in_first'))
+        self.h.daemon.supervisor.full = True
+        self.assertEqual(self.way(meet), ('phone', 'no_seat'))
+        # Midnight where the Google Meet number rings: the meeting keeps to its link.
+        self.h.now = NIGHT
+        self.assertEqual(self.way(meet, first), ('link', None))
+        self.assertEqual(self.way(meet), ('link', None))
+        with self.assertRaises(CallRefused) as refused:
+            self.h.meeting.ready(self.h.hooks, 'local', CallBrief.from_dict(meet))
+        self.assertEqual(refused.exception.code, 'capacity_exceeded')
+        # Zoom's own numbers keep no calling hours.
+        zoom = meeting_brief(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE})
+        self.assertEqual(self.way(zoom), ('phone', 'no_seat'))
+        self.assertEqual(self.way(zoom, first), ('phone', 'dial_in_first'))
+
+    async def test_a_number_only_meeting_outside_calling_hours_is_refused_before_it_rings(self):
+        self.h.now = NIGHT
+        with self.assertRaises(CallError) as refused:
+            await self.h.service.create(meeting_brief(to=TEAMS_NUMBER + ',,123456789#'))
+        self.assertEqual(refused.exception.code, 'outside_calling_hours')
+        self.assertIn('It can dial in at 8:00 AM there, in about 8 hours.', refused.exception.message)
+        self.assertEqual(self.h.twilio.created, [])
+        self.assertEqual(self.h.store.list(owner='local', limit=None), [])
+        # The user confirms the meeting is on now: it dials.
+        record = await self.h.service.create(meeting_brief(to=TEAMS_NUMBER + ',,123456789#', afterHours=True))
+        await until(lambda: self.h.twilio.created)
+        self.assertEqual(self.h.twilio.created[0]['to'], TEAMS_NUMBER)
+        await self.h.service.end(record['id'], owner='local')
+        await self.h.service.wait(record['id'], timeout=5, owner='local')
+
+    async def test_a_browser_turned_away_outside_calling_hours_does_not_dial_and_says_why(self):
+        self.h.now = NIGHT
+        # Dialing in first waits for the calling hours too: until then the link is the way in.
+        self.h.env['SMITLINE_MEETING_DIAL_IN_FIRST'] = 'all'
+        record = await self.h.service.create(meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE}))
+        done = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(len(self.h.daemon.created), 1)  # it went by the link
+        self.assertEqual(self.h.twilio.created, [])
+        self.assertEqual(self.h.events(record, 'call.dial_in_skipped'), [{'code': 'outside_calling_hours'}])
+        summary = done['result']['summary']
+        self.assertIn('Smitline did not join by phone instead: +16505550123 is not a meeting', summary)
+        self.assertIn('It can dial in at 8:00 AM there', summary)
 
     def test_the_way_in(self):
         linked = meeting_brief(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE})
@@ -758,15 +876,101 @@ class GuardrailTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.env = dict(ENV)
         self.store = CallStore(Path(self.temp.name) / 'calls')
-        # 3 AM in New York.
-        self.hooks = DefaultCallHooks(environ=self.env, store=self.store,
-                                      clock=lambda: datetime(2026, 11, 5, 8, 0, tzinfo=timezone.utc))
+        self.now = NIGHT
+        self.hooks = DefaultCallHooks(environ=self.env, store=self.store, clock=lambda: self.now)
 
     def tearDown(self):
         self.temp.cleanup()
 
     def check(self, **overrides):
         self.hooks.precheck('local', CallBrief.from_dict(meeting_brief(**overrides)))
+
+    def refused(self, **overrides):
+        with self.assertRaises(CallRefused) as refused:
+            self.check(**overrides)
+        return refused.exception
+
+    def add_calls(self, count, number, *, joined_by='phone', channel='meeting', status='completed'):
+        """Earlier calls to `number` two hours ago: meetings joined by `joined_by`, or phone calls."""
+        stamp = (self.now.replace(minute=0) - timedelta(hours=2)).isoformat().replace('+00:00', 'Z')
+        start = len(self.store.list(owner='local', limit=None))
+        for index in range(start, start + count):
+            brief = {'to': number} if channel == 'phone' else {
+                'to': ZOOM_LINK, 'dialIn': {'number': number, 'meetingId': '123456789', 'keys': ',,123456789#'}}
+            line = ({'providerCallSid': 'CA1'} if channel == 'phone' else
+                    {'joinedBy': 'phone', 'providerCallSid': 'CA1'} if joined_by == 'phone' else
+                    {'meetingId': 'mtg-1'})
+            self.store.create({'version': 1, 'id': f'call-{index:016x}', 'owner': 'local',
+                               'channel': channel, 'direction': 'outbound', 'status': status,
+                               'brief': brief, 'createdAt': stamp, 'updatedAt': stamp, 'line': line})
+
+    def test_a_dial_in_number_that_is_not_a_published_bridge_keeps_calling_hours(self):
+        # Teams and Google Meet numbers are an organizer's or a pool's: a phone call's hours.
+        for to, wait in ((TEAMS_NUMBER + ',,123456789#', 8), ('+16505550123,,123456789#', 8),
+                         ('+12125550123,,123456789#', 5)):
+            problem = self.refused(to=to)
+            self.assertEqual(problem.code, 'outside_calling_hours')
+            self.assertIn("is not a meeting platform's published dial-in number", problem.message)
+            self.assertIn(f'It can dial in at 8:00 AM there, in about {wait} hours.', problem.message)
+            self.assertIn("Zoom's own dial-in numbers have no calling hours", problem.message)
+            self.assertIn('afterHours', problem.message)
+        # Late in the evening it is tomorrow morning.
+        self.now = datetime(2026, 11, 6, 4, 30, tzinfo=timezone.utc)  # 8:30 PM in Los Angeles
+        self.check(to=TEAMS_NUMBER + ',,123456789#')
+        self.now = datetime(2026, 11, 6, 5, 30, tzinfo=timezone.utc)  # 9:30 PM there
+        self.assertIn('at 8:00 AM there, in about 11 hours', self.refused(to=TEAMS_NUMBER + ',,123456789#').message)
+        # The user confirms the meeting is on now, or the installation keeps no calling hours.
+        self.check(to=TEAMS_NUMBER + ',,123456789#', afterHours=True)
+        self.env['SMITLINE_CALLING_HOURS'] = 'off'
+        self.check(to=TEAMS_NUMBER + ',,123456789#')
+
+    def test_a_published_bridge_keeps_no_calling_hours(self):
+        self.check(to='+16469313860,,85951289482#')  # Zoom's New York number at 3 AM there
+        self.check(to='+14388097799,,85951289482#')  # and its Montreal one
+        self.check(dialIn={'invite': ZOOM_INVITE})
+        # Without the published list it is a number like any other.
+        self.env['SMITLINE_DIAL_IN_BRIDGES'] = 'none'
+        problem = self.refused(to='+16469313860,,85951289482#')
+        self.assertEqual(problem.code, 'outside_calling_hours')
+        self.assertIn('It can dial in at 8:00 AM there, in about 5 hours.', problem.message)
+        # A number the installation adds is a bridge too.
+        self.env['SMITLINE_DIAL_IN_BRIDGES'] = 'published,' + TEAMS_NUMBER
+        self.check(to=TEAMS_NUMBER + ',,123456789#')
+        self.check(to='+16469313860,,85951289482#')
+
+    def test_a_meeting_with_a_link_checks_the_hours_only_when_it_dials(self):
+        # It joins by the link; the phone rules apply when it comes to dialing (dial_in.phone_rules).
+        self.check(to=MEET_LINK, dialIn={'invite': MEET_INVITE})
+        with self.assertRaises(CallRefused) as refused:
+            self.hooks.check_dial_in('local', CallBrief.from_dict(
+                meeting_brief(to=MEET_LINK, dialIn={'invite': MEET_INVITE})))
+        self.assertEqual(refused.exception.code, 'outside_calling_hours')
+
+    def test_dial_ins_count_toward_the_call_limits(self):
+        self.now = DAY
+        self.add_calls(4, TEAMS_NUMBER)
+        # Meetings by their link, over or still on: nothing was dialed.
+        self.add_calls(2, TEAMS_NUMBER, joined_by='link')
+        self.add_calls(2, TEAMS_NUMBER, joined_by='link', status='in_progress')
+        self.check(to=TEAMS_NUMBER + ',,123456789#')
+        self.add_calls(1, TEAMS_NUMBER)
+        problem = self.refused(to=TEAMS_NUMBER + ',,123456789#')
+        self.assertEqual(problem.code, 'too_many_calls_to_number')
+        self.assertIn(f'Smitline has called {TEAMS_NUMBER} 5 times in the last 24 hours, the most '
+                      'SMITLINE_MAX_CALLS_PER_NUMBER allows. It can call again in about 22 hours.',
+                      problem.message)
+        self.assertIn("Zoom's own dial-in numbers have no calling hours or call limits", problem.message)
+        # A phone call to the number counts them, and a dial-in counts phone calls.
+        phone = {'channel': 'phone', 'to': TEAMS_NUMBER, 'onBehalfOf': 'Raj', 'objective': 'Ask about the invoice'}
+        with self.assertRaises(CallRefused) as refused:
+            self.hooks.precheck('local', CallBrief.from_dict(phone))
+        self.assertEqual(refused.exception.code, 'too_many_calls_to_number')
+        self.add_calls(5, '+12125550123', channel='phone')
+        self.assertEqual(self.refused(to='+12125550123,,123456789#').code, 'too_many_calls_to_number')
+        # The hourly limit counts every call placed.
+        self.env['SMITLINE_MAX_CALLS_PER_HOUR'] = '3'
+        self.now = self.now.replace(hour=16, minute=30)  # half an hour after those calls
+        self.assertEqual(self.refused(to='+16505550123,,123456789#').code, 'too_many_calls')
 
     def test_the_dial_in_number_gets_the_phone_guardrails(self):
         self.check(to='+16469313860,,85951289482#')  # 3 AM there: a bridge keeps no hours
@@ -785,14 +989,14 @@ class GuardrailTests(unittest.TestCase):
         # A meeting without a dial-in has nothing to check here.
         self.check(to=ZOOM_LINK)
 
-    def test_a_bridge_number_has_no_per_number_limit(self):
-        now = '2026-11-05T07:00:00Z'
-        for index in range(6):
-            self.store.create({'version': 1, 'id': f'call-{index:016x}', 'owner': 'local',
-                               'channel': 'meeting', 'direction': 'outbound', 'status': 'completed',
-                               'brief': {'to': '+16469313860'}, 'createdAt': now, 'updatedAt': now,
-                               'line': {'joinedBy': 'phone', 'providerCallSid': 'CA1'}})
+    def test_a_bridge_number_has_no_call_limits(self):
+        self.now = DAY
+        self.env['SMITLINE_MAX_CALLS_PER_HOUR'] = '3'
+        self.add_calls(6, '+16469313860')
+        self.now = self.now.replace(hour=16, minute=30)
         self.check(to='+16469313860,,85951289482#')
+        self.env['SMITLINE_DIAL_IN_BRIDGES'] = 'none'
+        self.assertEqual(self.refused(to='+16469313860,,85951289482#').code, 'too_many_calls_to_number')
 
 
 class SurfaceTests(unittest.TestCase):
@@ -806,6 +1010,9 @@ class SurfaceTests(unittest.TestCase):
                          set(dial_in_details.DIAL_IN_FIELDS))
         self.assertLessEqual({'not_admitted', 'dial_in_refused', 'meeting_ended', 'busy', 'no_answer'},
                              set(schemas['Call']['properties']['endReason']['enum']))
+        # Agents read that a dial-in keeps calling hours, which afterHours lifts.
+        self.assertIn('meetings with a dialIn', schemas['Brief']['properties']['afterHours']['description'])
+        self.assertIn('calling hours and call limits included', schemas['Brief']['properties']['dialIn']['description'])
 
     def test_the_daemon_gives_its_meeting_line_the_phone_line(self):
         from daemon_main import build_app, build_parser

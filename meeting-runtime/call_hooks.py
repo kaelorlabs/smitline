@@ -352,7 +352,9 @@ class DefaultCallHooks:
     def precheck(self, owner, brief):
         if brief.channel != 'phone':
             if getattr(brief, 'dial_in', None):
-                self.check_dial_in(owner, brief.dial_in['number'])
+                # A meeting with a link dials in only if it cannot get in by the link: its calling
+                # hours and limits are checked then (dial_in.phone_rules).
+                self.check_dial_in(owner, brief, dialing=brief.joins_by_phone)
             return
         env = self.settings(owner)
         if brief.rehearsal:
@@ -388,20 +390,34 @@ class DefaultCallHooks:
         except PolicyProblem as problem:
             raise CallRefused(problem.code, problem.message) from problem
 
-    def check_dial_in(self, owner, number):
-        """A meeting's dial-in number gets the phone guardrails against cost and unwanted calls:
-        the calling codes, premium and satellite numbers, and the do-not-call list. Not calling
-        hours or the per-number limit: one bridge number serves every meeting on it."""
+    def check_dial_in(self, owner, brief, *, dialing=True):
+        """A meeting's dial-in number gets the phone guardrails: the calling codes, premium and
+        satellite numbers, and the do-not-call list; and when Smitline is about to dial it
+        (`dialing`), a phone call's calling hours and call limits, unless it is a meeting
+        platform's published bridge (dial_in_details.is_bridge). Anyone can put a number in a
+        brief, and a number that is not a bridge may be someone's phone."""
+        from call_policy import (
+            PolicyProblem, check_cost, check_do_not_call, check_hours, check_repeats,
+        )
+        from dial_in_details import is_bridge
+        number = brief.dial_in['number']
         env = self.settings(owner)
         allowed = _country_prefixes(env.get('SMITLINE_ALLOWED_CALLING_CODES'))
         if allowed and not number.startswith(allowed):
             raise CallRefused(
                 'destination_not_allowed', "The meeting's dial-in number is in a country that is not "
                 'in SMITLINE_ALLOWED_CALLING_CODES for this installation.')
-        from call_policy import PolicyProblem, check_cost, check_do_not_call
+        own_number = number == _usable(env.get('SMITLINE_OWNER_PHONE'))
+        now = self.now()
         try:
             check_cost(number, env)
             check_do_not_call(number, self.do_not_call_list(owner).entries())
+            if dialing and not is_bridge(number, env):
+                if not (own_number or brief.after_hours):
+                    check_hours(number, now, env, dial_in=True)
+                if self.store is not None:
+                    check_repeats(number, self.store.list(owner=owner, limit=None), now, env,
+                                  own_number=own_number, dial_in=True)
         except PolicyProblem as problem:
             raise CallRefused(problem.code, problem.message) from problem
 

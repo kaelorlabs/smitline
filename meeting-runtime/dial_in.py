@@ -7,7 +7,11 @@ itself as `to`, even as a one-tap number such as +14388097799,,85951289482#,,,,*
 
 Smitline joins by phone when the brief has no link, when its platform is in
 SMITLINE_MEETING_DIAL_IN_FIRST, when there is no free meeting seat, or when the platform turned
-the browser away (meeting_line.py). It is a phone call (phone_line.py) whose TwiML has the phone
+the browser away (meeting_line.py). A dial-in number that is not a meeting platform's published
+bridge keeps a phone call's calling hours and call limits (call_hooks.check_dial_in): a meeting
+with a link then uses its link while they do not allow dialing.
+
+It is a phone call (phone_line.py) whose TwiML has the phone
 provider key in the digits with its own DTMF, <Play digits> before <Connect><Stream>: Twilio and
 SignalWire both document it, with w for half a second. The timing is the platform's one-tap number,
 where each comma is a two-second pause. The voice comes on the line once the keys are in, so it
@@ -20,8 +24,8 @@ be let in (a waiting room, a lobby, a host who has not started): that wait is no
 after WAITING_LIMIT. A bridge that refuses the ID or passcode ends the call at once.
 
 The call stays a meeting: its result and end reasons are a meeting's, and usage.voiceSeconds is
-the time in the meeting, what a meeting is billed by. The phone line's own usage (phoneSeconds,
-the provider's price) goes into its cost.
+the time in the meeting, without the ringing, the keys or the wait to be let in. The phone line's
+own usage (phoneSeconds, the provider's price) goes into its cost.
 """
 import asyncio
 import re
@@ -85,10 +89,30 @@ def phone_problem(line, credentials):
     return None
 
 
-def way_in(meeting_line, settings, owner, brief, credentials):
+def phone_rules(hooks, owner, brief):
+    """Why the meeting's dial-in number may not be dialed now, as a CallRefused: a phone call's
+    calling hours and call limits, for a number that is not a published bridge (the hooks'
+    check_dial_in, which is synchronous). None when it may be."""
+    check = getattr(hooks, 'check_dial_in', None)
+    if check is None:
+        return None
+    try:
+        check(owner, brief)
+    except CallRefused as refusal:
+        return refusal
+    return None
+
+
+def hooks_of(ctx):
+    """The call service's hooks, for a running call's context."""
+    return getattr(getattr(ctx, 'service', None), 'hooks', None)
+
+
+def way_in(meeting_line, settings, owner, brief, credentials, hooks=None):
     """('phone', why) when this meeting joins by phone, ('link', None) when by its link. By phone:
     the brief has no link (no_link); its platform dials in first (dial_in_first); or no meeting seat
-    is free now and the phone line could dial in (no_seat)."""
+    is free now and the phone line could dial in (no_seat). A meeting with a link dials in only
+    while its number passes the phone rules (phone_rules, with the hooks)."""
     if not getattr(brief, 'dial_in', None):
         return 'link', None
     if brief.joins_by_phone:
@@ -97,11 +121,15 @@ def way_in(meeting_line, settings, owner, brief, credentials):
     if phone is None:
         return 'link', None
     if dial_in_first(brief.platform, settings):
-        return 'phone', 'dial_in_first'
-    problem = getattr(getattr(meeting_line.daemon, 'supervisor', None), 'capacity_problem', None)
-    if callable(problem) and problem(owner) and phone_problem(phone, credentials) is None:
-        return 'phone', 'no_seat'
-    return 'link', None
+        why = 'dial_in_first'
+    else:
+        problem = getattr(getattr(meeting_line.daemon, 'supervisor', None), 'capacity_problem', None)
+        if not (callable(problem) and problem(owner) and phone_problem(phone, credentials) is None):
+            return 'link', None
+        why = 'no_seat'
+    if phone_rules(hooks, owner, brief) is not None:
+        return 'link', None
+    return 'phone', why
 
 
 def ready(line, credentials):
@@ -127,11 +155,20 @@ REFUSED_ENDINGS = frozenset({'authentication_required'})
 
 def fall_back(meeting_line, ctx, handoff):
     """True when a meeting the browser could not get into dials in instead: the platform turned
-    the browser away before it was in, the brief has the dial-in, and the phone line can dial."""
+    the browser away before it was in, the brief has the dial-in, the phone line can dial, and
+    the number passes the phone rules now. When only those rules stop it, the handoff's summary
+    says why, for the result."""
     if ((handoff or {}).get('endReason') not in REFUSED_ENDINGS
             or ctx.call_id in meeting_line._canceled or ctx.call_id in meeting_line._over_time
             or not getattr(ctx.brief, 'dial_in', None)
             or phone_problem(getattr(meeting_line, 'phone', None), ctx.credentials) is not None):
+        return False
+    refusal = phone_rules(hooks_of(ctx), ctx.owner, ctx.brief)
+    if refusal is not None:
+        ctx.event('call.dial_in_skipped', code=refusal.code)
+        handoff['summary'] = ' '.join(filter(None, (
+            str(handoff.get('summary') or '').strip(),
+            f'Smitline did not join by phone instead: {refusal.message}')))
         return False
     forget = getattr(meeting_line.daemon, 'forget_captions', None)
     meeting_id = meeting_line._meetings.pop(ctx.call_id, None)

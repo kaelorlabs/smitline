@@ -185,7 +185,7 @@
           },
           "afterHours": {
             "type": "boolean",
-            "description": "Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now."
+            "description": "Phone calls, and meetings with dialIn: call even though it is outside calling hours (8 AM to 9 PM) where the number rings. Set only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own."
           },
           "notify": {
             "type": "object",
@@ -243,7 +243,7 @@
           "dialIn": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in.",
+            "description": "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in. Zoom's own dial-in numbers can be dialed any time; any other number keeps the calling hours and call limits of a phone call.",
             "properties": {
               "invite": {
                 "type": "string",
@@ -461,7 +461,7 @@
           },
           "afterHours": {
             "type": "boolean",
-            "description": "Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now."
+            "description": "Phone calls, and meetings with dialIn: call even though it is outside calling hours (8 AM to 9 PM) where the number rings. Set only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own."
           },
           "notify": {
             "type": "object",
@@ -519,7 +519,7 @@
           "dialIn": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in.",
+            "description": "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in. Zoom's own dial-in numbers can be dialed any time; any other number keeps the calling hours and call limits of a phone call.",
             "properties": {
               "invite": {
                 "type": "string",

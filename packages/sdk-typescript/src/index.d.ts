@@ -47,7 +47,8 @@ export interface CallBrief {
   voice?: string;
   maxMinutes?: number;
   rehearsal?: boolean;
-  /** Phone only: call outside calling hours where the person is; only when the user confirms they expect it. */
+  /** Phone calls, and meetings with `dialIn`: call outside calling hours where the number rings;
+   * only when the user confirms they expect it (for a meeting: that it is on now). */
   afterHours?: boolean;
   /** Phone only: record this call; Smitline keeps the recording, each side on its own channel. */
   record?: boolean;
@@ -65,7 +66,9 @@ export interface CallBrief {
   /** Meetings only: joining by phone. The dial-in number, the meeting ID (Teams: phone conference
    * ID; Google Meet: PIN) and Zoom's numeric phone passcode, or the invitation text they come in.
    * With a link in `to`, Smitline dials in when the platform turns its browser away; without one,
-   * always. `keys` (one-tap form, a comma per 2-second pause) is rarely needed. */
+   * always. A number that is not the platform's published dial-in number (Zoom's are) keeps
+   * phone calling hours and call limits. `keys` (one-tap form, a comma per 2-second pause) is
+   * rarely needed. */
   dialIn?: {
     number?: string;
     meetingId?: string;

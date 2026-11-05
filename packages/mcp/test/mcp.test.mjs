@@ -92,6 +92,9 @@ test('a meeting brief can carry its dial-in, and start_call passes it on', async
   assert.equal(dialIn.additionalProperties, false);
   assert.deepEqual(Object.keys(dialIn.properties).sort(), ['invite', 'keys', 'meetingId', 'number', 'passcode', 'platform']);
   assert.match(start.inputSchema.properties.to.description, /dial-in number/);
+  // A dial-in number that is not Zoom's own keeps a phone call's hours, which afterHours lifts.
+  assert.match(dialIn.description, /Zoom's own dial-in numbers can be dialed any time/);
+  assert.match(start.inputSchema.properties.afterHours.description, /meetings with dialIn/);
   const briefs = [];
   const session = createMcpSession({ colleague: { async startCall(brief) { briefs.push(brief); return { id: 'call-0123456789abcdef', status: 'queued' }; } }, log() {} });
   const brief = { channel: 'meeting', objective: 'Take notes', dialIn: { invite: 'Meeting ID: 859 5128 9482\n+14388097799,,85951289482#' } };

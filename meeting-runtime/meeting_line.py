@@ -187,7 +187,8 @@ class MeetingLine:
 
     def ready(self, hooks, owner, brief):
         credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731
-        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials)[0] == 'phone':
+        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials,
+                          hooks)[0] == 'phone':
             return dial_in.ready(getattr(self, 'phone', None), credentials)
         # No meeting container for it (the one container runs the local owner's meetings only,
         # or is busy; the pool is full, or out of ports): refused now, with the code, rather
@@ -210,12 +211,14 @@ class MeetingLine:
     async def preflight(self, hooks, owner, brief):
         """For a brief check: a meeting that would join by phone tests the phone line's tunnel."""
         credentials = lambda provider: hooks.credentials(owner, provider)  # noqa: E731
-        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials)[0] == 'phone':
+        if dial_in.way_in(self, owner_settings(hooks, owner), owner, brief, credentials,
+                          hooks)[0] == 'phone':
             return await dial_in.preflight(self.phone)
         return None
 
     async def start(self, ctx):
-        way, why = dial_in.way_in(self, ctx.settings(), ctx.owner, ctx.brief, ctx.credentials)
+        way, why = dial_in.way_in(self, ctx.settings(), ctx.owner, ctx.brief, ctx.credentials,
+                                  dial_in.hooks_of(ctx))
         if way == 'phone':
             return await dial_in.join_by_phone(self.phone, ctx, why)
         ctx.set_status('connecting')

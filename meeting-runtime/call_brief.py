@@ -330,8 +330,9 @@ class CallBrief:
             raise ValueError('rehearsal is only supported for phone calls')
         after_hours = optional_field(data, 'afterHours')
         after_hours = False if after_hours is None else require_bool(after_hours, 'afterHours')
-        if after_hours and channel != 'phone':
-            raise ValueError('afterHours is only for phone calls')
+        if after_hours and channel != 'phone' and dial_in is None:
+            # A dial-in number that is not a published bridge keeps calling hours (call_hooks).
+            raise ValueError('afterHours is only for phone calls and meetings with a dialIn')
         record = optional_field(data, 'record')
         record = False if record is None else require_bool(record, 'record')
         if record and channel != 'phone':

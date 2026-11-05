@@ -72,7 +72,7 @@ export const BRIEF_SCHEMA = {
     maxMinutes: { type: 'integer', minimum: 1, maximum: 240, description: 'Phone calls: at most 60 (default 10). Meetings: at most 240 (default 120).' },
     rehearsal: { type: 'boolean', description: "Phone only: practice a call to someone else on the user's own phone first, with the user playing that person. Not for calling the user themselves: when they say \"call me\", place a normal call to their number, without rehearsal." },
     record: { type: 'boolean', description: "Phone only: record this call. Smitline keeps the recording with the call, each side on its own channel, and the assistant tells the other person the call is recorded. Only when the user asks for a recording." },
-    afterHours: { type: 'boolean', description: 'Phone only: call even though it is outside calling hours (8 AM to 9 PM) where the person is. Set only when the user confirms the person expects a call now.' },
+    afterHours: { type: 'boolean', description: 'Phone calls, and meetings with dialIn: call even though it is outside calling hours (8 AM to 9 PM) where the number rings. Set only when the user confirms the person expects a call now, or for a meeting that it is on now and the number is its own.' },
     notify: {
       type: 'object',
       additionalProperties: false,
@@ -106,7 +106,7 @@ export const BRIEF_SCHEMA = {
     dialIn: {
       type: 'object',
       additionalProperties: false,
-      description: "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in.",
+      description: "Meetings: join by phone. Pass the meeting's dial-in details whenever the user has them, or just paste the invitation text as invite: Smitline reads the number, the meeting ID and the passcode from it. Smitline dials in, the phone keys in the ID and passcode, and it takes part by audio, saying out loud that it is an AI. With a link in to, it joins by link and dials in if the platform turns it away (or first, where this service joins that platform by phone); with no link it always dials in. Zoom's own dial-in numbers can be dialed any time; any other number keeps the calling hours and call limits of a phone call.",
       properties: {
         invite: { type: 'string', maxLength: 12000, description: 'The meeting invitation, as pasted: its one-tap lines, dial-in numbers, meeting ID or PIN, and passcode' },
         number: { type: 'string', description: "The meeting's dial-in number in E.164 form, such as +14388097799" },
