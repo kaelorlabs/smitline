@@ -239,6 +239,7 @@ class CallService:
         # Meeting calls a previous daemon left open: their meeting may still be running, adopted
         # by the meeting supervisor at startup. resume_meetings() follows or closes each.
         self._resumable = []
+        self._reconciled = False
 
     @property
     def environ(self):
@@ -422,6 +423,7 @@ class CallService:
         that stopped without ending it (a crash, a forced restart) leaves running, and the meeting
         supervisor adopts it at startup. Such calls wait for resume_meetings(), which follows the
         ones still running and closes the rest."""
+        self._reconciled = True
         closed = []
         for record in self.store.list(limit=1000):
             if record['status'] in TERMINAL or record['id'] in self._contexts:
@@ -452,6 +454,10 @@ class CallService:
         the daemon had never stopped: without this, the meeting ran on with nobody billing or
         ending it. Calls whose meeting is gone are closed as reconcile() closes any other.
         Returns the ids of the calls followed again."""
+        if not self._reconciled:
+            # Whatever the startup order, the calls left open are always looked at: otherwise a
+            # meeting call held back for this would stay open for good.
+            self.reconcile()
         resumed, closed = [], []
         while self._resumable:
             call_id = self._resumable.pop(0)

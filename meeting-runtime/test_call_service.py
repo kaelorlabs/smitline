@@ -577,6 +577,20 @@ class MeetingRestartTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await h.service.resume_meetings(), [])
             await h.service.shutdown()
 
+    async def test_meetings_are_followed_again_even_if_reconcile_did_not_run_first(self):
+        # Whatever the startup order, a meeting call left open is never left open for good.
+        with tempfile.TemporaryDirectory() as temp:
+            h = self.harness(temp, ['live', 'live', 'ended'])
+            left = await self.left_open(h, live_for=60)
+            phone = h.store.create(dict(h.store.get(left['id']), id=new_call_id(), channel='phone',
+                                        line={}, brief=brief()))
+            self.assertEqual(await h.service.resume_meetings(), [left['id']])
+            self.assertEqual(h.store.get(phone['id'])['status'], 'failed')   # closed as before
+            done = await h.service.wait(left['id'], timeout=5, owner='local')
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(h.service.reconcile(), [])                        # nothing left to do
+            await h.service.shutdown()
+
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
