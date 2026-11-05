@@ -53,6 +53,23 @@ TERMINAL_STAGES = frozenset({
     'api_error', 'closed_without_final_usage',
 })
 COMPLETE_REASONS = frozenset({'finished', 'meeting_ended'})
+# Once a meeting reports its end, how long the daemon waits for its bot to say it is out of the
+# meeting (leaveState on /health) before it writes the handoff and stops the container or deletes
+# the machine. A bot killed before it left kept a frozen Zoom tile in the meeting for minutes
+# (2026-11-05). The bot gives the platform 8 seconds (adapters_base.LEAVE_TIMEOUT).
+LEAVE_WAIT_SECONDS = 15.0
+LEFT_STATES = frozenset({'left', 'leave_failed'})
+
+
+def out_of_the_meeting(health):
+    """The meeting's bot is out of the meeting platform, or never got in: its leave is over, its
+    archive is closed (the meeting is all done), or it was never admitted."""
+    if health.get('leaveState') in LEFT_STATES:
+        return True
+    archive = health.get('archive')
+    if isinstance(archive, dict) and archive.get('closed') is True:
+        return True
+    return health.get('admissionState') != 'admitted'
 
 
 def owner_env_file(values):
@@ -355,6 +372,7 @@ class ProductionMeetingSupervisor:
         claim=None,
         mounts=(),
         archive_timeout=ARCHIVE_TIMEOUT,
+        leave_wait=LEAVE_WAIT_SECONDS,
     ):
         self.project_root = Path(project_root).resolve()
         # claim: a pool meeting's own claim file and what it records (owner, project, ports),
@@ -373,6 +391,7 @@ class ProductionMeetingSupervisor:
         self.start_timeout = start_timeout
         self.stop_timeout = stop_timeout
         self.archive_timeout = archive_timeout
+        self.leave_wait = leave_wait
         # owner_environment(owner): a pool meeting's whole environment besides HOME and its
         # runtime state (meeting_line.pool_meeting_environment), written to a private env file
         # that the pool's compose files read instead of .env. One meeting container at a time
@@ -751,6 +770,7 @@ class ProductionMeetingSupervisor:
             pass
 
     async def _watch(self, session):
+        ended = {}  # once the meeting reported its end while its bot was still in the meeting
         try:
             while True:
                 await asyncio.sleep(self.poll_interval)
@@ -762,18 +782,22 @@ class ProductionMeetingSupervisor:
                     if status.get('unknown'):
                         continue
                     if not status.get('running'):
-                        await self._complete_handoff(session, 'container_exited', partial=True)
+                        if ended:
+                            # It exited before saying it left: the end it reported stands.
+                            await self._finish(session, ended['health'])
+                        else:
+                            await self._complete_handoff(session, 'container_exited', partial=True)
                         return
                     if not self.remote:
                         health = await self.health.fetch()
                 if not health:
                     continue
-                if await self._apply_health(session, health):
+                if await self._apply_health(session, health, ended):
                     return
         except asyncio.CancelledError:
             raise
 
-    async def _apply_health(self, session, health):
+    async def _apply_health(self, session, health, ended=None):
         stage = health.get('stage')
         mapped = STAGE_TO_STATE.get(stage)
         if mapped and self.daemon is not None:
@@ -806,13 +830,24 @@ class ProductionMeetingSupervisor:
             except Exception:
                 pass
         if stage in TERMINAL_STAGES:
-            reason = stage
-            if stage in COMPLETE_REASONS and health.get('endReason') in AGENT_ENDINGS:
-                reason = health['endReason']  # the agent left: why, not just that it ended
-            await self._complete_handoff(
-                session, reason, partial=stage not in COMPLETE_REASONS)
+            if ended is not None and not out_of_the_meeting(health):
+                # Its bot is still leaving the meeting: the handoff and the stop wait for it, a
+                # moment at most (`ended` is the watch's own record of when the end came).
+                now = asyncio.get_running_loop().time()
+                ended['health'] = health
+                if now - ended.setdefault('at', now) < self.leave_wait:
+                    return False
+            await self._finish(session, health)
             return True
         return False
+
+    async def _finish(self, session, health):
+        """The handoff of a meeting that reported its end in `health`."""
+        stage = health.get('stage')
+        reason = stage
+        if stage in COMPLETE_REASONS and health.get('endReason') in AGENT_ENDINGS:
+            reason = health['endReason']  # the agent left: why, not just that it ended
+        await self._complete_handoff(session, reason, partial=stage not in COMPLETE_REASONS)
 
     def _container_url(self, meeting_id, path):
         url = getattr(self.health, 'url', None)
@@ -1047,11 +1082,13 @@ class MeetingPool:
         launcher_factory=None,
         health_factory=None,
         port_free=port_is_free,
+        leave_wait=LEAVE_WAIT_SECONDS,
     ):
         self.project_root = Path(project_root).resolve()
         self.runtime_root = Path(runtime_root or (self.project_root / 'meeting-runtime')).resolve()
         self.runner = runner or SubprocessCommandRunner(self.project_root)
         self.environ = environ
+        self.leave_wait = leave_wait
         self.max_meetings = max_meetings
         # A cap for each owner other than the local one; None: only the pool's size.
         self.per_owner = per_owner
@@ -1077,7 +1114,7 @@ class MeetingPool:
         supervisor = ProductionMeetingSupervisor(
             self.project_root, runtime_root=self.runtime_root, runner=self.runner,
             poll_interval=self.poll_interval, start_timeout=self.start_timeout,
-            stop_timeout=self.stop_timeout,
+            stop_timeout=self.stop_timeout, leave_wait=self.leave_wait,
             owner_environment=lambda owner: (self.owner_environment(owner)
                                              if self.owner_environment else {}),
             **kwargs)

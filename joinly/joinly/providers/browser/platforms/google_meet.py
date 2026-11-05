@@ -73,17 +73,39 @@ class GoogleMeetBrowserPlatformController(BaseBrowserPlatformController):
     async def leave(self, page: Page) -> None:
         """Leave the Google Meet meeting.
 
+        Meet names the button "Leave call". A host is asked whether to end the call for
+        everyone, and only leaves ("Just leave the call").
+
         Args:
             page: The Playwright page instance.
         """
+        if await self._just_leave(page):
+            return
         await self._dismiss_dialog(page)
 
-        leave_btn = page.get_by_role("button", name=re.compile(r"leave", re.IGNORECASE))
-        if not await leave_btn.is_visible():
+        buttons = page.get_by_role(
+            "button", name=re.compile(r"^leave(?: call)?(?:\s|$)", re.IGNORECASE)
+        )
+        for button in await buttons.all():
+            if await button.is_visible():
+                await button.click(timeout=2000)
+                break
+        else:
             msg = "Leave button not found or not visible."
             raise RuntimeError(msg)
-        await leave_btn.click(timeout=1000)
         await page.wait_for_timeout(500)
+        await self._just_leave(page)
+
+    async def _just_leave(self, page: Page) -> bool:
+        """Answer a host's question whether to end the call for everyone: only leave."""
+        buttons = page.get_by_role(
+            "button", name=re.compile(r"^just leave the (?:call|meeting)$", re.IGNORECASE)
+        )
+        for button in await buttons.all():
+            if await button.is_visible():
+                await button.click(timeout=2000)
+                return True
+        return False
 
     async def send_chat_message(self, page: Page, message: str) -> None:
         """Send a chat message in the Google Meet meeting.

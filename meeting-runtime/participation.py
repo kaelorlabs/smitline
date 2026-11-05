@@ -169,8 +169,11 @@ class Participation:
             await self.gate.set_muted(True)
             self.state['muted'] = True
             if mute_platform:
-                with contextlib.suppress(Exception):
-                    await self.adapter.mute()
+                # Once the agent has left the meeting there is no microphone there to mute
+                # (adapters_base.leave_meeting); trying took Zoom three seconds.
+                if not getattr(self.adapter, 'left_meeting', False):
+                    with contextlib.suppress(Exception):
+                        await self.adapter.mute()
                 self.platform_ready = False
                 self.state['microphoneState'] = 'muted'
 
