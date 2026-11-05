@@ -638,6 +638,315 @@ class BridgeBackendTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(task, return_exceptions=True)
 
 
+def pcm(value, ms):
+    """`ms` of 24 kHz audio at one sample value (0 for silence)."""
+    return struct.pack(f'<{24 * ms}h', *([value] * (24 * ms)))
+
+
+async def until(check, seconds=3.0):
+    for _ in range(int(seconds * 100)):
+        if check():
+            return
+        await asyncio.sleep(.01)
+    raise AssertionError('timed out')
+
+
+class InterruptionTests(unittest.IsolatedAsyncioTestCase):
+    """Talked over, the meeting voice stops, as a phone call does: GPT-Live stops generating but
+    sends no event, and what it already made can be seconds ahead of what has been heard."""
+
+    async def start(self, microphone=None):
+        self.adapter, self.microphone = Adapter(), microphone or PacedMic()
+        self.state, self.record = {}, RecordingArchive()
+        self.participation = Participation(self.adapter, self.microphone, self.state,
+                                           quiet_seconds=.05, record=self.record)
+        self.task = asyncio.create_task(self.participation.run())
+        self.addAsyncCleanup(self.stop)
+
+    async def stop(self):
+        self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+
+    def voiced_written(self):
+        return sum(len(data) for data in self.microphone.data if any(data))
+
+    async def say(self, seconds):
+        """GPT-Live's reply arrives at once, in 100 ms pieces; wait until it is being heard."""
+        for _ in range(int(seconds * 10)):
+            self.participation.offer(pcm(900, 100))
+        await until(lambda: self.voiced_written() > 0)
+
+    async def test_talked_over_it_drops_what_it_has_not_said(self):
+        await self.start()
+        await self.say(2.0)
+        self.assertGreater(self.participation.unsaid_seconds(), 1.5)
+        self.participation.heard(0, 300)
+        self.participation.heard(300, 700)  # they have talked for 700 ms
+        await asyncio.sleep(self.participation.interrupt_settle + .1)
+        self.assertEqual(self.participation.unsaid_seconds(), 0)
+        written = self.voiced_written()
+        await asyncio.sleep(.3)
+        self.assertLessEqual(self.voiced_written(), written)  # nothing more of it is heard
+        self.assertLess(written, 48000)  # well under a second of the two
+        self.assertEqual(self.state['interruptionsFollowed'], 1)
+        (kind, details), = [event for event in self.record.events if event[0] == 'interrupted']
+        self.assertGreater(details['unsaid_ms'], 1000)
+        self.assertEqual(self.state['floorState'], 'listening')
+        # Its next reply is heard as usual.
+        self.participation.offer(pcm(700, 100))
+        await until(lambda: any(data == pcm(700, 100) for data in self.microphone.data))
+
+    async def test_a_short_mhm_does_not_stop_it(self):
+        await self.start()
+        await self.say(1.5)
+        self.participation.heard(0, 200)
+        await asyncio.sleep(self.participation.interrupt_settle + .1)
+        self.assertGreater(self.participation.unsaid_seconds(), .5)
+        self.assertEqual(self.state['interruptionsFollowed'], 0)
+
+    async def test_talk_it_carries_on_over_does_not_stop_it(self):
+        await self.start()
+        await self.say(1.0)
+        self.participation.heard(0, 800)
+        await asyncio.sleep(.1)
+        self.participation.offer(pcm(900, 100))  # GPT-Live keeps talking: it chose to
+        await asyncio.sleep(self.participation.interrupt_settle)
+        self.assertEqual(self.state['interruptionsFollowed'], 0)
+        self.assertGreater(self.participation.unsaid_seconds(), .3)
+
+    async def test_their_words_start_anew_after_the_voices_own(self):
+        await self.start()
+        await self.say(1.5)
+        self.participation.heard(0, 300)
+        self.participation.said()  # the voice spoke in between: not one long interruption
+        self.participation.heard(900, 1100)
+        await asyncio.sleep(self.participation.interrupt_settle + .1)
+        self.assertEqual(self.state['interruptionsFollowed'], 0)
+
+    async def test_little_left_to_say_is_left_alone(self):
+        await self.start()
+        self.participation.offer(pcm(900, 100))
+        await until(lambda: self.voiced_written() > 0)
+        self.participation.heard(0, 900)
+        await asyncio.sleep(self.participation.interrupt_settle + .1)
+        self.assertEqual(self.state['interruptionsFollowed'], 0)
+
+    async def test_silence_after_the_last_speech_is_not_unsaid(self):
+        participation = Participation(Adapter(), Mic(), {})
+        for piece in (pcm(900, 100), pcm(0, 100), pcm(900, 100), pcm(0, 200)):
+            participation.queue.put_nowait((piece, any(piece)))
+        self.assertAlmostEqual(participation.unsaid_seconds(), .3)
+
+
+class _Pipe:
+    """The PulseAudio pipe a browser's virtual microphone writes to."""
+
+    def __init__(self):
+        self.data = []
+
+    def write(self, chunk):
+        self.data.append(bytes(chunk))
+
+    async def drain(self):
+        pass
+
+
+def browser_microphone():
+    """joinly's VirtualMicrophone, pacing 10 ms chunks into a pipe, without PulseAudio."""
+    from joinly.providers.browser.devices.virtual_microphone import VirtualMicrophone
+    microphone = VirtualMicrophone(sample_rate=24000, byte_depth=2)
+    pipe = _Pipe()
+    microphone._writer = pipe
+    microphone._queue = asyncio.Queue(maxsize=microphone.queue_size)
+    microphone._pace_task = asyncio.create_task(microphone._pace_loop())
+    return microphone, pipe
+
+
+class PacedSpeaker:
+    """The room's audio in 20 ms chunks, in real time: `loud_for` seconds of someone talking, then
+    silence."""
+
+    def __init__(self, loud_for=0.0, value=3000):
+        self.loud_until = None
+        self.loud_for, self.value = loud_for, value
+        self.next_at = None
+
+    async def read(self):
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if self.next_at is None:
+            self.next_at, self.loud_until = now, now + self.loud_for
+        self.next_at += 0.02
+        await asyncio.sleep(max(0, self.next_at - now))
+        loud = self.next_at <= self.loud_until
+        return SimpleNamespace(data=pcm(self.value if loud else 0, 20))
+
+
+class MeetingVoiceTests(unittest.IsolatedAsyncioTestCase):
+    """bridge.run_voice with the room's audio, the voice and the hello, on both kinds of meeting."""
+
+    async def run_meeting(self, script, *, microphone=None, speaker=None, adapter=None, env=None,
+                          patches=()):
+        import contextlib
+        import copy
+        import bridge
+        from runtime_config import RuntimeConfig
+        socket = FakeLiveSocket(bridge)
+        record = RecordingArchive()
+        state = copy.deepcopy(bridge.state)
+        state.update(input_bytes=0)  # other tests run the voice on the module's own state
+        state.pop('input', None)
+        stop = asyncio.Event()
+        runtime = RuntimeConfig.from_environ(env or {'SMITLINE_MEETING_INTRO': '0'})
+        with contextlib.ExitStack() as stack:
+            for target, name, value in (
+                    (bridge, 'ClientSession', socket.client), (bridge, 'record', record),
+                    (bridge, 'state', state), (bridge, 'stop', stop), *patches):
+                stack.enter_context(patch.object(target, name, value))
+            task = asyncio.create_task(bridge.run_voice(
+                speaker or IdleSpeaker(), microphone or Mic(), None, 'test-only', runtime,
+                adapter or Adapter()))
+            try:
+                await socket.events.put({'type': 'session.started'})
+                await script(socket, state, record)
+                stop.set()
+                await until(lambda: any(e['type'] == 'session.close' for e in socket.sent), 5)
+                await socket.events.put({'type': 'session.closed', 'usage': {'seconds': 3}})
+                await asyncio.wait_for(task, 3)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        return SimpleNamespace(socket=socket, record=record, state=state)
+
+    async def talked_over(self, microphone, written):
+        """GPT-Live sends three seconds of reply at once, someone talks over it for 800 ms, and
+        GPT-Live then sends only the silence it streams between replies."""
+        reply = base64.b64encode(pcm(900, 200)).decode()
+        silence = base64.b64encode(pcm(0, 200)).decode()
+        heard = {}
+
+        async def script(socket, state, record):
+            for _ in range(15):
+                await socket.events.put({'type': 'session.output_audio.delta', 'delta': reply})
+            await socket.events.put({'type': 'session.output_transcript.delta',
+                                     'delta': 'Here is the long answer you asked for.',
+                                     'start_ms': 0, 'end_ms': 3000})
+            await until(lambda: written() >= 0.2 * 48000)
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': 'Sorry, wait,', 'start_ms': 3200, 'end_ms': 3600})
+            await socket.events.put({'type': 'session.input_transcript.delta',
+                                     'delta': ' one thing first.', 'start_ms': 3600,
+                                     'end_ms': 4000})
+            for _ in range(3):
+                await socket.events.put({'type': 'session.output_audio.delta', 'delta': silence})
+                await asyncio.sleep(.2)
+            heard['soon_after'] = written()
+            await asyncio.sleep(.4)
+            heard['later'] = written()
+        run = await self.run_meeting(script, microphone=microphone)
+        return run, heard
+
+    async def test_a_daily_room_voice_stops_when_talked_over(self):
+        from daily_room import DailyMicrophone
+        from test_daily_room import FakeDevice
+        device = FakeDevice('microphone', 'mic')
+        microphone = DailyMicrophone(device)
+        microphone.start()
+        self.addAsyncCleanup(microphone.close)
+
+        def written():
+            return sum(len(frame) for frame in device.written if any(frame))
+        run, heard = await self.talked_over(microphone, written)
+        self.assertEqual(run.state['interruptionsFollowed'], 1)
+        self.assertIn('interrupted', [kind for kind, _ in run.record.events])
+        self.assertLessEqual(heard['later'] - heard['soon_after'], 960)  # at most 10 ms more
+        self.assertLess(heard['later'], 1.5 * 48000)  # of a three-second reply
+
+    async def test_a_browser_meetings_voice_stops_when_talked_over(self):
+        import bridge
+        from runtime_config import RuntimeConfig
+        microphone, pipe = browser_microphone()
+
+        async def stop_pacing():
+            microphone._pace_task.cancel()
+            await asyncio.gather(microphone._pace_task, return_exceptions=True)
+        self.addAsyncCleanup(stop_pacing)
+        runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_CAMERA_STYLE': 'animated'})
+        writer = bridge.camera_feed_for(runtime, microphone).audio_writer  # as main() hands it on
+        self.assertIsNot(writer, microphone)
+
+        def written():
+            return sum(len(chunk) for chunk in pipe.data if any(chunk))
+        run, heard = await self.talked_over(writer, written)
+        self.assertEqual(run.state['interruptionsFollowed'], 1)
+        self.assertLessEqual(heard['later'] - heard['soon_after'], 960)
+        self.assertLess(heard['later'], 1.5 * 48000)
+
+    async def test_the_hello_waits_for_a_pause_in_the_rooms_audio(self):
+        # Transcripts trail the audio by a second or more; going by them alone, the hello cut in
+        # over people still talking. Here someone talks for 1.2 s and no words arrive at all.
+        import meeting_intro
+        loop = asyncio.get_running_loop()
+        times = {}
+
+        def hello(socket):
+            return [e for e in socket.sent if e['type'] == 'session.commentary.append']
+
+        async def script(socket, state, record):
+            times['live'] = loop.time()
+            await until(lambda: hello(socket), 5)
+            times['hello'] = loop.time()
+        await self.run_meeting(
+            script, speaker=PacedSpeaker(loud_for=1.2),
+            env={'SMITLINE_MEETING_INTRO': '1', 'SMITLINE_OWNER_NAME': 'Robin'},
+            patches=[(meeting_intro, 'INTRO_QUIET_SECONDS', 0.3)])
+        self.assertGreater(times['hello'] - times['live'], 1.2 + 0.3 - 0.05)
+
+    async def test_a_room_that_is_heard_records_what_came_in(self):
+        async def script(socket, state, record):
+            await until(lambda: state.get('input', {}).get('voiced_ms', 0) >= 200)
+        run = await self.run_meeting(script, speaker=PacedSpeaker(loud_for=5))
+        self.assertGreater(run.state['input']['peak'], 2000)
+        (details,) = [details for kind, details in run.record.events if kind == 'input_audio']
+        self.assertGreaterEqual(details['voiced_ms'], 200)
+        self.assertEqual(details['bytes'], run.state['input_bytes'])
+        self.assertNotIn('input_silent', [kind for kind, _ in run.record.events])
+
+    async def test_people_talking_to_a_deaf_room_are_recorded_once(self):
+        import meeting_input
+
+        class TalkingAdapter(Adapter):
+            speaker_poll_seconds = .05
+
+            async def get_active_speaker(self):
+                return 'Arun'
+
+        async def script(socket, state, record):
+            await until(lambda: any(kind == 'input_silent' for kind, _ in record.events))
+            await asyncio.sleep(.3)
+        run = await self.run_meeting(
+            script, speaker=PacedSpeaker(loud_for=0), adapter=TalkingAdapter(),
+            patches=[(meeting_input, 'INPUT_SILENT_SECONDS', 0.4)])
+        silent = [details for kind, details in run.record.events if kind == 'input_silent']
+        self.assertEqual(len(silent), 1)
+        self.assertEqual(silent[0]['peak'], 0)
+        (details,) = [details for kind, details in run.record.events if kind == 'input_audio']
+        self.assertEqual(details['voiced_ms'], 0)
+
+    async def test_process_stopped_says_what_came_in(self):
+        import bridge
+        state = {'stage': 'finished', 'finalized': True, 'output_bytes': 9600, 'input_bytes': 960,
+                 'input': {'bytes': 960, 'voiced_ms': 0, 'peak': 0, 'dropped_ms': 0},
+                 'interruptionsFollowed': 2}
+        details = bridge.process_stopped_details(state)
+        self.assertEqual(details['input'], {'bytes': 960, 'voiced_ms': 0, 'peak': 0, 'dropped_ms': 0})
+        self.assertEqual(details['output_audio_bytes'], 9600)
+        self.assertEqual(details['interruptions_followed'], 2)
+        # A meeting whose voice never started still says how much came in: nothing.
+        self.assertEqual(bridge.process_stopped_details(
+            {'stage': 'needs_attention', 'finalized': False})['input'], {'bytes': 0})
+
+
 class BridgeNameTests(unittest.IsolatedAsyncioTestCase):
     async def test_joinly_knows_the_name_the_bot_joined_under(self):
         # Meet and Teams find the active speaker by skipping the bot's own tile, which they

@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from adapters_base import Capabilities, MeetingPlatformAdapter, leave_meeting
 from joinly.types import AudioChunk, AudioFormat
+from meeting_input import pcm_level
 from presence_pack import load_presence_pack
 from visual_presence import VISUAL_STATES
 from voice_activity import VoiceActivity
@@ -27,6 +28,19 @@ SAMPLE_RATE = 24000
 BYTE_DEPTH = 2
 SPEAKER_FRAMES = 480          # 20 ms: the chunk bridge.send_audio hands GPT-Live
 SPEAKER_QUEUE_CHUNKS = 50     # 1 s; a reader that falls behind loses the oldest audio first
+# The room's audio waiting for the speaker's pace (DailySpeaker). Daily completes a 20 ms read
+# every 20 ms by its clock and the pace takes 20 ms by the event loop's, so this holds about one
+# chunk; a hiccup on either side (a busy loop, Daily's thread waking late and catching up) leaves
+# more for a moment. More than SPEAKER_AHEAD_CHUNKS ahead, the pace skips chunks of silence, so
+# the delay does not build up while nobody talks; speech is never skipped. Audio is dropped
+# (oldest first, and counted) only past SPEAKER_PENDING_CHUNKS, half a second ahead, far beyond
+# ordinary jitter.
+SPEAKER_AHEAD_CHUNKS = 3      # 60 ms
+SPEAKER_PENDING_CHUNKS = 25   # 500 ms
+SILENT_PEAK = 64              # a chunk no louder than this all through is silence (-54 dBFS)
+# A read unanswered this long is taken as lost and asked again, so a completion Daily never sends
+# cannot leave the meeting deaf. Daily answers within 20 ms, or at once when nothing plays.
+SPEAKER_READ_TIMEOUT = 1.0
 MIC_CHUNK_MS = 10
 MIC_LEAD_SECONDS = 0.04       # how far ahead of real time the voice is handed to daily-python
 JOIN_TIMEOUT = 60
@@ -366,44 +380,161 @@ class DailyRoom(MeetingPlatformAdapter):
 class DailySpeaker:
     """The room's audio for GPT-Live: joinly AudioChunks of 20 ms, 24 kHz 16-bit mono.
 
-    GPT-Live keeps time by its input, so the stream never stops: every 20 ms it takes what Daily's
-    non-blocking speaker has (nothing at all while nobody in the room has a microphone on, because
-    Daily then plays nothing) and fills the rest with silence, as a sound card would. Without that
-    the voice never spoke and GPT-Live closed the session ("context_injection_incomplete")."""
+    daily-python gives a non-blocking speaker's audio only to the completion of read_frames; the
+    call itself always returns b'' (daily-python 0.37, src/media/virtual_speaker_device.rs).
+    Reading without a completion fed GPT-Live silence for a whole meeting: on 2026-11-05 a room
+    heard nobody while Daily showed two people talking. (A note here then said Daily plays nothing
+    while every microphone is off; that was seen with this bug, when no audio ever came in.) So a
+    20 ms read always waits while the room plays. Its completion comes on one of Daily's threads,
+    or at once on the caller's thread with nothing while nothing plays (before anyone else is in
+    the room). The audio goes to the event loop, which asks for the next 20 ms; never from inside
+    the completion, which daily-python refuses ("Already borrowed"). After a read that found
+    nothing, the next tick asks again, so an empty room costs a read every 20 ms, not a spin.
 
-    def __init__(self, device, *, frames=SPEAKER_FRAMES, max_chunks=SPEAKER_QUEUE_CHUNKS):
+    GPT-Live keeps time by its input, so the stream never stops: every 20 ms the pace hands on the
+    oldest audio that has come in and fills the rest with silence, as a sound card would. Without
+    that the voice never spoke and GPT-Live closed the session ("context_injection_incomplete")."""
+
+    def __init__(self, device, *, frames=SPEAKER_FRAMES, max_chunks=SPEAKER_QUEUE_CHUNKS,
+                 ahead_chunks=SPEAKER_AHEAD_CHUNKS, pending_chunks=SPEAKER_PENDING_CHUNKS,
+                 read_timeout=SPEAKER_READ_TIMEOUT):
         self.device = device
         self.frames = frames
         self.audio_format = AudioFormat(sample_rate=SAMPLE_RATE, byte_depth=BYTE_DEPTH)
         self.chunk_size = frames * BYTE_DEPTH
         self.period = frames / SAMPLE_RATE
-        self.dropped = 0
+        self.ahead = ahead_chunks * self.chunk_size
+        self.most = pending_chunks * self.chunk_size
+        self.read_timeout = read_timeout
+        self.loop = None
+        self.dropped = 0          # chunks lost because the reader fell behind, once it reads
+        self.reads = 0            # completions that brought audio
+        self.empty_reads = 0      # completions that found nothing playing
+        self.read_errors = 0
+        self.lost_reads = 0       # reads never answered (SPEAKER_READ_TIMEOUT)
+        self.received_bytes = 0
+        self.overflow_bytes = 0   # audio dropped past SPEAKER_PENDING_CHUNKS
+        self.skipped_bytes = 0    # silence skipped to catch up
         self._queue = asyncio.Queue(maxsize=max_chunks)
         self._task = None
-        self._pending = b''
+        self._pending = bytearray()
+        self._reading = False     # a read is waiting for its completion
+        self._read_number = 0     # the newest read; only its completion asks for the next
+        self._read_at = 0.0
+        self._closed = False
+        self._listening = False   # a reader has come: from then on a full queue loses audio
+        self._stopped_listening = False  # the reader has stopped for good (stop_listening)
         self._time_ns = 0
         self._chunk_ns = frames * 1_000_000_000 // SAMPLE_RATE
 
     def start(self):
+        self.loop = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._pace(), name='daily-speaker')
+        self._read()
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         if self._task is not None:
             self._task.cancel()
             self._task = None
+        if self.loop is not None:
+            # One line for the container log: what came in from the room, and what was lost.
+            print(f'speaker: {self.reads} reads with audio, {self.empty_reads} with none, '
+                  f'{self.read_errors} failed, {self.lost_reads} unanswered; '
+                  f'{self._ms(self.received_bytes)} ms received, {self.dropped_ms} ms dropped, '
+                  f'{self._ms(self.skipped_bytes)} ms of silence skipped', flush=True)
+
+    @staticmethod
+    def _ms(count):
+        return count * 1000 // (SAMPLE_RATE * BYTE_DEPTH)
+
+    @property
+    def dropped_ms(self):
+        """Room audio lost on its way to GPT-Live: chunks the reader fell behind on, and audio
+        past SPEAKER_PENDING_CHUNKS."""
+        return self._ms(self.dropped * self.chunk_size + self.overflow_bytes)
+
+    def stats(self):
+        return {'reads': self.reads, 'empty_reads': self.empty_reads,
+                'read_errors': self.read_errors, 'lost_reads': self.lost_reads,
+                'received_ms': self._ms(self.received_bytes), 'dropped_ms': self.dropped_ms,
+                'skipped_ms': self._ms(self.skipped_bytes)}
+
+    def _read(self):
+        """Ask Daily for the next 20 ms; it comes to _completed."""
+        self._read_number += 1
+        number = self._read_number
+        self._reading, self._read_at = True, time.monotonic()
+        try:
+            # Non-blocking: this returns b'' at once, and the audio comes to the completion only.
+            self.device.read_frames(self.frames,
+                                    completion=lambda data: self._completed(data, number))
+        except Exception as error:
+            self._reading = False  # the next tick asks again
+            self.read_errors += 1
+            if self.read_errors == 1:
+                print(f'speaker: reading the room failed: {type(error).__name__}: '
+                      f'{str(error)[:200]}', flush=True)
+
+    def _completed(self, data, number=None):
+        """read_frames' completion: on one of Daily's threads, or at once on the caller's."""
+        if self._closed:
+            return
+        data = bytes(data or b'')
+        loop = self.loop
+        if loop is None:
+            self._arrived(data, number)
+            return
+        with contextlib.suppress(RuntimeError):  # the event loop has closed: nobody listens
+            loop.call_soon_threadsafe(self._arrived, data, number)
+
+    def _arrived(self, data, number=None):
+        """On the event loop: keep what a read brought, then ask for the next 20 ms. A read
+        given up as lost that answers after all only adds its audio."""
+        newest = number is None or number == self._read_number
+        if newest:
+            self._reading = False
+        if self._closed:
+            return
+        if not data:
+            self.empty_reads += 1  # nothing plays: the next tick asks again
+            return
+        self.reads += 1
+        self.received_bytes += len(data)
+        self._pending += data
+        excess = len(self._pending) - self.most
+        if excess > 0:
+            del self._pending[:excess]  # the oldest goes first
+            if not self.overflow_bytes:
+                print('speaker: the room ran more than half a second ahead; its oldest audio '
+                      'was dropped', flush=True)
+            self.overflow_bytes += excess
+        if newest:
+            self._read()
 
     def next_chunk(self):
-        """One chunk: what Daily has played since the last one, then silence to fill it."""
-        try:
-            data = self.device.read_frames(self.frames)
-        except Exception:
-            data = b''
-        pending = self._pending + bytes(data or b'')
-        # Never fall more than ten chunks behind the room: older audio is dropped first.
-        if len(pending) > self.chunk_size * 10:
-            pending = pending[-self.chunk_size * 10:]
-        chunk, self._pending = pending[:self.chunk_size], pending[self.chunk_size:]
-        return chunk + b'\x00' * (self.chunk_size - len(chunk))
+        """The next 20 ms for GPT-Live: the oldest audio that has come in, filled out with
+        silence. It asks Daily for more when no read waits (at the start, after a read that found
+        nothing, or after an error), and again when one has waited past read_timeout."""
+        if not self._closed:
+            if not self._reading:
+                self._read()
+            elif time.monotonic() - self._read_at > self.read_timeout:
+                self.lost_reads += 1
+                if self.lost_reads == 1:
+                    print('speaker: Daily never answered a read; asking again', flush=True)
+                self._read()
+        size = self.chunk_size
+        chunk = bytes(self._pending[:size])
+        del self._pending[:size]
+        if len(self._pending) > self.ahead and pcm_level(self._pending[:size])[1] <= SILENT_PEAK:
+            # Behind the room while nobody talks: a chunk of silence is skipped, not sent late.
+            skipped = len(self._pending[:size])
+            del self._pending[:size]
+            self.skipped_bytes += skipped
+        return chunk + bytes(size - len(chunk))
 
     async def _pace(self):
         loop = asyncio.get_running_loop()
@@ -420,10 +551,23 @@ class DailySpeaker:
     def _put(self, data):
         if self._queue.full():
             self._queue.get_nowait()
-            self.dropped += 1
+            # Before anyone reads (GPT-Live is still starting), the oldest second just gives way.
+            if self._listening:
+                self.dropped += 1
+                if self.dropped == 1:
+                    print('speaker: GPT-Live fell behind the room; its oldest audio was dropped',
+                          flush=True)
         self._queue.put_nowait(data)
 
+    def stop_listening(self):
+        """The reader has stopped for good (the meeting is over): from now on the oldest audio
+        gives way again without counting as dropped, as before anyone read."""
+        self._listening = False
+        self._stopped_listening = True
+
     async def read(self):
+        if not self._stopped_listening:
+            self._listening = True
         data = await self._queue.get()
         chunk = AudioChunk(data=data, time_ns=self._time_ns)
         self._time_ns += self._chunk_ns

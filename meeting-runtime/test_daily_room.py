@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import struct
 import tempfile
 import threading
 import time
@@ -26,7 +27,6 @@ class FakeDevice:
     def __init__(self, kind, name, **settings):
         self.kind, self.name, self.settings = kind, name, settings
         self.written = []
-        self.reads = []
 
     def write_frames(self, frames, completion=None):
         self.written.append(bytes(frames))
@@ -35,8 +35,85 @@ class FakeDevice:
     def write_frame(self, frame):
         self.written.append(bytes(frame))
 
-    def read_frames(self, frames, completion=None):  # non-blocking: what has arrived, maybe nothing
-        return self.reads.pop(0) if self.reads else b''
+
+class FakeSpeakerDevice:
+    """daily-python 0.37's non-blocking virtual speaker, as virtual_speaker_device.rs has it:
+    read_frames always returns b'' at once and the audio goes to the completion only. While the
+    room plays (`plays`, one entry per read: bytes, or None for nothing), each read completes
+    from a thread of its own, 20 ms after the last one, as Daily's playout does. While nothing
+    plays it completes at once, on the caller's thread, with b''. A read while read_frames is
+    still running (from inside a completion that came at once) is refused, as daily-python does."""
+
+    def __init__(self, name='speaker', **settings):
+        self.kind, self.name, self.settings = 'speaker', name, settings
+        self.plays = []
+        self.period = 0.02
+        self.reads = 0
+        self.waiting = 0
+        self.most_waiting = 0
+        self.fail = None
+        self.swallow = 0   # this many reads are never answered
+        self.slow = []     # extra seconds before the next reads with audio are answered
+        self.delivered = []
+        self.waiting_at = []  # reads waiting as each piece of audio was delivered
+        self._lock = threading.Lock()
+        self._busy = False
+        self._due = 0.0
+        self._jobs = []
+        self._wake = threading.Condition(self._lock)
+        self._thread = None
+
+    def read_frames(self, frames, completion=None):
+        if self._busy:
+            raise RuntimeError('Already borrowed')
+        if self.fail is not None:
+            raise self.fail
+        self._busy = True
+        try:
+            with self._lock:
+                self.reads += 1
+                if completion is not None:
+                    self.waiting += 1
+                    self.most_waiting = max(self.most_waiting, self.waiting)
+                if completion is not None and self.swallow:
+                    self.swallow -= 1
+                    return b''  # lost: never answered
+                data = self.plays.pop(0) if self.plays else None
+                if completion is not None and data is not None:
+                    extra = self.slow.pop(0) if self.slow else 0
+                    self._due = max(self._due, time.monotonic()) + self.period + extra
+                    self._jobs.append((self._due, completion, data))
+                    if self._thread is None:
+                        self._thread = threading.Thread(target=self._play, daemon=True,
+                                                        name='daily-speaker-p')
+                        self._thread.start()
+                    self._wake.notify()
+            if completion is not None and data is None:
+                self._finish(completion, b'')  # nothing plays: answered at once, on this thread
+            return b''
+        finally:
+            self._busy = False
+
+    def _finish(self, completion, data):
+        with self._lock:
+            if data:
+                self.waiting_at.append(self.waiting)
+            self.waiting -= 1
+            self.delivered.append(data)
+        completion(data)
+
+    def _play(self):
+        while True:
+            with self._lock:
+                while not self._jobs:
+                    self._wake.wait()
+                due, completion, data = self._jobs[0]
+                delay = due - time.monotonic()
+                if delay > 0:
+                    self._wake.wait(delay)
+                    continue
+                self._jobs.pop(0)
+            self._finish(completion, data)
 
 
 class FakeDaily:
@@ -51,7 +128,8 @@ class FakeDaily:
         return self._device('microphone', name, **settings)
 
     def create_speaker_device(self, name, **settings):
-        return self._device('speaker', name, **settings)
+        self.devices['speaker'] = FakeSpeakerDevice(name, **settings)
+        return self.devices['speaker']
 
     def create_camera_device(self, name, **settings):
         return self._device('camera', name, **settings)
@@ -402,31 +480,73 @@ class DailyAudioTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(microphone.drain(), 1)
         self.assertEqual(device.written, [])
 
-    async def test_speaker_streams_20_ms_chunks_and_silence_while_the_room_is_quiet(self):
-        # GPT-Live keeps time by its input: in a room with every microphone off, Daily plays
-        # nothing, and without silence in its place the voice never spoke (the 2026-11-05 self-test).
-        device = FakeDevice('speaker', 'speaker')
-        device.reads = [b'\x01' * 960, b'', b'\x02' * 400]
+    @staticmethod
+    def voice(number, size=960):
+        """A distinct, audible 20 ms chunk: every sample is `number` times 100."""
+        return struct.pack(f'<{size // 2}h', *([number * 100] * (size // 2)))
+
+    async def read_until(self, speaker, check, limit=200):
+        chunks = []
+        for _ in range(limit):
+            chunks.append((await asyncio.wait_for(speaker.read(), 1)).data)
+            if check(chunks):
+                return chunks
+        self.fail('the speaker never gave what was expected')
+
+    async def test_speaker_hands_on_the_rooms_audio_in_order_from_the_completions(self):
+        # daily-python gives a non-blocking speaker's audio only to the completion, from its own
+        # thread; reading without one fed GPT-Live silence for a whole meeting (2026-11-05).
+        device = FakeSpeakerDevice()
+        played = [self.voice(number) for number in range(1, 31)]
+        device.plays = list(played)
+        speaker = DailySpeaker(device)
+        speaker.start()
+        try:
+            chunks = await self.read_until(speaker, lambda got: played[-1] in got)
+        finally:
+            speaker.close()
+        heard = [chunk for chunk in chunks if chunk != bytes(960)]
+        self.assertEqual(heard, played)  # every chunk, in order, none twice
+        self.assertEqual(speaker.reads, 30)
+        self.assertEqual(device.most_waiting, 1)  # one read waits at a time
+        self.assertEqual(speaker.dropped_ms, 0)
+        self.assertEqual(speaker.received_bytes, 30 * 960)
+
+    async def test_speaker_paces_20_ms_chunks_with_silence_while_nothing_plays(self):
+        # GPT-Live keeps time by its input, so the stream never stops. With nobody else in the
+        # room daily-python answers a read at once, with nothing, on the caller's thread.
+        device = FakeSpeakerDevice()
         speaker = DailySpeaker(device)
         speaker.start()
         started = time.monotonic()
-        chunks = [await asyncio.wait_for(speaker.read(), 1) for _ in range(5)]
-        elapsed = time.monotonic() - started
-        speaker.close()
-        self.assertEqual([chunk.data for chunk in chunks], [
-            b'\x01' * 960, b'\x00' * 960, b'\x02' * 400 + b'\x00' * 560, b'\x00' * 960, b'\x00' * 960])
-        self.assertEqual([chunk.time_ns for chunk in chunks], [i * 20_000_000 for i in range(5)])
-        self.assertGreater(elapsed, 0.07)  # paced in real time, not as fast as it can
+        try:
+            chunks = [await asyncio.wait_for(speaker.read(), 1) for _ in range(10)]
+        finally:
+            elapsed = time.monotonic() - started
+            speaker.close()
+        self.assertEqual({chunk.data for chunk in chunks}, {bytes(960)})
+        self.assertEqual([chunk.time_ns for chunk in chunks], [i * 20_000_000 for i in range(10)])
+        self.assertGreater(elapsed, 0.15)  # paced in real time, not as fast as it can
+        # It asks again on the next tick, never in a loop: about one read per 20 ms.
+        self.assertLessEqual(device.reads, 13)
+        self.assertGreaterEqual(speaker.empty_reads, 8)
+        self.assertEqual(speaker.read_errors, 0)  # never re-armed inside a completion
 
-    async def test_speaker_keeps_audio_that_arrives_in_bigger_pieces(self):
-        device = FakeDevice('speaker', 'speaker')
-        device.reads = [b'\x03' * 1500]
+    async def test_a_quiet_room_passes_its_silence_on_and_fills_gaps(self):
+        # People in the room with nothing to say: Daily plays their silence. A read that finds
+        # nothing in between leaves silence in its place, and the stream goes on.
+        device = FakeSpeakerDevice()
+        device.plays = [bytes(960)] * 5 + [None] + [self.voice(7)] + [bytes(960)] * 20
         speaker = DailySpeaker(device)
-        self.assertEqual(speaker.next_chunk(), b'\x03' * 960)
-        self.assertEqual(speaker.next_chunk(), b'\x03' * 540 + b'\x00' * 420)
-        device.reads = [b'\x04' * 960 * 30]
-        speaker.next_chunk()
-        self.assertLessEqual(len(speaker._pending), 960 * 10)  # never more than ten chunks behind
+        speaker.start()
+        try:
+            chunks = await self.read_until(speaker, lambda got: self.voice(7) in got)
+        finally:
+            speaker.close()
+        self.assertTrue(all(chunk in (bytes(960), self.voice(7)) for chunk in chunks))
+        self.assertEqual(chunks.count(self.voice(7)), 1)
+        self.assertGreaterEqual(speaker.reads, 6)
+        self.assertEqual(speaker.empty_reads, 1)
 
     async def test_the_microphone_shows_each_chunk_and_the_ones_queued_behind_it(self):
         device = FakeDevice('microphone', 'mic')
@@ -441,12 +561,144 @@ class DailyAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [(b'\x01', [b'\x02']), (b'\x02', [])])
         self.assertEqual(len(device.written), 2)
 
-    async def test_a_speaker_reader_that_falls_behind_loses_the_oldest_audio(self):
-        speaker = DailySpeaker(FakeDevice('speaker', 'speaker'), max_chunks=2)
+    async def test_audio_in_bigger_or_smaller_pieces_comes_out_in_20_ms_chunks(self):
+        speaker = DailySpeaker(FakeSpeakerDevice())
+        speaker._arrived(b'\x03' * 1500)
+        self.assertEqual(speaker.next_chunk(), b'\x03' * 960)
+        self.assertEqual(speaker.next_chunk(), b'\x03' * 540 + bytes(420))
+        speaker._arrived(b'\x04' * 400)
+        self.assertEqual(speaker.next_chunk(), b'\x04' * 400 + bytes(560))
+
+    async def test_more_than_half_a_second_ahead_the_oldest_audio_is_dropped_and_counted(self):
+        speaker = DailySpeaker(FakeSpeakerDevice())
+        burst = b''.join(self.voice(number) for number in range(1, 41))  # 800 ms at once
+        speaker._arrived(burst)
+        self.assertEqual(len(speaker._pending), 25 * 960)
+        self.assertEqual(speaker.overflow_bytes, 15 * 960)
+        self.assertEqual(speaker.dropped_ms, 300)
+        self.assertEqual(speaker.next_chunk(), self.voice(16))  # the oldest 15 chunks went
+
+    async def test_ahead_of_the_clock_it_skips_silence_but_never_speech(self):
+        speaker = DailySpeaker(FakeSpeakerDevice())
+        silence = bytes(960)
+        speaker._arrived(self.voice(1) + silence * 4 + self.voice(2) * 3 + silence)
+        out = [speaker.next_chunk() for _ in range(7)]
+        # More than three chunks ahead, one silent chunk is skipped a tick until only three
+        # wait; the speech after them is all passed on.
+        self.assertEqual(out, [self.voice(1), silence, silence] + [self.voice(2)] * 3 + [silence])
+        self.assertEqual(speaker.skipped_bytes, 2 * 960)
+        self.assertEqual(speaker.dropped_ms, 0)
+        speaker._arrived(self.voice(3) * 6)
+        out = [speaker.next_chunk() for _ in range(8)]
+        # Speech is never skipped, however far ahead.
+        self.assertEqual(out, [self.voice(3)] * 6 + [silence] * 2)
+        self.assertEqual(speaker.skipped_bytes, 2 * 960)
+
+    async def test_completions_after_close_or_after_the_loop_ended_are_ignored(self):
+        device = FakeSpeakerDevice()
+        device.plays = [self.voice(1)] * 3
+        speaker = DailySpeaker(device)
+        speaker.start()
+        await asyncio.sleep(0.01)
+        speaker.close()
+        reads = device.reads
+        await asyncio.sleep(0.1)  # the read that was waiting completes after close
+        self.assertEqual(device.reads, reads)  # and asks for nothing more
+        self.assertEqual(len(speaker._pending), 0)
+        # A completion from Daily's thread once the event loop has gone raises nothing there.
+        closed_loop = asyncio.new_event_loop()
+        closed_loop.close()
+        late = DailySpeaker(FakeSpeakerDevice())
+        late.loop = closed_loop
+        errors = []
+        thread = threading.Thread(target=lambda: self._call(late._completed, self.voice(1), errors))
+        thread.start()
+        thread.join(1)
+        self.assertEqual(errors, [])
+
+    @staticmethod
+    def _call(function, data, errors):
+        try:
+            function(data)
+        except Exception as error:  # what Daily's thread would see
+            errors.append(error)
+
+    async def test_a_read_that_fails_is_counted_and_asked_again_on_the_next_tick(self):
+        device = FakeSpeakerDevice()
+        device.fail = RuntimeError('no speaker device has been attached')
+        speaker = DailySpeaker(device)
+        speaker.start()
+        try:
+            chunks = [await asyncio.wait_for(speaker.read(), 1) for _ in range(5)]
+            self.assertEqual({chunk.data for chunk in chunks}, {bytes(960)})
+            self.assertGreaterEqual(speaker.read_errors, 4)
+            self.assertLessEqual(speaker.read_errors, 8)  # once a tick, not in a loop
+            device.fail = None
+            device.plays = [self.voice(5)]
+            await self.read_until(speaker, lambda got: self.voice(5) in got)
+        finally:
+            speaker.close()
+
+    async def test_a_read_daily_never_answers_is_asked_again(self):
+        # Waiting forever on it would leave the meeting deaf again, with nothing to show for it.
+        device = FakeSpeakerDevice()
+        device.swallow = 1
+        played = [self.voice(number) for number in range(1, 6)]
+        device.plays = list(played)
+        speaker = DailySpeaker(device, read_timeout=0.1)
+        speaker.start()
+        try:
+            chunks = await self.read_until(speaker, lambda got: played[-1] in got)
+        finally:
+            speaker.close()
+        self.assertEqual([chunk for chunk in chunks if chunk != bytes(960)], played)
+        self.assertEqual(speaker.lost_reads, 1)
+        self.assertEqual(speaker.stats()['lost_reads'], 1)
+
+    async def test_a_read_that_answers_after_it_was_given_up_only_adds_its_audio(self):
+        device = FakeSpeakerDevice()
+        device.slow = [0.2]  # the first read answers after the next one was asked for
+        played = [self.voice(number) for number in range(1, 8)]
+        device.plays = list(played)
+        speaker = DailySpeaker(device, read_timeout=0.15)
+        speaker.start()
+        try:
+            chunks = await self.read_until(speaker, lambda got: played[-1] in got)
+        finally:
+            speaker.close()
+        self.assertEqual([chunk for chunk in chunks if chunk != bytes(960)], played)
+        self.assertEqual(speaker.lost_reads, 1)
+        # The given-up read and its replacement wait together; once the late one has answered,
+        # one read at a time again.
+        self.assertEqual(device.waiting_at, [2] + [1] * (len(played) - 1))
+
+    async def test_a_reader_that_falls_behind_loses_the_oldest_audio_once_it_reads(self):
+        speaker = DailySpeaker(FakeSpeakerDevice(), max_chunks=2)
         for value in (b'a', b'b', b'c'):
             speaker._put(value)
-        self.assertEqual(speaker.dropped, 1)
+        # Before anyone reads (GPT-Live still starting), the oldest simply gives way.
+        self.assertEqual(speaker.dropped, 0)
         self.assertEqual([(await speaker.read()).data for _ in range(2)], [b'b', b'c'])
+        for value in (b'd', b'e', b'f'):
+            speaker._put(value)
+        self.assertEqual(speaker.dropped, 1)
+        self.assertEqual(speaker.dropped_ms, 20)
+        self.assertEqual([(await speaker.read()).data for _ in range(2)], [b'e', b'f'])
+
+    async def test_once_the_reader_stops_what_still_comes_in_is_not_counted_as_dropped(self):
+        # 2026-11-05: after the meeting ended, the room's audio kept coming in for a second and
+        # a half and was logged as GPT-Live falling behind.
+        speaker = DailySpeaker(FakeSpeakerDevice(), max_chunks=2)
+        speaker._put(b'a')
+        self.assertEqual((await speaker.read()).data, b'a')
+        speaker.stop_listening()
+        for value in (b'b', b'c', b'd', b'e'):
+            speaker._put(value)
+        self.assertEqual(speaker.dropped, 0)
+        self.assertEqual([(await speaker.read()).data for _ in range(2)], [b'd', b'e'])
+        for value in (b'f', b'g', b'h'):
+            speaker._put(value)
+        self.assertEqual(speaker.dropped, 0)  # a read after stopping does not count drops again
 
 
 def pack_of(clips, states, arrival=None, fps=12):
