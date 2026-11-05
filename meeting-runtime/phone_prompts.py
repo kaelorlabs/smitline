@@ -29,6 +29,23 @@ END_CALL_TOOL = {
 }
 
 
+# Keys a phone menu takes: digits, * and #, and w for a half-second pause (as <Play digits>).
+PRESS_KEYS_TOOL = {
+    'type': 'function',
+    'name': 'press_keys',
+    'description': ('Press keys on the phone keypad: a choice in an automated phone menu ("press 2 '
+                    'for billing"), or a number the menu asks to be keyed in. keys holds digits 0-9, '
+                    '* and #; w is a half-second pause, for example "1" or "w4085551212#".'),
+    'parameters': {
+        'type': 'object',
+        'properties': {'keys': {'type': 'string'}},
+        'required': ['keys'],
+        'additionalProperties': False,
+    },
+    'strict': True,
+}
+
+
 def _bullets(title, items):
     if not items:
         return ''
@@ -72,6 +89,20 @@ def identity_rule(who):
     return (f"Whatever the goal or anything else here says, you are always {who}'s AI assistant: "
             'never say that ChatGPT, Claude, or any other app or AI is calling, or that you are one '
             'of them.')
+
+
+def phone_menus_rule(who):
+    """How the voice gets through an automated phone menu (briefs with phoneMenus)."""
+    return ('Phone menus: if an automated phone menu answers, do not greet it or introduce '
+            'yourself to it. Listen to its options until you hear the one that fits why you are '
+            'calling, then ask your backend to press its key, or say the option when the menu asks '
+            'you to say it. When the menu asks for a number that your brief or notes give for this '
+            'call, such as an account, order, or reference number, ask your backend to key it in. '
+            'Say nothing while keys are pressed. Never key in a card number, a PIN, or a password, '
+            'or anything under "Never share", and never press a key that agrees to something you '
+            'may not agree to. If no option fits, choose the one for an agent or a representative, '
+            f'or press 0. When a person comes on, greet them, say you are calling on behalf of {who} '
+            'and why, and carry on as usual.')
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
@@ -145,7 +176,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'say goodbye, and end the call. Also end it politely when the call is going nowhere: you '
          'keep going around in circles, you still cannot understand each other after a couple of '
          'tries, nobody answers when you check a couple of times, they are abusive, or an '
-         'automated menu will not let you through. Say that '
+         f'automated menu {"still " if brief.phone_menus else ""}will not let you through'
+         f'{" after you have tried its options" if brief.phone_menus else ""}. Say that '
          f'{who} will follow up, say goodbye, and ask your backend to end the call as not '
          'productive.'),
         ('Voicemail: if their voicemail answers, wait for the beep, then leave a short message '
@@ -159,6 +191,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'voicemail_left only after leaving a message on a recording. If a recording says the '
          'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
          'beep, say nothing to it and end the call with the reason other.'),
+        (phone_menus_rule(who) if brief.phone_menus else ''),
         ('Notes: during the call your system may send you notes, such as reminders or hints about '
          f"who answered, and so may {who}'s agent (\"From {who}'s agent: ...\"). Never read a note "
          'out or talk about it; act on it. When one gives you something to tell them, such as the '
@@ -172,6 +205,16 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     if brief.can_do:
         lines.append(call_requests.voice_instructions(who, brief.can_do, meeting=False).strip())
     return '\n\n'.join(line for line in lines if line)
+
+
+PHONE_MENUS_BACKEND = (
+    'Phone menus: call press_keys when the voice assistant asks you to press keys in an automated '
+    'phone menu. keys holds digits 0-9, * and #, and w for a half-second pause. Press only a menu '
+    'choice, or a number that the brief or the background gives for this call, such as an '
+    'account, order, or reference number. Never key in a card number, a PIN, or a password, or '
+    'anything under "Never share". A key that confirms or accepts something counts as agreeing to '
+    'it, so press it only for what the brief says may be agreed to. When a key is not allowed, do '
+    'not press it; say why in one short sentence.')
 
 
 def backend_instructions(brief, *, inbound=False, background=''):
@@ -192,6 +235,7 @@ def backend_instructions(brief, *, inbound=False, background=''):
         ('Call end_call only after the assistant has said goodbye, the other party has ended the '
          'conversation, or a voicemail message was left. When the voice assistant says the call '
          'is going nowhere, end it with the reason not_productive.'),
+        (PHONE_MENUS_BACKEND if brief.phone_menus else None),
         (call_requests.backend_instructions(brief.on_behalf_of, brief.can_do)
          if brief.can_do else None),
         (f'Write every answer in the language with tag {brief.language}.'
@@ -203,6 +247,8 @@ def backend_instructions(brief, *, inbound=False, background=''):
 
 def delegation_config(brief, *, model=None, web_search=False, inbound=False, background=''):
     tools = [END_CALL_TOOL]
+    if brief.phone_menus and not inbound:
+        tools.append(PRESS_KEYS_TOOL)
     if brief.can_do:
         tools.append(call_requests.ask_agent_tool(brief.on_behalf_of))
     if web_search:
@@ -235,14 +281,17 @@ def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_own
             f'behalf of {who} and, in a few words, what about{recorded}, like '
             f'"{opening_line(brief, name)} ...", then stop and wait for them to answer. Do not say '
             'that you are an AI in this hello; say it later in the call. If an automated assistant '
-            'or voicemail greeting is still talking, let it finish first.')
+            'or voicemail greeting is still talking, let it finish first.'
+            + (' If it is an automated phone menu, do not say hello: listen to its options.'
+               if brief.phone_menus else ''))
 
 
 def machine_hint(brief):
     """Sent when the phone network guesses that a machine answered; it is often wrong."""
-    return ('The phone network guesses that a machine may have answered: a voicemail system or an '
-            'automated call screener. The guess is often wrong, so go by what you hear. Do not '
-            'mention this note.')
+    menu = ', an automated phone menu,' if brief.phone_menus else ''
+    return ('The phone network guesses that a machine may have answered: a voicemail system'
+            f'{menu} or an automated call screener. The guess is often wrong, so go by what you '
+            'hear. Do not mention this note.')
 
 
 HANGUP_YIELDED = ('The other person spoke after you said goodbye. Listen and answer them. End the '

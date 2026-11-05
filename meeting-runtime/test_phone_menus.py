@@ -5,6 +5,10 @@ import unittest
 from call_brief import CallBrief
 from call_recorder import ULAW
 from phone_keys import FREQUENCIES, key_audio, menu_keys, shown_keys
+from phone_prompts import (
+    PRESS_KEYS_TOOL, backend_instructions, delegation_config, machine_hint, opening_cue,
+    voice_instructions,
+)
 from test_phone import brief
 
 
@@ -36,6 +40,37 @@ class BriefTests(unittest.TestCase):
             CallBrief.from_dict({'channel': 'meeting', 'to': 'https://zoom.us/j/123456789',
                                  'onBehalfOf': 'Robin', 'objective': 'Take notes',
                                  'phoneMenus': True})
+
+
+class PromptTests(unittest.TestCase):
+    def tools(self, brief_, **kwargs):
+        return [tool['name'] for tool in delegation_config(brief_, **kwargs)['responses']['tools']]
+
+    def test_the_key_tool_comes_only_with_the_brief(self):
+        self.assertEqual(self.tools(parsed()), ['end_call'])
+        self.assertEqual(self.tools(parsed(phoneMenus=True)), ['end_call', 'press_keys'])
+        self.assertEqual(self.tools(parsed(phoneMenus=True), inbound=True), ['end_call'])
+        self.assertTrue(PRESS_KEYS_TOOL['strict'])
+
+    def test_without_it_the_voice_gives_up_at_a_menu_as_before(self):
+        text = voice_instructions(parsed())
+        self.assertIn('automated menu will not let you through. Say that', text)
+        self.assertNotIn('Phone menus:', text)
+        self.assertNotIn('Phone menus:', backend_instructions(parsed()))
+        self.assertNotIn('phone menu', opening_cue(parsed()))
+        self.assertIn('a voicemail system or an automated call screener', machine_hint(parsed()))
+
+    def test_with_it_the_voice_works_the_menu(self):
+        on = parsed(phoneMenus=True)
+        text = voice_instructions(on)
+        self.assertIn('Phone menus: if an automated phone menu answers, do not greet it', text)
+        self.assertIn('Never key in a card number, a PIN, or a password', text)
+        self.assertIn('still will not let you through after you have tried its options', text)
+        backend = backend_instructions(on)
+        self.assertIn('call press_keys when the voice assistant asks you', backend)
+        self.assertIn('counts as agreeing', backend)
+        self.assertIn('do not say hello: listen to its options', opening_cue(on))
+        self.assertIn('an automated phone menu', machine_hint(on))
 
 
 class KeyTests(unittest.TestCase):
