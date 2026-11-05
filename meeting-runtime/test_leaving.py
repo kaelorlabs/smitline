@@ -179,7 +179,10 @@ class TeardownOrderTests(unittest.IsolatedAsyncioTestCase):
         # Out of the meeting first; only then is it marked ended, and GPT-Live closed after that.
         self.assertLess(kinds.index('agent_left'), kinds.index('left'))
         self.assertLess(kinds.index('left'), kinds.index('stage:meeting_ended'))
-        self.assertEqual(kinds[-2:], ['session_closed', 'stage:finished'])
+        # input_audio, what came in from the meeting, is written whenever the audio reader stops;
+        # this test's fake meeting never hands it another chunk, so it stops last of all.
+        ending = [kind for kind in kinds if kind != 'input_audio']
+        self.assertEqual(ending[-2:], ['session_closed', 'stage:finished'])
         self.assertEqual(run.state['leaveState'], 'left')
         self.assertEqual(run.state['endReason'], 'left_completed')
         # Nothing is left to mute once it is out (Zoom took three seconds to find nothing).
