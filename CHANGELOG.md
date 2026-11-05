@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Agents see that Smitline can start a meeting.** These now say plainly that a meeting brief with `to: "new"` starts a room people join from a link, ready in seconds: `start_call`'s description, its `channel` and `to` fields, the MCP server's instructions and the call-with-smitline skill. Joining someone's meeting by its link can take a minute or two while a hosted service starts a machine for it; `get_call` says this where it explains `connecting`. Before this, ChatGPT, connected before rooms existed, offered only to join a Zoom, Teams or Meet link and said it couldn't make one.
+
 ## 0.3.7 — 2026-11-05
 
 - **Each meeting on a machine of its own, for hosted installations.** `SMITLINE_MEETING_LAUNCHER=package.module:create` names a launcher plugin, and the daemon runs each meeting on a machine the plugin makes for it, such as a cloud VM, instead of in a container on its own Docker host. The meeting starts in the background: its call is `connecting` while the machine boots (about 80 seconds on Google Cloud), `end_call` ends it at once, and a machine that never comes up fails the call. The machine gets the meeting's runtime state, environment and token by value, so no key is written on the daemon's side. Its meeting checks the token on every route, `/health` too, and hands its archive back at `GET /archive` before the handoff is written. A restarted daemon adopts the machines still running, with their tokens (kept in `.smitline/active-meetings/<meeting id>.token`). Without the setting nothing changes. See [Each meeting on a machine of its own](docs/meetings.md#each-meeting-on-a-machine-of-its-own).
