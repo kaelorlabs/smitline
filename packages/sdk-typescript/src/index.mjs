@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 
 export const SCHEMA_VERSION = 1;
-export const SDK_VERSION = '0.3.9';
+export const SDK_VERSION = '0.3.10';
 
 export const EXIT = Object.freeze({
   ok: 0,
@@ -400,9 +400,10 @@ export class Smitline {
   /** Long-poll until the call is terminal or the timeout (at most 280 s) passes. */
   /**
    * Wait until the call finishes or the timeout passes. Pass `{ since }` ('' at first, then the
-   * last answer's `live.cursor`) to follow it live: the answer then also comes once something new
-   * is said, with `live.transcript` holding the new lines, and at once for a request
-   * (`live.requests`). `{ only: 'requests' }` wakes for requests alone, without the transcript.
+   * last answer's `live.cursor`) to follow it live: the answer then also comes once new talk has
+   * gathered (about 12 s), with `live.transcript` holding the new lines, and at once for a request
+   * (`live.requests`) or a status change. `{ only: 'requests' }` wakes for requests alone, without
+   * the transcript.
    */
   async waitForCall(callId, timeoutSeconds = 60, { since, only, others } = {}) {
     return this._transport.waitForCall(callId, timeoutSeconds, since, only, others);
@@ -451,12 +452,15 @@ export class Smitline {
     return this._transport.instructCall(callId, text, options);
   }
 
-  /** The owner's profile: who they are, the people they know, how they come across. */
+  /** The owner's profile: who they are, the people they know, how they come across, default voices. */
   async getProfile() {
     return this._transport.getProfile();
   }
 
-  /** Merge into the profile: fields replace, people upsert by name, removePeople drops names. */
+  /**
+   * Merge into the profile: fields replace, people upsert by name, removePeople drops names, and
+   * voices ({ phone, meeting }) sets the default voices ('' for the default).
+   */
   async updateProfile(update) {
     return this._transport.updateProfile(update);
   }
@@ -484,6 +488,7 @@ export class Smitline {
     return this._transport.transferCall(callId);
   }
 
+  /** The voices calls can use, and the defaults for phone calls and for meetings. */
   async listVoices() {
     return this._transport.listVoices();
   }

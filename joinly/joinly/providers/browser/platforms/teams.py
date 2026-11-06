@@ -140,14 +140,23 @@ class TeamsBrowserPlatformController(BaseBrowserPlatformController):
     async def leave(self, page: Page) -> None:
         """Leave the Teams meeting.
 
+        Teams names the button "Leave", at times with its shortcut ("Leave (Ctrl+Shift+H)"),
+        and can draw more than one; an organizer's "Leave options" beside it is never pressed.
+        With no visible button, Teams' own shortcut hangs up.
+
         Args:
             page: The Playwright page instance.
         """
-        leave_btn = page.get_by_role("button", name=re.compile(r"leave", re.IGNORECASE))
-        if not await leave_btn.is_visible():
-            msg = "Leave button not found or not visible."
-            raise RuntimeError(msg)
-        await leave_btn.click(timeout=1000)
+        buttons = page.get_by_role(
+            "button",
+            name=re.compile(r"^(?:leave|hang up)(?:\s*\([^)]*\))?$", re.IGNORECASE),
+        )
+        for button in await buttons.all():
+            if await button.is_visible():
+                await button.click(timeout=2000)
+                break
+        else:
+            await page.keyboard.press("Control+Shift+H")
         await page.wait_for_timeout(500)
 
     async def send_chat_message(self, page: Page, message: str) -> None:

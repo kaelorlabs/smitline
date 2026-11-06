@@ -23,10 +23,11 @@ from voice_core import append_event, backend_usage_from, function_call_from, fun
 import call_requests
 from meeting_control import ArchiveDoor, MeetingControl, add_routes, archive_grace, health_route
 from meeting_connection import joined_meeting
+from meeting_input import InputMonitor
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
     others_in, participants_note, speaker_note)
-from adapters_base import AuthenticationRequired
+from adapters_base import AuthenticationRequired, join_refusal, leave_meeting
 from meeting_urls import platform_for_url
 from participation import Participation
 from presence_pack import load_presence_pack
@@ -44,6 +45,7 @@ from joinly.providers.browser.devices.virtual_speaker import VirtualSpeaker
 from joinly.providers.browser.devices.virtual_microphone import VirtualMicrophone
 from joinly.providers.browser.camera_feed import CameraFeed
 from visual_presence import Presence, apply_platform_camera, presence_public_fields
+from voice_activity import VoiceActivity
 
 state = {'stage': 'starting', 'model': 'gpt-live-1', 'input_bytes': 0, 'output_bytes': 0,
          'muted': True, 'listening': False, 'admissionState': 'pending', 'authenticationState': 'guest', 'microphoneState': 'muted', 'captions': [], 'usage_seconds': 0, 'finalized': False,
@@ -77,6 +79,19 @@ def stage(value):
         print(value, flush=True)
     if presence is not None:
         presence.sync()
+
+
+def note_join_refused(error):
+    """How the platform kept the browser out, when it did (adapters_base.join_refusal): on /health
+    and in the archive, as a word the call's result explains. The error's own text stays here."""
+    refused = join_refusal(error)
+    if refused:
+        state['joinRefused'] = refused
+        if record:
+            # Never in the way of what the meeting does next: report the stage, close the archive.
+            with contextlib.suppress(Exception):
+                record.event('join_refused', refusal=refused)
+    return refused
 
 
 PRIVATE_NAMES = frozenset({'MEETING_URL', 'MEETING_PASSCODE', 'TWILIO_ACCOUNT_SID'})
@@ -212,6 +227,11 @@ def build_session_config(runtime, meeting_state=None):
 
 # Seconds a goodbye gets to be heard before the agent leaves.
 LEAVE_SPEECH_TIMEOUT = 10.0
+# The tasks that read or click the meeting while it runs. They stop before the agent leaves, so
+# nothing else touches the page while Leave is pressed.
+PLATFORM_WATCHERS = frozenset({
+    'microphone_monitor', 'meeting_lifecycle', 'speaker_notes', 'ai_disclosure', 'leave_after_goodbye',
+})
 # Who is speaking: asked this often (an adapter may set speaker_poll_seconds), and told to the
 # voice once someone has held the floor this long, so a passing "yeah" does not count.
 SPEAKER_POLL_SECONDS = 1.0
@@ -231,29 +251,58 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                 adapter, microphone, state, on_presence=_sync_presence, record=record)
             gate = participation
             transcript = MeetingTranscript(record, state)
+            room_input = InputMonitor()  # the room's audio as it goes to GPT-Live
             last_speech = [time.monotonic()]
             leaving = []
             # Asked to leave, then a goodbye: the meeting is left once that has been heard.
             turns = {'meeting': '', 'agent': '', 'last': None}
             asked_to_leave = [None]  # when someone asked the agent to leave in so many words
+            ask_answered = [False]  # the agent has spoken since it was last asked to leave
             goodbye = [None]  # when the agent last said goodbye
             judged = [None]  # the goodbye the leave check last decided to stay after
             judge = LeaveJudge(api_key)
             said_after_goodbye = ['']
             heard_at = [None]  # when the meeting was last heard
+            platform_ended = [False]  # the platform ended the meeting (the host, a removal)
+            platform_leave = []  # the one leave of the meeting, once some way out began it
 
-            async def leave(reason, why):
-                # Every way out goes through stop: GPT-Live closes (final usage) and the bot leaves.
+            def leave_platform():
+                """Leave the meeting on its platform, once, whichever way out comes first, and
+                before anything else ends: the voice stops, the tasks that read the page stop, and
+                the adapter leaves (adapters_base.leave_meeting). Every way out waits for it."""
+                if not platform_leave:
+                    platform_leave.append(asyncio.ensure_future(leave_the_platform()))
+                return asyncio.shield(platform_leave[0])
+
+            async def leave_the_platform():
+                state['finalizing'] = True
+                _sync_presence()
+                await gate.stop_output()
+                watchers = [task for task in tasks if task.get_name() in PLATFORM_WATCHERS]
+                for task in watchers:
+                    task.cancel()
+                await asyncio.gather(*watchers, return_exceptions=True)
+                return await leave_meeting(adapter, state, record=record.event, page=page)
+
+            async def leave(reason, why, settle=1.0):
+                """The agent leaves: by its own choice (reason), or alone or idle (None). Its
+                goodbye is heard first, then the meeting is left, and only then is it marked ended;
+                closer() closes GPT-Live after that, so leaving never waits behind it."""
                 state['endReason'] = why
                 record.event('auto_leave' if reason is None else 'agent_left',
                              reason=why if reason is None else reason)
-                try:
-                    if reason is not None:
-                        await participation.finish_speaking(LEAVE_SPEECH_TIMEOUT)
-                    await gate.stop_output()
-                finally:
+                if reason is not None:
+                    await participation.finish_speaking(LEAVE_SPEECH_TIMEOUT, settle=settle)
+                await leave_platform()
+                if not finished.is_set():
                     stage('meeting_ended')
-                    stop.set()
+                stop.set()
+
+            def start_leaving(reason, why, settle=1.0):
+                if leaving:
+                    return
+                leaving.append(asyncio.create_task(leave(reason, why, settle), name='agent_leave'))
+                leaving[0].add_done_callback(task_failed)
 
             heard = [None]  # when someone in the meeting was last heard; the intro waits for a pause
             requests = []
@@ -309,12 +358,23 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
 
             async def send_audio():
                 await ready.wait()
-                while not stop.is_set():
-                    chunk = await speaker.read()
-                    state['input_bytes'] += len(chunk.data)
-                    audio = base64.b64encode(chunk.data).decode()
-                    await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
-                    listening.push('meeting', audio)
+                try:
+                    while not stop.is_set():
+                        chunk = await speaker.read()
+                        room_input.feed(chunk.data)
+                        state['input_bytes'] += len(chunk.data)
+                        state['input'] = room_input.stats(speaker)
+                        audio = base64.b64encode(chunk.data).decode()
+                        await ws.send_json({'type': 'session.input_audio.append', 'audio': audio})
+                        listening.push('meeting', audio)
+                finally:
+                    # Nobody reads the room any more: what still comes in is not lost speech.
+                    stop_listening = getattr(speaker, 'stop_listening', None)
+                    if stop_listening is not None:
+                        stop_listening()
+                    # What came in, in the archive before it closes (a machine of its own hands
+                    # the archive over before process_stopped is written).
+                    record.event('input_audio', **room_input.stats(speaker))
 
             async def watch_microphone():
                 # Also accepts a host's explicit request to unmute (Participation.accept_host_unmute).
@@ -324,9 +384,15 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     actual = await adapter.get_microphone_state()
                     await gate.platform_microphone_changed(actual)
 
+            def last_heard():
+                # Someone talking in the room's audio, or their words: the words come a second or
+                # more after the audio, so going by them alone the hello cut in over people.
+                times = [at for at in (room_input.last_voiced_at, heard[0]) if at is not None]
+                return max(times) if times else None
+
             async def introduce_once():
                 if await introduce(ws.send_json, runtime, participation, ready, stop,
-                                   heard_at=lambda: heard[0],
+                                   heard_at=last_heard,
                                    takes_requests=bool(meeting_state.get('canDo'))):
                     state['introduced'] = True
                     record.event('ai_disclosure_cued')
@@ -348,9 +414,10 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     record.event('participants_unavailable', platform=state.get('platform'))
                 if names and names != participants['names']:
                     participants['names'] = names
-                    if await send_note('thinking', participants_note(
-                            names, runtime.owner_name, runtime.participant_name)):
-                        record.event('participants', count=len(names))
+                    # In the archive too: the result says who was there, also people who never spoke.
+                    record.event('participants', count=len(names), names=names)
+                    await send_note('thinking', participants_note(
+                        names, runtime.owner_name, runtime.participant_name))
 
             async def follow_speakers():
                 """Tell the voice who is speaking once that has held for a moment, so a reply can
@@ -369,6 +436,9 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     state['activeSpeaker'] = name
                     if name:
                         state['lastSpeaker'] = name
+                    silent = room_input.speaker(name)
+                    if silent:  # the meeting shows people talking, and nothing comes in
+                        record.event('input_silent', **silent)
                     now = time.monotonic()
                     if name != current:
                         current, since = name, now
@@ -386,7 +456,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     state['microphoneState'] = await adapter.get_microphone_state()
                     state['chatAvailable'] = await adapter.chat_available()
                     if await adapter.has_ended():
-                        stage('meeting_ended')
+                        platform_ended[0] = True  # closer() marks it ended once it is out
                         stop.set()
                         return
                     await tell_who_is_here()
@@ -394,14 +464,18 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         count = await adapter.get_participant_count()
                     except Exception:
                         count = None
+                    if count is not None and count != participants.get('count'):
+                        participants['count'] = count
+                        record.event('participant_count', count=count)  # itself included
                     state['participantCount'] = count
                     if leaving:
                         return
+                    # Leaving stops this task, so it goes on in a task of its own.
                     if alone.update(count):
-                        await leave(None, 'alone_in_meeting')
+                        start_leaving(None, 'alone_in_meeting')
                         return
                     if is_idle(last_speech[0], time.monotonic(), runtime.idle_leave_seconds):
-                        await leave(None, 'idle')
+                        start_leaving(None, 'idle')
                         return
 
             def note_turn(kind, delta):
@@ -410,23 +484,31 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     return
                 now = time.monotonic()
                 side = 'meeting' if kind == 'session.input_transcript.delta' else 'agent'
-                if turns['last'] != side:
+                new_turn = turns['last'] != side
+                if new_turn:
                     turns[side] = ''
                 turns[side] += delta
                 turns['last'] = side
                 if side == 'meeting':
                     heard_at[0] = now
                     if asks_to_leave(turns['meeting'][-240:]):
-                        asked_to_leave[0], goodbye[0] = now, None
+                        asked_to_leave[0], goodbye[0], ask_answered[0] = now, None, False
                     elif goodbye[0] is not None:
                         said_after_goodbye[0] += delta
+                elif new_turn and asked_to_leave[0] is not None and not ask_answered[0]:
+                    # Its answer to being asked to go is its goodbye, in whatever language it
+                    # speaks; leave_after_goodbye has the leave check read words it cannot.
+                    ask_answered[0] = True
+                    goodbye[0], said_after_goodbye[0] = now, ''
                 elif goodbye[0] is None and says_goodbye(turns['agent']):
                     goodbye[0], said_after_goodbye[0] = now, ''
 
             async def leave_after_goodbye():
                 """After the agent's goodbye has been heard and the meeting is quiet for a moment,
                 leave without waiting for the backend's leave_meeting: at once when someone asked
-                it to leave, otherwise when the leave check of the end of the meeting says so."""
+                it to leave and it said goodbye in so many words, otherwise when the leave check of
+                the end of the meeting says so. The check reads any language, so a goodbye in Hindi
+                after "you can hang up" leaves as soon as an English one (2026-11-05: 27 s)."""
                 await ready.wait()
                 quiet_since = None
                 while not stop.is_set() and not leaving:
@@ -437,7 +519,11 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     if goodbye[0] is None:
                         quiet_since = None
                         continue
-                    if not says_goodbye(turns['agent']) or not only_closing(said_after_goodbye[0]):
+                    # A goodbye in so many words ends what the agent said, and only thanks and
+                    # goodbyes may follow it. Other words count only as the answer to an ask.
+                    plain = says_goodbye(turns['agent'])
+                    if ((plain and not only_closing(said_after_goodbye[0]))
+                            or (not plain and asked_to_leave[0] is None)):
                         goodbye[0], quiet_since = None, None  # it said more, or they carried on
                         continue
                     if participation.speaking() or (heard_at[0] is not None and now - heard_at[0] < 1.0):
@@ -446,27 +532,36 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                     quiet_since = quiet_since or now
                     if now - quiet_since < meeting_lifecycle.LEAVE_QUIET_SECONDS:
                         continue
-                    reason = 'asked_to_leave' if asked_to_leave[0] is not None else None
+                    reason = 'asked_to_leave' if asked_to_leave[0] is not None and plain else None
                     if reason is None:
                         if judged[0] == goodbye[0]:
                             continue  # it already decided to stay after this goodbye
                         said_at = judged[0] = goodbye[0]
+                        asked_at = time.monotonic()
                         decided, why = await judge.decide(state.get('captions') or [],
                                                           runtime.participant_name)
                         record.event('leave_judged', leave=decided, reason=why)
-                        if (not decided or leaving or goodbye[0] != said_at
-                                or not only_closing(said_after_goodbye[0])):
+                        if not decided or leaving or goodbye[0] != said_at:
+                            continue
+                        if says_goodbye(turns['agent']):
+                            if not only_closing(said_after_goodbye[0]):
+                                continue  # they carried on while it was decided
+                        elif heard_at[0] is not None and heard_at[0] > asked_at:
+                            judged[0], quiet_since = None, None  # someone spoke: decide again
                             continue
                         reason = why
                     record.event('goodbye_leave')
-                    leaving.append(asyncio.create_task(
-                        leave(reason, leave_end_reason(reason)), name='agent_leave'))
+                    # Heard already: no wait for a reply that might still be on its way.
+                    start_leaving(reason, leave_end_reason(reason), settle=0)
                     return
 
             async def closer():
                 await stop.wait()
-                state['finalizing'] = True
-                _sync_presence()
+                # Out of the meeting first, so nobody sees the agent's tile stay behind; then
+                # GPT-Live closes with the final usage, and bridge.main closes the archive.
+                await leave_platform()
+                if platform_ended[0] and not finished.is_set():
+                    stage('meeting_ended')
                 await ws.send_json({'type': 'session.close'})
                 try:
                     await asyncio.wait_for(finished.wait(), 15)
@@ -506,15 +601,21 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         stage('live')
                     elif kind == 'session.output_audio.delta':
                         listening.push('agent', event['delta'])
-                        data = base64.b64decode(event['delta'])
-                        # Fail rather than silently accumulate seconds of stale speech.
-                        gate.offer(data)
+                        # Once the agent is leaving, nothing more the voice says goes out.
+                        if not platform_leave:
+                            data = base64.b64decode(event['delta'])
+                            # Fail rather than silently accumulate seconds of stale speech.
+                            gate.offer(data)
                     elif kind in ('session.input_transcript.delta', 'session.output_transcript.delta'):
                         note_turn(kind, event.get('delta') or '')
                         if (event.get('delta') or '').strip():
                             last_speech[0] = time.monotonic()
                         if kind == 'session.input_transcript.delta' and (event.get('delta') or '').strip():
                             heard[0] = time.monotonic()
+                            # Talked over, the voice stops, as on a phone call (participation).
+                            participation.heard(event.get('start_ms'), event.get('end_ms'))
+                        elif (event.get('delta') or '').strip():
+                            participation.said()
                         control.heard('agent' if kind == 'session.output_transcript.delta' else 'meeting',
                                       event.get('delta') or '')
                         transcript.note(event)
@@ -528,9 +629,7 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         elif call and call['name'] == 'leave_meeting' and not leaving:
                             # Leaving needs no tool result or further backend turn.
                             reason = call['arguments'].get('reason') or 'other'
-                            leaving.append(asyncio.create_task(
-                                leave(reason, leave_end_reason(reason)), name='agent_leave'))
-                            leaving[0].add_done_callback(task_failed)
+                            start_leaving(reason, leave_end_reason(reason))
                         if state.get('backend_status') != before:
                             _sync_presence()
                     elif kind == 'session.usage.updated':
@@ -541,6 +640,8 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
                         state['finalized'] = True
                         state['usage_seconds'] = event.get('usage', {}).get('seconds', 0)
                         finished.set()
+                        # GPT-Live may end the session by itself: out of the meeting first.
+                        await leave_platform()
                         stage('finished')
                         break
                     elif kind == 'error':
@@ -557,9 +658,13 @@ async def run_voice(speaker, microphone, page, api_key, runtime, adapter, meetin
             finally:
                 control.send = None
                 control.quiet = None
-                for task in tasks + requests + leaving:
-                    task.cancel()
-                await asyncio.gather(*tasks, *requests, *leaving, return_exceptions=True)
+                try:
+                    # Every way out leaves the meeting before the rest stops, an error's too.
+                    await leave_platform()
+                finally:
+                    for task in tasks + requests + leaving:
+                        task.cancel()
+                    await asyncio.gather(*tasks, *requests, *leaving, return_exceptions=True)
 
 
 def presence_pack_for(runtime):
@@ -579,7 +684,8 @@ def presence_pack_for(runtime):
 
 def with_persona(runtime, pack, meeting_state=None):
     """The agent appears as the pack's character, so it takes the character's persona, and its
-    voice unless the brief named one (a brief's voice reaches the meeting as `voice`)."""
+    voice unless the meeting has one: the brief's, or the owner's meeting voice, which reach it
+    as `voice` (meeting_line.meeting_payload)."""
     if pack is None:
         return runtime
     changes = {}
@@ -596,7 +702,10 @@ def with_persona(runtime, pack, meeting_state=None):
 
 
 def camera_feed_for(runtime, microphone, pack=None):
-    """The browser meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE)."""
+    """The browser meeting camera for these settings (SMITLINE_MEETING_CAMERA_STYLE). The talking
+    picture and the mascot's mouth follow the voice as the microphone writes it (voice_activity.py)."""
+    voice = VoiceActivity()
+    voice.attach(microphone)
     style = runtime.camera_style if runtime.camera_style != 'mascot' or pack else 'still'
     return CameraFeed(
         microphone,
@@ -605,6 +714,7 @@ def camera_feed_for(runtime, microphone, pack=None):
         style=style,
         caption=camera_caption(runtime.owner_name),
         pack=pack.page_payload() if pack is not None else None,
+        voice=voice,
     )
 
 
@@ -729,6 +839,7 @@ async def main():
                 await run_voice(speaker, camera_feed.audio_writer, page, api_key, runtime, adapter, meeting_state)
         except Exception as exc:
             state['error'] = type(exc).__name__ + ': ' + str(exc).split('Call log:')[0][:300]
+            note_join_refused(exc)
             stage('authentication_required' if isinstance(exc, AuthenticationRequired) else 'needs_attention')
             print(state['error'], flush=True)
             if archive_grace(os.environ):
@@ -745,6 +856,23 @@ async def main():
                 await archive_door.wait_fetched(archive_grace(os.environ))
             finally:
                 await runner.cleanup()
+
+
+def process_stopped_details(state):
+    """The meeting process's last event: where it stopped, and what its audio did both ways.
+    `input` is what came in from the meeting (InputMonitor.stats): a meeting that heard nobody
+    shows voiced_ms 0."""
+    return {
+        'stage': state['stage'],
+        'finalized': state['finalized'],
+        'microphone_state': state.get('microphoneState'),
+        'generated_audio_bytes': state.get('generated_audio_bytes', 0),
+        'audible_audio_bytes': state.get('audible_audio_bytes', 0),
+        'discarded_audio_bytes': state.get('discarded_audio_bytes', 0),
+        'output_audio_bytes': state.get('output_bytes', 0),
+        'input': dict(state.get('input') or {'bytes': state.get('input_bytes', 0)}),
+        'interruptions_followed': state.get('interruptionsFollowed', 0),
+    }
 
 
 def close_record(runtime):
@@ -784,13 +912,4 @@ if __name__ == '__main__':
             asyncio.run(main())
     finally:
         if record:
-            record.event(
-                'process_stopped',
-                stage=state['stage'],
-                finalized=state['finalized'],
-                microphone_state=state.get('microphoneState'),
-                generated_audio_bytes=state.get('generated_audio_bytes', 0),
-                audible_audio_bytes=state.get('audible_audio_bytes', 0),
-                discarded_audio_bytes=state.get('discarded_audio_bytes', 0),
-                output_audio_bytes=state.get('output_bytes', 0),
-            )
+            record.event('process_stopped', **process_stopped_details(state))

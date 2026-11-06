@@ -127,6 +127,59 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state['authenticationState'],'signed_in')
             self.assertEqual([t[0] for t in trace][-2:],['leave','close'])
 
+    async def test_a_failed_leave_unloads_the_meeting_page_before_the_browser_closes(self):
+        # Killing the browser is no way to leave: Zoom showed the bot's frozen tile for minutes.
+        trace = []
+
+        class Page:
+            async def goto(self, url, **kwargs):
+                trace.append(('goto', url))
+
+        class Browser:
+            def __init__(self, env): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): trace.append(('close',))
+            async def get_page(self): return Page()
+
+        class Adapter:
+            platform_id = 'zoom'; capabilities = Capabilities()
+            def __init__(self, url, page, stop, stage): pass
+            async def join(self, *args): pass
+            async def leave(self):
+                trace.append(('leave',))
+                raise RuntimeError('Zoom still showed the meeting after Leave and Leave Meeting')
+        state = {}
+        async with joined_meeting('https://zoom.us/j/123', 'Smitline AI', '', {}, asyncio.Event(),
+                                  lambda _: None, state, browser_factory=Browser,
+                                  adapter_factory=Adapter):
+            pass
+        self.assertEqual(trace, [('leave',), ('goto', 'about:blank'), ('close',)])
+        self.assertEqual(state['leaveState'], 'leave_failed')
+        self.assertIn('Zoom still showed the meeting', state['leaveError'])
+
+    async def test_the_voice_having_left_the_meeting_is_not_left_again(self):
+        from adapters_base import leave_meeting
+        trace = []
+
+        class Browser:
+            def __init__(self, env): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): trace.append('close')
+            async def get_page(self): return 'page'
+
+        class Adapter:
+            platform_id = 'zoom'; capabilities = Capabilities()
+            def __init__(self, url, page, stop, stage): pass
+            async def join(self, *args): pass
+            async def leave(self): trace.append('leave')
+        state = {}
+        async with joined_meeting('https://zoom.us/j/123', 'Smitline AI', '', {}, asyncio.Event(),
+                                  lambda _: None, state, browser_factory=Browser,
+                                  adapter_factory=Adapter) as (_page, adapter):
+            self.assertTrue(await leave_meeting(adapter, state))  # as bridge.run_voice does
+        self.assertEqual(trace, ['leave', 'close'])
+        self.assertEqual(state['leaveState'], 'left')
+
     async def test_guest_denied_without_google_profile_stays_required(self):
         class Browser:
             def __init__(self, env): self.env=env

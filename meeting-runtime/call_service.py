@@ -14,7 +14,7 @@ from call_hooks import (
 )
 from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
-    result_from_handoff, result_without_conversation, transcript_entries,
+    meeting_facts, result_from_handoff, result_without_conversation, transcript_entries,
 )
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
@@ -29,12 +29,23 @@ MAX_WAIT_SECONDS = 300
 # wait in it for the first person (daily_room.ADMISSION_TIMEOUT), and a little more.
 ROOM_EXTRA_MINUTES = 15
 # Following a call live: once something new is said, wait this long for more before answering,
-# so one answer carries a whole exchange rather than a line.
-LIVE_SETTLE_SECONDS = 2.0
-# Events that wake a live wait: what was said, and status changes.
-LIVE_EVENTS = frozenset({'call.transcript', 'call.status'})
-# A request from the call wakes a live wait at once, without settling.
+# so one answer carries an exchange or two (a person's turn and the voice's reply take about 5 to
+# 10 seconds on a phone call) rather than a line. Every answer costs the agent a tool call, and in
+# apps that ask before each tool call a click, and each one is a chance for the agent to stop
+# following: 2 seconds meant about 20 a minute, 12 seconds at most about 5. Nothing the agent must
+# act on waits for it: a request, a status change and the end answer at once, so answers to people
+# on the call are as fast as before. Only stepping in on what was said (send_call_instruction)
+# comes up to 12 seconds later, and with canDo the voice passes on what it cannot answer anyway.
+LIVE_SETTLE_SECONDS = 12.0
+# What was said: gathered for LIVE_SETTLE_SECONDS before a live wait answers.
+TALK_EVENTS = frozenset({'call.transcript'})
+# A request from the call wakes a live wait at once, without gathering talk.
 REQUEST_EVENTS = frozenset({'call.request'})
+# So do these status changes (not for only='requests'): ringing, waiting to be let into a meeting
+# (or for the first person in a room), and connected. Not connecting, which start_call has just
+# reported, nor summarizing: the conversation is over, and the end, which wakes the wait too,
+# follows in seconds with the result. Each wake is one more tool call for the agent.
+WAKING_STATUSES = frozenset({'ringing', 'waiting', 'in_progress'})
 # An agent counts as following a call while it waits on it live, and this many seconds after
 # its last contact (a wait, a reply): long enough to act on what a wait brought back.
 FOLLOW_GRACE = 90.0
@@ -384,11 +395,20 @@ class CallService:
         return CallBrief.from_dict(payload, environ=settings), corrected
 
     async def check(self, payload, *, request=None):
-        """Everything create() would refuse, reported instead of raised."""
+        """Everything create() would refuse, reported instead of raised (problems), and what may
+        go wrong without stopping the call (warnings), such as a platform that often turns guest
+        bots away."""
         owner = await self.owner_for(request)
         brief, _ = await self._brief(owner, payload)
         line = self.lines.get(brief.channel)
         problems = []
+        warnings = []
+        warn = getattr(line, 'warnings', None)
+        if warn is not None:
+            try:
+                warnings.extend(warn(self.hooks, owner, brief) or ())
+            except Exception:
+                pass  # a warning is advice: never a reason for the check to fail
         if line is None:
             problems.append(f'{brief.channel} calls are not available on this installation')
         else:
@@ -416,7 +436,8 @@ class CallService:
         except CallError as error:
             problems.append(error.message)
             carried = 0
-        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems, 'carried': carried}
+        return {'ok': not problems, 'brief': brief.to_dict(), 'problems': problems,
+                'warnings': warnings, 'carried': carried}
 
     def reconcile(self):
         """At startup, close calls a previous daemon left unfinished; nothing will finish them.
@@ -696,21 +717,67 @@ class CallService:
         return body, (content_type.split(';')[0].strip() or default)
 
     def profile(self, owner):
+        """The owner's profile, with `voices`: what phone calls and meetings speak with when the
+        brief names no voice (meeting_line.voice_defaults)."""
+        return dict(self._saved_profile(owner), voices=self._voice_defaults(owner))
+
+    def _saved_profile(self, owner):
         getter = getattr(self.hooks, 'profile', None)
         if getter is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no profile')
         return getter(owner) or {}
 
-    def update_profile(self, owner, update):
+    def _voice_defaults(self, owner):
+        from meeting_line import voice_defaults
+        return voice_defaults(self.settings(owner))
+
+    async def update_profile(self, owner, update):
+        """Merge an update into the profile (briefing.merge_profile). Its `voices`, {phone,
+        meeting} or either one, sets the owner's default voices (a voice name, or '' for the
+        default) through hooks.save_voices. Nothing is saved when any part is invalid."""
         from briefing import merge_profile
         saver = getattr(self.hooks, 'save_profile', None)
         if saver is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no profile')
+        if not isinstance(update, dict):
+            raise CallError(422, 'invalid_request', 'the update must be an object')
+        update = dict(update)
+        voices = update.pop('voices', None)
         try:
-            merged = merge_profile(self.profile(owner), update)
+            voices = self._checked_voices(owner, voices)
+            # An update of the voices alone leaves the saved profile as it is.
+            merged = merge_profile(self._saved_profile(owner), update) if update or not voices else None
         except ValueError as error:
             raise CallError(422, 'invalid_request', str(error)) from error
-        return saver(owner, merged)
+        if voices:
+            await self._save_voices(owner, voices)
+        profile = saver(owner, merged) if merged is not None else self._saved_profile(owner)
+        return dict(profile, voices=self._voice_defaults(owner))
+
+    def _checked_voices(self, owner, voices):
+        """An update's voices, each one of the owner's voices or '': {kind: name}."""
+        from call_brief import check_voice
+        if voices is None:
+            return {}
+        if not isinstance(voices, dict):
+            raise ValueError('voices must be an object with phone, meeting or both')
+        unknown = set(voices) - {'phone', 'meeting'}
+        if unknown:
+            raise ValueError('unknown voices fields: ' + ', '.join(sorted(map(str, unknown))))
+        settings = self.settings(owner)
+        return {kind: '' if value == '' else check_voice(value, settings, f'voices.{kind}')
+                for kind, value in voices.items() if value is not None}
+
+    async def _save_voices(self, owner, voices):
+        saver = getattr(self.hooks, 'save_voices', None)
+        if saver is None:
+            raise CallError(501, 'unsupported', 'these call hooks keep no default voices')
+        try:
+            await maybe_await(saver(owner, voices))
+        except CallRefused as error:
+            raise CallError(error.status, error.code, error.message, **error.details) from error
+        except ValueError as error:
+            raise CallError(422, 'invalid_request', str(error)) from error
 
     def do_not_call(self, owner):
         getter = getattr(self.hooks, 'do_not_call', None)
@@ -1014,8 +1081,13 @@ class CallService:
         """The call once it is terminal or the timeout passes. With `since` (an event cursor,
         '' for the start), it also comes back once something new was said, with `live`: the
         transcript lines and requests after the cursor, and the cursor to pass next time. A
-        request comes back at once. only='requests' comes back for requests alone and leaves out
-        the transcript, for long meetings. While an agent waits live, it follows the call.
+        request or a status change (WAKING_STATUSES) comes back at once; what was said comes
+        LIVE_SETTLE_SECONDS after its first new line, with whatever else was said meanwhile.
+        From the start (since ''), what was already there when the wait began is gathered like
+        talk, and only what happens during the wait comes back at once: an agent that keeps
+        passing '' (or, through MCP, leaves since out) is answered every LIVE_SETTLE_SECONDS
+        rather than at once each time. only='requests' comes back for requests alone and leaves
+        out the transcript, for long meetings. While an agent waits live, it follows the call.
 
         others=True (live only) also watches the owner's other calls in progress: a new request
         on any of them comes back at once, and `live.otherRequests` lists every request on them
@@ -1033,16 +1105,33 @@ class CallService:
         if others:
             self._watching[owner] = self._watching.get(owner, 0) + 1
             asked = self._owner_requests.get(owner, 0)
+
+        def at_once(event):
+            if event['type'] in REQUEST_EVENTS:
+                return True
+            return (only != 'requests' and event['type'] == 'call.status'
+                    and (event.get('data') or {}).get('status') in WAKING_STATUSES)
+
+        def talk(event):
+            return only != 'requests' and event['type'] in TALK_EVENTS
+
+        # From the start: the last event there before this wait (later ones happen during it).
+        before = None
+        if live and since == '':
+            existing = self.events(call_id)
+            before = int(existing[-1]['id']) if existing else 0
         try:
             while True:
                 record = self.get(call_id, owner=owner)
                 remaining = deadline - loop.time()
                 if live and record['status'] not in TERMINAL:
                     events = self.events(call_id, after=since or None)
-                    if any(event['type'] in REQUEST_EVENTS for event in events):
+                    old = [] if before is None else [e for e in events if int(e['id']) <= before]
+                    new = events[len(old):]
+                    if any(at_once(event) for event in new):
                         remaining = 0
-                    elif (only != 'requests' and settle_until is None
-                          and any(event['type'] in LIVE_EVENTS for event in events)):
+                    elif settle_until is None and (any(talk(event) for event in new) or any(
+                            at_once(event) or talk(event) for event in old)):
                         settle_until = min(deadline, loop.time() + LIVE_SETTLE_SECONDS)
                 if others and self._owner_requests.get(owner, 0) != asked:
                     remaining = 0  # a request on another of the owner's calls
@@ -1431,10 +1520,12 @@ class CallService:
                                                  duration_seconds=duration)
             if simple is not None:
                 return simple
+        facts = self._meeting_facts(record, end_reason, handoff) if record['channel'] == 'meeting' else []
         try:
             summarizer = self._summarizer_factory(context.owner)
             result = await summarizer.summarize(record['brief'], transcript,
-                                                duration_seconds=duration)
+                                                duration_seconds=duration,
+                                                **({'facts': facts} if facts else {}))
             if end_reason == 'voicemail' and result['outcome'] in ('achieved', 'partial'):
                 result['outcome'] = 'voicemail'
             return result
@@ -1442,6 +1533,25 @@ class CallService:
             return fallback_result(end_reason, transcript, duration, str(error))
         except Exception as error:
             return fallback_result(end_reason, transcript, duration, type(error).__name__)
+
+    def _meeting_facts(self, record, end_reason, handoff):
+        """What a meeting's summarizer is told that its transcript cannot show (meeting_facts):
+        that Smitline started the room (call.room_created), that it joined by phone, who the
+        meeting showed (the handoff's participants), and why it left (call.agent_left)."""
+        room, left = False, None
+        try:
+            events = self.store.events(record['id'])
+        except (CallNotFound, ValueError):
+            events = []  # the facts help the summary; without them it is still written
+        for event in events:
+            if event['type'] == 'call.room_created':
+                room = True
+            elif event['type'] == 'call.agent_left':
+                left = (event.get('data') or {}).get('reason')
+        return meeting_facts(room_created=room,
+                             by_phone=(record.get('line') or {}).get('joinedBy') == 'phone',
+                             participants=(handoff or {}).get('participants'),
+                             ended=left or end_reason)
 
     async def _finalize(self, context, end_reason, *, usage, handoff, error):
         call_id = context.call_id

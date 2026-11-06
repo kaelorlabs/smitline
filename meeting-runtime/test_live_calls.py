@@ -16,6 +16,9 @@ from meeting_line import LiveTranscript, MeetingLine
 from runtime_daemon import RuntimeDaemon, create_app
 from test_call_service import ZOOM, FakeDaemon, FakeSession, ServiceHarness, brief
 
+# The real value, before a test shortens it.
+SETTLE_SECONDS = call_service.LIVE_SETTLE_SECONDS
+
 
 class Context:
     def __init__(self):
@@ -38,8 +41,8 @@ class LiveWaitTests(unittest.IsolatedAsyncioTestCase):
         await self.h.service.shutdown()
         self.temp.cleanup()
 
-    async def started(self):
-        record = await self.h.service.create(brief())
+    async def started(self, **overrides):
+        record = await self.h.service.create(brief(**overrides))
         for _ in range(100):
             if record['id'] in self.h.line.contexts and self.h.service.get(
                     record['id'], owner='local')['status'] == 'in_progress':
@@ -82,6 +85,109 @@ class LiveWaitTests(unittest.IsolatedAsyncioTestCase):
         done = await wait(call_id, owner='local', timeout=30, since=said['live']['cursor'])
         self.assertEqual(done['status'], 'completed')
         self.assertEqual([line['text'] for line in done['live']['transcript']], ['Great, bye.'])
+
+    async def connecting(self, **overrides):
+        """A call that connects and then waits for the test to move it on."""
+        self.h.line.script = []
+        record = await self.h.service.create(brief(**overrides))
+        for _ in range(100):
+            if record['id'] in self.h.line.contexts and self.h.service.get(
+                    record['id'], owner='local')['status'] == 'connecting':
+                return record['id'], self.h.line.contexts[record['id']]
+            await asyncio.sleep(0.01)
+        self.fail('the call did not connect')
+
+    async def timed(self, wait, during):
+        """(answer, seconds) of a wait while `during` runs alongside it."""
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        task = asyncio.create_task(during())
+        answer = await wait
+        await task
+        return answer, loop.time() - began
+
+    def test_talk_is_gathered_long_enough_for_an_exchange_or_two(self):
+        # Each answer is a tool call for the agent (and a click where its app asks first): a
+        # person's turn and the voice's reply take about 5 to 10 seconds on a phone call.
+        self.assertGreaterEqual(SETTLE_SECONDS, 10)
+        self.assertLessEqual(SETTLE_SECONDS, 15)
+
+    async def test_a_status_change_or_a_request_comes_at_once_and_talk_waits(self):
+        call_id, ctx = await self.connecting(canDo='answer questions about the booking')
+        wait = self.h.service.wait
+        cursor = (await wait(call_id, owner='local', timeout=0, since=''))['live']['cursor']
+        with patch.object(call_service, 'LIVE_SETTLE_SECONDS', 5):
+            # Waking only for requests, a status change is no reason to answer.
+            async def ring():
+                await asyncio.sleep(0.05)
+                ctx.set_status('ringing')
+            quiet, seconds = await self.timed(
+                wait(call_id, owner='local', timeout=0.4, since=cursor, only='requests'), ring)
+            self.assertGreaterEqual(seconds, 0.4)
+            self.assertEqual((quiet['status'], quiet['live']['requests']), ('ringing', []))
+            self.assertNotIn('transcript', quiet['live'])
+
+            # Talk is gathered, but a status change answers at once, with what was said.
+            async def pick_up():
+                await asyncio.sleep(0.05)
+                ctx.add_transcript('other', 'Hello?')
+                await asyncio.sleep(0.05)
+                ctx.set_status('in_progress')
+            answered, seconds = await self.timed(
+                wait(call_id, owner='local', timeout=30, since=quiet['live']['cursor']), pick_up)
+            self.assertLess(seconds, 2)
+            self.assertEqual(answered['status'], 'in_progress')
+            self.assertEqual([line['text'] for line in answered['live']['transcript']], ['Hello?'])
+
+            # So does a request.
+            async def ask():
+                await asyncio.sleep(0.05)
+                ctx.add_transcript('other', 'Who is listening?')
+                await asyncio.sleep(0.05)
+                ctx.request({'type': 'ask', 'id': 'r1', 'kind': 'question', 'text': 'Who is listening?'})
+            asked, seconds = await self.timed(
+                wait(call_id, owner='local', timeout=30, since=answered['live']['cursor']), ask)
+            self.assertLess(seconds, 2)
+            self.assertEqual([item['id'] for item in asked['live']['requests']], ['r1'])
+            self.assertEqual([line['text'] for line in asked['live']['transcript']],
+                             ['Who is listening?'])
+
+        # Talk alone comes once it has been gathered, with what else was said meanwhile.
+        with patch.object(call_service, 'LIVE_SETTLE_SECONDS', 0.5):
+            async def talk():
+                await asyncio.sleep(0.05)
+                ctx.add_transcript('agent', 'Robin is, through me.')
+                await asyncio.sleep(0.2)
+                ctx.add_transcript('other', 'Okay.')
+            said, seconds = await self.timed(
+                wait(call_id, owner='local', timeout=30, since=asked['live']['cursor']), talk)
+            self.assertGreaterEqual(seconds, 0.5)
+            self.assertLess(seconds, 2)
+            self.assertEqual([line['text'] for line in said['live']['transcript']],
+                             ['Robin is, through me.', 'Okay.'])
+
+    async def test_from_the_start_what_was_there_is_gathered_and_what_happens_wakes(self):
+        call_id, ctx = await self.started(canDo='answer questions about the booking')
+        ctx.add_transcript('other', 'Hello?')
+        wait = self.h.service.wait
+        with patch.object(call_service, 'LIVE_SETTLE_SECONDS', 0.5):
+            # An agent that keeps asking from the start is not answered at once every time.
+            async def nothing():
+                pass
+            for _ in range(2):
+                again, seconds = await self.timed(
+                    wait(call_id, owner='local', timeout=30, since=''), nothing)
+                self.assertGreaterEqual(seconds, 0.5)
+                self.assertEqual([line['text'] for line in again['live']['transcript']], ['Hello?'])
+        with patch.object(call_service, 'LIVE_SETTLE_SECONDS', 5):
+            # What happens during the wait still comes at once.
+            async def ask():
+                await asyncio.sleep(0.05)
+                ctx.request({'type': 'ask', 'id': 'r1', 'kind': 'question', 'text': 'Is it booked?'})
+            asked, seconds = await self.timed(
+                wait(call_id, owner='local', timeout=30, since=''), ask)
+            self.assertLess(seconds, 2)
+            self.assertEqual([item['id'] for item in asked['live']['requests']], ['r1'])
 
     async def test_without_since_nothing_changes(self):
         call_id, ctx = await self.started()

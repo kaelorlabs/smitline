@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Smitline calls API",
-    "version": "0.3.9",
+    "version": "0.3.10",
     "description": "Start phone calls and meetings from a brief and read structured results. See docs/calls.md.",
     "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
   },
@@ -68,7 +68,7 @@
       "get": {
         "summary": "Wait until the call finishes or the timeout passes; with since, also until something new is said",
         "operationId": "waitForCall",
-        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes as soon as something new is said (about 2 seconds after, to gather the exchange), at once for a request from the call, and carries live. While an agent follows a call this way it can answer requests.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }, { "name": "only", "in": "query", "description": "requests: wake only for requests from the call, and leave live.transcript out; for long meetings. Implies since (empty) when since is not given.", "schema": { "type": "string", "enum": ["requests"] } }, { "name": "others", "in": "query", "description": "true: also watch the owner's other calls in progress. A new request on any of them wakes the wait at once, live.otherRequests lists every request on them the agent has not answered yet, and while the wait runs the agent counts as following them. Implies since (empty) when since is not given. Default false.", "schema": { "type": "boolean", "default": false } }],
+        "parameters": [{ "name": "timeout", "in": "query", "schema": { "type": "number", "minimum": 0, "maximum": 300, "default": 60 } }, { "name": "since", "in": "query", "description": "Follow the call live: the cursor from the last answer's live.cursor, or empty for the start. The answer then comes at once for a request from the call or a status change (ringing, waiting, in_progress), about 12 seconds after something new is said (to gather an exchange or two), and carries live. With an empty since, what was already there when the wait began also comes after those 12 seconds. While an agent follows a call this way it can answer requests.", "schema": { "type": "string", "pattern": "^[0-9]{0,12}$" } }, { "name": "only", "in": "query", "description": "requests: wake only for requests from the call, and leave live.transcript out; for long meetings. Implies since (empty) when since is not given.", "schema": { "type": "string", "enum": ["requests"] } }, { "name": "others", "in": "query", "description": "true: also watch the owner's other calls in progress. A new request on any of them wakes the wait at once, live.otherRequests lists every request on them the agent has not answered yet, and while the wait runs the agent counts as following them. Implies since (empty) when since is not given. Default false.", "schema": { "type": "boolean", "default": false } }],
         "responses": {
           "200": { "description": "The call, terminal or not", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Call" } } } },
           "404": { "$ref": "#/components/responses/Error" }
@@ -223,9 +223,9 @@
     "/v1/voices": {
       "parameters": [{ "$ref": "#/components/parameters/Owner" }],
       "get": {
-        "summary": "List GPT-Live voices",
+        "summary": "List GPT-Live voices and the owner's default voices",
         "operationId": "listVoices",
-        "responses": { "200": { "description": "Voices", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "voices"] } } } } }
+        "responses": { "200": { "description": "Voices; default is defaults.phone", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "defaults": { "$ref": "#/components/schemas/VoiceDefaults" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "defaults", "voices"] } } } } }
       }
     },
     "/v1/profile": {
@@ -244,6 +244,7 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProfileUpdate" } } } },
         "responses": {
           "200": { "description": "The saved profile", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Profile" } } } },
+          "409": { "$ref": "#/components/responses/Error" },
           "422": { "$ref": "#/components/responses/Error" },
           "501": { "$ref": "#/components/responses/Error" }
         }
@@ -291,7 +292,7 @@
         "required": ["channel", "to", "objective", "onBehalfOf"],
         "properties": {
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
-          "to": { "type": "string", "description": "E.164 phone number for phone calls. For meetings: a Zoom, Teams, Google Meet, or Daily invite URL; \"new\" for a room Smitline opens; or the meeting's dial-in number to join by phone, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). A meeting with dialIn may leave it out." },
+          "to": { "type": "string", "description": "E.164 phone number for phone calls. For meetings: a Zoom, Teams, Google Meet, or Daily invite URL; \"new\" for a room Smitline opens; or the meeting's dial-in number to join by phone, also as a one-tap number such as +14388097799,,85951289482#,,,,*123456# (see dialIn). A meeting with dialIn may leave it out. With a Google Meet link, also pass dialIn when the invitation has a phone number: Google often turns guest bots away." },
           "onBehalfOf": { "type": "string", "maxLength": 120, "description": "The person the call is for, never an AI, model or app. Spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows. A name such as ChatGPT or Claude is replaced with the owner's name (SMITLINE_OWNER_NAME), or the brief is refused (422 invalid_request)." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
@@ -349,7 +350,7 @@
           },
           "dialIn": {
             "type": "object", "additionalProperties": false,
-            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
+            "description": "Meetings only: joining by phone. Smitline dials the number, the phone provider keys in the meeting ID and passcode (timed like the platform's one-tap number), and the meeting voice takes part by audio, saying out loud that it is an AI. Give the fields, or the invitation text in invite, which Smitline reads them from. With a link in to, it dials in when the platform turns its browser away, when no meeting seat is free, or first for the platforms in SMITLINE_MEETING_DIAL_IN_FIRST; without one, always. For Google Meet, give it whenever the invitation has a Join by phone number: Google often turns guest browsers away, and then Smitline joins by phone by itself. The dial-in number gets the phone guardrails, calling hours and call limits included, unless it is a meeting platform's published dial-in number (Zoom's own US and Canada numbers; SMITLINE_DIAL_IN_BRIDGES changes the list). The stored brief keeps what is dialed: number, meetingId, passcode, platform and keys. See docs/meetings.md#joining-by-phone.",
             "properties": {
               "number": { "type": "string", "description": "The meeting's dial-in number in E.164 form; a one-tap number, with its keys after commas, works too." },
               "meetingId": { "type": "string", "description": "What the bridge asks for: Zoom's meeting ID, Teams' phone conference ID, or Google Meet's PIN. Digits; spaces and dashes are dropped." },
@@ -430,20 +431,33 @@
           "about": { "type": "string", "maxLength": 2000 },
           "style": { "type": "string", "maxLength": 600 },
           "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
-          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 }
+          "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
+          "voices": { "$ref": "#/components/schemas/VoiceDefaults" }
         }
       },
       "ProfileUpdate": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Fields present replace the saved ones; people are added or updated by name (ignoring case); removePeople drops names.",
+        "description": "Fields present replace the saved ones; people are added or updated by name (ignoring case); removePeople drops names. voices sets the default voices (saved with the call hooks' save_voices: 501 without it); a brief's voice still wins.",
         "properties": {
           "about": { "type": "string", "maxLength": 2000 },
           "style": { "type": "string", "maxLength": 600 },
           "boundaries": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "people": { "type": "array", "items": { "$ref": "#/components/schemas/Person" }, "maxItems": 100 },
-          "removePeople": { "type": "array", "items": { "type": "string" } }
+          "removePeople": { "type": "array", "items": { "type": "string" } },
+          "voices": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "A voice from GET /v1/voices, or \"\" to go back to the default.",
+            "properties": { "phone": { "type": "string", "maxLength": 32 }, "meeting": { "type": "string", "maxLength": 32 } }
+          }
         }
+      },
+      "VoiceDefaults": {
+        "type": "object",
+        "description": "The voice each kind of call speaks with when its brief names none: phone (SMITLINE_VOICE, else marin) and meeting, joined by link or by phone (SMITLINE_MEETING_VOICE, else the phone one).",
+        "required": ["phone", "meeting"],
+        "properties": { "phone": { "type": "string" }, "meeting": { "type": "string" } }
       },
       "DoNotCallList": {
         "type": "object",
@@ -488,6 +502,7 @@
           "ok": { "type": "boolean" },
           "brief": { "$ref": "#/components/schemas/Brief" },
           "problems": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" }, "description": "What may keep the call from working without stopping it, such as a Google Meet link without dialIn: ok stays true." },
           "carried": { "type": "integer", "description": "How many earlier calls' notes the call would start with." }
         }
       },
@@ -619,7 +634,9 @@
           "source": { "type": "string", "enum": ["summary_model", "meeting_handoff", "status", "fallback"] },
           "disclosureVerified": { "type": ["boolean", "null"], "description": "Outbound phone calls only. True when the agent was heard during the call saying it is an AI calling for onBehalfOf; false when the call ended without it; null when the agent never spoke." },
           "doNotCall": { "type": "boolean", "description": "Present and true when the other person asked not to be called again; their number was added to the do-not-call list." },
-          "openRequests": { "type": "array", "description": "Requests nobody finished during the call: follow-ups. replyToRequest with done still records an answer.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "kind": { "type": "string" }, "text": { "type": "string" }, "askedBy": { "type": "string" } } } }
+          "openRequests": { "type": "array", "description": "Requests nobody finished during the call: follow-ups. replyToRequest with done still records an answer.", "items": { "type": "object", "properties": { "id": { "type": "string" }, "kind": { "type": "string" }, "text": { "type": "string" }, "askedBy": { "type": "string" } } } },
+          "reason": { "type": "string", "description": "Why the call got nowhere, in plain words, when Smitline knows: for example, a meeting's platform did not let Smitline in from its link, and why it did not join by phone instead." },
+          "hint": { "type": "string", "description": "What the agent can do about it, such as asking the user for the invitation's phone details and starting again with them as dialIn." }
         }
       },
       "Error": {

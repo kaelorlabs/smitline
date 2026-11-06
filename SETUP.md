@@ -140,7 +140,7 @@ When `firstCallReady` is true:
 docker exec smitline smitline setup call-me --wait
 ```
 
-Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and in meetings it joins quietly as "Smitline AI", with "<first name>'s AI assistant" on its camera tile Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it; `docker exec smitline smitline setup voice` lists the voices. The voice can be changed the same way at any time.
+Tell the user: "Your phone will ring in a few seconds. That's Smitline." Every call opens with a short hello that says who it is calling for and why ("Hi, I'm calling on behalf of <name> about…") and says during the call that it is their AI assistant, and in meetings it joins quietly as "Smitline AI", with "<first name>'s AI assistant" on its camera tile Afterwards, ask whether they like the voice. To try another one, `docker exec smitline smitline setup voice --preview <name>` calls them in that voice; `--set <name>` keeps it for phone calls and `--meeting <name>` for meetings (meetings use the phone calls' voice until then); `docker exec smitline smitline setup voice` lists the voices. The voices can be changed the same way at any time, or by asking the agent.
 
 Without phone calls, offer: "Send me a Zoom, Teams, or Google Meet link and I'll have Smitline join." The first meeting downloads the meeting image (about 1.8 GB); tell the user before it starts.
 
@@ -192,7 +192,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools (pass `
 ## Updating and removing
 
 - **Update:** `docker pull ghcr.io/kaelorlabs/smitline`, then `docker rm -f smitline` and run the `docker run` command from step 2 again. The volume keeps everything.
-- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.3.9`, in both commands. The meeting image with the matching code is pulled for it.
+- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.3.10`, in both commands. The meeting image with the matching code is pulled for it.
 - **Remove:** `docker rm -f smitline`. Also run `docker volume rm smitline` to delete keys and records.
 
 ## Troubleshooting

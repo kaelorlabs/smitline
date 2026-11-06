@@ -12,7 +12,7 @@ The steps below use the console. When an agent starts the meeting, steps 1 and 2
 4. Start Smitline. The adapter tries an isolated guest browser first and retries with the connected profile only when guest access is explicitly denied. Tenant or host policy may still refuse admission.
 5. Admit the participant. It connects computer audio and starts listening continuously.
 6. The adapter opens the platform microphone once and keeps the audio connection stable. The virtual microphone transmits silence while Smitline listens and immediately transports speech when GPT-Live chooses to respond.
-7. Once its microphone is open, Smitline listens. Its name ("Smitline AI") and its tile's caption say it is an AI; `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 1` (from a checkout: `smitline setup set ...`) adds a short spoken hello at the first pause. `SMITLINE_VOICE` picks the GPT-Live voice.
+7. Once its microphone is open, Smitline listens. Its name ("Smitline AI") and its tile's caption say it is an AI; `docker exec smitline smitline setup set SMITLINE_MEETING_INTRO 1` (from a checkout: `smitline setup set ...`) adds a short spoken hello at the first pause. `SMITLINE_MEETING_VOICE` picks the GPT-Live voice, else `SMITLINE_VOICE`, unless the brief names one.
 8. GPT-Live owns conversational turn-taking, including pauses, backchannels, and interruptions. The local runtime does not classify participant speech or impose an additional silence delay.
 9. A host or participant mute is authoritative; Smitline does not reopen the platform microphone on its own. In Zoom it accepts the host's explicit "Ask to unmute" request.
 10. Stop Smitline to finalize its local transcript. To remove a Microsoft or Google session, stop the browser and choose **Disconnect**. This removes the local profile; it does not revoke the account's sessions on other devices.
@@ -33,6 +33,8 @@ Reference: https://developers.openai.com/api/reference/resources/live/primary-we
 
 `MeetingPlatformAdapter` owns joining, admission/authentication states, audio connection, microphone controls, chat, leave, termination detection, and capabilities. `adapters.REGISTRY` maps recognized platforms to implementations; `meeting_urls` validates URLs before opening them. Zoom-specific DOM interactions remain in its adapter/helpers. Teams and Google Meet reuse Joinly controllers for chat and leave, with explicit admission and microphone checks in Smitline. Signed-in fallback is declared on the adapter (`signed_in_profile`); the join path does not branch on platform id.
 
+`leave()` raises unless the page then shows the agent is out, and returns at once when it is out already. Zoom brings its hidden toolbar back, clicks **Leave**, then **Leave Meeting** in the confirmation; Google Meet answers a host's question with **Just leave the call**. Nothing ever ends the meeting for everyone. The runtime leaves once, through `adapters_base.leave_meeting`, before the voice session closes: it gives the platform 8 seconds, records `left` or `leave_failed` with the reason, and after a failure unloads the meeting page before the browser closes. A killed browser looks like a dropped connection, and Zoom then keeps a frozen tile for minutes.
+
 The bridge (`meeting-runtime/bridge.py`) owns the GPT-Live connection, Responses delegation, virtual devices, transcripts, and the selective participation prompt. Platform mute controls establish the audio connection and respect an external mute; `accept_unmute_request` lets an adapter follow a host's explicit request to unmute (Zoom only today). A separate virtual gate transports model output without repeatedly clicking the meeting toolbar or interpreting meeting speech.
 
 Adapters do not share a screen and do not read shared screens.
@@ -43,11 +45,11 @@ Adapters do not share a screen and do not read shared screens.
 
 - **Hearing.** Every 20 ms it hands GPT-Live what daily-python's speaker has played, filled with silence. GPT-Live keeps time by its input, so the stream never stops, also in a room where every microphone is off (Daily then plays nothing). If the voice loop falls behind, the oldest audio goes first.
 - **Speaking.** The voice is paced into daily-python's non-blocking microphone at most 40 ms ahead of real time. Between turns nothing is written, and Daily sends silence.
-- **Camera.** `DailyCamera` draws the tile with Pillow: a presence pack's clips at the pack's frame rate, or the still mark at two frames a second, with the caption. `ClipPlayer` follows the browser camera's rules: the arrival plays once, and a one-shot clip is never cut short.
+- **Camera.** `DailyCamera` draws the tile with Pillow: a presence pack's clips at the pack's frame rate, or the still mark at two frames a second, with the caption. `ClipPlayer` follows the browser camera's rules: the arrival plays once, and a one-shot clip is never cut short. A speaking clip's mouth follows `DailyMicrophone`'s voice (a `VoiceActivity`), and once the meeting has ended and the last clip has played, the frames stop and the room's camera turns off.
 - **Waiting.** In an empty room it reports `waiting_for_admission` until someone else joins, for up to 10 minutes like a lobby, so the voice starts only when someone is there; `AloneWatch` then leaves as usual once they go. Hidden participants (Daily's recorders) don't count.
 - **Mute.** A room owner turning Smitline's microphone off counts as a host mute.
 - **Chat** goes to Daily Prebuilt's chat.
-- **Ending.** A room that expires or ejects Smitline ends the meeting.
+- **Ending.** A room that expires or ejects Smitline ends the meeting. Leaving takes Smitline out of the room before its camera and microphone stop.
 
 `daily_rooms.py` makes and removes rooms through Daily's REST API with `SMITLINE_DAILY_API_KEY`; joining a room needs no key.
 

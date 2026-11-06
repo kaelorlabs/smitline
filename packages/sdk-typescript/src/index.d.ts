@@ -165,15 +165,28 @@ export type CallStatus =
 export interface CallResult {
   outcome: 'achieved' | 'partial' | 'not_reached' | 'voicemail' | 'declined' | 'failed' | 'canceled';
   summary: string;
-  details: Array<{ label: string; value: string   /** True when the person asked not to be called again; their number is now on the do-not-call list. */
-  doNotCall?: boolean;
-}>;
+  details: Array<{ label: string; value: string }>;
   decisions: string[];
   actionItems: string[];
   openQuestions: string[];
   transcript: Array<{ speaker: string; text: string }>;
   durationSeconds: number;
   source?: string;
+  /** True when the person asked not to be called again; their number is now on the do-not-call list. */
+  doNotCall?: boolean;
+  /** Why the call got nowhere, when Smitline knows: such as a meeting platform that did not let it in from its link. */
+  reason?: string;
+  /** What to do about it, such as asking the user for the invitation's phone details and starting again with dialIn. */
+  hint?: string;
+}
+
+/** What checkCall reports: problems stop the call; warnings may keep it from working but do not stop it. */
+export interface CallCheck {
+  ok: boolean;
+  brief: CallBrief;
+  problems: string[];
+  warnings?: string[];
+  carried?: number;
 }
 
 export interface Call {
@@ -215,12 +228,19 @@ export interface ProfilePerson {
   notes?: string;
 }
 
+/** The voice each kind of call speaks with when its brief names none. */
+export interface VoiceDefaults {
+  phone: string;
+  meeting: string;
+}
+
 export interface Profile {
   version: number;
   about?: string;
   style?: string;
   boundaries?: string[];
   people?: ProfilePerson[];
+  voices?: VoiceDefaults;
 }
 
 export interface ProfileUpdate {
@@ -229,6 +249,15 @@ export interface ProfileUpdate {
   boundaries?: string[];
   people?: ProfilePerson[];
   removePeople?: string[];
+  /** New default voices: a name from listVoices, or '' to go back to the default. */
+  voices?: Partial<VoiceDefaults>;
+}
+
+export interface Voices {
+  /** The phone calls' default, as before there were two: defaults.phone. */
+  default: string;
+  defaults: VoiceDefaults;
+  voices: string[];
 }
 
 export interface DoNotCallEntry {
@@ -244,7 +273,7 @@ export interface DoNotCallUpdate {
 }
 
 export interface DaemonTransport {
-  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
+  checkCall(brief: CallBrief): Promise<CallCheck>;
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
   waitForCall(callId: string, timeoutSeconds?: number, since?: string, only?: 'requests', others?: boolean): Promise<Call>;
@@ -263,7 +292,7 @@ export interface DaemonTransport {
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
-  listVoices(): Promise<{ default: string; voices: string[] }>;
+  listVoices(): Promise<Voices>;
 }
 
 export interface SmitlineOptions {
@@ -288,7 +317,7 @@ export interface SmitlineOptions {
 
 export class Smitline {
   constructor(options?: SmitlineOptions);
-  checkCall(brief: CallBrief): Promise<{ ok: boolean; brief: CallBrief; problems: string[]; carried?: number }>;
+  checkCall(brief: CallBrief): Promise<CallCheck>;
   /** Place a phone call or join a meeting; returns the queued call at once. */
   startCall(brief: CallBrief): Promise<Call>;
   getCall(callId: string): Promise<Call>;
@@ -312,7 +341,7 @@ export class Smitline {
   endCall(callId: string): Promise<Call>;
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
-  listVoices(): Promise<{ default: string; voices: string[] }>;
+  listVoices(): Promise<Voices>;
 }
 
 export function createLoopbackTransport(options?: {

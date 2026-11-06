@@ -5,6 +5,22 @@ import contextlib
 import time
 
 from speech_gate import SpeechGate
+from voice_activity import VoiceActivity
+
+BYTES_PER_SECOND = 24000 * 2  # GPT-Live's meeting voice: 24 kHz, 16-bit, mono
+# GPT-Live stops talking when someone talks over it but sends no event for it, and it makes
+# speech faster than it plays, so the rest of what it was saying can still be waiting here. As on
+# a phone call (phone_line.INTERRUPT_*): once someone in the meeting has talked this long while
+# this much of the voice's speech is still to be heard, and the voice says nothing new for
+# INTERRUPT_SETTLE seconds, it has stopped for them, and the rest is dropped.
+INTERRUPT_MIN_SPEECH_MS = 500
+INTERRUPT_MIN_QUEUED = 0.25
+INTERRUPT_SETTLE = 0.35
+
+
+def _waiting(queue):
+    """What an asyncio.Queue holds, oldest first, without taking it out."""
+    return tuple(getattr(queue, '_queue', ()))
 
 
 def audible_pcm(data, threshold=160):
@@ -18,6 +34,13 @@ class Participation:
                  on_presence=None, record=None):
         self.adapter, self.state = adapter, state
         self.gate = SpeechGate(microphone, clock=clock)
+        # The talking picture (floorState) follows the voice as the meeting hears it: the
+        # microphone's VoiceActivity, fed by each chunk it writes, or else what the gate writes.
+        self.voice = getattr(microphone, 'voice', None)
+        if self.voice is None:
+            self.voice = VoiceActivity()
+            self.gate.on_written = self.voice.feed
+        self.voice.on_speaking.append(self._voice_changed)
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.on_presence = on_presence
@@ -28,6 +51,9 @@ class Participation:
         self.audible_queued = 0
         self.lock = asyncio.Lock()
         self.platform_ready = False
+        self.interrupt_settle = INTERRUPT_SETTLE
+        self._their_words = None  # [start_ms, end_ms] of what someone in the meeting says now
+        self._interrupt_check = None
         self.state.update(
             muted=True,
             microphoneState='muted',
@@ -35,6 +61,7 @@ class Participation:
             generated_audio_bytes=0,
             discarded_audio_bytes=0,
             audible_audio_bytes=0,
+            interruptionsFollowed=0,
         )
 
     def offer(self, data):
@@ -124,19 +151,15 @@ class Participation:
             self.on_presence()
         return True
 
-    def _follow_voice(self):
-        """Keep floorState on audible speech while the gate is open.
-
-        GPT-Live keeps streaming silence between replies, so the queue rarely runs dry
-        and the quiet-time mute above may never come; the floor still returns to
-        listening once the voice has been quiet for quiet_seconds.
-        """
-        quiet = self.clock() - self.last_output_audio > self.quiet_seconds
+    def _voice_changed(self, speaking):
+        """floorState is speaking from the first audible chunk written to the meeting until
+        voice_activity.RELEASE_SECONDS after the last, whatever GPT-Live has delivered: it
+        delivers faster than real time and streams silence between replies."""
         floor = self.state.get('floorState')
-        if floor == 'speaking' and quiet:
-            self.state['floorState'] = 'listening'
-        elif floor == 'listening' and not quiet:
+        if speaking and floor != 'speaking':
             self.state['floorState'] = 'speaking'
+        elif not speaking and floor == 'speaking':
+            self.state['floorState'] = 'listening'
         else:
             return
         if self.on_presence:
@@ -169,10 +192,75 @@ class Participation:
             await self.gate.set_muted(True)
             self.state['muted'] = True
             if mute_platform:
-                with contextlib.suppress(Exception):
-                    await self.adapter.mute()
+                # Once the agent has left the meeting there is no microphone there to mute
+                # (adapters_base.leave_meeting); trying took Zoom three seconds.
+                if not getattr(self.adapter, 'left_meeting', False):
+                    with contextlib.suppress(Exception):
+                        await self.adapter.mute()
                 self.platform_ready = False
                 self.state['microphoneState'] = 'muted'
+
+    def unsaid_seconds(self):
+        """How much of the voice's speech is still to be heard: what waits at the gate, then
+        here, up to its last audible piece (silence after that does not count)."""
+        waiting = [(data, audible) for _generation, data, audible in _waiting(self.gate.queue)]
+        waiting += _waiting(self.queue)
+        total = unsaid = 0
+        for data, audible in waiting:
+            total += len(data)
+            if audible:
+                unsaid = total
+        return unsaid / BYTES_PER_SECOND
+
+    def heard(self, start_ms=None, end_ms=None):
+        """Someone in the meeting is talking: a piece of GPT-Live's input transcript, with its
+        times. Once they have talked for INTERRUPT_MIN_SPEECH_MS while the voice still has
+        INTERRUPT_MIN_QUEUED seconds to say, it is checked INTERRUPT_SETTLE seconds later; if it
+        has said nothing new, it stopped for them, and the rest is dropped (drop_unsaid). A short
+        "mhm" does not stop it, and neither does talk it carries on over."""
+        words = self._their_words
+        if words is None:
+            words = self._their_words = [start_ms, end_ms]
+        elif end_ms is not None:
+            words[1] = end_ms
+        if self._interrupt_check is not None and not self._interrupt_check.done():
+            return
+        if self.unsaid_seconds() < INTERRUPT_MIN_QUEUED:
+            return
+        if None not in words and words[1] - words[0] < INTERRUPT_MIN_SPEECH_MS:
+            return
+        self._interrupt_check = asyncio.create_task(
+            self._follow_interruption(self.clock()), name='meeting_interruption')
+
+    def said(self):
+        """A piece of the voice's own transcript: what the meeting says next starts anew."""
+        self._their_words = None
+
+    async def _follow_interruption(self, spoke_at):
+        await asyncio.sleep(self.interrupt_settle)
+        if self.last_output_audio > spoke_at:
+            return  # it carried on talking: GPT-Live chose to
+        if self.unsaid_seconds() < INTERRUPT_MIN_QUEUED:
+            return
+        unsaid = await self.drop_unsaid()
+        self.state['interruptionsFollowed'] = self.state.get('interruptionsFollowed', 0) + 1
+        if self.record is not None:
+            self.record.event('interrupted', unsaid_ms=int(unsaid * 1000))
+
+    async def drop_unsaid(self):
+        """Someone talked over the voice and it stopped: drop what it has not said yet, here, at
+        the gate and in the microphone's buffer. Its next reply opens the gate again. Returns the
+        seconds of speech dropped."""
+        async with self.lock:
+            unsaid = self.unsaid_seconds()
+            self._discard_pending()
+            await self.gate.set_muted(True)
+            self.state['muted'] = True
+            if self.state.get('floorState') == 'speaking':
+                self.state['floorState'] = 'listening'
+        if self.on_presence:
+            self.on_presence()
+        return unsaid
 
     async def run(self):
         writer = asyncio.create_task(self.gate.run())
@@ -213,17 +301,16 @@ class Participation:
                             continue
                         if self.gate.muted:
                             await self.gate.set_muted(False)
-                            self.state.update(muted=False, floorState='speaking')
-                            if self.on_presence:
-                                self.on_presence()
+                            self.state['muted'] = False
                         # The gate counts this piece of speech from here on.
                         self.gate.offer(data, audible=audible)
-                        self._follow_voice()
                 finally:
                     if audible:
                         self.audible_queued = max(0, self.audible_queued - 1)
                 self.state['output_bytes'] = self.gate.output_bytes
         finally:
+            if self._interrupt_check is not None:
+                self._interrupt_check.cancel()
             await self.stop_output(mute_platform=True)
             self.state['output_bytes'] = self.gate.output_bytes
             writer.cancel()

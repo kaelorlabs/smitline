@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 SCHEMA_VERSION = 1
-SDK_VERSION = '0.3.9'
+SDK_VERSION = '0.3.10'
 
 def redact(value: Any) -> str:
     import re
@@ -307,8 +307,9 @@ class Smitline:
                             others=None):
         """Wait until the call is terminal or the timeout (at most 300 s) passes. With `since`
         ('' at first, then the last answer's live['cursor']) it follows the call live: the answer
-        also comes once something new is said, with live['transcript'] holding the new lines, and
-        at once for a request (live['requests']). only='requests' wakes for requests alone.
+        also comes once new talk has gathered (about 12 s), with live['transcript'] holding the new
+        lines, and at once for a request (live['requests']) or a status change. only='requests'
+        wakes for requests alone.
         others=True also watches your other calls in progress: a new request on any of them
         wakes the wait, and live['otherRequests'] lists the ones you have not answered yet."""
         import asyncio
@@ -355,6 +356,8 @@ class Smitline:
         return self._transport.get_profile()
 
     async def update_profile(self, update):
+        """Merge into the profile: fields replace, people upsert by name, removePeople drops names,
+        and {'voices': {'phone': ..., 'meeting': ...}} sets the default voices ('' for the default)."""
         return self._transport.update_profile(update)
 
     async def get_do_not_call(self):
@@ -372,6 +375,7 @@ class Smitline:
         return self._transport.transfer_call(call_id)
 
     async def list_voices(self):
+        """{'voices': [...], 'defaults': {'phone': ..., 'meeting': ...}, 'default': the phone one}."""
         return self._transport.list_voices()
 
 

@@ -10,8 +10,9 @@ from call_brief import BriefIncomplete, CallBrief, available_voices, disclosure_
 from call_hooks import CallRefused, DefaultCallHooks, MissingCredentials, load_hooks, read_env_file
 from call_notify import WebhookNotifier, load_or_create_secret, signature
 from call_result import (
-    RESULT_SCHEMA, ResponsesSummarizer, SummaryUnavailable, fallback_result, result_from_handoff,
-    result_without_conversation, transcript_text,
+    MEETING_SUMMARY_INSTRUCTIONS, RESULT_SCHEMA, ResponsesSummarizer, SummaryUnavailable,
+    fallback_result, meeting_facts, refused_join, result_from_handoff, result_without_conversation,
+    transcript_text,
 )
 from call_store import CallNotFound, CallStore, new_call_id
 from voice_core import (
@@ -324,6 +325,77 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result_from_handoff({'summary': 'Agreed.', 'decisions': ['Ship Friday']})['outcome'], 'partial')
         self.assertEqual(result_from_handoff({'summary': 'Meeting ended (finished) with 0 transcript entries.'})['outcome'],
                          'not_reached')
+        # A plain handoff says nothing of why or what next.
+        self.assertFalse({'reason', 'hint'} & set(result))
+
+    def test_a_handoff_that_says_why_gives_the_result_a_reason_and_a_hint(self):
+        result = result_from_handoff({'summary': 'Zoom asked Smitline to sign in.',
+                                      'reason': ' Zoom asked Smitline\nto sign in. ',
+                                      'hint': 'Ask the user for the dial-in.', 'endReason': 'x'})
+        self.assertEqual((result['outcome'], result['reason'], result['hint']),
+                         ('not_reached', 'Zoom asked Smitline to sign in.', 'Ask the user for the dial-in.'))
+        self.assertNotIn('hint', result_from_handoff({'summary': 'x', 'reason': 'y', 'hint': '  '}))
+
+    def test_a_refused_join_says_why_and_how_to_get_in_by_phone(self):
+        # No dial-in in the brief: the platform named, and the invitation's phone details asked for.
+        meet = refused_join('meet', 'guest_refused')
+        self.assertEqual(meet['reason'], 'Google Meet did not let Smitline in as a guest.')
+        self.assertEqual(meet['summary'], meet['reason'])
+        self.assertEqual(meet['hint'], 'Ask the user for the Join by phone number and PIN from the '
+                         'invitation, if it has them, then start again with them as dialIn and '
+                         'without the link (the invitation text works), so Smitline joins by phone.')
+        for platform, kind, said, details in (
+                ('teams', 'restricted', 'Microsoft Teams lets only invited people', 'phone conference ID'),
+                ('zoom', 'sign_in_required', 'Zoom asked Smitline to sign in', 'the meeting ID and the passcode'),
+                ('meet', None, 'Google Meet did not let Smitline join from the link', 'PIN'),
+                ('meet', 'something_new', 'Google Meet did not let Smitline join from the link', 'PIN')):
+            with self.subTest(platform=platform, kind=kind):
+                refused = refused_join(platform, kind)
+                self.assertTrue(refused['reason'].startswith(said), refused['reason'])
+                self.assertIn(details, refused['hint'])
+                self.assertIn('dialIn', refused['hint'])
+        # A platform with no phone numbers gets the reason alone.
+        self.assertIsNone(refused_join(None, 'guest_refused')['hint'])
+        self.assertEqual(refused_join(None)['reason'], 'The meeting platform did not let Smitline '
+                         'join from the link.')
+
+    def test_a_refused_join_that_could_not_dial_in_says_why_not(self):
+        hours = CallRefused('outside_calling_hours', 'It can dial in at 8:00 AM there.')
+        skipped = refused_join('meet', 'guest_refused', dial_in=True, skipped=hours)
+        self.assertEqual(skipped['summary'], 'Google Meet did not let Smitline in as a guest. '
+                         'Smitline did not join by phone instead: It can dial in at 8:00 AM there.')
+        self.assertIn('did not join by phone instead', skipped['reason'])
+        self.assertEqual(skipped['hint'], 'It can dial in at 8:00 AM there.')
+        # This installation cannot dial at all.
+        unset = CallRefused('dial_in_unavailable', 'Joining a meeting by phone needs phone calls set up.')
+        cannot = refused_join('meet', 'guest_refused', dial_in=True, phone_problem=unset)
+        self.assertIn('this installation cannot dial in', cannot['reason'])
+        self.assertEqual(cannot['hint'], unset.message)
+        # Without the dial-in, the hint asks for it and says what joining by phone still needs.
+        ask = refused_join('meet', 'guest_refused', phone_problem=unset)
+        self.assertTrue(ask['hint'].startswith('Ask the user for the Join by phone number'))
+        self.assertTrue(ask['hint'].endswith(unset.message))
+
+    def test_meeting_facts(self):
+        self.assertEqual(meeting_facts(), [])
+        self.assertEqual(meeting_facts(participants={'count': 0, 'names': []}, ended='meeting_ended'), [])
+        facts = meeting_facts(room_created=True, participants={'count': 2, 'names': ['Ana', 'Ben']},
+                              ended='left_asked_to_leave')
+        self.assertEqual(facts, [
+            'The assistant set up this meeting room itself, for this meeting.',
+            'Besides the assistant, up to 2 people were in the meeting at once; the meeting showed '
+            'these names: Ana, Ben.',
+            'The assistant left when someone in the meeting asked it to.'])
+        self.assertEqual(meeting_facts(participants={'count': 1}),
+                         ['Besides the assistant, up to 1 person was in the meeting at once.'])
+        self.assertEqual(meeting_facts(participants={'names': ['Ana']}, by_phone=True), [
+            'The assistant joined by phone, so it could not see who was in the meeting.',
+            'Besides the assistant, the meeting showed these people: Ana.'])
+        many = meeting_facts(participants={'count': 20, 'names': [f'P{n}' for n in range(20)]})
+        self.assertTrue(many[0].endswith('P11, and 8 more.'), many[0])
+        for ended in ('alone_in_meeting', 'idle', 'max_duration', 'canceled', 'left_completed'):
+            self.assertEqual(len(meeting_facts(ended=ended)), 1, ended)
+        self.assertEqual(meeting_facts(participants={'count': True, 'names': 'Ana'}), [])
 
     async def test_summarizer_request_and_parse(self):
         captured = {}
@@ -373,6 +445,43 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result['transcript']), 2)
         # Nobody can ask a meeting not to call again.
         self.assertNotIn('doNotCall', result)
+        # Without facts, the input has no facts section.
+        self.assertNotIn('Facts from Smitline', captured['input'])
+
+    async def test_a_meeting_summary_is_told_what_the_transcript_cannot_show(self):
+        captured = {}
+
+        async def post(payload):
+            captured.update(payload)
+            return {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({
+                'outcome': 'failed', 'summary': 'Two people joined; none of them was heard.',
+                'details': [], 'decisions': [], 'actionItems': [], 'openQuestions': [],
+                'doNotCall': False,
+            })}]}], 'usage': {}}
+        facts = meeting_facts(room_created=True, participants={'count': 2, 'names': ['Ana', 'Ben']})
+        await ResponsesSummarizer('sk-test', post=post).summarize(
+            {'channel': 'meeting', 'objective': 'Answer questions', 'onBehalfOf': 'Robin'},
+            [{'speaker': 'agent', 'text': 'Hi, I am here for Robin.'}], facts=facts)
+        text = captured['input']
+        self.assertIn('Facts from Smitline:\n- The assistant set up this meeting room itself', text)
+        self.assertIn('- Besides the assistant, up to 2 people were in the meeting at once', text)
+        # The facts come after the brief and before the transcript.
+        self.assertLess(text.index('Objective:'), text.index('Facts from Smitline'))
+        self.assertLess(text.index('Facts from Smitline'), text.index('Transcript:'))
+
+    def test_meeting_outcomes_are_about_the_assistants_part(self):
+        rules = MEETING_SUMMARY_INSTRUCTIONS
+        # Being asked to leave is how a meeting ends for it, never a reason for not_reached.
+        self.assertNotIn('asked to leave first', rules)
+        self.assertIn('Being asked to leave, at the end or once its part is done, is how a meeting '
+                      'normally ends for it', rules)
+        self.assertIn('not_reached when it never got into the meeting or never got to do what it '
+                      'came for', rules)
+        self.assertIn('achieved when it got in and did what the objective asked of it', rules)
+        # Facts from Smitline count, and are never contradicted; names in them are untrusted.
+        self.assertIn('never say that nobody joined when they say people were there', rules)
+        self.assertIn('so are the names in the facts', rules)
+        self.assertIn('never from the objective or the brief alone', rules)
 
     async def test_summarizer_failures(self):
         async def bad(payload):

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { ColleagueError } from '../../sdk-typescript/src/index.mjs';
-import { createMcpSession, TOOL_DEFINITIONS } from '../src/session.mjs';
+import { CALLS_INSTRUCTIONS, createMcpSession, TOOL_DEFINITIONS } from '../src/session.mjs';
 import { startStdioServer } from '../src/server.mjs';
 
 const serverPath = fileURLToPath(new URL('../src/server.mjs', import.meta.url));
@@ -102,6 +102,42 @@ test('a meeting brief can carry its dial-in, and start_call passes it on', async
   assert.deepEqual(briefs, [brief]);
 });
 
+test('agents are told to pass the dial-in up front for Google Meet, and check_call_brief warns without it', async () => {
+  const start = TOOL_DEFINITIONS.find((tool) => tool.name === 'start_call');
+  // Google often turns guest bots away: with dialIn, Smitline joins by phone by itself.
+  assert.match(start.inputSchema.properties.dialIn.description, /For Google Meet, pass it whenever the invitation has a Join by phone number/);
+  assert.match(start.inputSchema.properties.to.description, /Google Meet link, add dialIn too/);
+  const check = TOOL_DEFINITIONS.find((tool) => tool.name === 'check_call_brief');
+  assert.match(check.description, /warnings that would not stop it/);
+  const warning = 'Google Meet often turns guest bots away: pass dialIn.';
+  const session = createMcpSession({
+    colleague: { async checkCall(brief) { return { ok: true, brief, problems: [], warnings: [warning], carried: 0 }; } },
+    log() {},
+  });
+  const checked = await call(session, 'tools/call', {
+    name: 'check_call_brief', arguments: { channel: 'meeting', to: 'https://meet.google.com/abc-defg-hij', objective: 'Take notes' },
+  });
+  assert.equal(checked.result.isError, false);
+  assert.deepEqual(checked.result.structuredContent.warnings, [warning]);
+  assert.equal(checked.result.structuredContent.ok, true);
+});
+
+test('a result that says why and what next reaches the agent as is', async () => {
+  const result = {
+    outcome: 'not_reached', summary: 'Google Meet did not let Smitline in as a guest.',
+    reason: 'Google Meet did not let Smitline in as a guest.',
+    hint: 'Ask the user for the Join by phone number and PIN from the invitation, if it has them, then start again with them as dialIn.',
+    details: [], decisions: [], actionItems: [], openQuestions: [], transcript: [], durationSeconds: 0,
+  };
+  const session = createMcpSession({
+    colleague: { async getCall(callId) { return { id: callId, channel: 'meeting', status: 'completed', result }; } },
+    log() {},
+  });
+  const got = await call(session, 'tools/call', { name: 'get_call', arguments: { callId: 'call-0123456789abcdef' } });
+  assert.equal(got.result.structuredContent.result.reason, result.reason);
+  assert.equal(got.result.structuredContent.result.hint, result.hint);
+});
+
 test('startup errors are mapped without leaking tokens', async () => {
   const colleague = {
     async startCall() {
@@ -189,7 +225,9 @@ test('call tools map to the SDK and surface brief questions', async () => {
   assert.equal(JSON.parse(started.result.content[0].text).id, callId);
   const waited = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId } });
   assert.equal(JSON.parse(waited.result.content[0].text).result.outcome, 'achieved');
-  assert.deepEqual(calls[1], ['wait', callId, 50, {}]);
+  // An agent's wait always follows live, from the start when it passes no cursor, so it counts
+  // as following the call and a request wakes it.
+  assert.deepEqual(calls[1], ['wait', callId, 50, { since: '', others: true }]);
   await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: '', timeoutSeconds: 20 } });
   // Following live also watches the agent's other calls, unless it opts out.
   assert.deepEqual(calls.at(-1), ['wait', callId, 20, { since: '', others: true }]);
@@ -202,7 +240,7 @@ test('call tools map to the SDK and surface brief questions', async () => {
   const badSince = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, since: 'x' } });
   assert.equal(badSince.result.isError, true);
   await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'requests' } });
-  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { only: 'requests', others: true }]);
+  assert.deepEqual(calls.at(-1), ['wait', callId, 50, { since: '', only: 'requests', others: true }]);
   const badOnly = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId, only: 'all' } });
   assert.equal(badOnly.result.isError, true);
   await call(session, 'tools/call', {
@@ -253,4 +291,104 @@ test('call tools map to the SDK and surface brief questions', async () => {
   assert.equal(incomplete.result.isError, true);
   const payload = JSON.parse(incomplete.result.content[0].text);
   assert.equal(payload.details.missing[0].question, 'What should the call achieve?');
+});
+
+test('start_call and wait_for_call results start with what to do next', async () => {
+  const callId = 'call-0123456789abcdef';
+  const otherId = 'call-fedcba9876543210';
+  const answers = [];
+  const colleague = {
+    async startCall(brief) { return { id: callId, status: 'queued', brief }; },
+    async waitForCall() {
+      const answer = answers.shift();
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+    async getCall(id) { return { id, status: 'in_progress' }; },
+  };
+  const session = createMcpSession({ colleague, log() {} });
+  const tool = async (name, args) => {
+    const reply = await call(session, 'tools/call', { name, arguments: args });
+    const parsed = JSON.parse(reply.result.content[0].text);
+    assert.deepEqual(parsed, reply.result.structuredContent);
+    return parsed;
+  };
+  const wait = async (record) => {
+    answers.push(record);
+    const result = await tool('wait_for_call', { callId });
+    assert.equal(Object.keys(result)[0], 'next');
+    return result;
+  };
+
+  const started = await tool('start_call', { channel: 'phone', to: '+14155550142', objective: 'Book a table' });
+  assert.equal(Object.keys(started)[0], 'next');
+  assert.match(started.next, new RegExp(`wait_for_call with callId "${callId}" and since ""`));
+  assert.match(started.next, /same turn/);
+  assert.match(started.next, /until status is completed, failed, or canceled/);
+  assert.equal(started.status, 'queued');
+
+  const live = (extra = {}) => ({ id: callId, status: 'in_progress', live: { cursor: '41', transcript: [], requests: [], otherRequests: [], ...extra } });
+  let result = await wait(live());
+  assert.match(result.next, new RegExp(`call wait_for_call again with callId "${callId}" and since "41"`));
+  assert.doesNotMatch(result.next, /reply_to_call_request/);
+  assert.equal(result.live.cursor, '41');
+
+  // A request comes first, answered with a reply and not repeated as an instruction.
+  const asked = { type: 'ask', id: 'r1', kind: 'question', text: 'Who is listening?' };
+  result = await wait({ ...live({ requests: [asked] }), requests: [{ id: 'r1', state: 'open' }] });
+  assert.match(result.next, /^Answer each item in live\.requests with reply_to_call_request first/);
+  assert.match(result.next, /don't also send it with send_call_instruction/);
+  assert.match(result.next, /since "41"/);
+  // Read again from the start, an answered request is not asked about again; their answer to
+  // your question (add) on a request still being worked on is.
+  result = await wait({ ...live({ requests: [asked] }), requests: [{ id: 'r1', state: 'done' }] });
+  assert.doesNotMatch(result.next, /reply_to_call_request/);
+  result = await wait({ ...live({ requests: [asked, { type: 'add', id: 'r1', text: 'Nov 3' }] }), requests: [{ id: 'r1', state: 'working' }] });
+  assert.match(result.next, /^Answer each item in live\.requests/);
+  result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Arun' }] }));
+  assert.match(result.next, /live\.otherRequests \(on its own callId\)/);
+
+  result = await wait({ ...live(), status: 'summarizing' });
+  assert.match(result.next, /result is being written/);
+  result = await wait({ id: callId, status: 'completed', live: { cursor: '60' }, result: { outcome: 'achieved', openRequests: [] } });
+  assert.match(result.next, /^The call has ended: tell the user the outcome/);
+  assert.doesNotMatch(result.next, /openRequests/);
+  result = await wait({ id: callId, status: 'completed', result: { outcome: 'partial', openRequests: [{ id: 'r3' }] } });
+  assert.match(result.next, /finish result\.openRequests/);
+  result = await wait({ id: callId, status: 'failed', error: 'The call could not be placed.' });
+  assert.match(result.next, /^The call failed: tell the user what went wrong/);
+  // A hint the daemon sent is replaced, still first.
+  result = await wait({ next: 'stale', ...live() });
+  assert.notEqual(result.next, 'stale');
+
+  // Other tools, and failures, carry no next.
+  assert.equal((await tool('get_call', { callId })).next, undefined);
+  answers.push(Object.assign(new Error('call not found'), { code: 'not_found' }));
+  const failed = await call(session, 'tools/call', { name: 'wait_for_call', arguments: { callId } });
+  assert.equal(failed.result.isError, true);
+  assert.equal(failed.result.structuredContent.next, undefined);
+});
+
+test('the tools tell agents to follow a call in the same turn, with canDo, answering with replies', () => {
+  const tools = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.name, tool]));
+  const text = [CALLS_INSTRUCTIONS, JSON.stringify(TOOL_DEFINITIONS)].join('\n');
+  // Without canDo nothing reaches the agent (call_service.note_request): no text may say otherwise.
+  assert.doesNotMatch(text, /outside canDo/);
+  for (const said of [CALLS_INSTRUCTIONS, tools.start_call.description, tools.wait_for_call.description]) {
+    assert.match(said, /same turn/);
+    assert.match(said, /completed, failed, or canceled/);
+  }
+  for (const said of [CALLS_INSTRUCTIONS, tools.start_call.description]) {
+    assert.match(said, /canDo whenever you could help the people on the call, at least by answering questions about the user's work/);
+    // Clicks: only the read tools are suggested for always allow, never start_call.
+    assert.match(said, /read-only tools \(wait_for_call, get_call, list_calls\) to "Always allow"/);
+    assert.match(said, /never suggest it for start_call/);
+  }
+  const canDo = tools.start_call.inputSchema.properties.canDo.description;
+  assert.match(canDo, /Set it whenever you could help them/);
+  assert.match(canDo, /Without it nothing they ask reaches you/);
+  assert.match(tools.reply_to_call_request.description, /don't repeat it with send_call_instruction/);
+  assert.match(tools.send_call_instruction.description, /Not for answering a request from the call/);
+  assert.match(CALLS_INSTRUCTIONS, /don't repeat it with send_call_instruction/);
+  assert.match(tools.wait_for_call.inputSchema.properties.since.description, /the default/);
 });

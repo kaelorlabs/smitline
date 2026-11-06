@@ -1,6 +1,6 @@
 # Smitline MCP server
 
-The call tools for any MCP-capable agent (`smitline-mcp` 0.3.9): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
+The call tools for any MCP-capable agent (`smitline-mcp` 0.3.10): phone calls and Zoom, Teams, and Google Meet meetings. Every tool calls the loopback daemon through the TypeScript SDK. It is served three ways:
 
 - **Streamable HTTP** at `http://127.0.0.1:8095/mcp`, from the local console, with a bearer token. This is how local agents connect to the `smitline` container.
 - **stdio**, with `smitline mcp` (`src/server.mjs`). Claude Desktop, which only starts stdio servers, runs `docker exec -i smitline smitline mcp`.
@@ -19,8 +19,8 @@ Do not publish this package and do not install it globally.
 | `wait_for_call` / `get_call` / `list_calls` | Follow a call to its structured result |
 | `send_call_instruction` / `end_call` / `transfer_call_to_me` | Steer, end, or take over a call in progress |
 | `reply_to_call_request` | Answer a request from the people on the call (brief `canDo`): status as you work, then done |
-| `list_voices` | GPT-Live voices |
-| `get_profile` / `update_profile` | The user's profile that every call gets as background |
+| `list_voices` | GPT-Live voices, and the default voices for phone calls and meetings |
+| `get_profile` / `update_profile` | The user's profile that every call gets as background, and the default voices (`voices`) |
 
 See [calls](../../docs/calls.md) for the brief and the result.
 
@@ -31,7 +31,7 @@ Both go through `start_call`:
 - Phone: `{ "channel": "phone", "to": "+14155550142", "objective": "..." }`
 - Meeting: `{ "channel": "meeting", "to": "https://zoom.us/j/...", "objective": "..." }` joins that Zoom, Teams, or Google Meet invite.
 
-Then call `wait_for_call` until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome. To supervise the call while it runs, pass `since` (`""` first, then `live.cursor`): each answer then also comes once something new is said, with the new lines in `live.transcript`, and the agent can step in with `send_call_instruction`. With `canDo` in the brief, people on the call can ask the agent for things: each request returns the wait at once, in `live.requests`, and the agent answers with `reply_to_call_request` (`status` as it works, then `done`).
+Then call `wait_for_call` again and again, in the same turn, until the status is `completed`, `failed`, or `canceled`, and tell the user the outcome. It follows the call live: pass `since` (`""`, the default, first, then `live.cursor`). Each answer comes at once for a request or a status change, and otherwise once new talk has gathered, with the new lines in `live.transcript`; the agent can step in with `send_call_instruction`. Every `start_call` and `wait_for_call` result starts with `next`: what to do now. With `canDo` in the brief, people on the call can ask the agent for things: each request returns the wait at once, in `live.requests`, and the agent answers with `reply_to_call_request` (`status` as it works, then `done`).
 
 ## Connecting an agent
 

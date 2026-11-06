@@ -88,6 +88,48 @@ class MeetingFinalizerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(newer.directory.name, meeting.id)
         self.assertEqual(archive_dir(self.runtime, meeting.id).name, meeting.id)
 
+    async def test_the_handoff_says_how_the_join_was_refused(self):
+        meeting = session()
+        archive = CallRecord(self.recordings, meeting_id=meeting.id)
+        archive.event('stage', stage='joining')
+        archive.event('join_refused', refusal='made_up')  # not a known kind: never passed on
+        archive.event('join_refused', refusal='guest_refused')
+        archive.close(end_reason='authentication_required', stage='authentication_required')
+        handoff = build_meeting_handoff(archive, meeting, reason='authentication_required', partial=True)
+        self.assertEqual(handoff.join_refused, 'guest_refused')
+        self.assertIsNone(handoff.participants)
+        self.assertEqual(handoff.to_dict()['joinRefused'], 'guest_refused')
+        # A meeting that got in says nothing of a refusal.
+        other = session(id='mtg-other0001')
+        self.assertIsNone(build_meeting_handoff(self._archive(other), other, reason='finished').join_refused)
+
+    async def test_the_handoff_says_who_the_meeting_showed(self):
+        meeting = session()
+        archive = CallRecord(self.recordings, meeting_id=meeting.id)
+        # What bridge.py records: the participant list's names (the others), its count (everyone,
+        # Smitline included), and the names the meeting shows on what people said.
+        archive.event('participant_count', count=2)
+        archive.event('participants', count=1, names=['Ana Diaz'])
+        archive.event('participant_count', count=4)
+        archive.event('participants', count=2, names=['Ana Diaz', ' Ben\n Okafor\x07 '])
+        archive.event('participant_count', count=True)  # not a count
+        archive.transcript('meeting', 'Hi all.', False, name='Chen Wu')
+        archive.transcript('meeting', 'Hello?', False)
+        archive.transcript('agent', 'Hello, I am here for Ada.', False)
+        archive.close(end_reason='left_asked_to_leave', stage='finished')
+        handoff = build_meeting_handoff(archive, meeting, reason='left_asked_to_leave')
+        self.assertEqual(handoff.participants.count, 3)
+        self.assertEqual(handoff.participants.names, ('Ana Diaz', 'Ben Okafor', 'Chen Wu'))
+        # What the builder wrote reads back as a valid handoff.
+        from meeting_handoff import MeetingHandoff
+        self.assertEqual(MeetingHandoff.from_dict(handoff.to_dict()).to_dict(), handoff.to_dict())
+        # Only Smitline counted: nobody else to name.
+        alone = session(id='mtg-alone000001')
+        record = CallRecord(self.recordings, meeting_id=alone.id)
+        record.event('participant_count', count=1)
+        record.close(end_reason='alone_in_meeting', stage='finished')
+        self.assertIsNone(build_meeting_handoff(record, alone, reason='alone_in_meeting').participants)
+
     async def test_handoff_is_stored_once(self):
         meeting = session()
         self._archive(meeting)

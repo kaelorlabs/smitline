@@ -67,9 +67,11 @@ class FakeLine:
 class FakeSummarizer:
     def __init__(self):
         self.calls = 0
+        self.facts = None
 
-    async def summarize(self, brief, transcript, *, duration_seconds=0):
+    async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
         self.calls += 1
+        self.facts = list(facts)
         return {'outcome': 'achieved', 'summary': 'Booked.', 'details': [], 'decisions': [],
                 'actionItems': [], 'openQuestions': [], 'transcript': transcript,
                 'durationSeconds': duration_seconds, 'source': 'summary_model',
@@ -425,6 +427,41 @@ class MeetingLineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(done['result']['transcript'], spoken)
             lines = [e['data']['text'] for e in h.service.events(record['id']) if e['type'] == 'call.transcript']
             self.assertEqual(lines, ['Two PRs works for me.', 'Noted.'])
+            await h.service.shutdown()
+
+    async def test_a_meeting_summary_is_told_who_was_there_and_why_it_left(self):
+        # The transcript has only what Smitline heard: the summarizer also gets who the meeting
+        # showed (the handoff's participants) and why Smitline left (call.agent_left).
+        with tempfile.TemporaryDirectory() as temp:
+            class Seen(FakeDaemon):
+                async def get_handoff(self, meeting_id, owner=None):
+                    handoff = await super().get_handoff(meeting_id, owner)
+                    return dict(handoff, endReason='left_asked_to_leave',
+                                participants={'count': 2, 'names': ['Ana', 'Ben']})
+            daemon = Seen()
+            ticks = iter(range(0, 10000, 5))
+
+            async def no_sleep(_seconds):
+                await asyncio.sleep(0)
+            line = MeetingLine(daemon, sleep=no_sleep, monotonic=lambda: next(ticks),
+                               transcript=lambda _id: [{'speaker': 'agent', 'text': 'Hi, I am here for Robin.'}])
+            h = ServiceHarness(temp, lines={'meeting': line})
+            record = await h.service.create(brief(channel='meeting', to=ZOOM))
+            done = await h.service.wait(record['id'], timeout=5, owner='local')
+            self.assertEqual(done['result']['source'], 'summary_model')
+            self.assertEqual(h.summarizer.facts, [
+                'Besides the assistant, up to 2 people were in the meeting at once; the meeting '
+                'showed these names: Ana, Ben.',
+                'The assistant left when someone in the meeting asked it to.'])
+            await h.service.shutdown()
+
+    async def test_a_phone_call_summary_gets_no_meeting_facts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            h = ServiceHarness(temp)
+            h.line.proceed.set()
+            record = await h.service.create(brief())
+            await h.service.wait(record['id'], timeout=5, owner='local')
+            self.assertEqual(h.summarizer.facts, [])
             await h.service.shutdown()
 
     async def test_a_meeting_whose_summary_fails_says_so_and_keeps_the_transcript(self):
@@ -827,6 +864,49 @@ class MeetingThroughRealDaemonTests(unittest.IsolatedAsyncioTestCase):
             await harness.service.shutdown()
             app.runtime_daemon.close()
 
+    async def test_a_refused_join_reaches_the_result_with_why_and_what_next(self):
+        """The meeting notes in its archive how the platform refused the browser; the handoff
+        carries it, and the call's result says why and what the agent can do."""
+        from call_record import CallRecord
+        from meeting_finalizer import MeetingFinalizer
+        from test_runtime_daemon import FakeSupervisor
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = FakeSupervisor()
+            harness = ServiceHarness(temp)
+            runtime_root = Path(temp) / 'meeting-runtime'
+
+            def lines(daemon):
+                harness.service.lines = {'meeting': MeetingLine(
+                    daemon, poll_interval=0.01, handoff_timeout=5)}
+                return harness.service
+            app = create_app(root=Path(temp) / 'daemon', auth_token='t', supervisor=supervisor,
+                             call_service_factory=lines)
+            daemon = app.runtime_daemon
+            record = await harness.service.create(brief(
+                channel='meeting', to='https://meet.google.com/abc-defg-hij'))
+            call = await harness.service.wait(record['id'], timeout=0.2, owner='local')
+            meeting_id = call['line']['meetingId']
+            # What bridge.main does when Google turns the guest away right after Join.
+            archive = CallRecord(runtime_root / 'recordings', meeting_id=meeting_id)
+            archive.event('stage', stage='joining')
+            archive.event('join_refused', refusal='guest_refused')
+            archive.close(end_reason='authentication_required', stage='authentication_required')
+            session = await daemon.get_meeting(meeting_id)
+            await MeetingFinalizer(runtime_root, daemon=daemon).complete(
+                session, reason='authentication_required', partial=True)
+            self.assertEqual((await daemon.get_handoff(meeting_id)).join_refused, 'guest_refused')
+            done = await harness.service.wait(record['id'], timeout=5, owner='local')
+            result = done['result']
+            self.assertEqual((done['status'], result['outcome']), ('completed', 'not_reached'))
+            self.assertEqual(result['reason'], 'Google Meet did not let Smitline in as a guest.')
+            self.assertEqual(result['summary'], result['reason'])
+            self.assertIn('Join by phone number and PIN', result['hint'])
+            # This installation has no phone calls set up: the hint says so too.
+            self.assertTrue(result['hint'].endswith('needs phone calls set up on this installation.'),
+                            result['hint'])
+            await harness.service.shutdown()
+            app.runtime_daemon.close()
+
 
 class MeetingCapacityTests(unittest.IsolatedAsyncioTestCase):
     """A meeting that cannot start for want of a meeting container is refused when the call is
@@ -1068,6 +1148,19 @@ class AgentRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([event['data'] for event in events], [{'meetingUrl': self.LINK}])
             await asyncio.sleep(0)
             self.assertEqual(h.service._contexts[record['id']].brief.to, self.LINK)
+
+    async def test_the_result_knows_smitline_set_up_the_room(self):
+        # The room's summary must never say a room still has to be made, or that nobody came
+        # when people did: the summarizer is told Smitline made it.
+        from unittest.mock import patch
+        with patch('daily_rooms.create_room', lambda key, minutes: (self.LINK, 'AbC123')):
+            h = self.harness()
+            record = await h.service.create(brief(channel='meeting', to='new'))
+            h.service.lines['meeting'].proceed.set()
+            done = await h.service.wait(record['id'], timeout=5, owner='local')
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(h.summarizer.facts,
+                             ['The assistant set up this meeting room itself, for this meeting.'])
 
     async def test_without_a_daily_key_it_is_refused_before_any_room(self):
         from unittest.mock import patch

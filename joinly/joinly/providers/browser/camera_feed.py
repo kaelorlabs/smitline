@@ -16,12 +16,18 @@ local avatar) directly. Three styles: ``still`` shows one picture per
 presence state at a few frames a second, which costs almost no CPU;
 ``animated`` redraws at 30 fps, with an equalizer driven by the voice's
 amplitude; ``mascot`` plays a presence pack's clips (a character walking
-in, listening, thinking, speaking and leaving) at the pack's frame rate.
-Presence uses ``set_visual_state``.
+in, listening, thinking, speaking and leaving) at the pack's frame rate,
+its mouth following the voice where the pack has mouth pictures.
+Presence uses ``set_visual_state``. The tracks are marked as detail, so an
+encoder short of bits keeps the picture sharp, and the camera goes off once
+the meeting has ended, so nobody is left with a frozen frame.
 """
 
 import asyncio
+import contextlib
 import json
+import math
+import time
 from collections.abc import Callable
 from urllib.parse import quote
 
@@ -382,6 +388,8 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
             window.__visualState = name;
             const mapped = VISUAL_TO_STATUS[name] || '';
             window.__setStatus(mapped);
+            // Once the meeting has ended, the camera goes off after a moment.
+            if (name === 'ended') setTimeout(cameraOff, {ended_ms});
         }};
 
         function draw() {{
@@ -473,10 +481,26 @@ _CAPTION_DRAW = """ctx.save();
             ctx.fillText(__CAPTION__, W / 2, H * 0.9);
             ctx.restore();"""
 
-# Routes camera requests to the canvas track from _initCanvas(); shared by both
-# styles. Inserted through str.format, so its braces are single.
+# Routes camera requests to the canvas track from _initCanvas(); shared by every
+# style. Each track handed out is marked as detail (a picture to keep sharp, not
+# motion to keep smooth) and remembered, so cameraOff() can stop them all when the
+# meeting ends: the meeting then shows the name tile, not a frozen last frame.
+# Inserted through str.format, so its braces are single.
 _DEVICE_PATCH = """\
 const md = navigator.mediaDevices;
+    const handedOut = [];
+    function handOut() {
+        const track = _initCanvas().clone();
+        track.contentHint = 'detail';
+        handedOut.push(track);
+        return track;
+    }
+    function cameraOff() {
+        handedOut.forEach((track) => track.stop());
+        if (camTrack) camTrack.stop();
+        window.__smitlineCameraIsOff = true;
+    }
+    window.__smitlineCameraOff = cameraOff;
 
     window.__camOrigGUM = md.getUserMedia.bind(md);
     md.getUserMedia = async (constraints) => {
@@ -488,11 +512,11 @@ const md = navigator.mediaDevices;
                 audio: constraints.audio,
                 video: false,
             });
-            if (wantsVideo) real.addTrack(_initCanvas().clone());
+            if (wantsVideo) real.addTrack(handOut());
             return real;
         }
         if (wantsVideo) {
-            return new MediaStream([_initCanvas().clone()]);
+            return new MediaStream([handOut()]);
         }
         return window.__camOrigGUM(constraints);
     };
@@ -500,9 +524,7 @@ const md = navigator.mediaDevices;
     const origAddTrack = RTCPeerConnection.prototype.addTrack;
     RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
         if (track.kind === 'video') {
-            return origAddTrack.call(
-                this, _initCanvas().clone(), ...streams
-            );
+            return origAddTrack.call(this, handOut(), ...streams);
         }
         return origAddTrack.call(this, track, ...streams);
     };
@@ -598,6 +620,8 @@ _STILL_CAMERA_TEMPLATE = """\
             if (!VISUAL_STATES.has(name) || name === window.__visualState) return;
             window.__visualState = name;
             draw();
+            // Once the meeting has ended, the camera goes off after a moment.
+            if (name === 'ended') setTimeout(cameraOff, {ended_ms});
         }};
         draw();
         setInterval(() => {{ tick++; draw(); }}, REPAINT_MS);
@@ -610,17 +634,25 @@ _STILL_CAMERA_TEMPLATE = """\
 }})();"""
 
 # The mascot style: the clips of a presence pack (meeting-runtime/presence_pack.py), one per
-# presence state, at the pack's frame rate. The frames are not in this script, which every frame
-# of the meeting page runs: the page asks for them once through an exposed function and decodes
-# them into bitmaps from memory (no URL, so the meeting site's content policy has no say).
-# Looping clips stay decoded once used; one-shot clips (walking in, leaving) are let go after.
-# Inserted through str.format, so its own braces are doubled.
+# presence state, at the pack's frame rate. The pictures are not in this script, which every frame
+# of the meeting page runs: the page asks for them through an exposed function, a few at a time,
+# and decodes them into bitmaps from memory (no URL, so the meeting site's content policy has no
+# say). Only what plays next is decoded (AHEAD frames), which keeps a 1280x720 pack to a few dozen
+# bitmaps; small loops stay decoded once used, and a clip with a mouth (speaking) is decoded as the
+# pack loads, so the first word never waits. While such a clip plays, the mouth picture the voice
+# asks for (__setMouth) is drawn into its box. A new clip blends in from the last picture, quicker
+# into and out of a clip with a mouth. Once the meeting has ended and the last clip has played, the
+# camera goes off. Inserted through str.format, so its own braces are doubled.
 _MASCOT_CAMERA_TEMPLATE = """\
 (() => {{
     const W = {w}, H = {h}, FPS = {fps};
     const VISUAL_STATES = new Set(__VISUAL_STATES__);
     const CAPTION = __CAPTION__;
     const CAPTION_COLOR = __CAPTION_COLOR__;
+    const BLEND = Math.max(1, Math.round(FPS * {blend_s}));
+    const QUICK_BLEND = Math.max(1, Math.round(FPS * {quick_blend_s}));
+    const AHEAD = {ahead}, KEEP = {keep}, START = {start}, PER_CALL = {per_call};
+    const PRESENT = new Set(['listening', 'working', 'speaking', 'needs_attention']);
 
     if (window.__camOrigGUM) return;
 
@@ -637,62 +669,85 @@ _MASCOT_CAMERA_TEMPLATE = """\
         ctx.fillRect(0, 0, W, H);
 
         let pack = null;
-        const blobs = {{}};
-        const bitmaps = {{}};
-        let clip = null, frame = 0, next = [], arrived = false;
-        // A new clip blends in over a quarter second from a snapshot of the last picture.
+        const blobs = [];               // picture number -> Blob
+        const bitmaps = new Map();      // picture number -> ImageBitmap, or null while decoding
+        const keep = new Set();         // picture numbers that stay decoded
+        let clip = null, frame = 0, next = [], arrived = false, settled = false, stopped = false;
+        let mouth = 0;                  // the mouth picture the voice asks for; 0 is closed
+        let shown = -1;                 // the picture on screen, never let go
         const snap = document.createElement('canvas');
         snap.width = W; snap.height = H;
         const snapCtx = snap.getContext('2d');
-        const BLEND = Math.max(1, Math.round(FPS / 4));
-        let fadeLeft = 0, drawn = false;
+        let fadeLeft = 0, fadeOf = BLEND, drawn = false;
 
-        function loops(name) {{
-            return !!(pack && pack.clips[name] && pack.clips[name].loop);
+        function info(name) {{ return pack.clips[name]; }}
+        function hasMouth(name) {{ return !!(name && info(name) && info(name).mouth); }}
+        function decode(n) {{
+            if (bitmaps.has(n) || !blobs[n]) return;
+            bitmaps.set(n, null);
+            createImageBitmap(blobs[n]).then((bitmap) => {{
+                if (bitmaps.get(n) === null) bitmaps.set(n, bitmap);
+                else bitmap.close();
+            }}).catch(() => {{ bitmaps.delete(n); }});
         }}
-        function release(name) {{
-            const frames = bitmaps[name];
-            if (Array.isArray(frames)) frames.forEach((b) => b.close && b.close());
-            delete bitmaps[name];
+        // Decoded: the pictures kept, the one on screen, and the next AHEAD frames of what plays
+        // (on through the queued clips, round a loop). Everything else is let go.
+        function refresh() {{
+            const want = new Set(keep);
+            if (shown >= 0) want.add(shown);
+            let name = clip, at = frame;
+            const queue = next.slice();
+            for (let n = 0; name && n < AHEAD;) {{
+                const list = info(name).frames;
+                if (at < list.length) {{ want.add(list[at]); at += 1; n += 1; }}
+                else if (queue.length) {{ name = queue.shift(); at = 0; }}
+                else if (info(name).loop) at = 0;
+                else break;
+            }}
+            want.forEach(decode);
+            for (const [n, bitmap] of bitmaps) {{
+                if (want.has(n)) continue;
+                if (bitmap) bitmap.close();
+                bitmaps.delete(n);
+            }}
         }}
-        function decode(name) {{
-            if (bitmaps[name] || !blobs[name]) return;
-            bitmaps[name] = 'decoding';
-            Promise.all(blobs[name].map((b) => createImageBitmap(b)))
-                .then((frames) => {{ bitmaps[name] = frames; }})
-                .catch(() => {{ delete bitmaps[name]; }});
+        function keepClip(name, first) {{
+            const entry = info(name);
+            if (!entry) return;
+            const all = entry.loop && new Set(entry.frames).size <= KEEP;
+            entry.frames.slice(0, all ? entry.frames.length : first).forEach((n) => keep.add(n));
         }}
         function play(names) {{
             if (drawn) {{
                 snapCtx.drawImage(c, 0, 0);
-                fadeLeft = BLEND;
+                fadeOf = hasMouth(clip) || hasMouth(names[0]) ? QUICK_BLEND : BLEND;
+                fadeLeft = fadeOf;
             }}
-            const keep = new Set(names);
-            Object.keys(bitmaps).forEach((n) => {{
-                if (!keep.has(n) && n !== clip && !loops(n)) release(n);
-            }});
             clip = names[0];
             next = names.slice(1);
             frame = 0;
-            names.forEach(decode);
+            settled = false;
+            keepClip(clip, 0);
+            refresh();
+        }}
+        // The arrival plays once, the first time the agent is present; a character that never
+        // arrived stays off stage when the meeting ends.
+        function clipsFor(state) {{
+            const target = pack.states[state] || pack.states.listening;
+            if (!PRESENT.has(state)) return [arrived ? target : pack.states.joining];
+            if (arrived) return [target];
+            arrived = true;
+            return pack.arrival ? [pack.arrival, target] : [target];
         }}
         function show(state) {{
             if (!pack) return;
-            const target = pack.states[state] || pack.states.listening;
-            const frames = bitmaps[clip];
-            const walkingIn = clip === pack.arrival
-                && !(Array.isArray(frames) && frame >= frames.length - 1);
-            if (!arrived && state !== 'joining' && pack.arrival) {{
-                arrived = true;
-                play([pack.arrival, target]);
-            }} else if (walkingIn) {{
-                // Let it finish walking in, then show what it is doing by then.
-                next = [target];
-                decode(target);
-            }} else if (target !== clip) {{
-                if (state !== 'joining') arrived = true;
-                play([target]);
-            }}
+            const names = clipsFor(state);
+            const entry = clip ? info(clip) : null;
+            const oneShotRunning = entry && !entry.loop && frame + 1 < entry.frames.length;
+            settled = false;
+            if (names[0] === clip) next = names.slice(1);    // carries on where it is
+            else if (oneShotRunning) next = names;           // never cut short
+            else play(names);
         }}
         function caption() {{
             if (!CAPTION) return;
@@ -706,24 +761,40 @@ _MASCOT_CAMERA_TEMPLATE = """\
             ctx.restore();
         }}
         function tick() {{
-            const frames = clip ? bitmaps[clip] : null;
-            if (!Array.isArray(frames) || !frames.length) return;
+            if (stopped || !pack || !clip) return;
+            refresh();
+            const entry = info(clip);
+            const n = entry.frames[Math.min(frame, entry.frames.length - 1)];
+            const bitmap = bitmaps.get(n);
+            if (!bitmap) return;  // not decoded yet: the last picture stays a moment longer
             ctx.globalAlpha = 1;
-            ctx.drawImage(frames[Math.min(frame, frames.length - 1)], 0, 0, W, H);
-            if (fadeLeft > 0) {{
-                ctx.globalAlpha = fadeLeft / (BLEND + 1);
+            ctx.drawImage(bitmap, 0, 0, W, H);
+            const m = entry.mouth;
+            if (m && mouth > 0) {{
+                const open = bitmaps.get(m.levels[Math.min(mouth, m.levels.length) - 1]);
+                if (open) ctx.drawImage(open, m.x, m.y, m.width, m.height);
+            }}
+            const blended = fadeLeft > 0;
+            if (blended) {{
+                ctx.globalAlpha = fadeLeft / (fadeOf + 1);
                 ctx.drawImage(snap, 0, 0);
                 ctx.globalAlpha = 1;
                 fadeLeft -= 1;
             }}
             caption();
+            shown = n;
             drawn = true;
-            if (frame < frames.length - 1) {{
-                frame += 1;
-            }} else if (next.length) {{
-                play(next);
-            }} else if (loops(clip)) {{
-                frame = 0;
+            const last = frame + 1 >= entry.frames.length;
+            settled = last && !next.length;
+            if (!last) frame += 1;
+            else if (next.length) play(next);
+            else if (entry.loop) frame = 0;
+            // The meeting has ended and its last clip has played, its last frame shown unblended:
+            // the camera goes off.
+            if (window.__visualState === 'ended' && settled && !blended) {{
+                stopped = true;
+                clearInterval(timer);
+                cameraOff();
             }}
         }}
 
@@ -732,24 +803,39 @@ _MASCOT_CAMERA_TEMPLATE = """\
             window.__visualState = name;
             show(name);
         }};
+        window.__setMouth = (level) => {{ mouth = Math.max(0, level | 0); }};
 
         const load = window.__smitlinePresencePack;
         if (typeof load === 'function') {{
-            Promise.resolve(load()).then((payload) => {{
-                if (!payload || !payload.clips || !payload.states) return;
-                for (const [name, entry] of Object.entries(payload.clips)) {{
-                    blobs[name] = entry.frames.map((f) => {{
-                        const raw = atob(f.data);
+            (async () => {{
+                const manifest = await load();
+                if (!manifest || !manifest.clips || !manifest.states) return;
+                const count = manifest.pictures | 0;
+                for (let first = 0; first < count; first += PER_CALL) {{
+                    const part = await load(first, Math.min(count, first + PER_CALL));
+                    part.forEach((p, k) => {{
+                        const raw = atob(p.data);
                         const bytes = new Uint8Array(raw.length);
                         for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-                        return new Blob([bytes], {{type: f.type}});
+                        blobs[first + k] = new Blob([bytes], {{type: p.type}});
                     }});
                 }}
-                pack = payload;
+                pack = manifest;
+                // Decoded now and kept: the empty stage it starts on, every clip with a mouth
+                // and its mouth pictures, and the first frames of listening, which follows speech.
+                keepClip(pack.states.joining, START);
+                keepClip(pack.states.listening, START);
+                for (const name of Object.keys(pack.clips)) {{
+                    const m = info(name).mouth;
+                    if (!m) continue;
+                    keepClip(name, AHEAD);
+                    m.levels.forEach((n) => keep.add(n));
+                }}
                 show(window.__visualState);
-            }}).catch(() => {{}});
+                refresh();
+            }})().catch(() => {{}});
         }}
-        setInterval(tick, Math.round(1000 / FPS));
+        const timer = setInterval(tick, Math.round(1000 / FPS));
 
         camTrack = c.captureStream(FPS).getVideoTracks()[0];
         return camTrack;
@@ -763,8 +849,23 @@ _STILL_WIDTH = 640
 _STILL_HEIGHT = 360
 _STILL_FPS = 5
 _STILL_REPAINT_MS = 400
-# The exposed function the mascot page calls, once, for its presence pack.
+# The still and animated cameras go off this long after the meeting has ended.
+_ENDED_MS = 1500
+# The exposed function the mascot page calls for its presence pack: with no arguments for the
+# manifest, then (first, end) for pictures, at most _PICTURES_PER_CALL at a time.
 PRESENCE_PACK_BINDING = "__smitlinePresencePack"
+_PICTURES_PER_CALL = 24
+# The mascot page: a new clip blends in over _BLEND_S, into and out of a clip with a mouth over
+# _QUICK_BLEND_S; _AHEAD frames are decoded ahead of the one shown; a looping clip of at most
+# _KEEP distinct pictures stays decoded; the first _START frames of the clips it starts on and
+# returns to after speech (listening) stay decoded too.
+_BLEND_S = 0.25
+_QUICK_BLEND_S = 0.08
+_AHEAD = 12
+_KEEP = 12
+_START = 3
+# Mouth pictures go to the page when they change, at most this often while the mouth is open.
+_MOUTH_THROTTLE_S = 0.03
 
 
 def build_camera_override_script(
@@ -788,6 +889,12 @@ def build_camera_override_script(
             w=int(pack["width"]),
             h=int(pack["height"]),
             fps=int(pack["fps"]),
+            blend_s=_BLEND_S,
+            quick_blend_s=_QUICK_BLEND_S,
+            ahead=_AHEAD,
+            keep=_KEEP,
+            start=_START,
+            per_call=_PICTURES_PER_CALL,
             device_patch=_DEVICE_PATCH,
         )
         caption_color = pack.get("captionColor") or caption_color
@@ -797,6 +904,7 @@ def build_camera_override_script(
             h=_STILL_HEIGHT,
             fps=_STILL_FPS,
             repaint_ms=_STILL_REPAINT_MS,
+            ended_ms=_ENDED_MS,
             device_patch=_DEVICE_PATCH,
             caption_draw=caption_draw,
         )
@@ -813,6 +921,7 @@ def build_camera_override_script(
             fx_thinking=_FX_THINKING,
             fx_busy=_FX_BUSY,
             fx_listening=_FX_LISTENING,
+            ended_ms=_ENDED_MS,
             device_patch=_DEVICE_PATCH,
             caption_draw=caption_draw,
         )
@@ -832,7 +941,9 @@ class CameraFeed:
     Draws the Smitline mark (or a validated avatar data URI) on the
     camera canvas. Wraps an ``AudioWriter`` to extract amplitude and
     push it to the canvas render loop. Presence states use
-    ``set_visual_state``.
+    ``set_visual_state``. With a presence pack whose speaking clip has a
+    mouth, ``voice`` (meeting-runtime's VoiceActivity, fed by the
+    microphone as it writes) chooses the mouth picture the page draws.
     """
 
     def __init__(
@@ -844,6 +955,7 @@ class CameraFeed:
         style: str = "animated",
         caption: str | None = None,
         pack: dict | None = None,
+        voice: object | None = None,
     ) -> None:
         """Initialize with the underlying audio writer.
 
@@ -857,9 +969,27 @@ class CameraFeed:
         self.style = style
         self.caption = caption
         self.pack = pack if style == "mascot" else None
+        self.voice = voice
         self._logo_src = logo_src or _LOGO_SVG
         self._meeting_page: Page | None = None
         self._last_band_time: float = 0
+        self._manifest: dict | None = None
+        self._mouth_levels = 0
+        self._mouth_sent = 0
+        self._mouth_sent_at = 0.0
+        if self.pack is not None:
+            self._manifest = {k: v for k, v in self.pack.items() if k != "pictures"}
+            self._manifest["pictures"] = len(self.pack.get("pictures") or ())
+            self._mouth_levels = max(
+                (
+                    len(clip["mouth"]["levels"])
+                    for clip in self.pack["clips"].values()
+                    if clip.get("mouth")
+                ),
+                default=0,
+            )
+        if enabled and voice is not None and self._mouth_levels:
+            voice.on_level.append(self._on_level)
         # Only the animated style draws the voice's frequency bands.
         if enabled and style == "animated":
             self.audio_writer = _AmplitudeAudioWriter(writer, self._on_bands)
@@ -872,9 +1002,8 @@ class CameraFeed:
         if not self.enabled:
             return
         if self.pack is not None:
-            pack = self.pack
             # Registered on this page for all its frames, before any of them asks.
-            await meeting_page.expose_function(PRESENCE_PACK_BINDING, lambda: pack)
+            await meeting_page.expose_function(PRESENCE_PACK_BINDING, self._pack_part)
         await meeting_page.add_init_script(
             build_camera_override_script(
                 logo_src=self._logo_src, style=self.style, caption=self.caption, pack=self.pack
@@ -903,9 +1032,47 @@ class CameraFeed:
             return
         self.set_visual_state(_JOINLY_EFFECT_TO_VISUAL.get(name, "working"))
 
+    async def turn_off(self) -> None:
+        """Stop the camera tracks the meeting was given.
+
+        The meeting then shows the name tile instead of a frozen last frame.
+        The camera also goes off by itself once the meeting has ended.
+        """
+        page = self._meeting_page
+        if not self.enabled or page is None or page.is_closed():
+            return
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(page.evaluate("window.__smitlineCameraOff?.()"), 2)
+
     async def stop(self) -> None:
-        """Clean up references."""
+        """Turn the camera off and clean up references."""
+        await self.turn_off()
         self._meeting_page = None
+
+    def _pack_part(self, first: int | None = None, end: int | None = None) -> object:
+        """The pack's manifest, or its pictures from ``first`` to ``end``."""
+        if first is None:
+            return self._manifest
+        pictures = self.pack["pictures"] if self.pack else []
+        first = max(0, int(first))
+        end = min(int(end if end is not None else first + 1), first + _PICTURES_PER_CALL)
+        return pictures[first:end]
+
+    def _on_level(self, level: float) -> None:
+        """Send the page the mouth picture for the voice's level when it changes."""
+        levels = self._mouth_levels
+        mouth = min(levels, max(0, math.floor(level * levels + 0.5)))
+        if mouth == self._mouth_sent:
+            return
+        now = time.monotonic()
+        if mouth and now - self._mouth_sent_at < _MOUTH_THROTTLE_S:
+            return  # the next chunk, 10 ms on, tries again
+        page = self._meeting_page
+        if page is None or page.is_closed():
+            return
+        self._mouth_sent, self._mouth_sent_at = mouth, now
+        task = asyncio.ensure_future(page.evaluate(f"window.__setMouth?.({mouth})"))
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     def _on_bands(self, bands: list[float]) -> None:
         now = asyncio.get_event_loop().time()
@@ -933,6 +1100,8 @@ class _AmplitudeAudioWriter(AudioWriter):
         self._on_bands = on_bands
         self.audio_format = writer.audio_format
         self.chunk_size = writer.chunk_size
+        # What the microphone writes, for whoever follows the voice (Participation).
+        self.voice = getattr(writer, "voice", None)
 
     async def write(self, data: bytes) -> None:
         """Write audio and forward frequency band levels."""

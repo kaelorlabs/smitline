@@ -3,8 +3,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 
+from adapters_base import JOIN_REFUSALS
 from call_record import CallRecord
-from meeting_handoff import MeetingHandoff
+from meeting_handoff import (
+    MAX_PARTICIPANT_NAME, MAX_PARTICIPANT_NAMES, MeetingHandoff, ParticipantsSeen,
+)
 from schema_validation import reject_secrets, require_meeting_id
 from startup_input import clip_tokens
 
@@ -80,6 +83,50 @@ def _summary(session, events, reason, partial):
     return _clip(' '.join(parts), MAX_SUMMARY)
 
 
+def _join_refused(events):
+    """How the platform kept the browser out (the bridge's join_refused event), or None."""
+    for event in events:
+        if event.get('type') == 'join_refused' and event.get('refusal') in JOIN_REFUSALS:
+            return event['refusal']
+    return None
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _participants(events):
+    """Who the meeting showed besides Smitline: the most people at once, from its participant
+    list (participants: the others by name; participant_count: everyone, Smitline included), and
+    every name it showed, the speakers' on the transcript included. None when it showed nobody."""
+    most = None
+    names = []
+
+    def seen(name):
+        name = ' '.join(''.join(character for character in str(name or '')
+                                if character.isprintable() or character.isspace()).split())
+        name = name[:MAX_PARTICIPANT_NAME].strip()
+        if name and name not in names and len(names) < MAX_PARTICIPANT_NAMES:
+            names.append(name)
+    for event in events:
+        kind = event.get('type')
+        count = _count(event.get('count'))
+        if kind == 'participant_count' and count:
+            count -= 1
+        elif kind != 'participants':
+            count = None
+        if count is not None:
+            most = count if most is None else max(most, count)
+        if kind == 'participants' and isinstance(event.get('names'), list):
+            for name in event['names']:
+                seen(name)
+        elif kind == 'transcript' and event.get('speaker') == 'meeting':
+            seen(event.get('name'))
+    if not most and not names:
+        return None
+    return ParticipantsSeen(count=most, names=tuple(names))
+
+
 def handoff_id_for(meeting_id):
     return STABLE_HANDOFF_PREFIX + require_meeting_id(meeting_id)
 
@@ -120,6 +167,8 @@ def build_meeting_handoff(archive, session, *, reason, partial=False, ended_at=N
         partial=bool(partial),
         end_reason=_clip(reason or 'ended', 256) or 'ended',
         archive_path=str(directory.name),
+        join_refused=_join_refused(events),
+        participants=_participants(events),
     )
     reject_secrets(handoff.to_dict(), 'meeting handoff')
     return handoff

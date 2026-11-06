@@ -132,6 +132,21 @@ def way_in(meeting_line, settings, owner, brief, credentials, hooks=None):
     return 'phone', why
 
 
+# Google Meet turns most guest browsers away right after Join; its invitations have a phone number.
+MEET_WITHOUT_DIAL_IN = ('Google Meet often turns guest bots away: pass the invitation\'s Join by '
+                        'phone number and PIN as dialIn (the invitation text works), so Smitline '
+                        'can join by phone if Google refuses it.')
+
+
+def warnings(line, brief, credentials):
+    """For a brief check: what may keep a meeting out without stopping the call. A Google Meet
+    link with no dial-in, where this installation could dial in."""
+    if (brief.channel != 'meeting' or brief.platform != 'meet' or getattr(brief, 'dial_in', None)
+            or phone_problem(getattr(line, 'phone', None), credentials) is not None):
+        return []
+    return [MEET_WITHOUT_DIAL_IN]
+
+
 def ready(line, credentials):
     """Raise when this installation cannot dial in now (MeetingLine.ready for a dial-in)."""
     problem = phone_problem(line, credentials)
@@ -156,36 +171,40 @@ REFUSED_ENDINGS = frozenset({'authentication_required'})
 def fall_back(meeting_line, ctx, handoff):
     """True when a meeting the browser could not get into dials in instead: the platform turned
     the browser away before it was in, the brief has the dial-in, the phone line can dial, and
-    the number passes the phone rules now. When only those rules stop it, the handoff's summary
-    says why, for the result."""
+    the number passes the phone rules now. Otherwise such a meeting's handoff gets what its result
+    says instead (call_result.refused_join): why it did not get in, and what the agent can do."""
     if ((handoff or {}).get('endReason') not in REFUSED_ENDINGS
-            or ctx.call_id in meeting_line._canceled or ctx.call_id in meeting_line._over_time
-            or not getattr(ctx.brief, 'dial_in', None)
-            or phone_problem(getattr(meeting_line, 'phone', None), ctx.credentials) is not None):
+            or ctx.call_id in meeting_line._canceled or ctx.call_id in meeting_line._over_time):
         return False
-    refusal = phone_rules(hooks_of(ctx), ctx.owner, ctx.brief)
-    if refusal is not None:
-        ctx.event('call.dial_in_skipped', code=refusal.code)
-        handoff['summary'] = ' '.join(filter(None, (
-            str(handoff.get('summary') or '').strip(),
-            f'Smitline did not join by phone instead: {refusal.message}')))
-        return False
-    forget = getattr(meeting_line.daemon, 'forget_captions', None)
-    meeting_id = meeting_line._meetings.pop(ctx.call_id, None)
-    if forget is not None and meeting_id is not None:
-        forget(meeting_id)
-    return True
+    from call_result import refused_join
+    kind = handoff.get('joinRefused')
+    ctx.event('call.join_refused', platform=ctx.brief.platform, **({'kind': kind} if kind else {}))
+    has_dial_in = bool(getattr(ctx.brief, 'dial_in', None))
+    problem = phone_problem(getattr(meeting_line, 'phone', None), ctx.credentials)
+    skipped = None
+    if has_dial_in and problem is None:
+        skipped = phone_rules(hooks_of(ctx), ctx.owner, ctx.brief)
+        if skipped is None:
+            forget = getattr(meeting_line.daemon, 'forget_captions', None)
+            meeting_id = meeting_line._meetings.pop(ctx.call_id, None)
+            if forget is not None and meeting_id is not None:
+                forget(meeting_id)
+            return True
+        ctx.event('call.dial_in_skipped', code=skipped.code)
+    handoff.update(refused_join(ctx.brief.platform, kind, dial_in=has_dial_in, skipped=skipped,
+                                phone_problem=problem))
+    return False
 
 
 # The voice on the line -----------------------------------------------------------------------------
 
 def voice_config(brief, settings):
     """The GPT-Live session for a meeting joined by phone: the meeting's participation policy, its
-    name and leaving rules, the spoken hello, the brief's context, on the phone's G.711 audio."""
+    name and leaving rules, the spoken hello, the brief's context, on the phone's G.711 audio. Its
+    voice is a meeting's: the brief's, else the owner's meeting voice, else SMITLINE_VOICE."""
     import call_requests
     import meeting_voice
-    from call_brief import default_voice
-    from meeting_line import context_from_brief
+    from meeting_line import context_from_brief, voice_defaults
     from phone_prompts import DEFAULT_BACKEND_MODEL
     from runtime_state import DEFAULT_PARTICIPANT_NAME
     from startup_input import context_text, handoff_from_state, handoff_to_session_input
@@ -222,7 +241,7 @@ def voice_config(brief, settings):
         'tools': tools,
     }}
     return session_config(instructions=instructions, audio_format=PCMU8,
-                          voice=brief.voice or default_voice(settings), delegation=delegation,
+                          voice=brief.voice or voice_defaults(settings)['meeting'], delegation=delegation,
                           seed_input=handoff_to_session_input(handoff))
 
 
