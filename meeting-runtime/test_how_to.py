@@ -19,7 +19,7 @@ HOSTED = ('$', 'Free plan', 'Pro', 'wallet at', 'app.smitline.com', 'support@smi
 
 class GuideTests(unittest.TestCase):
     def test_every_topic_has_short_plain_text_and_named_https_links(self):
-        self.assertEqual(how_to.TOPICS, ('overview', 'using', 'pricing', 'account', 'troubleshooting', 'rules'))
+        self.assertEqual(how_to.TOPICS, ('overview', 'using', 'following', 'pricing', 'account', 'troubleshooting', 'rules'))
         for topic in how_to.TOPICS:
             with self.subTest(topic=topic):
                 found = how_to.guide(topic, {})
@@ -57,8 +57,34 @@ class GuideTests(unittest.TestCase):
         for fact in ('brief', 'until it ends', 'canDo', 'dialIn', 'to "new"', 'a minute or two', 'list_voices',
                      'rehearsal'):
             self.assertIn(fact, text)
+        self.assertIn('(topic following)', text)
         for order in ('You must', 'you must', 'Always ', 'Never ', 'Call wait_for_call', 'Do not'):
             self.assertNotIn(order, text)
+
+    def test_following_explains_the_two_ways_to_run_a_call(self):
+        found = how_to.guide('following', {})
+        let_run, live = found['text'].split('\n\n')
+        self.assertTrue(let_run.startswith('Start it and let it run:'))
+        for fact in ('complete brief', 'returns the result when the call ends', 'get_call or wait_for_call',
+                     'cannot stay', 'the user will follow up', 'openRequests'):
+            self.assertIn(fact, let_run)
+        self.assertTrue(live.startswith('Follow it live, which is better whenever possible:'))
+        for fact in ('keeps calling wait_for_call in the same turn', 'since "" the first time, then live.cursor',
+                     'completed, failed or canceled', "next says what to do", 'at once when someone on the call asks',
+                     'about every 12 seconds', 'canDo', 'live.requests', 'reply_to_call_request', 'send_call_instruction',
+                     'end_call', 'Always allow', 'wait_for_call, get_call and list_calls'):
+            self.assertIn(fact, live)
+        # How Smitline works, not orders: the agent is spoken of, not to.
+        for order in ('You must', 'you must', 'Keep calling', 'Call wait_for_call', 'Do not', 'Never '):
+            self.assertNotIn(order, found['text'])
+        self.assertEqual(found['links'], [{'name': 'Following a call live',
+                                           'url': how_to.DOCS + 'agents.md#following-a-call-live'}])
+
+    def test_following_says_what_the_daemon_does(self):
+        # The wait it describes is the daemon's: about every 12 seconds of talk.
+        from call_service import LIVE_SETTLE_SECONDS
+        self.assertEqual(LIVE_SETTLE_SECONDS, 12.0)
+        self.assertIn('about every 12 seconds', how_to.guide('following', {})['text'])
 
     def test_the_account_reads_the_owners_settings_live(self):
         text = how_to.guide('account', {})['text']
@@ -159,7 +185,7 @@ class DaemonCase(unittest.IsolatedAsyncioTestCase):
 
 
 # What is refused before anything is read: (query, what the refusal says).
-REFUSED = (('topic=prices', 'topic must be one of: overview, using, pricing, account, troubleshooting, rules'),
+REFUSED = (('topic=prices', 'topic must be one of: overview, using, following, pricing, account, troubleshooting, rules'),
            ('topic=', 'topic must be one of'), ('topic=ACCOUNT', 'topic must be one of'),
            ('client=', 'client must be an app name: lowercase letters, digits and dashes, such as chatgpt'),
            ('client=ChatGPT', 'client must be an app name'), ('client=chat%20gpt', 'client must be an app name'),

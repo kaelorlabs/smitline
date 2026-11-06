@@ -502,7 +502,7 @@ export class Smitline {
 
   /**
    * What an agent can tell the user about Smitline, as { topic, text, links }: topic is overview
-   * (the default), using, pricing, account, troubleshooting or rules. A hosted gateway names the
+   * (the default), using, following, pricing, account, troubleshooting or rules. A hosted gateway names the
    * app asking with { client }, a name such as 'chatgpt' or 'claude'.
    */
   async howTo(topic, options = {}) {

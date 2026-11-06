@@ -384,7 +384,7 @@ class Smitline:
 
     async def how_to(self, topic=None, client=None):
         """What an agent can tell the user about Smitline: {'topic', 'text', 'links'}. topic is
-        overview (the default), using, pricing, account, troubleshooting or rules; a hosted
+        overview (the default), using, following, pricing, account, troubleshooting or rules; a hosted
         gateway names the app asking as client, such as 'chatgpt' or 'claude'."""
         return self._transport.how_to(topic, client)
 

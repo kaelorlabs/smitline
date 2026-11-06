@@ -13,7 +13,7 @@ import re
 
 from call_policy import PolicyProblem, call_limits, calling_hours
 
-TOPICS = ('overview', 'using', 'pricing', 'account', 'troubleshooting', 'rules')
+TOPICS = ('overview', 'using', 'following', 'pricing', 'account', 'troubleshooting', 'rules')
 DEFAULT_TOPIC = 'overview'
 # The app asking, as a hosted gateway names it (GET /v1/how-to?client=), such as chatgpt, claude or
 # other: an app's directory may have rules that change what a hosted service says there. Any name of
@@ -85,7 +85,8 @@ def _using(settings):
         'The agent gives Smitline a brief: the goal, what to find out, what it may agree to, what '
         'it must not share, and what the user has been working on as context. Smitline follows the '
         'call until it ends and reports what was said and agreed. People on the call can ask the '
-        'agent things when the brief allows it (canDo).',
+        'agent things when the brief allows it (canDo). A call can run on its own or be followed '
+        'live (topic following).',
         'Google Meet often turns guest bots away; with the invitation\'s phone number and PIN '
         '(dialIn), Smitline joins by phone instead. A new meeting room (to "new") is ready in '
         'seconds; joining a meeting by its link can take a minute or two.',
@@ -95,6 +96,27 @@ def _using(settings):
     ], [
         _link('Calls guide', DOCS + 'calls.md'),
         _link('Agents guide', DOCS + 'agents.md'),
+    ]
+
+
+def _following(settings):
+    return [
+        'Start it and let it run: with a complete brief and context, Smitline holds the conversation '
+        'by itself and returns the result when the call ends, to read with get_call or wait_for_call. '
+        'This suits an agent that cannot stay, such as when its turn has to end or the user is away. '
+        'The voice handles what it can; when it cannot answer something, it tells the person the user '
+        'will follow up, and those questions come back as openRequests in the result.',
+        'Follow it live, which is better whenever possible: after start_call, the agent keeps calling '
+        'wait_for_call in the same turn (since "" the first time, then live.cursor) until the status is '
+        'completed, failed or canceled, and each answer\'s next says what to do. A wait comes back at '
+        'once when someone on the call asks the agent something, when the status changes or at the '
+        'end, and otherwise about every 12 seconds with what was said. With canDo in the brief, people '
+        'on the call can ask the agent questions or tasks (live.requests, answered with '
+        'reply_to_call_request), and the agent can steer with send_call_instruction, or end_call if it '
+        'goes wrong. In apps that ask before each tool call, setting wait_for_call, get_call and '
+        'list_calls to Always allow lets it follow without a click each time.',
+    ], [
+        _link('Following a call live', DOCS + 'agents.md#following-a-call-live'),
     ]
 
 
@@ -162,8 +184,8 @@ def _rules(settings):
     ]
 
 
-WRITERS = {'overview': _overview, 'using': _using, 'pricing': _pricing, 'account': _account,
-           'troubleshooting': _troubleshooting, 'rules': _rules}
+WRITERS = {'overview': _overview, 'using': _using, 'following': _following, 'pricing': _pricing,
+           'account': _account, 'troubleshooting': _troubleshooting, 'rules': _rules}
 
 
 def guide(topic, settings):

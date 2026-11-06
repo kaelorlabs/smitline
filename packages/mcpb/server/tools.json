@@ -992,12 +992,13 @@
             "enum": [
               "overview",
               "using",
+              "following",
               "pricing",
               "account",
               "troubleshooting",
               "rules"
             ],
-            "description": "overview (the default): what Smitline is and who makes it. using: how calls work. pricing: what calls cost. account: the user's plan, call limits and balance now. troubleshooting: what refusals and common problems mean. rules: what Smitline does and does not do."
+            "description": "overview (the default): what Smitline is and who makes it. using: how calls work. following: the two ways to run a call, letting it run or following it live. pricing: what calls cost. account: the user's plan, call limits and balance now. troubleshooting: what refusals and common problems mean. rules: what Smitline does and does not do."
           }
         }
       }

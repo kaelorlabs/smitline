@@ -23,7 +23,7 @@ const CACHE_HINTS = Object.freeze({ ttlMs: 5 * 60_000, cacheScope: 'public' });
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };
 // how_to_smitline's topics (the daemon's how_to.TOPICS); overview is the default.
-export const HOW_TO_TOPICS = Object.freeze(['overview', 'using', 'pricing', 'account', 'troubleshooting', 'rules']);
+export const HOW_TO_TOPICS = Object.freeze(['overview', 'using', 'following', 'pricing', 'account', 'troubleshooting', 'rules']);
 
 export const BRIEF_SCHEMA = {
   type: 'object',
@@ -325,7 +325,7 @@ export const CALL_TOOL_DEFINITIONS = [
         topic: {
           type: 'string',
           enum: [...HOW_TO_TOPICS],
-          description: "overview (the default): what Smitline is and who makes it. using: how calls work. pricing: what calls cost. account: the user's plan, call limits and balance now. troubleshooting: what refusals and common problems mean. rules: what Smitline does and does not do.",
+          description: "overview (the default): what Smitline is and who makes it. using: how calls work. following: the two ways to run a call, letting it run or following it live. pricing: what calls cost. account: the user's plan, call limits and balance now. troubleshooting: what refusals and common problems mean. rules: what Smitline does and does not do.",
         },
       },
     },

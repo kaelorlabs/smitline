@@ -20,7 +20,7 @@ test('how_to_smitline is a read-only tool with a title and one optional topic', 
   assert.equal(tool.inputSchema.additionalProperties, false);
   assert.deepEqual(Object.keys(tool.inputSchema.properties), ['topic']);
   assert.deepEqual(tool.inputSchema.properties.topic.enum,
-    ['overview', 'using', 'pricing', 'account', 'troubleshooting', 'rules']);
+    ['overview', 'using', 'following', 'pricing', 'account', 'troubleshooting', 'rules']);
   assert.deepEqual(tool.inputSchema.properties.topic.enum, [...HOW_TO_TOPICS]);
   for (const topic of HOW_TO_TOPICS) assert.match(tool.inputSchema.properties.topic.description, new RegExp(`\\b${topic}\\b`));
   assert.match(tool.inputSchema.properties.topic.description, /overview \(the default\)/);
@@ -65,7 +65,7 @@ test('an unknown topic is refused before the daemon is asked', async () => {
     const answer = await call(session, 'tools/call', { name: 'how_to_smitline', arguments: { topic } });
     assert.equal(answer.result.isError, true);
     assert.equal(answer.result.structuredContent.code, 'validation');
-    assert.match(answer.result.structuredContent.message, /topic must be one of: overview, using, pricing, account, troubleshooting, rules/);
+    assert.match(answer.result.structuredContent.message, /topic must be one of: overview, using, following, pricing, account, troubleshooting, rules/);
   }
   assert.deepEqual(asked, []);
 });

@@ -234,7 +234,7 @@
         "summary": "What an agent can tell the user about Smitline: what it is, how calls work, costs, the account, refusals and rules",
         "operationId": "howTo",
         "parameters": [
-          { "name": "topic", "in": "query", "required": false, "description": "overview (the default), using, pricing, account, troubleshooting or rules.", "schema": { "type": "string", "enum": ["overview", "using", "pricing", "account", "troubleshooting", "rules"] } },
+          { "name": "topic", "in": "query", "required": false, "description": "overview (the default), using, following, pricing, account, troubleshooting or rules.", "schema": { "type": "string", "enum": ["overview", "using", "following", "pricing", "account", "troubleshooting", "rules"] } },
           { "name": "client", "in": "query", "required": false, "description": "The app asking, as a hosted gateway names it, such as chatgpt, claude or other. Only the deployment's how_to hook reads it; an installation's own text is the same for every app.", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" } }
         ],
         "responses": {
@@ -479,7 +479,7 @@
         "type": "object",
         "required": ["topic", "text", "links"],
         "properties": {
-          "topic": { "type": "string", "enum": ["overview", "using", "pricing", "account", "troubleshooting", "rules"] },
+          "topic": { "type": "string", "enum": ["overview", "using", "following", "pricing", "account", "troubleshooting", "rules"] },
           "text": { "type": "string", "description": "A few short plain paragraphs, separated by blank lines." },
           "links": { "type": "array", "items": { "type": "object", "required": ["name", "url"], "properties": { "name": { "type": "string" }, "url": { "type": "string" } } } }
         }
