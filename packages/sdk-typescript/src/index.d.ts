@@ -260,7 +260,7 @@ export interface Voices {
   voices: string[];
 }
 
-export type HowToTopic = 'overview' | 'using' | 'pricing' | 'account' | 'troubleshooting' | 'rules';
+export type HowToTopic = 'overview' | 'using' | 'following' | 'pricing' | 'account' | 'troubleshooting' | 'rules';
 
 /** What an agent can tell the user about Smitline: a few short paragraphs, and named links. */
 export interface HowTo {

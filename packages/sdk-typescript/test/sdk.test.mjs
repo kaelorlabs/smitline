@@ -97,6 +97,14 @@ test('howTo reads GET /v1/how-to, with the topic and the app asking when given',
   });
 });
 
+test('HowToTopic in the types lists the topics GET /v1/how-to accepts', async () => {
+  const types = await fs.readFile(new URL('../src/index.d.ts', import.meta.url), 'utf8');
+  const union = types.match(/export type HowToTopic = ([^;]+);/)[1].split('|').map((item) => item.trim().replace(/'/g, ''));
+  const api = JSON.parse(await fs.readFile(new URL('../../../meeting-runtime/openapi.json', import.meta.url), 'utf8'));
+  const topic = api.paths['/v1/how-to'].get.parameters.find((item) => item.name === 'topic');
+  assert.deepEqual(union, topic.schema.enum);
+});
+
 test('an incomplete brief is a ValidationError with the questions to ask', async (t) => {
   await withDaemon(t, {}, async ({ colleague }) => {
     await assert.rejects(() => colleague.startCall({ channel: 'phone', to: '+14155550142' }), (error) => {
