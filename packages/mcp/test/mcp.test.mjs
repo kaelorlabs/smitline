@@ -37,7 +37,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
     'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
     'save_call_note', 'list_contacts',
     'send_call_instruction', 'reply_to_call_request', 'end_call', 'transfer_call_to_me', 'list_voices',
-    'get_profile', 'update_profile',
+    'get_profile', 'update_profile', 'how_to_smitline',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
   const startTool = listed.result.tools.find((tool) => tool.name === 'start_call');

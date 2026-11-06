@@ -409,6 +409,16 @@ class DefaultCallHooks:
         (a hosted one: {'onBehalfOf': the account holder's name}). Nothing here."""
         return {}
 
+    def how_to(self, owner, topic, guide, *, client=None):
+        """What an agent tells the user about Smitline for `topic` (GET /v1/how-to, the
+        how_to_smitline tool). `guide` is this installation's {topic, text, links} (how_to.py),
+        `client` the app asking, as a hosted gateway names it (such as 'chatgpt' or 'claude'; None
+        when not said). Return
+        None to keep the guide, or a dict whose `text`, `links` or both replace its own: a hosted
+        service says what its plans are and where the owner's account stands, live. It may be
+        async. Optional: hooks without it keep the guide. Nothing here."""
+        return None
+
     def precheck(self, owner, brief):
         if brief.channel != 'phone':
             if getattr(brief, 'dial_in', None):

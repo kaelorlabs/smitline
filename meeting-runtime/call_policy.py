@@ -158,6 +158,13 @@ def _limit(env, name, default):
     return int(raw)
 
 
+def call_limits(env):
+    """(calls to one number in any 24 hours, calls in an hour), 0 for no limit:
+    SMITLINE_MAX_CALLS_PER_NUMBER and SMITLINE_MAX_CALLS_PER_HOUR."""
+    return (_limit(env, 'SMITLINE_MAX_CALLS_PER_NUMBER', DEFAULT_MAX_PER_NUMBER),
+            _limit(env, 'SMITLINE_MAX_CALLS_PER_HOUR', DEFAULT_MAX_PER_HOUR))
+
+
 def _created(record):
     try:
         return datetime.fromisoformat(str(record.get('createdAt')).replace('Z', '+00:00'))
@@ -197,8 +204,7 @@ def check_repeats(number, records, now, env, *, own_number=False, dial_in=False)
     and calls that never reached the phone provider do not count. The owner's own phone has no
     per-number limit. `dial_in`: the number is a meeting's dial-in number, not a published bridge.
     """
-    per_number = _limit(env, 'SMITLINE_MAX_CALLS_PER_NUMBER', DEFAULT_MAX_PER_NUMBER)
-    per_hour = _limit(env, 'SMITLINE_MAX_CALLS_PER_HOUR', DEFAULT_MAX_PER_HOUR)
+    per_number, per_hour = call_limits(env)
     day_ago, hour_ago = now - timedelta(days=1), now - timedelta(hours=1)
     to_number, last_hour = [], []
     for record in records:

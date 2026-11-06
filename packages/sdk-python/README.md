@@ -40,7 +40,7 @@ print(done['result']['summary'])
 
 ## Methods
 
-`check_call`, `start_call`, `get_call`, `wait_for_call`, `list_calls`, `instruct_call` (with `silent=True` for a background note), `end_call`, `transfer_call`, `get_profile`, `update_profile`, and `list_voices`.
+`check_call`, `start_call`, `get_call`, `wait_for_call`, `list_calls`, `instruct_call` (with `silent=True` for a background note), `end_call`, `transfer_call`, `get_profile`, `update_profile`, `list_voices`, and `how_to(topic)` (what an agent can tell the user about Smitline).
 
 Typed errors: `ValidationError`, `StartupError`, `RuntimeError`.
 

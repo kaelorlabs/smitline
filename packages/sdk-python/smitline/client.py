@@ -280,6 +280,10 @@ class LoopbackTransport:
     def list_voices(self):
         return self._http('GET', '/v1/voices')
 
+    def how_to(self, topic=None, client=None):
+        query = {key: value for key, value in (('topic', topic), ('client', client)) if value}
+        return self._http('GET', '/v1/how-to' + (f'?{urlencode(query)}' if query else ''))
+
 
 def create_loopback_transport(**options):
     return LoopbackTransport(**options)
@@ -377,6 +381,12 @@ class Smitline:
     async def list_voices(self):
         """{'voices': [...], 'defaults': {'phone': ..., 'meeting': ...}, 'default': the phone one}."""
         return self._transport.list_voices()
+
+    async def how_to(self, topic=None, client=None):
+        """What an agent can tell the user about Smitline: {'topic', 'text', 'links'}. topic is
+        overview (the default), using, pricing, account, troubleshooting or rules; a hosted
+        gateway names the app asking as client, such as 'chatgpt' or 'claude'."""
+        return self._transport.how_to(topic, client)
 
 
 # Names from before the product was called Smitline.

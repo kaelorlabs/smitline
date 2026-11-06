@@ -779,6 +779,34 @@ class CallService:
         except ValueError as error:
             raise CallError(422, 'invalid_request', str(error)) from error
 
+    async def how_to(self, owner, topic=None, client=None):
+        """What an agent can tell the user about Smitline (how_to.guide): {topic, text, links}.
+        topic is one of how_to.TOPICS (overview when None); client, the app asking (a name such as
+        chatgpt, how_to.CLIENT, or None), is passed to the hooks only. The optional hook
+        how_to(owner, topic, guide, client=...) gets this installation's guide and returns what to
+        say instead (its text, its links, or both), or None to keep it."""
+        from how_to import CLIENT, DEFAULT_TOPIC, TOPICS, checked_change, guide
+        topic = DEFAULT_TOPIC if topic is None else topic
+        if topic not in TOPICS:
+            raise CallError(422, 'invalid_request', 'topic must be one of: ' + ', '.join(TOPICS))
+        if client is not None and not CLIENT.fullmatch(client):
+            raise CallError(422, 'invalid_request', 'client must be an app name: lowercase letters, '
+                            'digits and dashes, such as chatgpt')
+        found = guide(topic, self.settings(owner))
+        hook = getattr(self.hooks, 'how_to', None)
+        if hook is None:
+            return found
+        try:
+            offered = dict(found, links=[dict(link) for link in found['links']])
+            changed = await maybe_await(hook(owner, topic, offered, client=client))
+        except CallRefused as error:
+            raise CallError(error.status, error.code, error.message, **error.details) from error
+        try:
+            return checked_change(found, changed)
+        except ValueError as error:
+            raise CallError(502, 'invalid_hook_answer', 'The how-to text could not be read. Try '
+                            'again in a minute.') from error
+
     def do_not_call(self, owner):
         getter = getattr(self.hooks, 'do_not_call', None)
         if getter is None:

@@ -51,6 +51,7 @@ console.log(done.result?.summary);
 | `endCall(id)` / `transferCall(id)` | Wrap up politely, or hand a phone call to the user's phone |
 | `getProfile()` / `updateProfile(update)` | The user's profile that every call gets as background |
 | `listVoices()` | GPT-Live voices |
+| `howTo(topic)` | What an agent can tell the user about Smitline: `{ topic, text, links }` |
 
 ## Errors
 

@@ -21,6 +21,7 @@ Do not publish this package and do not install it globally.
 | `reply_to_call_request` | Answer a request from the people on the call (brief `canDo`): status as you work, then done |
 | `list_voices` | GPT-Live voices, and the default voices for phone calls and meetings |
 | `get_profile` / `update_profile` | The user's profile that every call gets as background, and the default voices (`voices`) |
+| `how_to_smitline` | Information about Smitline for the user, by topic: overview, using, pricing, account, troubleshooting, rules |
 
 See [calls](../../docs/calls.md) for the brief and the result.
 
