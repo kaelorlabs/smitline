@@ -45,7 +45,7 @@ class InputMonitorTests(unittest.TestCase):
         reports = []
         for second in range(30):
             monitor.feed(bytes(960))
-            name = 'Arun' if second % 6 < 3 else 'Bea'
+            name = 'Smith' if second % 6 < 3 else 'Bea'
             reports.append(monitor.speaker(name))
             self.now[0] += 1
         found = [report for report in reports if report]
@@ -54,12 +54,12 @@ class InputMonitorTests(unittest.TestCase):
         self.assertEqual(reports.index(found[0]), INPUT_SILENT_SECONDS)
 
     def test_one_person_talking_to_a_deaf_room_is_reported(self):
-        # A platform that keeps naming the last speaker: Arun alone, never heard.
+        # A platform that keeps naming the last speaker: Smith alone, never heard.
         monitor = self.monitor
         reports = []
         for _ in range(12):
             monitor.feed(bytes(960))
-            reports.append(monitor.speaker('Arun'))
+            reports.append(monitor.speaker('Smith'))
             self.now[0] += 1
         self.assertEqual(sum(1 for report in reports if report), 1)
 
@@ -67,11 +67,11 @@ class InputMonitorTests(unittest.TestCase):
         monitor = self.monitor
         monitor.feed(chunk(2500))  # their first words come in before the meeting names them
         self.now[0] += 1.5
-        self.assertIsNone(monitor.speaker('Arun'))
+        self.assertIsNone(monitor.speaker('Smith'))
         for _ in range(30):  # they stop; the platform keeps naming the last speaker
             self.now[0] += 1
             monitor.feed(bytes(960))
-            self.assertIsNone(monitor.speaker('Arun'))
+            self.assertIsNone(monitor.speaker('Smith'))
         # Later someone new speaks and is heard a moment after being named.
         self.assertIsNone(monitor.speaker('Bea'))
         self.now[0] += 0.5

@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 
 export const SCHEMA_VERSION = 1;
-export const SDK_VERSION = '0.3.10';
+export const SDK_VERSION = '0.3.11';
 
 export const EXIT = Object.freeze({
   ok: 0,
@@ -366,6 +366,13 @@ export function createLoopbackTransport(options = {}) {
     listVoices() {
       return json('GET', '/v1/voices');
     },
+    howTo(topic, { client } = {}) {
+      const query = new URLSearchParams();
+      if (topic) query.set('topic', String(topic));
+      if (client) query.set('client', String(client));
+      const search = query.toString();
+      return json('GET', `/v1/how-to${search ? `?${search}` : ''}`);
+    },
     // Operations, not calls: used by smitline setup stop, not part of the public SDK.
     stopDaemon() {
       return json('POST', '/v1/daemon/stop', {});
@@ -491,6 +498,15 @@ export class Smitline {
   /** The voices calls can use, and the defaults for phone calls and for meetings. */
   async listVoices() {
     return this._transport.listVoices();
+  }
+
+  /**
+   * What an agent can tell the user about Smitline, as { topic, text, links }: topic is overview
+   * (the default), using, following, pricing, account, troubleshooting or rules. A hosted gateway names the
+   * app asking with { client }, a name such as 'chatgpt' or 'claude'.
+   */
+  async howTo(topic, options = {}) {
+    return this._transport.howTo(topic, options);
   }
 }
 

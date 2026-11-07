@@ -209,7 +209,7 @@ class SimulatedDialInTests(unittest.IsolatedAsyncioTestCase):
                 provider.bridge_says('Hi everyone, thanks for joining.')
                 await until(lambda: self.h.status(record) == 'in_progress')
                 await until(lambda: voice.spoken, timeout=5)
-                self.assertEqual(voice.spoken[0], "Hey, this is Raj's AI assistant. I'm here to answer "
+                self.assertEqual(voice.spoken[0], "Hey, this is Smith's AI assistant. I'm here to answer "
                                  "any questions or do any work. I'll be here taking notes, so let me "
                                  "know if you need anything.")
                 await until(lambda: provider.session.disclosed.is_set())

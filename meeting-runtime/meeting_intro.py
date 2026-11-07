@@ -1,6 +1,6 @@
 """Who the meeting voice is: its name, the caption on its camera tile, and the optional hello.
 
-Meetings join quietly. The bot's name ("Smitline AI") and the caption on its tile ("Arun's AI
+Meetings join quietly. The bot's name ("Smitline AI") and the caption on its tile ("Smith's AI
 assistant") say it is an AI for as long as it is there, also to people who join later; a spoken
 hello is opt-in (SMITLINE_MEETING_INTRO=1): who it is, what it is there for, and that it takes
 notes, said once at the first pause. Phone calls, which have no screen, say it aloud.
@@ -55,7 +55,7 @@ def spoken_name(owner):
 
 
 def assistant_of(owner):
-    """ "Arun's AI assistant", or "an AI assistant for the person who invited me". """
+    """ "Smith's AI assistant", or "an AI assistant for the person who invited me". """
     return f"{spoken_name(owner)}'s AI assistant" if owner else f'an AI assistant for {FALLBACK_OWNER}'
 
 
@@ -77,7 +77,7 @@ def camera_caption(owner):
     return caption if len(caption) <= MAX_CAPTION else 'AI assistant'
 
 
-# Platform labels a participant list puts after a name: "Arun Raj (Host, me)".
+# Platform labels a participant list puts after a name: "Smith Lee (Host, me)".
 _LABELS = re.compile(r'\s*\((?:host|co-host|me|you|guest|organizer|presenter)\b[^)]*\)\s*$', re.I)
 MAX_PARTICIPANTS = 30
 

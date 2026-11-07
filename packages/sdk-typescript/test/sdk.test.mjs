@@ -39,7 +39,7 @@ test('the SDK exposes calls only, for calls and meetings only', () => {
   const methods = Object.getOwnPropertyNames(Smitline.prototype).filter((name) => name !== 'constructor').sort();
   assert.deepEqual(methods, [
     'checkCall', 'downloadRecording', 'endCall', 'forgetContact', 'getCall', 'getContact', 'getDoNotCall', 'getProfile',
-    'instructCall', 'listCalls', 'listContacts', 'listVoices', 'replyToRequest', 'saveCallNote', 'startCall',
+    'howTo', 'instructCall', 'listCalls', 'listContacts', 'listVoices', 'replyToRequest', 'saveCallNote', 'startCall',
     'transferCall', 'updateContact', 'updateDoNotCall', 'updateProfile', 'waitForCall',
   ]);
 });
@@ -84,6 +84,25 @@ test('phone calls can be listed, steered, ended, and transferred', async (t) => 
     const check = await colleague.checkCall({ channel: 'phone', to: '+14155550142' });
     assert.equal(check.ok, false);
   });
+});
+
+test('howTo reads GET /v1/how-to, with the topic and the app asking when given', async (t) => {
+  await withDaemon(t, {}, async ({ colleague, daemon }) => {
+    assert.equal((await colleague.howTo()).topic, 'overview');
+    const pricing = await colleague.howTo('pricing');
+    assert.deepEqual(pricing, { topic: 'pricing', text: 'About pricing.', links: [{ name: 'Source code', url: 'https://github.com/kaelorlabs/smitline' }] });
+    await colleague.howTo('account', { client: 'chatgpt' });
+    const asked = daemon.state.requests.filter((item) => item.path === '/v1/how-to').map((item) => item.search);
+    assert.deepEqual(asked, ['', '?topic=pricing', '?topic=account&client=chatgpt']);
+  });
+});
+
+test('HowToTopic in the types lists the topics GET /v1/how-to accepts', async () => {
+  const types = await fs.readFile(new URL('../src/index.d.ts', import.meta.url), 'utf8');
+  const union = types.match(/export type HowToTopic = ([^;]+);/)[1].split('|').map((item) => item.trim().replace(/'/g, ''));
+  const api = JSON.parse(await fs.readFile(new URL('../../../meeting-runtime/openapi.json', import.meta.url), 'utf8'));
+  const topic = api.paths['/v1/how-to'].get.parameters.find((item) => item.name === 'topic');
+  assert.deepEqual(union, topic.schema.enum);
 });
 
 test('an incomplete brief is a ValidationError with the questions to ask', async (t) => {

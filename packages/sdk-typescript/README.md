@@ -1,6 +1,6 @@
 # Smitline TypeScript SDK
 
-Versioned local SDK (`smitline-sdk` 0.3.10) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
+Versioned local SDK (`smitline-sdk` 0.3.11) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The client interface is transport-independent; the default transport talks to the loopback daemon.
 
 Requires Node.js 22+. This package is not published to npm: use it from a checkout of this repository, importing `packages/sdk-typescript/src/index.mjs`.
 
@@ -51,6 +51,7 @@ console.log(done.result?.summary);
 | `endCall(id)` / `transferCall(id)` | Wrap up politely, or hand a phone call to the user's phone |
 | `getProfile()` / `updateProfile(update)` | The user's profile that every call gets as background |
 | `listVoices()` | GPT-Live voices |
+| `howTo(topic)` | What an agent can tell the user about Smitline: `{ topic, text, links }` |
 
 ## Errors
 

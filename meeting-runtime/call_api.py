@@ -286,6 +286,14 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
         return public_json({'default': defaults['phone'], 'defaults': defaults,
                             'voices': list(available_voices(env))})
 
+    @handle
+    async def how_to(request):
+        """What an agent can tell the user about Smitline: ?topic= (overview by default) and, from a
+        hosted gateway, ?client= (the app asking), which only the hooks read."""
+        call_owner = await owner(request)
+        return public_json(await service.how_to(call_owner, request.query.get('topic'),
+                                                request.query.get('client')))
+
     async def openapi(_request):
         return web.json_response(json.loads(OPENAPI_PATH.read_text(encoding='utf-8')))
 
@@ -307,6 +315,7 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     app.router.add_patch('/v1/contacts/{number}', update_contact)
     app.router.add_delete('/v1/contacts/{number}', forget_contact)
     app.router.add_get('/v1/voices', list_voices)
+    app.router.add_get('/v1/how-to', how_to)
     app.router.add_get('/v1/profile', get_profile)
     app.router.add_patch('/v1/profile', update_profile)
     app.router.add_get('/v1/do-not-call', get_do_not_call)

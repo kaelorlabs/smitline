@@ -27,7 +27,7 @@ A pack is a folder holding manifest.json and the frames, as WebP or PNG files:
   required; the states a pack leaves out show the listening clip.
 - "arrival", optional, plays once the first time the agent is present (admitted and live), before
   that state's clip: people see it walk in rather than appear.
-- "captionColor", optional, is the colour of the caption under the picture ("Arun's AI
+- "captionColor", optional, is the colour of the caption under the picture ("Smith's AI
   assistant"); white otherwise.
 - "persona", optional, says who the character is and how it sounds, in a few sentences. The agent
   appears as the character, so the voice is given it as part of its instructions.

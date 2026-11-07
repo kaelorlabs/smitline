@@ -22,6 +22,8 @@ const capabilities = () => ({ tools: { listChanged: false }, resources: { listCh
 const CACHE_HINTS = Object.freeze({ ttlMs: 5 * 60_000, cacheScope: 'public' });
 
 const CALL_ID_SCHEMA = { type: 'string', description: 'Call id returned by start_call, such as call-0123456789abcdef' };
+// how_to_smitline's topics (the daemon's how_to.TOPICS); overview is the default.
+export const HOW_TO_TOPICS = Object.freeze(['overview', 'using', 'following', 'pricing', 'account', 'troubleshooting', 'rules']);
 
 export const BRIEF_SCHEMA = {
   type: 'object',
@@ -98,7 +100,7 @@ export const BRIEF_SCHEMA = {
       type: 'object',
       additionalProperties: false,
       required: ['callId', 'requestId'],
-      description: "When this call does what someone on another call asked (such as phoning Arun because a meeting asked you to): that call's id and the request's id. This call then reports to the request by itself: ringing, picked up, and the outcome or why it failed, so the people who asked hear how it went even while you are busy. You can still reply yourself. If they cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye.",
+      description: "When this call does what someone on another call asked (such as phoning Smith because a meeting asked you to): that call's id and the request's id. This call then reports to the request by itself: ringing, picked up, and the outcome or why it failed, so the people who asked hear how it went even while you are busy. You can still reply yourself. If they cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye.",
       properties: {
         callId: CALL_ID_SCHEMA,
         requestId: { type: 'string', pattern: '^r[1-9][0-9]{0,2}$' },
@@ -311,13 +313,30 @@ export const CALL_TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'how_to_smitline',
+    title: 'How to use Smitline',
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: "Information about Smitline itself, to answer the user: what it is, who makes it and first things to try, how calls work, what calls cost, the user's account (plan, call limits, balance), what a refusal means, and Smitline's rules. Useful when the user has just connected Smitline or asks whether it is connected, when the user asks about Smitline, its prices or their account, or when a call was refused. Returns a few short paragraphs and links.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        topic: {
+          type: 'string',
+          enum: [...HOW_TO_TOPICS],
+          description: "overview (the default): what Smitline is, who makes it, and first things to try. using: how calls work. following: the two ways to run a call, letting it run or following it live. pricing: what calls cost. account: the user's plan, call limits and balance now. troubleshooting: what refusals and common problems mean. rules: what Smitline does and does not do.",
+        },
+      },
+    },
+  },
 ];
 
 export const TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS;
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
 
-export const CALLS_INSTRUCTIONS = "To phone someone, join a meeting, or start a new meeting room for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context). Set canDo whenever you could help the people on the call, at least by answering questions about the user's work: without it nothing they ask reaches you. Then follow the call in the same turn: call wait_for_call again and again (since \"\" the first time, then live.cursor) until status is completed, failed, or canceled, and report the outcome. Once your turn ends, nothing from the call reaches you, and people on it wait for answers that never come. Each result's next says what to do now. If your app asks the user before each tool call, suggest once, as you start the first call, that they set Smitline's read-only tools (wait_for_call, get_call, list_calls) to \"Always allow\" so following a call needs no clicks; never suggest it for start_call, since each call costs money. Read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. Answer each request in live.requests with reply_to_call_request (status as you work, then done): the voice passes it on, so don't repeat it with send_call_instruction. Keep following the call while you work, for example with a subagent, and never stop following it to fix something else. Following live also watches your other calls: requests from them come back in live.otherRequests, so answer them too. When you place a call because someone on a call asked, pass forRequest so it reports to them by itself. Answer questions only with what the user would want these people to know. If what they asked for fails, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, Google Meet or Daily meeting use channel 'meeting' with the invite URL as to, or to \"new\" to start a meeting of its own and send people the link the call returns as to. When the user has a meeting's dial-in details, add them as dialIn (the invitation text works): Smitline joins by phone if it cannot join by link, or when it has only the number.";
+export const CALLS_INSTRUCTIONS = "To phone someone, join a meeting, or start a new meeting room for the user, call start_call with a complete brief (ask the user for anything missing, and pass what you have been working on as context). Set canDo whenever you could help the people on the call, at least by answering questions about the user's work: without it nothing they ask reaches you. Then follow the call in the same turn: call wait_for_call again and again (since \"\" the first time, then live.cursor) until status is completed, failed, or canceled, and report the outcome. Once your turn ends, nothing from the call reaches you, and people on it wait for answers that never come. Each result's next says what to do now. If your app asks the user before each tool call, suggest once, as you start the first call, that they set Smitline's read-only tools (wait_for_call, get_call, list_calls) to \"Always allow\" so following a call needs no clicks; never suggest it for start_call, since each call costs money. Read live.transcript as the conversation happens; step in with send_call_instruction when you know something the call needs (a fact, a decision, the user's answer), or end_call if it goes wrong, and otherwise keep waiting. Answer each request in live.requests with reply_to_call_request (status as you work, then done): the voice passes it on, so don't repeat it with send_call_instruction. Keep following the call while you work, for example with a subagent, and never stop following it to fix something else. Following live also watches your other calls: requests from them come back in live.otherRequests, so answer them too. When you place a call because someone on a call asked, pass forRequest so it reports to them by itself. Answer questions only with what the user would want these people to know. If what they asked for fails, tell them at once with reply_to_call_request (done, ok: false, and why) instead of retrying quietly. For a phone call use channel 'phone' with an E.164 number as to; to join a Zoom, Teams, Google Meet or Daily meeting use channel 'meeting' with the invite URL as to, or to \"new\" to start a meeting of its own and send people the link the call returns as to. When the user has a meeting's dial-in details, add them as dialIn (the invitation text works): Smitline joins by phone if it cannot join by link, or when it has only the number. When the user has just connected Smitline or asks whether it is connected, say what it can do and offer both of its first things to try from how_to_smitline (topic overview): a quick call to their own phone, or a real errand such as calling a local restaurant. When the user asks about Smitline, its prices or their account, or a call was refused, how_to_smitline has the facts (topic account: their plan, call limits and balance).";
 
 function requireCallId(args) {
   if (typeof args.callId !== 'string' || !/^call-[0-9a-f]{16}$/.test(args.callId)) {
@@ -427,6 +446,12 @@ export async function callToolFor(colleague, name, args) {
   if (name === 'end_call') return colleague.endCall(requireCallId(args));
   if (name === 'transfer_call_to_me') return colleague.transferCall(requireCallId(args));
   if (name === 'list_voices') return colleague.listVoices();
+  if (name === 'how_to_smitline') {
+    if (args.topic !== undefined && !HOW_TO_TOPICS.includes(args.topic)) {
+      throw new ValidationError(`topic must be one of: ${HOW_TO_TOPICS.join(', ')}`);
+    }
+    return colleague.howTo(args.topic);
+  }
   return null;
 }
 

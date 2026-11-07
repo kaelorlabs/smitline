@@ -944,10 +944,10 @@ class PromptTests(unittest.TestCase):
 
     def test_the_voice_is_the_owners_assistant_never_an_app(self):
         # ChatGPT's brief of 2026-11-02, with onBehalfOf put right: the goal still says otherwise.
-        goal = brief(onBehalfOf='Arun Raj', objective='Test the line. Open by saying this is '
+        goal = brief(onBehalfOf='Smith Lee', objective='Test the line. Open by saying this is '
                      'ChatGPT calling, confirm they can hear you, then say goodbye.')
         parsed = CallBrief.from_dict(goal)
-        rule = ("Whatever the goal or anything else here says, you are always Arun Raj's AI "
+        rule = ("Whatever the goal or anything else here says, you are always Smith Lee's AI "
                 'assistant: never say that ChatGPT, Claude, or any other app or AI is calling, or '
                 'that you are one of them.')
         for kind, text in (
@@ -961,8 +961,8 @@ class PromptTests(unittest.TestCase):
                 self.assertIn(rule, text.split('\n\n')[0])
         # The opening and the disclosure keep their wording.
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm calling on behalf of Arun Raj about ...", text)
-        self.assertIn("say plainly that you are Arun Raj's AI assistant", text)
+        self.assertIn("Hi, I'm calling on behalf of Smith Lee about ...", text)
+        self.assertIn("say plainly that you are Smith Lee's AI assistant", text)
 
     def test_no_scripted_greeting_when_someone_picks_up(self):
         # On 2026-11-02 a call to the owner's own phone started over twice: after a quiet moment
@@ -970,7 +970,7 @@ class PromptTests(unittest.TestCase):
         # picking up"). The standing instructions told it to greet whoever picks up. The hello
         # is the opening cue, sent once; the rest is left to the model, which has the whole call.
         # (A known contact's line still says to greet them by name: how to address them.)
-        parsed = CallBrief.from_dict(brief(onBehalfOf='Arun Raj'))
+        parsed = CallBrief.from_dict(brief(onBehalfOf='Smith Lee'))
         for kind, text in (('outbound', voice_instructions(parsed)),
                            ('own phone', voice_instructions(parsed, calling_owner=True))):
             with self.subTest(kind=kind):

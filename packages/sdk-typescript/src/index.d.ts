@@ -260,6 +260,21 @@ export interface Voices {
   voices: string[];
 }
 
+export type HowToTopic = 'overview' | 'using' | 'following' | 'pricing' | 'account' | 'troubleshooting' | 'rules';
+
+/** What an agent can tell the user about Smitline: a few short paragraphs, and named links. */
+export interface HowTo {
+  topic: HowToTopic;
+  text: string;
+  links: Array<{ name: string; url: string }>;
+}
+
+export interface HowToOptions {
+  /** The app asking, as a hosted gateway names it (lowercase letters, digits and dashes, such as
+   * 'chatgpt' or 'claude'); an installation's own text ignores it. */
+  client?: string;
+}
+
 export interface DoNotCallEntry {
   number: string;
   addedAt: string;
@@ -293,6 +308,7 @@ export interface DaemonTransport {
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
   listVoices(): Promise<Voices>;
+  howTo(topic?: HowToTopic, options?: HowToOptions): Promise<HowTo>;
 }
 
 export interface SmitlineOptions {
@@ -342,6 +358,8 @@ export class Smitline {
   transferCall(callId: string): Promise<Record<string, unknown>>;
   downloadRecording(callId: string, options?: { format?: 'wav' | 'mp3' }): Promise<{ contentType: string; data: Uint8Array }>;
   listVoices(): Promise<Voices>;
+  /** What an agent can tell the user about Smitline (topic: overview by default). */
+  howTo(topic?: HowToTopic, options?: HowToOptions): Promise<HowTo>;
 }
 
 export function createLoopbackTransport(options?: {

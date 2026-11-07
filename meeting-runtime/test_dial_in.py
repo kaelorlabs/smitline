@@ -23,7 +23,7 @@ from test_phone import ENV, PUBLIC, FakeLive, FakeTwilio, FakeTwilioSocket, unti
 
 
 ZOOM_LINK = 'https://us06web.zoom.us/j/85951289482?pwd=bE9Xa2VhT1Zpc2N0d0lQZz09'
-ZOOM_INVITE = """Arun Raj is inviting you to a scheduled Zoom meeting.
+ZOOM_INVITE = """Smith Lee is inviting you to a scheduled Zoom meeting.
 
 Topic: Smitline dial-in test
 Time: Nov 5, 2026 10:00 AM Eastern Time (US and Canada)
@@ -84,7 +84,7 @@ DAY = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)   # 1 PM in New York, 10
 
 
 def meeting_brief(**overrides):
-    payload = {'channel': 'meeting', 'onBehalfOf': 'Raj', 'objective': 'Take notes on the launch plan'}
+    payload = {'channel': 'meeting', 'onBehalfOf': 'Smith', 'objective': 'Take notes on the launch plan'}
     payload.update(overrides)
     return payload
 
@@ -500,7 +500,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(PARTICIPATION_POLICY, instructions)
         self.assertIn("on the meeting's phone line", instructions)
         self.assertIn('cannot see anything or press keys', instructions)
-        self.assertIn("Raj's AI assistant", instructions)
+        self.assertIn("Smith's AI assistant", instructions)
         self.assertIn('say it', instructions)  # nobody sees a tile: it says it is an AI
         self.assertNotIn('calling on behalf of', instructions)  # not a phone call's opening
         tools = [tool.get('name') for tool in config['delegation']['responses']['tools']]
@@ -523,13 +523,13 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(kind == 'session.commentary.append' for kind, _ in live.appends))
         session.started_at -= 120  # two minutes in the waiting room
         session.waiting_since -= 120
-        said(live, "Hi Raj's assistant, welcome. Let's begin.")
+        said(live, "Hi Smith's assistant, welcome. Let's begin.")
         await until(lambda: self.h.status(record) == 'in_progress')
         # The hello at the first pause: the spoken disclosure, in Arun's words.
         await until(lambda: any(kind == 'session.commentary.append' for kind, _ in live.appends))
         cue = next(text for kind, text in live.appends if kind == 'session.commentary.append')
-        self.assertIn("Hey, this is Raj's AI assistant. I'm here to answer any questions.", cue)
-        said(live, "Hey, this is Raj's AI assistant. I'm here to answer any questions.", meeting=False)
+        self.assertIn("Hey, this is Smith's AI assistant. I'm here to answer any questions.", cue)
+        said(live, "Hey, this is Smith's AI assistant. I'm here to answer any questions.", meeting=False)
         await until(lambda: session.disclosed.is_set())
         ws.push({'event': 'stop'})  # the host ends the meeting
         await asyncio.wait_for(task, 3)
@@ -588,7 +588,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         ws, live, task = await self.h.connect(record, session)
         said(live, 'Smitline, are you there?')
         await until(lambda: self.h.status(record) == 'in_progress')
-        said(live, "Yes, I'm Raj's AI assistant, here to take notes.", meeting=False)
+        said(live, "Yes, I'm Smith's AI assistant, here to take notes.", meeting=False)
         await until(lambda: session.disclosed.is_set())
         await asyncio.sleep(0.5)
         self.assertEqual(self.h.events(record, 'call.disclosure_cued'), [])
@@ -600,7 +600,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         ws, live, task = await self.h.connect(record, session)
         said(live, 'Please wait, the meeting host will let you in soon.')
         await until(lambda: self.h.status(record) == 'waiting')
-        said(live, "Okay, I'm Raj's AI assistant, waiting to be let in.", meeting=False)
+        said(live, "Okay, I'm Smith's AI assistant, waiting to be let in.", meeting=False)
         await until(lambda: session.disclosed.is_set())
         said(live, 'Welcome, everyone.')
         await until(lambda: self.h.status(record) == 'in_progress')
@@ -660,7 +660,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         # It spoke but never said it is an AI (asked to go before the hello): it says so first.
         await until(lambda: any('have not yet told them' in text for _, text in live.appends), timeout=5)
         self.assertFalse(ws.closed)
-        said(live, "Oh, and just so you know, I'm Raj's AI assistant.", meeting=False)
+        said(live, "Oh, and just so you know, I'm Smith's AI assistant.", meeting=False)
         await until(lambda: ws.closed, timeout=5)
         await asyncio.wait_for(task, 3)
         self.assertEqual(self.h.events(record, 'call.agent_left'), [{'reason': 'left_asked_to_leave'}])
@@ -720,7 +720,7 @@ class DialInCallTests(unittest.IsolatedAsyncioTestCase):
         await until(lambda: self.h.status(record) == 'in_progress')
         answer = await self.h.service.instruct(record['id'], 'The budget is $40k.', owner='local')
         self.assertEqual(answer, {'delivered': True})
-        self.assertIn(('session.instructions.append', "From Raj's agent: The budget is $40k."),
+        self.assertIn(('session.instructions.append', "From Smith's agent: The budget is $40k."),
                       live.appends)
         self.assertIs(self.h.service.listen(record['id'], owner='local'), session.tap)
         with self.assertRaises(CallError) as refused:
@@ -1120,7 +1120,7 @@ class GuardrailTests(unittest.TestCase):
                       problem.message)
         self.assertIn("Zoom's own dial-in numbers have no calling hours or call limits", problem.message)
         # A phone call to the number counts them, and a dial-in counts phone calls.
-        phone = {'channel': 'phone', 'to': TEAMS_NUMBER, 'onBehalfOf': 'Raj', 'objective': 'Ask about the invoice'}
+        phone = {'channel': 'phone', 'to': TEAMS_NUMBER, 'onBehalfOf': 'Smith', 'objective': 'Ask about the invoice'}
         with self.assertRaises(CallRefused) as refused:
             self.hooks.precheck('local', CallBrief.from_dict(phone))
         self.assertEqual(refused.exception.code, 'too_many_calls_to_number')

@@ -241,7 +241,7 @@ class ClaimWatchTests(unittest.TestCase):
 
     def test_told_looks_for_the_answer(self):
         answer = 'The latest changes are in pull request 75, requests from calls.'
-        self.assertFalse(call_requests.told(answer, "Arun, here's what your agent says about that."))
+        self.assertFalse(call_requests.told(answer, "Smith, here's what your agent says about that."))
         self.assertTrue(call_requests.told(answer, 'Stopping the story here. The latest changes are in pull request 75.'))
         self.assertTrue(call_requests.told('Added the launch date to the README.',
                                            'Done: I added the launch date to the README.'))
@@ -258,7 +258,7 @@ class ClaimWatchTests(unittest.TestCase):
         self.assertTrue(call_requests.told('That came from pull request 41, merged October 6.',
                                            'That AI line came from pull request 41, merged October 6th.'))
         # Cut off before the rest of the answer: still not told.
-        self.assertFalse(call_requests.told('Your table is at 7 for 4 people, under Arun.',
+        self.assertFalse(call_requests.told('Your table is at 7 for 4 people, under Smith.',
                                             'Your table is at 7'))
 
 
@@ -301,13 +301,13 @@ class NoteTests(unittest.TestCase):
 class ParticipantTests(unittest.TestCase):
     def test_the_list_without_the_bot_and_with_the_owner_marked(self):
         from meeting_intro import others_in, participants_note
-        names = others_in(['Smitline AI (me)', 'Arun Raj (Host, me)', ' Priya  Shah ', 'Priya Shah',
+        names = others_in(['Smitline AI (me)', 'Smith Lee (Host, me)', ' Priya  Shah ', 'Priya Shah',
                            '', 'Dev (Guest)'], 'Smitline AI')
-        self.assertEqual(names, ['Arun Raj', 'Priya Shah', 'Dev'])
-        note = participants_note(names, 'Arun Raj', 'Smitline AI')
-        self.assertIn('Arun Raj (probably Arun, the person you work for)', note)
+        self.assertEqual(names, ['Smith Lee', 'Priya Shah', 'Dev'])
+        note = participants_note(names, 'Smith Lee', 'Smitline AI')
+        self.assertIn('Smith Lee (probably Smith, the person you work for)', note)
         self.assertIn('You are listed as Smitline AI', note)
-        self.assertNotIn('probably', participants_note(['Priya Shah'], 'Arun Raj', 'Smitline AI'))
+        self.assertNotIn('probably', participants_note(['Priya Shah'], 'Smith Lee', 'Smitline AI'))
         self.assertEqual(others_in(None, 'Smitline AI'), [])
 
 
@@ -634,16 +634,16 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_call_for_a_request_reports_to_it_by_itself(self):
         meeting, ctx = await self.start()
-        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        ctx.request(ask('r1', 'Call Smith and ask him to join'))
         record = await self.service.create(brief(
-            to='+14155550143', contact={'name': 'Arun'},
+            to='+14155550143', contact={'name': 'Smith'},
             forRequest={'callId': meeting, 'requestId': 'r1'}))
         self.assertEqual(record['brief']['forRequest'], {'callId': meeting, 'requestId': 'r1'})
         await until(lambda: len(self.request_on(meeting)['thread']) >= 3)
         thread = self.request_on(meeting)['thread']
         self.assertEqual([(entry['type'], entry['text'], entry.get('automatic')) for entry in thread[1:3]],
-                         [('status', 'Calling Arun now; it is ringing.', True),
-                          ('status', 'Arun picked up; the call is under way.', True)])
+                         [('status', 'Calling Smith now; it is ringing.', True),
+                          ('status', 'Smith picked up; the call is under way.', True)])
         # An automatic report is not the agent checking in: nobody follows the meeting yet.
         self.assertFalse(self.service.agent_following(meeting))
         self.line.proceed.set()
@@ -656,7 +656,7 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_call_for_a_request_that_fails_says_why(self):
         from tunnel import BLOCKED, TunnelBlocked
         meeting, ctx = await self.start()
-        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        ctx.request(ask('r1', 'Call Smith and ask him to join'))
         self.line.fail = TunnelBlocked(BLOCKED)
         await self.service.create(brief(to='+14155550143',
                                         forRequest={'callId': meeting, 'requestId': 'r1'}))
@@ -669,7 +669,7 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reports_stop_once_the_agent_has_closed_the_request(self):
         meeting, ctx = await self.start()
-        ctx.request(ask('r1', 'Call Arun'))
+        ctx.request(ask('r1', 'Call Smith'))
         await self.service.create(brief(to='+14155550143',
                                         forRequest={'callId': meeting, 'requestId': 'r1'}))
         # The agent answers it itself before the call rings.
@@ -682,7 +682,7 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_canceling_a_request_ends_the_call_serving_it(self):
         meeting, ctx = await self.start()
-        ctx.request(ask('r1', 'Call Arun and ask him to join'))
+        ctx.request(ask('r1', 'Call Smith and ask him to join'))
         ended = []
         end = self.line.end
 
@@ -1173,13 +1173,13 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
         from test_participation import Adapter, FakeLiveSocket, IdleSpeaker, Mic, RecordingArchive
 
         class People(Adapter):
-            names = ['Smitline AI (me)', 'Arun Raj (Host)', 'Priya Shah']
+            names = ['Smitline AI (me)', 'Smith Lee (Host)', 'Priya Shah']
 
             async def get_participant_names(self):
                 return list(self.names)
         socket = FakeLiveSocket(bridge)
         state = copy.deepcopy(bridge.state)
-        control = MeetingControl('tok-1', state, owner='Arun Raj', can_do=CAN_DO)
+        control = MeetingControl('tok-1', state, owner='Smith Lee', can_do=CAN_DO)
         people = People()
         with patch.object(bridge, 'ClientSession', socket.client), \
                 patch.object(bridge, 'record', RecordingArchive()), \
@@ -1189,7 +1189,7 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(ClaimWatch, 'GRACE', 0.2):
             task = asyncio.create_task(bridge.run_voice(
                 IdleSpeaker(), Mic(), None, 'test-only',
-                RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0', 'SMITLINE_OWNER_NAME': 'Arun Raj'}),
+                RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0', 'SMITLINE_OWNER_NAME': 'Smith Lee'}),
                 people, {'canDo': CAN_DO}))
             try:
                 await socket.events.put({'type': 'session.started'})
@@ -1198,14 +1198,14 @@ class BridgeRequestTests(unittest.IsolatedAsyncioTestCase):
                     return [e['content'] for e in socket.sent if e['type'] == 'session.thinking.append']
                 await until(lambda: any('People in the meeting now' in n for n in notes()), 6)
                 note = next(n for n in notes() if 'People in the meeting now' in n)
-                self.assertIn('Arun Raj (probably Arun, the person you work for)', note)
+                self.assertIn('Smith Lee (probably Smith, the person you work for)', note)
                 self.assertIn('Priya Shah', note)
                 self.assertNotIn('Smitline AI (me)', note)
                 # The voice says it passed something on; its backend never asks.
                 await socket.events.put({'type': 'session.input_transcript.delta',
                                          'delta': 'Could you ask my agent for the full PR link?'})
                 await socket.events.put({'type': 'session.output_transcript.delta',
-                                         'delta': "Sure, I'll get Arun's agent to check it."})
+                                         'delta': "Sure, I'll get Smith's agent to check it."})
                 await until(lambda: state.get('requests'), 4)
                 self.assertEqual(state['requests'][0]['source'], 'speech')
                 self.assertEqual(state['requests'][0]['text'], 'Could you ask my agent for the full PR link?')

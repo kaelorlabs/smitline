@@ -1,6 +1,6 @@
 # Smitline Python SDK
 
-Versioned local SDK (`smitline` 0.3.10) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
+Versioned local SDK (`smitline` 0.3.11) that lets any agent or program place phone calls and join Zoom, Teams, and Google Meet meetings through the Smitline runtime daemon. GPT-Live does the talking; you get a structured result when the call ends. The default transport uses the standard library against the loopback daemon.
 
 Requires Python 3.10+. This package is not published to PyPI: use it from a checkout of this repository, with `packages/sdk-python` on `PYTHONPATH` or installed with `pip install ./packages/sdk-python`. There are no third-party runtime dependencies.
 
@@ -40,7 +40,7 @@ print(done['result']['summary'])
 
 ## Methods
 
-`check_call`, `start_call`, `get_call`, `wait_for_call`, `list_calls`, `instruct_call` (with `silent=True` for a background note), `end_call`, `transfer_call`, `get_profile`, `update_profile`, and `list_voices`.
+`check_call`, `start_call`, `get_call`, `wait_for_call`, `list_calls`, `instruct_call` (with `silent=True` for a background note), `end_call`, `transfer_call`, `get_profile`, `update_profile`, `list_voices`, and `how_to(topic)` (what an agent can tell the user about Smitline).
 
 Typed errors: `ValidationError`, `StartupError`, `RuntimeError`.
 

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Smitline calls API",
-    "version": "0.3.10",
+    "version": "0.3.11",
     "description": "Start phone calls and meetings from a brief and read structured results. See docs/calls.md.",
     "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
   },
@@ -226,6 +226,22 @@
         "summary": "List GPT-Live voices and the owner's default voices",
         "operationId": "listVoices",
         "responses": { "200": { "description": "Voices; default is defaults.phone", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "defaults": { "$ref": "#/components/schemas/VoiceDefaults" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "defaults", "voices"] } } } } }
+      }
+    },
+    "/v1/how-to": {
+      "parameters": [{ "$ref": "#/components/parameters/Owner" }],
+      "get": {
+        "summary": "What an agent can tell the user about Smitline: what it is, how calls work, costs, the account, refusals and rules",
+        "operationId": "howTo",
+        "parameters": [
+          { "name": "topic", "in": "query", "required": false, "description": "overview (the default), using, following, pricing, account, troubleshooting or rules.", "schema": { "type": "string", "enum": ["overview", "using", "following", "pricing", "account", "troubleshooting", "rules"] } },
+          { "name": "client", "in": "query", "required": false, "description": "The app asking, as a hosted gateway names it, such as chatgpt, claude or other. Only the deployment's how_to hook reads it; an installation's own text is the same for every app.", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" } }
+        ],
+        "responses": {
+          "200": { "description": "A few short paragraphs to pass on, and named links", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HowTo" } } } },
+          "422": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
       }
     },
     "/v1/profile": {
@@ -458,6 +474,15 @@
         "description": "The voice each kind of call speaks with when its brief names none: phone (SMITLINE_VOICE, else marin) and meeting, joined by link or by phone (SMITLINE_MEETING_VOICE, else the phone one).",
         "required": ["phone", "meeting"],
         "properties": { "phone": { "type": "string" }, "meeting": { "type": "string" } }
+      },
+      "HowTo": {
+        "type": "object",
+        "required": ["topic", "text", "links"],
+        "properties": {
+          "topic": { "type": "string", "enum": ["overview", "using", "following", "pricing", "account", "troubleshooting", "rules"] },
+          "text": { "type": "string", "description": "A few short plain paragraphs, separated by blank lines." },
+          "links": { "type": "array", "items": { "type": "object", "required": ["name", "url"], "properties": { "name": { "type": "string" }, "url": { "type": "string" } } } }
+        }
       },
       "DoNotCallList": {
         "type": "object",

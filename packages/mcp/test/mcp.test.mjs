@@ -37,7 +37,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
     'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
     'save_call_note', 'list_contacts',
     'send_call_instruction', 'reply_to_call_request', 'end_call', 'transfer_call_to_me', 'list_voices',
-    'get_profile', 'update_profile',
+    'get_profile', 'update_profile', 'how_to_smitline',
   ]);
   assert.equal(listed.result.tools.length, TOOL_DEFINITIONS.length);
   const startTool = listed.result.tools.find((tool) => tool.name === 'start_call');
@@ -345,7 +345,7 @@ test('start_call and wait_for_call results start with what to do next', async ()
   assert.doesNotMatch(result.next, /reply_to_call_request/);
   result = await wait({ ...live({ requests: [asked, { type: 'add', id: 'r1', text: 'Nov 3' }] }), requests: [{ id: 'r1', state: 'working' }] });
   assert.match(result.next, /^Answer each item in live\.requests/);
-  result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Arun' }] }));
+  result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Smith' }] }));
   assert.match(result.next, /live\.otherRequests \(on its own callId\)/);
 
   result = await wait({ ...live(), status: 'summarizing' });

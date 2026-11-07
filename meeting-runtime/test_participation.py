@@ -919,7 +919,7 @@ class MeetingVoiceTests(unittest.IsolatedAsyncioTestCase):
             speaker_poll_seconds = .05
 
             async def get_active_speaker(self):
-                return 'Arun'
+                return 'Smith'
 
         async def script(socket, state, record):
             await until(lambda: any(kind == 'input_silent' for kind, _ in record.events))
@@ -1092,9 +1092,9 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
         import bridge
         from runtime_config import RuntimeConfig
         runtime = RuntimeConfig.from_environ({'SMITLINE_MEETING_INTRO': '0',
-                                              'SMITLINE_OWNER_NAME': 'Arun Raj'})
-        # Arun talks, pauses, talks again (told once), then Priya takes the floor.
-        speakers = iter(['Arun Raj'] * 4 + [None] * 3 + ['Arun Raj'] * 4 + ['Priya'] * 4
+                                              'SMITLINE_OWNER_NAME': 'Smith Lee'})
+        # Smith talks, pauses, talks again (told once), then Priya takes the floor.
+        speakers = iter(['Smith Lee'] * 4 + [None] * 3 + ['Smith Lee'] * 4 + ['Priya'] * 4
                         + ['Smitline AI'] * 4)
 
         class SpeakingAdapter(Adapter):
@@ -1121,7 +1121,7 @@ class AgentLeavesTests(unittest.IsolatedAsyncioTestCase):
         notes = told(run.socket)
         self.assertEqual(len(notes), 2)
         self.assertTrue(notes[0].startswith(
-            'Arun Raj (probably Arun, the person you work for) is speaking now.'))
+            'Smith Lee (probably Smith, the person you work for) is speaking now.'))
         self.assertTrue(notes[1].startswith('Priya is speaking now.'))
         meeting_lines = [extra for speaker, _text, _muted, extra in run.record.transcripts
                          if speaker == 'meeting']

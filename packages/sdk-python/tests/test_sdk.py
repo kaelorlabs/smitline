@@ -83,10 +83,25 @@ class CallTests(unittest.IsolatedAsyncioTestCase):
         methods = sorted(name for name in vars(Smitline) if not name.startswith('_'))
         self.assertEqual(methods, [
             'check_call', 'end_call', 'forget_contact', 'get_call', 'get_contact', 'get_do_not_call',
-            'get_profile', 'instruct_call', 'list_calls', 'list_contacts', 'list_voices',
+            'get_profile', 'how_to', 'instruct_call', 'list_calls', 'list_contacts', 'list_voices',
             'reply_to_request', 'save_call_note', 'start_call', 'transfer_call', 'update_contact',
             'update_do_not_call', 'update_profile', 'wait_for_call',
         ])
+
+    async def test_how_to_reads_the_topic_and_the_app_asking(self):
+        seen = []
+
+        def request(method, path, body=None, token=None):
+            seen.append((method, path))
+            return {'topic': 'overview', 'text': 'Smitline makes phone calls.', 'links': []}
+
+        client = Smitline(transport=LoopbackTransport(request=request, read_auth=lambda: 't',
+                                                       is_port_open=lambda: True, autostart=False))
+        self.assertEqual((await client.how_to())['text'], 'Smitline makes phone calls.')
+        await client.how_to('pricing')
+        await client.how_to('account', client='claude')
+        self.assertEqual(seen, [('GET', '/v1/how-to'), ('GET', '/v1/how-to?topic=pricing'),
+                                ('GET', '/v1/how-to?topic=account&client=claude')])
 
     async def test_contacts_notes_and_list_filters(self):
         seen = []

@@ -67,6 +67,11 @@ export async function startFakeDaemon(options = {}) {
       json(response, 200, { default: 'marin', voices: ['marin', 'cinder'] });
       return;
     }
+    if (request.method === 'GET' && url.pathname === '/v1/how-to') {
+      const topic = url.searchParams.get('topic') || 'overview';
+      json(response, 200, { topic, text: `About ${topic}.`, links: [{ name: 'Source code', url: 'https://github.com/kaelorlabs/smitline' }] });
+      return;
+    }
     if (url.pathname === '/v1/profile') {
       if (request.method === 'PATCH') state.profile = { ...state.profile, ...body };
       json(response, 200, state.profile);

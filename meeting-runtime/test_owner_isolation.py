@@ -233,6 +233,7 @@ ROUTES = {
     ('PATCH', '/v1/contacts/{number}'): 'contact_change_is_own',
     ('DELETE', '/v1/contacts/{number}'): 'contact_forget_is_own',
     ('GET', '/v1/voices'): 'voices_are_own',
+    ('GET', '/v1/how-to'): 'how_to_is_own',
     ('GET', '/v1/profile'): 'profile_is_own',
     ('PATCH', '/v1/profile'): 'profile_change_is_own',
     ('GET', '/v1/do-not-call'): 'do_not_call_is_own',
@@ -283,7 +284,8 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        PerOwnerSettings.OVERRIDES = {A: {'SMITLINE_EXTRA_VOICES': 'aria', 'SMITLINE_VOICE': 'aria'}}
+        PerOwnerSettings.OVERRIDES = {A: {'SMITLINE_EXTRA_VOICES': 'aria', 'SMITLINE_VOICE': 'aria',
+                                          'SMITLINE_MAX_CALLS_PER_HOUR': '7'}}
         self.d = await OwnersDaemon(self.temp.name).start()
         self.client = self.d.client
         self.seeded = await self.d.seed_owner_a()
@@ -447,6 +449,15 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('aria', payload['voices'])
         self.assertNotEqual(payload['default'], 'aria')
         self.assertNotIn('aria', payload['defaults'].values())
+
+    async def how_to_is_own(self):
+        # The account topic reads the asking owner's settings: never owner A's hourly limit.
+        status, payload = await self.call('GET', '/v1/how-to?topic=account')
+        self.assertEqual((status, payload['topic']), (200, 'account'))
+        self.assertIn('at most 20 times an hour', payload['text'])
+        self.assertNotIn('at most 7 times an hour', payload['text'])
+        status, mine = await self.call('GET', '/v1/how-to?topic=account', headers=self.d.as_owner(A))
+        self.assertIn('at most 7 times an hour', mine['text'])
 
     async def profile_is_own(self):
         status, payload = await self.call('GET', '/v1/profile')
