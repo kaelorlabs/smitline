@@ -332,7 +332,7 @@ def main():
     parser.add_argument('--pack', required=True, help='the presence pack folder')
     parser.add_argument('--seconds', type=float, default=60, help='measured time, after the warm-up')
     parser.add_argument('--warmup', type=float, default=10)
-    parser.add_argument('--caption', default="Arun's AI assistant")
+    parser.add_argument('--caption', default="Smith's AI assistant")
     parser.add_argument('--codec', default='', help='browser: vp8, vp9, h264 or av1 first (default: Chromium\'s)')
     parser.add_argument('--bitrate', type=int, default=0, help='browser: cap the sender, kbit/s')
     parser.add_argument('--no-vnc', action='store_true', help='browser: without the VNC server a meeting runs')

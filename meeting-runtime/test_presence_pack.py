@@ -386,11 +386,11 @@ class PersonaTests(unittest.TestCase):
 class SpeakerNoteTests(unittest.TestCase):
     def test_says_who_is_speaking_and_marks_the_owner(self):
         from meeting_intro import speaker_note
-        self.assertEqual(speaker_note('Priya Shah', 'Arun Raj'),
+        self.assertEqual(speaker_note('Priya Shah', 'Smith Lee'),
                          'Priya Shah is speaking now. When you answer them, you can use their name. '
                          'Do not announce this.')
-        self.assertTrue(speaker_note('Arun Raj', 'Arun Raj').startswith(
-            'Arun Raj (probably Arun, the person you work for) is speaking now.'))
+        self.assertTrue(speaker_note('Smith Lee', 'Smith Lee').startswith(
+            'Smith Lee (probably Smith, the person you work for) is speaking now.'))
         self.assertTrue(speaker_note('  Priya   Shah ', '').startswith('Priya Shah is speaking now.'))
 
 

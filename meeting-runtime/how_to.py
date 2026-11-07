@@ -72,11 +72,16 @@ def _overview(settings):
         'engine (Apache-2.0, github.com/kaelorlabs/smitline), listed in the official MCP Registry '
         'as io.github.kaelorlabs/smitline. Smitline is made by Kaelor Labs, which also runs it as a '
         'hosted service, Smitline Cloud, at smitline.com.',
+        'To try it, ask for a quick call to your own phone ("call me now"), or for a real errand, '
+        'such as calling a local restaurant to book a table or order dinner for pickup. While a call '
+        'runs, the local console\'s Calls page (http://127.0.0.1:8095/calls) shows it live, and its '
+        'Listen in plays both sides when SMITLINE_LISTEN is 1.',
     ], [
         _link('Source code', REPO),
         _link('Documentation', REPO + '#documentation'),
         _link('Report a problem', REPO + '/issues'),
         _link('Smitline Cloud', 'https://smitline.com'),
+        _link('Local console', DOCS + 'control-panel.md'),
     ]
 
 

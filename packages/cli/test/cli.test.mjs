@@ -114,7 +114,7 @@ test('--can-do lets people on the call ask the agent for things', async (t) => {
 
 test('--for-request ties a call to the request on another call it serves', async (t) => {
   const { root, daemon, common } = await withDaemon(t);
-  const placed = await runColleague(['call', ...common, '--to', '+14155550142', '--objective', 'Ask Arun to join',
+  const placed = await runColleague(['call', ...common, '--to', '+14155550142', '--objective', 'Ask Smith to join',
     '--for-request', 'call-0123456789abcdef:r2'], { cwd: root });
   assert.equal(placed.code, 0, placed.stderr);
   assert.deepEqual(daemon.state.calls.get(JSON.parse(placed.stdout).id).brief.forRequest,

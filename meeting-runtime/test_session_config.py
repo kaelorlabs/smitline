@@ -168,10 +168,10 @@ class MeetingIntroTests(unittest.TestCase):
 
     def test_it_offers_to_do_work_only_when_the_agent_takes_requests(self):
         from meeting_intro import intro_line
-        self.assertEqual(intro_line('Raj', takes_requests=True),
-                         "Hey, this is Raj's AI assistant. I'm here to answer any questions or do "
+        self.assertEqual(intro_line('Smith', takes_requests=True),
+                         "Hey, this is Smith's AI assistant. I'm here to answer any questions or do "
                          "any work. I'll be here taking notes, so let me know if you need anything.")
-        self.assertNotIn('do any work', intro_line('Raj'))
+        self.assertNotIn('do any work', intro_line('Smith'))
         runtime = RuntimeConfig.from_environ({'SMITLINE_OWNER_NAME': 'Robin', 'SMITLINE_MEETING_INTRO': '1'})
         with_requests = build_session_config(runtime, {'canDo': ['Look up order status']})
         self.assertIn('answer any questions or do any work', with_requests['instructions'])
@@ -180,7 +180,7 @@ class MeetingIntroTests(unittest.TestCase):
 
     def test_people_are_named_as_people_say_them(self):
         from meeting_intro import spoken_name
-        self.assertEqual(spoken_name('Arun Raj'), 'Arun')
+        self.assertEqual(spoken_name('Smith Lee'), 'Smith')
         self.assertEqual(spoken_name('Dr. Lee'), 'Dr. Lee')
         self.assertEqual(spoken_name('  '), '')
 

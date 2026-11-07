@@ -44,6 +44,16 @@ class GuideTests(unittest.TestCase):
         urls = [link['url'] for link in how_to.guide('overview', {})['links']]
         self.assertIn('https://github.com/kaelorlabs/smitline', urls)
 
+    def test_overview_ends_with_first_things_to_try(self):
+        # Arun, 2026-11-06: right after connecting, an agent offers both, a call to the user's own
+        # phone or a real errand, and says where to follow a call and hear it.
+        guide = how_to.guide('overview', {})
+        last = guide['text'].split('\n\n')[-1]
+        for fact in ('To try it', '"call me now"', 'your own phone', 'a local restaurant', 'book a table',
+                     'order dinner', 'http://127.0.0.1:8095/calls', 'Listen in', 'SMITLINE_LISTEN is 1'):
+            self.assertIn(fact, last)
+        self.assertIn(how_to.DOCS + 'control-panel.md', [link['url'] for link in guide['links']])
+
     def test_pricing_and_account_say_the_owner_pays_their_own_providers(self):
         for topic in ('pricing', 'account'):
             text = how_to.guide(topic, {})['text']
