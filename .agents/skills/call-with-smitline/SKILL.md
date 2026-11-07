@@ -16,9 +16,9 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `channel` | `phone`, or `meeting` for a Zoom, Teams, or Google Meet link, or a new room |
 | `to` | E.164 number such as `+14155550142`, the invite URL, or `"new"` for a new room |
 | `dialIn` | Meetings: the dial-in details, or the invitation text as `{"invite": "..."}`, to join by phone (`to` may then be left out). For a Google Meet link, add it whenever the invitation has a phone number. |
-| `onBehalfOf` | The user's name, never your own or an app's, such as ChatGPT or Claude. The call opens with "Hi, I'm calling on behalf of NAME about…" and says during the call that it is NAME's AI assistant. Leave it out to use the name from setup. |
+| `onBehalfOf` | The user's name, never your own or an app's, such as ChatGPT or Claude. The call opens with "Hi, I'm calling on behalf of NAME about… I'm NAME's AI assistant." Leave it out to use the name from setup. |
 | `objective` | What the call must achieve, in one or two sentences |
-| `context` | What you and the user have been working on that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |
+| `context` | The facts the call needs that the other side may ask about. Text, or an object: `summary` (a few sentences), `facts`, `decisions`, `openQuestions`, and `details` for long reference material. The assistant looks things up in it; it does not recite it. |
 | `questions` | What to find out. The result answers each one. |
 | `tone` | How to come across, such as "casual; he is a close friend". Leave it out to match the relationship. |
 | `contact` | Who you are calling (`name`, `relationship`, `notes`), when the profile does not know the number |
@@ -45,7 +45,7 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 ## 3. Start, then follow it to the end
 
 1. `start_call` with the brief. If it returns `brief_incomplete`, ask the user the listed questions, then retry. If the call is refused, tell the user why in plain words; for a refusal about their account (a call limit, credit, a spending cap), `how_to_smitline` with topic `account` has their plan, limits and balance. `outside_calling_hours`: offer to call later; set `afterHours: true` only if the user confirms the person expects a call now. For a meeting's dial-in, a Zoom number from its invitation has no calling hours. `do_not_call`: the person asked not to be called again; never remove them from the list unless the user says the person has since agreed to calls. Smitline never calls emergency numbers; if someone needs help, tell the user to call themselves.
-2. Tell the user in one line that it is starting, such as "Calling Luigi's now." (or "Joining the meeting now."), and carry on in the same turn. If your app asks the user before each tool call, add once, on the first call, that they can set Smitline's read-only tools (`wait_for_call`, `get_call`, `list_calls`) to "Always allow" so you can follow the call without a click each time. Never suggest it for `start_call`: each call costs money.
+2. Tell the user in one line that it is starting, such as "Calling Luigi's now." (or "Joining the meeting now."), and carry on in the same turn. If your app asks the user before each tool call, add once, on the first call, that they can set `wait_for_call`, `get_call` and `list_calls`, and the two tools you use during a call (`send_call_instruction`, `reply_to_call_request`), to "Always allow" so you can follow and help the call without a click each time. Never suggest it for `start_call`: each call costs money.
 3. `wait_for_call` right away, then again and again in the same turn, until the status is `completed`, `failed`, or `canceled`. Once your turn ends, nothing from the call reaches you, and people on the call wait for answers that never come. Each answer's `next` says what to do now.
 
 ## 4. Supervise the call live

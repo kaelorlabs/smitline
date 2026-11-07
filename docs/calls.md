@@ -70,7 +70,7 @@ A phone call gets three levels of context, so the voice can talk like someone wh
 | Level | Comes from | Holds |
 | --- | --- | --- |
 | Profile | `GET` and `PATCH /v1/profile`, kept in `.smitline/profile.json` (owner-only) | Who the owner is, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries |
-| Session | The brief's `context` | What the agent and the owner have been working on: text (at most 6,000 characters), or an object with `summary`, `facts`, `decisions`, `openQuestions`, and long `details` (at most 24,000 characters) |
+| Session | The brief's `context` | The facts the call needs from the agent's work with the owner: text (at most 6,000 characters), or an object with `summary`, `facts`, `decisions`, `openQuestions`, and long `details` (at most 24,000 characters) |
 | Goal | The rest of the brief | `objective`, `questions`, `mayAgreeTo`, `mustNotShare`, `successCriteria`, `tone`, and `contact` |
 
 The goal leads: it goes into GPT-Live's instructions, together with the profile's standing boundaries. The voice also starts with short reference notes: the owner, the person called, and the session's summary, facts, decisions, and open questions, cut to about 1,800 tokens. They are marked as background rather than an agenda, so the voice uses them when they help and does not recite them. The backend model the voice consults for harder questions gets everything, `details` included, up to about 12,000 tokens.

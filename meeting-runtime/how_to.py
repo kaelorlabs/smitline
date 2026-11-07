@@ -83,7 +83,7 @@ def _overview(settings):
 def _using(settings):
     return [
         'The agent gives Smitline a brief: the goal, what to find out, what it may agree to, what '
-        'it must not share, and what the user has been working on as context. Smitline follows the '
+        'it must not share, and the facts the call needs as context. Smitline follows the '
         'call until it ends and reports what was said and agreed. People on the call can ask the '
         'agent things when the brief allows it (canDo). A call can run on its own or be followed '
         'live (topic following).',
@@ -114,7 +114,8 @@ def _following(settings):
         'on the call can ask the agent questions or tasks (live.requests, answered with '
         'reply_to_call_request), and the agent can steer with send_call_instruction, or end_call if it '
         'goes wrong. In apps that ask before each tool call, setting wait_for_call, get_call and '
-        'list_calls to Always allow lets it follow without a click each time.',
+        'list_calls, and the two tools used during a call (send_call_instruction and '
+        'reply_to_call_request), to Always allow lets it follow and help without a click each time.',
     ], [
         _link('Following a call live', DOCS + 'agents.md#following-a-call-live'),
     ]

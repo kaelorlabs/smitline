@@ -55,7 +55,7 @@ class GuideTests(unittest.TestCase):
     def test_using_informs_the_user_and_gives_the_agent_no_orders(self):
         text = how_to.guide('using', {})['text']
         for fact in ('brief', 'until it ends', 'canDo', 'dialIn', 'to "new"', 'a minute or two', 'list_voices',
-                     'rehearsal'):
+                     'rehearsal', 'the facts the call needs'):
             self.assertIn(fact, text)
         self.assertIn('(topic following)', text)
         for order in ('You must', 'you must', 'Always ', 'Never ', 'Call wait_for_call', 'Do not'):
@@ -72,7 +72,8 @@ class GuideTests(unittest.TestCase):
         for fact in ('keeps calling wait_for_call in the same turn', 'since "" the first time, then live.cursor',
                      'completed, failed or canceled', "next says what to do", 'at once when someone on the call asks',
                      'about every 12 seconds', 'canDo', 'live.requests', 'reply_to_call_request', 'send_call_instruction',
-                     'end_call', 'Always allow', 'wait_for_call, get_call and list_calls'):
+                     'end_call', 'Always allow', 'wait_for_call, get_call and list_calls',
+                     'send_call_instruction and reply_to_call_request'):
             self.assertIn(fact, live)
         # How Smitline works, not orders: the agent is spoken of, not to.
         for order in ('You must', 'you must', 'Keep calling', 'Call wait_for_call', 'Do not', 'Never '):

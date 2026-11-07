@@ -28,7 +28,7 @@ Agent skills for setup and for placing calls live under [`.agents/skills/`](.age
 - **Brief in, result out.** Phone calls and meetings start through the calls API and return the same result shape.
 - **Fail closed** on unknown fields, unsupported meeting links, incomplete briefs, and missing configuration.
 - **Local-first:** loopback daemon, gitignored secrets, transcripts, call records, profiles, and context.
-- **Disclose.** Phone calls say they are an AI acting for the named person during the call: the opening names the person and the reason, and the disclosure follows at a natural moment, before the goodbye at the latest. Meetings show it in their name and their camera tile's caption for as long as they are there; `SMITLINE_MEETING_INTRO=1` adds one spoken hello at the first pause, never over anyone.
+- **Disclose.** Phone calls say they are an AI acting for the named person in their opening: the person, the reason, then that it is their AI assistant, in one turn. A disclosure that was missed is said before the goodbye at the latest. Meetings show it in their name and their camera tile's caption for as long as they are there; `SMITLINE_MEETING_INTRO=1` adds one spoken hello at the first pause, never over anyone.
 - **Preserve** existing Zoom/Teams/Meet admission, audio, mute, transcript, handoff, and console behavior unless a change explicitly replaces it.
 
 ## Tests

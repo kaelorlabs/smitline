@@ -1176,8 +1176,8 @@ class PhoneSession:
     def _check_disclosure(self, text):
         """Note when the agent says it is an AI acting for NAME, anywhere in the call.
 
-        The opening says who the call is for and why; the AI disclosure comes at a
-        natural moment later. GPT-Live cannot be forced to say a fixed sentence, so
+        The opening says who the call is for, why, and that it is their AI assistant.
+        GPT-Live cannot be forced to say a fixed sentence, so
         everything the agent says is checked as it is spoken. AI as a topic does not
         count, and the name may come in another sentence ("calling on behalf of Robin").
         """
