@@ -418,3 +418,13 @@ test('each tool says honestly what it does: only lookups are read-only', () => {
   assert.equal(hints.end_call.idempotentHint, false);
   assert.equal(hints.save_call_note.idempotentHint, true);
 });
+
+test('every tool has a title, in its annotations too', () => {
+  // Claude's directory checks title among each tool's annotations (annotations.title); MCP's newer
+  // top-level title is what most apps show. The two must say the same.
+  for (const tool of TOOL_DEFINITIONS) {
+    assert.equal(typeof tool.title, 'string', tool.name);
+    assert.ok(tool.title.trim(), tool.name);
+    assert.equal(tool.annotations.title, tool.title, tool.name);
+  }
+});

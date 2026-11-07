@@ -27,6 +27,7 @@
         "openai/widgetAccessible": true
       },
       "annotations": {
+        "title": "Start a phone call or join a meeting",
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
@@ -309,6 +310,7 @@
       "name": "check_call_brief",
       "title": "Check a call before placing it",
       "annotations": {
+        "title": "Check a call before placing it",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -589,6 +591,7 @@
       "name": "wait_for_call",
       "title": "Follow a call live",
       "annotations": {
+        "title": "Follow a call live",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -640,6 +643,7 @@
         "openai/widgetAccessible": true
       },
       "annotations": {
+        "title": "Get call details",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -662,6 +666,7 @@
       "name": "list_calls",
       "title": "List calls and meetings",
       "annotations": {
+        "title": "List calls and meetings",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -696,6 +701,7 @@
       "name": "save_call_note",
       "title": "Save notes from a call",
       "annotations": {
+        "title": "Save notes from a call",
         "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": true,
@@ -725,6 +731,7 @@
       "name": "list_contacts",
       "title": "List your contacts",
       "annotations": {
+        "title": "List your contacts",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -739,6 +746,7 @@
       "name": "send_call_instruction",
       "title": "Guide a call in progress",
       "annotations": {
+        "title": "Guide a call in progress",
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
@@ -771,6 +779,7 @@
       "name": "reply_to_call_request",
       "title": "Answer a request from a call",
       "annotations": {
+        "title": "Answer a request from a call",
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
@@ -828,6 +837,7 @@
       "name": "end_call",
       "title": "End a call",
       "annotations": {
+        "title": "End a call",
         "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
@@ -852,6 +862,7 @@
       "name": "transfer_call_to_me",
       "title": "Take over a phone call",
       "annotations": {
+        "title": "Take over a phone call",
         "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
@@ -876,6 +887,7 @@
       "name": "list_voices",
       "title": "List voices",
       "annotations": {
+        "title": "List voices",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -890,6 +902,7 @@
       "name": "get_profile",
       "title": "Read your profile",
       "annotations": {
+        "title": "Read your profile",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -904,6 +917,7 @@
       "name": "update_profile",
       "title": "Update your profile",
       "annotations": {
+        "title": "Update your profile",
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": true,
@@ -989,6 +1003,7 @@
       "name": "how_to_smitline",
       "title": "How to use Smitline",
       "annotations": {
+        "title": "How to use Smitline",
         "readOnlyHint": true,
         "openWorldHint": false
       },

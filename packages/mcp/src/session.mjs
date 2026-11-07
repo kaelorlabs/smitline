@@ -333,6 +333,10 @@ export const CALL_TOOL_DEFINITIONS = [
   },
 ];
 
+// MCP has two places for a tool's title: `title`, and the older `annotations.title`. Claude's
+// directory lists title among the annotations it checks, so each tool's annotations carry it too.
+for (const tool of CALL_TOOL_DEFINITIONS) tool.annotations = { title: tool.title, ...tool.annotations };
+
 export const TOOL_DEFINITIONS = CALL_TOOL_DEFINITIONS;
 
 const CALL_TOOL_NAMES = new Set(CALL_TOOL_DEFINITIONS.map((tool) => tool.name));
