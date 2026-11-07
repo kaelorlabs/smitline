@@ -43,9 +43,9 @@ class CameraFeedScriptTests(unittest.TestCase):
                 plain = build_camera_override_script(style=style)
                 self.assertNotIn('fillText', plain)
                 self.assertNotIn('__CAPTION__', plain)
-                script = build_camera_override_script(style=style, caption="Arun's AI assistant")
+                script = build_camera_override_script(style=style, caption="Smith's AI assistant")
                 self.assertEqual(script.count('fillText('), 1)
-                self.assertIn('ctx.fillText("Arun\'s AI assistant", W / 2, H * 0.9)', script)
+                self.assertIn('ctx.fillText("Smith\'s AI assistant", W / 2, H * 0.9)', script)
                 self.assertNotIn('__CAPTION__', script)
                 # A caption cannot break out of its string.
                 tricky = build_camera_override_script(style=style, caption='"); alert(1); ("')
@@ -119,7 +119,7 @@ class CameraFeedScriptTests(unittest.TestCase):
     def test_mascot_style_plays_a_pack_it_asks_for_without_carrying_it(self):
         pack = self._pack()
         script = build_camera_override_script(style='mascot', pack=pack,
-                                              caption="Arun's AI assistant")
+                                              caption="Smith's AI assistant")
         self.assertIn('W = 640, H = 360, FPS = 12', script)
         self.assertIn('captureStream(FPS)', script)
         self.assertIn('window.__smitlinePresencePack', script)
@@ -127,7 +127,7 @@ class CameraFeedScriptTests(unittest.TestCase):
         # The frames reach the page through the exposed function, never in this script, which
         # every frame of the meeting page runs.
         self.assertNotIn('U0VDUkVULUZSQU1F', script)
-        self.assertIn('const CAPTION = "Arun\'s AI assistant";', script)
+        self.assertIn('const CAPTION = "Smith\'s AI assistant";', script)
         self.assertIn('const CAPTION_COLOR = "#2E2B3A";', script)
         self.assertEqual(script.count('fillText('), 1)
         self.assertNotIn('__CAPTION', script)

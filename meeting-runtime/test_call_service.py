@@ -953,7 +953,7 @@ NAMES_OF_AIS = (
     'ChatGPT', 'chatgpt', 'OpenAI', 'GPT', 'GPT-4o', 'Claude', 'Claude AI', 'Claude Code', 'Anthropic',
     'Gemini', 'Google Gemini', 'Copilot', 'Grok', 'Cursor', 'Perplexity', 'Siri', 'Alexa', 'Smitline',
     'AI', 'A.I.', 'an AI', 'assistant', 'the assistant', 'AI assistant', 'agent', 'bot',
-    "Claude's assistant", 'ChatGPT’s assistant', "Arun's AI assistant",
+    "Claude's assistant", 'ChatGPT’s assistant', "Smith's AI assistant",
 )
 NAMES_OF_PEOPLE = (
     'Alexa Smith', 'Claude Monet', 'Claude Dupont', 'Siri Hustvedt', 'Ai Weiwei', 'Grace Hopper',
@@ -966,7 +966,7 @@ NOT_A_PERSON = ('onBehalfOf must name the person the call is for, such as the us
 class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
     """A call is made for a person: never as ChatGPT, Claude, or the app that asked for it."""
 
-    OWNER = {'OPENAI_API_KEY': 'sk-test', 'SMITLINE_OWNER_NAME': 'Arun Raj'}
+    OWNER = {'OPENAI_API_KEY': 'sk-test', 'SMITLINE_OWNER_NAME': 'Smith Lee'}
 
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -991,16 +991,16 @@ class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_ai_in_on_behalf_of_becomes_the_owner_name(self):
         record = await self.h.service.create(brief(**FROM_CHATGPT))
-        self.assertEqual(record['brief']['onBehalfOf'], 'Arun Raj')
+        self.assertEqual(record['brief']['onBehalfOf'], 'Smith Lee')
         self.assertEqual(self.corrections(record), [{'field': 'onBehalfOf', 'was': 'ChatGPT'}])
         await asyncio.sleep(0)
-        # The line runs the corrected brief, so the voice calls for Arun.
-        self.assertEqual(self.h.line.contexts[record['id']].brief.on_behalf_of, 'Arun Raj')
+        # The line runs the corrected brief, so the voice calls for Smith.
+        self.assertEqual(self.h.line.contexts[record['id']].brief.on_behalf_of, 'Smith Lee')
         checked = await self.h.service.check(brief(**FROM_CHATGPT))
-        self.assertEqual((checked['ok'], checked['brief']['onBehalfOf']), (True, 'Arun Raj'))
+        self.assertEqual((checked['ok'], checked['brief']['onBehalfOf']), (True, 'Smith Lee'))
         for name in NAMES_OF_AIS:
             with self.subTest(name=name):
-                self.assertEqual(await self.named(name), 'Arun Raj')
+                self.assertEqual(await self.named(name), 'Smith Lee')
 
     async def test_without_an_owner_name_an_ai_is_refused(self):
         h = ServiceHarness(Path(self.temp.name) / 'no-name')
@@ -1065,7 +1065,7 @@ class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
                 return getattr(self.inner, name)
         self.h.service.hooks = Older(DefaultCallHooks(environ=dict(self.OWNER), store=self.h.store,
                                                       clock=DAYTIME))
-        self.assertEqual((await self.h.service.check(payload))['brief']['onBehalfOf'], 'Arun Raj')
+        self.assertEqual((await self.h.service.check(payload))['brief']['onBehalfOf'], 'Smith Lee')
 
     async def test_a_meeting_is_for_a_person_too(self):
         from test_runtime_daemon import FakeSupervisor, create_payload
@@ -1078,15 +1078,15 @@ class CallsAreForAPersonTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(h.service.shutdown)
         record = await h.service.create(brief(channel='meeting', to=ZOOM, onBehalfOf='Claude'))
         await h.service.wait(record['id'], timeout=5, owner='local')
-        self.assertEqual(daemon.created[0]['onBehalfOf'], 'Arun Raj')
+        self.assertEqual(daemon.created[0]['onBehalfOf'], 'Smith Lee')
         self.assertEqual(daemon.created[0]['context']['currentTask'],
-                         'Take part in this meeting on behalf of Arun Raj.')
+                         'Take part in this meeting on behalf of Smith Lee.')
         self.assertEqual(self.corrections(record, h), [{'field': 'onBehalfOf', 'was': 'Claude'}])
         # The console's meetings API, for the local owner, checks onBehalfOf the same way.
         supervisor = FakeSupervisor()
         client = await self.client(self.h.service, supervisor)
         auth = {'Authorization': 'Bearer t'}
-        for sent, kept in (('Claude AI', 'Arun Raj'), ('Claude Monet', 'Claude Monet')):
+        for sent, kept in (('Claude AI', 'Smith Lee'), ('Claude Monet', 'Claude Monet')):
             with self.subTest(sent=sent):
                 created = await client.post('/v1/meetings', json=create_payload(onBehalfOf=sent),
                                             headers=auth)

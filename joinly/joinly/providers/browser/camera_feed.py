@@ -469,7 +469,7 @@ _CAMERA_OVERRIDE_TEMPLATE = """\
     {device_patch}
 }})();"""
 
-# The one line of text a tile may show: a fixed caption under the mark ("Arun's AI assistant"),
+# The one line of text a tile may show: a fixed caption under the mark ("Smith's AI assistant"),
 # made by the caller from the owner's name, never task text. Inserted through str.format, so its
 # braces are single; __CAPTION__ becomes a JSON string.
 _CAPTION_DRAW = """ctx.save();

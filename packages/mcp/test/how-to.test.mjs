@@ -29,6 +29,11 @@ test('how_to_smitline is a read-only tool with a title and one optional topic', 
 test('its description says when it helps, plainly and briefly', async () => {
   const { description } = (await tools()).how_to_smitline;
   assert.match(description, /when the user asks about Smitline, its prices or their account, or when a call was refused/);
+  // Right after connecting (Arun, 2026-11-06): the overview has first things to try.
+  assert.match(description, /first things to try/);
+  assert.match(description, /Useful when the user has just connected Smitline or asks whether it is connected/);
+  assert.match((await tools()).how_to_smitline.inputSchema.properties.topic.description,
+    /overview \(the default\): what Smitline is, who makes it, and first things to try\./);
   assert.ok(description.length < 500, description.length);
   // Factual: no selling words, and it names no other app (directory rules).
   for (const word of [/\bbest\b/i, /\bfree\b/i, /\bupgrade\b/i, /\bpro\b/i, /\bdiscount/i, /ChatGPT|Claude|OpenAI|Anthropic/]) {
@@ -38,6 +43,8 @@ test('its description says when it helps, plainly and briefly', async () => {
 
 test('the server instructions point to it with the same words', () => {
   assert.match(CALLS_INSTRUCTIONS, /When the user asks about Smitline, its prices or their account, or a call was refused, how_to_smitline has the facts/);
+  // Both at once (Arun, 2026-11-06): a call to the user's own phone, or a real errand.
+  assert.match(CALLS_INSTRUCTIONS, /When the user has just connected Smitline or asks whether it is connected, say what it can do and offer both of its first things to try from how_to_smitline \(topic overview\): a quick call to their own phone, or a real errand such as calling a local restaurant\./);
 });
 
 test('it reads the topic from the daemon, overview when none is given', async () => {

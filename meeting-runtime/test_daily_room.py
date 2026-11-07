@@ -154,7 +154,7 @@ class FakeCallClient:
         self.inputs_now = {'camera': {'isEnabled': False}, 'microphone': {'isEnabled': False}}
         # Someone is already there unless a test empties the room.
         self.people = {'local': {'id': 'local', 'info': {'isLocal': True, 'userName': 'Smitline AI'}},
-                       'guest': {'id': 'guest', 'info': {'userName': 'Arun'}}}
+                       'guest': {'id': 'guest', 'info': {'userName': 'Smith'}}}
         self.speaker = None
         self.chat_error = None
         FakeCallClient.instances.append(self)
@@ -357,7 +357,7 @@ class DailyRoomTests(unittest.IsolatedAsyncioTestCase):
             'p2': {'id': 'p2', 'info': {}},
         })
         self.assertEqual(await room.get_participant_count(), 4)
-        self.assertEqual(await room.get_participant_names(), ['Smitline AI', 'Arun', 'Bea'])
+        self.assertEqual(await room.get_participant_names(), ['Smitline AI', 'Smith', 'Bea'])
         client.speaker = client.people['local']
         self.assertIsNone(await room.get_active_speaker())
         client.speaker = client.people['p1']
@@ -851,7 +851,7 @@ class DailyCameraTests(unittest.TestCase):
         pack = self.pack(size=(320, 180))
         plain = DailyCamera(FakeDevice('camera', 'cam'), None, pack=pack).next_frame()
         captioned = DailyCamera(FakeDevice('camera', 'cam'), None, pack=pack,
-                                caption="Arun's AI assistant").next_frame()
+                                caption="Smith's AI assistant").next_frame()
         changed = [i // 4 // 320 for i in range(0, len(plain), 4) if plain[i:i + 3] != captioned[i:i + 3]]
         self.assertTrue(changed)
         self.assertGreater(min(changed), 180 * 0.8)  # only the caption's band, near the bottom

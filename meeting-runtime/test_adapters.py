@@ -129,15 +129,15 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
             <button aria-label="open the participants list pane,[3] particpants" onclick="
                 document.getElementById('panel').innerHTML =
                   '<div class=participants-item__item-layout><span class=participants-item__display-name>Smitline AI</span><span class=participants-item__name-label>(me)</span></div>' +
-                  '<div class=participants-item__item-layout><span class=participants-item__display-name>Arun Raj</span><span class=participants-item__name-label>(Host)</span></div>' +
+                  '<div class=participants-item__item-layout><span class=participants-item__display-name>Smith Lee</span><span class=participants-item__name-label>(Host)</span></div>' +
                   '<div class=participants-item__item-layout><span class=participants-item__display-name>Priya  Shah</span></div>'">Participants</button>
             <div id="panel"></div>''')
         a = self.adapter(False)
         # The count comes from the button's label, without opening the panel.
         self.assertEqual(await a.get_participant_count(), 3)
-        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
+        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Smith Lee', 'Priya Shah'])
         # Open already: read without clicking again (a second click would close it).
-        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Arun Raj', 'Priya Shah'])
+        self.assertEqual(await a.get_participant_names(), ['Smitline AI', 'Smith Lee', 'Priya Shah'])
         await self.page.set_content('<p>No participants button here</p>')
         self.assertEqual(await a.get_participant_names(), [])
         self.assertIsNone(await a.get_participant_count())
@@ -161,9 +161,9 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
             <div contenteditable="true" role="textbox" id="box"
                  onkeydown="if (event.key === 'Enter') { window.sent = this.innerText; this.innerText = ''; }"></div>''')
         a = self.adapter(False)
-        await a.send_chat_message("From Arun's agent, request r1 for Priya:\nhttps://example.com/pr/75")
+        await a.send_chat_message("From Smith's agent, request r1 for Priya:\nhttps://example.com/pr/75")
         self.assertEqual(await self.page.evaluate('window.sent'),
-                         "From Arun's agent, request r1 for Priya: | https://example.com/pr/75")
+                         "From Smith's agent, request r1 for Priya: | https://example.com/pr/75")
 
     async def test_zoom_controls_and_end(self):
         await self.page.set_content('''<button aria-label="Unmute my microphone" onclick="this.setAttribute('aria-label',this.getAttribute('aria-label').startsWith('Unmute')?'Mute my microphone':'Unmute my microphone')">mic</button>''')
@@ -368,7 +368,7 @@ class BrowserFixtures(unittest.IsolatedAsyncioTestCase):
     # pointer movement, and Leave opens a confirmation (a host's also offers End Meeting for All).
     ZOOM_MEETING = '''
       <style>#toolbar, #confirm { display: none }</style>
-      <div id="video">Arun Raj</div>
+      <div id="video">Smith Lee</div>
       <footer id="toolbar">
         <button aria-label="Mute my microphone">mic</button>
         <button id="leave" aria-label="Leave">Leave</button>

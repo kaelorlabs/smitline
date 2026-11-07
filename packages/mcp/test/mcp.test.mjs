@@ -345,7 +345,7 @@ test('start_call and wait_for_call results start with what to do next', async ()
   assert.doesNotMatch(result.next, /reply_to_call_request/);
   result = await wait({ ...live({ requests: [asked, { type: 'add', id: 'r1', text: 'Nov 3' }] }), requests: [{ id: 'r1', state: 'working' }] });
   assert.match(result.next, /^Answer each item in live\.requests/);
-  result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Arun' }] }));
+  result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Smith' }] }));
   assert.match(result.next, /live\.otherRequests \(on its own callId\)/);
 
   result = await wait({ ...live(), status: 'summarizing' });
