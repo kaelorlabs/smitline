@@ -3,9 +3,9 @@
 1. Profile (overall): who the owner is, the people in their life, how they like
    to come across, standing boundaries. Saved on this computer; the owner's agent
    fills it in.
-2. Session: what the calling agent and the owner have been working on, passed in
-   the brief as `context` (a summary, facts, decisions, open questions, and long
-   reference `details`).
+2. Session: the facts the call needs from the calling agent's work with the owner,
+   passed in the brief as `context` (a summary, facts, decisions, open questions,
+   and long reference `details`).
 3. Goal: the brief itself (objective, questions, what may be agreed, tone).
 
 The goal leads the conversation and goes into the voice instructions. The voice

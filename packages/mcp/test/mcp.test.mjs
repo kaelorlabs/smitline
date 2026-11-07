@@ -380,8 +380,8 @@ test('the tools tell agents to follow a call in the same turn, with canDo, answe
   }
   for (const said of [CALLS_INSTRUCTIONS, tools.start_call.description]) {
     assert.match(said, /canDo whenever you could help the people on the call, at least by answering questions about the user's work/);
-    // Clicks: only the read tools are suggested for always allow, never start_call.
-    assert.match(said, /read-only tools \(wait_for_call, get_call, list_calls\) to "Always allow"/);
+    // Clicks: the read tools and the two used during a call are suggested for always allow, never start_call.
+    assert.match(said, /wait_for_call, get_call and list_calls, and the two tools you use during a call \(send_call_instruction, reply_to_call_request\), to "Always allow"/);
     assert.match(said, /never suggest it for start_call/);
   }
   const canDo = tools.start_call.inputSchema.properties.canDo.description;
@@ -391,4 +391,40 @@ test('the tools tell agents to follow a call in the same turn, with canDo, answe
   assert.match(tools.send_call_instruction.description, /Not for answering a request from the call/);
   assert.match(CALLS_INSTRUCTIONS, /don't repeat it with send_call_instruction/);
   assert.match(tools.wait_for_call.inputSchema.properties.since.description, /the default/);
+});
+
+test('each tool says honestly what it does: only lookups are read-only', () => {
+  // Clients decide from these hints whether to ask the user, and directory reviews check that each
+  // one fits. The in-call tools used to say read-only so they ran without asking; Claude Code also
+  // repeats a read-only call after a dropped connection, so an instruction could be spoken twice.
+  const hints = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.name, tool.annotations]));
+  const readOnly = Object.keys(hints).filter((name) => hints[name].readOnlyHint).sort();
+  assert.deepEqual(readOnly, ['check_call_brief', 'get_call', 'get_profile', 'how_to_smitline', 'list_calls',
+    'list_contacts', 'list_voices', 'wait_for_call']);
+  // Ending, handing over and replacing are destructive; the other write tools only add.
+  const destructive = Object.keys(hints).filter((name) => hints[name].destructiveHint).sort();
+  assert.deepEqual(destructive, ['end_call', 'save_call_note', 'transfer_call_to_me']);
+  for (const [name, hint] of Object.entries(hints)) {
+    assert.equal(typeof hint.readOnlyHint, 'boolean', name);
+    assert.equal(typeof hint.openWorldHint, 'boolean', name);
+    if (!hint.readOnlyHint) {
+      assert.equal(typeof hint.destructiveHint, 'boolean', name);
+      assert.equal(typeof hint.idempotentHint, 'boolean', name);
+    }
+  }
+  // Saying something twice, or a second goodbye, is not safe to repeat; a note saved twice is the same note.
+  assert.equal(hints.send_call_instruction.idempotentHint, false);
+  assert.equal(hints.reply_to_call_request.idempotentHint, false);
+  assert.equal(hints.end_call.idempotentHint, false);
+  assert.equal(hints.save_call_note.idempotentHint, true);
+});
+
+test('every tool has a title, in its annotations too', () => {
+  // Claude's directory checks title among each tool's annotations (annotations.title); MCP's newer
+  // top-level title is what most apps show. The two must say the same.
+  for (const tool of TOOL_DEFINITIONS) {
+    assert.equal(typeof tool.title, 'string', tool.name);
+    assert.ok(tool.title.trim(), tool.name);
+    assert.equal(tool.annotations.title, tool.title, tool.name);
+  }
 });

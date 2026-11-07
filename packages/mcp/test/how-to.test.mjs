@@ -15,7 +15,7 @@ async function tools() {
 test('how_to_smitline is a read-only tool with a title and one optional topic', async () => {
   const tool = (await tools()).how_to_smitline;
   assert.equal(tool.title, 'How to use Smitline');
-  assert.deepEqual(tool.annotations, { readOnlyHint: true, openWorldHint: false });
+  assert.deepEqual(tool.annotations, { title: 'How to use Smitline', readOnlyHint: true, openWorldHint: false });
   assert.deepEqual(tool.inputSchema.required, undefined);
   assert.equal(tool.inputSchema.additionalProperties, false);
   assert.deepEqual(Object.keys(tool.inputSchema.properties), ['topic']);

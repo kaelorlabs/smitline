@@ -501,11 +501,12 @@ def default_voice(environ=None):
 
 
 def opening_line(brief, name=None):
-    """How a phone call opens: a normal hello naming who the call is for. The reason follows."""
+    """How a phone call opens: a normal hello naming who the call is for. The reason and the AI
+    disclosure follow in the same turn."""
     hello = f'Hey {name}' if name else 'Hi'
     return f"{hello}, I'm calling on behalf of {brief.on_behalf_of} about"
 
 
 def disclosure_line(brief):
-    """The AI disclosure, said in the agent's second turn, before it asks for anything."""
+    """The AI disclosure, said in the opening turn, right after who the call is for and why."""
     return f"I'm {brief.on_behalf_of}'s AI assistant"

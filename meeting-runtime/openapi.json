@@ -312,7 +312,7 @@
           "onBehalfOf": { "type": "string", "maxLength": 120, "description": "The person the call is for, never an AI, model or app. Spoken at the start of the call (\"calling on behalf of NAME\") and in the AI disclosure that follows. A name such as ChatGPT or Claude is replaced with the owner's name (SMITLINE_OWNER_NAME), or the brief is refused (422 invalid_request)." },
           "objective": { "type": "string", "maxLength": 1000 },
           "context": {
-            "description": "What the calling agent and the owner have been working on. The voice starts with a short version and the backend model gets it all. See docs/calls.md#context.",
+            "description": "The facts the call needs from the calling agent's work with the owner. The voice starts with a short version and the backend model gets it all. See docs/calls.md#context.",
             "oneOf": [{ "type": "string", "maxLength": 6000 }, { "$ref": "#/components/schemas/SessionContext" }]
           },
           "questions": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20, "description": "What to find out. The result's details answer each one." },

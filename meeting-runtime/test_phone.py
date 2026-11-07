@@ -519,8 +519,8 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Pricing', notes)
         instructions = config['instructions']
         self.assertIn("You are calling Sam, Robin's close friend. Greet them by name", instructions)
-        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..." with the reason in place of '
-                      'the dots. Do not say that you are an AI in that hello.', instructions)
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ... I\'m Robin\'s AI assistant." '
+                      'with the reason in place of the dots.', instructions)
         self.assertIn('Find out:\n- Launch now or wait, and why?', instructions)
         self.assertIn('your context holds reference notes', instructions)
         self.assertIn('Robin always wants these kept, on every call:\n- Never discuss money.', instructions)
@@ -885,11 +885,9 @@ class PromptTests(unittest.TestCase):
         parsed = CallBrief.from_dict(brief(mayAgreeTo=['6:30 to 7:30pm'], mustNotShare=['card number'],
                                            language='es'))
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm calling on behalf of Robin about ...", text)
-        self.assertIn('Do not say that you are an AI in that hello.', text)
-        self.assertIn("At a natural moment during the call, say plainly that you are Robin's AI "
-                      'assistant', text)
-        self.assertIn('never let the call end without it', text)
+        self.assertIn("Hi, I'm calling on behalf of Robin about ... I'm Robin's AI assistant.", text)
+        self.assertIn('say who you are calling for, in a few words what it is about, and that you are '
+                      'their AI assistant', text)
         self.assertNotIn('call is recorded', text)
         self.assertIn('Also say in your first sentence that the call is recorded.',
                       voice_instructions(parsed, recording=True))
@@ -915,13 +913,30 @@ class PromptTests(unittest.TestCase):
         self.assertIn('When you are, say so, and do not say you do not know until the answer comes back.',
                       text)
 
-    def test_the_opening_cue_says_who_and_why_and_the_ai_part_follows(self):
+    def test_every_opening_says_it_is_an_ai_after_who_and_why(self):
+        # Arun, 2026-11-06: the AI disclosure is part of the opening turn, as AI agents should say so
+        # at the start. Who and why still come first, so the call sounds genuine. Nothing may tell the
+        # voice to hold the AI part back.
+        parsed = CallBrief.from_dict(brief(phoneMenus=True))
+        for said in (voice_instructions(parsed), voice_instructions(CallBrief.from_dict(brief(rehearsal=True))),
+                     opening_cue(parsed), opening_cue(parsed, name='Sam', recording=True)):
+            self.assertLess(said.index('calling on behalf of Robin'), said.index("I'm Robin's AI assistant"))
+            self.assertNotIn('Do not say that you are an AI', said)
+            self.assertNotIn('later in the call', said)
+        # A person who comes on after a phone menu or a call screener hears it too.
+        paragraphs = {part.split(':')[0]: part for part in voice_instructions(parsed).split('\n\n')}
+        for name in ('Phone menus', 'Call screening'):
+            self.assertIn('calling on behalf of Robin, why, and that you are their AI assistant', paragraphs[name])
+
+    def test_the_opening_cue_says_who_why_and_that_it_is_an_ai(self):
         parsed = CallBrief.from_dict(brief())
         cue = opening_cue(parsed, name='Sam')
-        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ..."', cue)
-        self.assertIn('Do not say that you are an AI in this hello; say it later in the call.', cue)
+        self.assertIn('"Hey Sam, I\'m calling on behalf of Robin about ... I\'m Robin\'s AI assistant."', cue)
+        self.assertIn('calling on behalf of Robin, in a few words what about, and that you are their AI '
+                      'assistant, like', cue)
         self.assertNotIn('recorded', cue)
-        self.assertIn('what about, and that the call is recorded,', opening_cue(parsed, recording=True))
+        self.assertIn('that you are their AI assistant, and that the call is recorded, like',
+                      opening_cue(parsed, recording=True))
         self.assertEqual(opening_cue(parsed, inbound=True, recording=True),
                          "Greet the caller: say they have reached Robin's AI assistant. "
                          'Say that the call is recorded.')
@@ -959,10 +974,9 @@ class PromptTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 # In the identity part, the first paragraph, ahead of the goal.
                 self.assertIn(rule, text.split('\n\n')[0])
-        # The opening and the disclosure keep their wording.
+        # The opening, with the disclosure in it, keeps its wording.
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm calling on behalf of Smith Lee about ...", text)
-        self.assertIn("say plainly that you are Smith Lee's AI assistant", text)
+        self.assertIn("Hi, I'm calling on behalf of Smith Lee about ... I'm Smith Lee's AI assistant.", text)
 
     def test_no_scripted_greeting_when_someone_picks_up(self):
         # On 2026-11-02 a call to the owner's own phone started over twice: after a quiet moment

@@ -105,23 +105,20 @@ def phone_menus_rule(who):
             'or anything under "Never share", and never press a key that agrees to something you '
             'may not agree to. If no option fits, choose the one for an agent or a representative; '
             'if the menu offers none, try 0, which reaches a person on many menus. When a person '
-            f'comes on, greet them, say you are calling on behalf of {who} '
-            'and why, and carry on as usual.')
+            f'comes on, greet them, say you are calling on behalf of {who}, why, and that you are '
+            'their AI assistant, and carry on as usual.')
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
                        boundaries=(), calling_owner=False):
     who = brief.on_behalf_of
-    # Who and why come first, so the call sounds genuine; the AI part comes later in the call.
-    steps = ('Open the way a person does on the phone: a short hello that says who you are calling '
-             'for and, in a few words, what it is about, for example: '
-             f'"{opening_line(brief, greeting_name(contact))} ..." with the reason in place of the '
-             'dots. Do not say that you are an AI in that hello. Then stop, let them answer, and '
-             'carry on the conversation. At a natural moment during the call, say plainly that you '
-             f'are {who}\'s AI assistant, in your own words, for example: "{disclosure_line(brief)}, '
-             'by the way." A good moment is when you get to what you need from them. It does not '
-             'have to be early, but never let the call end without it. Keep it relaxed rather than '
-             'formal.')
+    # Who and why come first, so the call sounds genuine (people hung up on openings that led with
+    # "AI assistant"); that it is an AI follows in the same opening, before they answer.
+    steps = ('Open the way a person does on the phone, in one short turn: say who you are calling '
+             'for, in a few words what it is about, and that you are their AI assistant, for '
+             f'example: "{opening_line(brief, greeting_name(contact))} ... '
+             f'{disclosure_line(brief)}." with the reason in place of the dots. Keep it relaxed '
+             'rather than formal. Then stop, let them answer, and carry on the conversation.')
     if inbound:
         opening = (f'You are answering a phone call as the AI assistant of {who}. '
                    f'Start by saying: "Hi, you have reached {who}\'s AI assistant." '
@@ -172,8 +169,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          f'{who} will follow up. Never share anything under "Never share", and never read out '
          'payment or account details.'),
         ('Call screening: if an automated assistant answers, let it finish. When it asks who is '
-         f'calling, tell it in one sentence that you are calling on behalf of {who} and why, then '
-         'wait for the person.'),
+         f'calling, tell it in one sentence that you are calling on behalf of {who}, why, and that '
+         'you are their AI assistant, then wait for the person.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
          'them. If they ask not to be called again, apologize, say they will not be called again, '
@@ -279,13 +276,15 @@ def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_own
     if inbound:
         recorded = ' Say that the call is recorded.' if recording else ''
         return f"Greet the caller: say they have reached {who}'s AI assistant.{recorded}"
-    # Several US states require consent before recording, so that notice cannot wait.
-    recorded = ', and that the call is recorded' if recording else ''
+    told = ['in a few words what about', 'that you are their AI assistant']
+    if recording:
+        # Several US states require consent before recording, so that notice cannot wait.
+        told.append('that the call is recorded')
+    told = ', '.join(told[:-1]) + f', and {told[-1]}'
     return ('The call just connected. Say only a short, relaxed hello that says you are calling on '
-            f'behalf of {who} and, in a few words, what about{recorded}, like '
-            f'"{opening_line(brief, name)} ...", then stop and wait for them to answer. Do not say '
-            'that you are an AI in this hello; say it later in the call. If an automated assistant '
-            'or voicemail greeting is still talking, let it finish first.'
+            f'behalf of {who}, {told}, like "{opening_line(brief, name)} ... '
+            f'{disclosure_line(brief)}.", then stop and wait for them to answer. If an automated '
+            'assistant or voicemail greeting is still talking, let it finish first.'
             + (' If it is an automated phone menu, do not say hello: listen to its options.'
                if brief.phone_menus else ''))
 
