@@ -974,10 +974,9 @@ class PromptTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 # In the identity part, the first paragraph, ahead of the goal.
                 self.assertIn(rule, text.split('\n\n')[0])
-        # The opening and the disclosure keep their wording.
+        # The opening, with the disclosure in it, keeps its wording.
         text = voice_instructions(parsed)
-        self.assertIn("Hi, I'm calling on behalf of Arun Raj about ...", text)
-        self.assertIn("say plainly that you are Arun Raj's AI assistant", text)
+        self.assertIn("Hi, I'm calling on behalf of Arun Raj about ... I'm Arun Raj's AI assistant.", text)
 
     def test_no_scripted_greeting_when_someone_picks_up(self):
         # On 2026-11-02 a call to the owner's own phone started over twice: after a quiet moment
