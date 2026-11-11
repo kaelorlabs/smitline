@@ -1,11 +1,10 @@
-"""Hear the other person on a relayed phone call, so the assistant stops talking at once.
+"""Hear when the other person on a relayed phone call starts and stops talking.
 
-GPT-Live produces speech faster than it plays, so on a relayed call seconds of it can be
-queued here when the other person starts talking. GPT-Live's own barge-in stops it
-generating but cannot unsay what is already queued. SpeechDetector listens to the caller's
-audio (the 8 kHz mu-law frames that also go to GPT-Live) and says when speech starts and
-ends; phone_line pauses playback at the start, and drops the rest once it is clearly an
-interruption rather than a short "mhm".
+SpeechDetector listens to the caller's audio (the 8 kHz mu-law frames that also go to
+GPT-Live) and says when speech starts and ends, faster than any transcript. phone_line uses
+it to time the opening and the hang-up, to tell a quiet line, and to start watching whether
+GPT-Live stops for them. It never stops the assistant by itself: it hears loudness, so a TV
+or people in the background count as speech here, and only the model can tell them apart.
 """
 import math
 
