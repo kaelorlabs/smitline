@@ -59,13 +59,20 @@ OUTPUT_TARGET_SECONDS = 0.3
 OUTPUT_MAX_SECONDS = 1.2
 # Quieter than this, a 20 ms frame of the assistant's audio is a pause.
 SILENT_FRAME_DB = -48.0
-# Local barge-in (barge_in.py): speech that starts while this much of the assistant's is
-# still unheard pauses it; once the other person has talked this long it is an
-# interruption and the rest is dropped. Model audio arriving this soon after the drop is
-# the abandoned rest of it.
-BARGE_MIN_QUEUED = 0.15
-BARGE_COMMIT_MS = 700
-BARGE_STALE_SECONDS = 1.0
+# GPT-Live owns barge-in: it decides whether the other person is taking the floor or is only
+# a "mhm", a TV or someone in the background, and stops making speech only for the first. It
+# sends no event when it stops, and it makes speech faster than it plays, so what it made but
+# nobody has heard yet would still play. So: when the other person starts talking (heard
+# locally, barge_in.py) while the model is still making speech (some came within YIELD_ACTIVE
+# seconds), it has yielded once, within YIELD_WINDOW, both (1) its speech has stopped for
+# YIELD_GAP seconds and (2) it has transcribed words from them; then the unheard rest is
+# dropped. If its speech carries on, it chose to keep talking; if it heard no words, it was
+# noise and the model merely finished. Either way nothing is touched. Its own pauses mid-turn
+# are almost all under 0.3 s on recorded calls.
+YIELD_ACTIVE = 0.5
+YIELD_GAP = 0.5
+YIELD_WINDOW = 3.0
+YIELD_POLL = 0.05
 # Speech this long is a turn; the reply delay is measured from its end.
 TURN_MIN_MS = 300
 DRAIN_TIMEOUT = 8.0
@@ -92,12 +99,6 @@ LIVE_CONNECT_TIMEOUT = 20.0
 OVERRUN_SECONDS = 180.0
 # How long a hang-up waits for a missing AI disclosure to be said first.
 DISCLOSE_BEFORE_END_SECONDS = 10.0
-# GPT-Live stops talking when interrupted but sends no event for it. If the other person
-# talks for this long while speech is still queued, and no new audio arrives for
-# INTERRUPT_SETTLE seconds, it has yielded: the queued rest is dropped.
-INTERRUPT_MIN_SPEECH_MS = 500
-INTERRUPT_MIN_QUEUED = 0.25
-INTERRUPT_SETTLE = 0.35
 # How many times a hang-up may give way to the other person still talking.
 MAX_HANGUP_YIELDS = 2
 # After a goodbye: how often to look, and how recent a line from them still counts as talking
@@ -202,10 +203,8 @@ class OutputPacer:
     next one, or is padded with silence when speech stops. The provider's buffer is kept near
     OUTPUT_TARGET_SECONDS by stretching and trimming pauses (see there). A recorded call showed
     SignalWire playing a 20 ms silent slot for every mark, so a mark goes out only after a
-    silent frame, at most once a second, or once audio stops arriving. When the other person
-    starts talking, pause() clears the provider and keeps what they have not heard yet:
-    resume() carries on from there after a short "mhm", and flush() drops it after a real
-    interruption.
+    silent frame, at most once a second, or once audio stops arriving. When GPT-Live stops
+    talking because the other person interrupted it, flush() drops what is still unheard.
     """
 
     FRAME_BYTES = 160  # 20 ms of 8 kHz mu-law
@@ -238,7 +237,6 @@ class OutputPacer:
         self.play_until = 0.0
         self.sent_marks = 0
         self.played_marks = 0
-        self.paused = False
         # count/totalMs: the provider ran dry; audible: it ran dry just before speech.
         self.gaps = {'count': 0, 'totalMs': 0, 'starved': 0, 'audible': 0}
         self.stretch = {'addedMs': 0, 'trimmedMs': 0}
@@ -265,8 +263,7 @@ class OutputPacer:
         for start in range(0, whole, self.FRAME_BYTES):
             self._queue_frame(audio[start:start + self.FRAME_BYTES])
         self.max_unplayed = max(self.max_unplayed, self.unplayed_seconds())
-        if not self.paused:
-            self._ready.set()
+        self._ready.set()
 
     def _queue_frame(self, frame):
         self.queue.append((base64.b64encode(frame).decode('ascii'), False))
@@ -283,31 +280,7 @@ class OutputPacer:
         return self.queued_bytes / self.bytes_per_second + max(0.0, self.play_until - self.clock())
 
     def playing(self):
-        return not self.paused and self.play_until > self.clock()
-
-    def pause(self):
-        """Stop sending and take back what the provider has not played; the caller clears it."""
-        now = self.clock()
-        unheard = [(payload, last) for payload, last, starts in self._sent if starts >= now]
-        if self._next is not None:
-            unheard.append(self._next)
-            self._next = None
-        for payload, last in reversed(unheard):
-            self.queue.appendleft((payload, last))
-            self.queued_bytes += len(base64.b64decode(payload))
-        self._sent.clear()
-        self._trace('pause', unheard=len(unheard))
-        self.play_until = now
-        self.speech_until = min(self.speech_until, now)
-        self.paused = True
-        self._continuous = False
-        self._ready.clear()
-
-    def resume(self):
-        self._trace('resume', queued=len(self.queue))
-        self.paused = False
-        if self.queue:
-            self._ready.set()
+        return self.play_until > self.clock()
 
     def flush(self):
         """Drop speech the model has stopped saying; the caller also clears the provider."""
@@ -321,7 +294,6 @@ class OutputPacer:
         self.play_until = self.clock()
         self.speech_until = min(self.speech_until, self.play_until)
         self.played_marks = self.sent_marks
-        self.paused = False
         self._continuous = False
         self._ready.clear()
         self._drained.set()
@@ -332,7 +304,7 @@ class OutputPacer:
         except ValueError:
             return
         if (self.played_marks >= self.sent_marks and not self.queue and not self._tail
-                and not self.paused and not self._mark_owed):
+                and not self._mark_owed):
             self._drained.set()
 
     async def drained(self, timeout=DRAIN_TIMEOUT):
@@ -393,10 +365,10 @@ class OutputPacer:
     async def run(self):
         while True:
             starved = False
-            while self.paused or not self.queue:
-                starved = starved or not self.paused
+            while not self.queue:
+                starved = True
                 self._ready.clear()
-                if not self.paused and (self._tail or self._mark_owed):
+                if self._tail or self._mark_owed:
                     try:
                         await asyncio.wait_for(self._ready.wait(),
                                                self.TAIL_WAIT if self._tail else self.MARK_IDLE)
@@ -410,14 +382,14 @@ class OutputPacer:
             payload, last = self._next = self.queue.popleft()
             size = len(base64.b64decode(payload))
             if self.play_until <= self.clock() and not await self._cushioned(size):
-                continue  # paused or flushed while gathering the cushion
+                continue  # flushed while gathering the cushion
             self.queued_bytes = max(0, self.queued_bytes - size)
             seconds = size / self.bytes_per_second
             now = self.clock()
             ahead = self.play_until - now
             if ahead > self.lead:
                 await self.sleep((ahead - self.lead) / getattr(self.clock, 'rate', 1.0))
-                if self._next is None:  # paused or flushed meanwhile, which took this frame
+                if self._next is None:  # flushed meanwhile, which took this frame
                     continue
                 now = self.clock()
             self._next = None
@@ -445,7 +417,7 @@ class OutputPacer:
                 self.speech_until = self.play_until
             self._continuous = True
             self._mark_owed = True
-            if silent and not self.paused and self.play_until - now < self.target:
+            if silent and self.play_until - now < self.target:
                 # Below the target: this pause plays 20 ms longer, and the reserve grows.
                 self.queue.appendleft((payload, last))
                 self.queued_bytes += size
@@ -538,18 +510,16 @@ class PhoneSession:
         self.heard_other = asyncio.Event()
         self.last_output_at = None
         self._other_spoke_at = None
-        self._other_span = None  # [start_ms, end_ms] of what the other person is saying now
         self._awaiting_reply_since = None
-        self._interrupt_check = None
+        self._speech_out_at = None  # when GPT-Live last sent speech (not its streamed silence)
+        self._yield_watch = None
         self._hangup_yields = 0
-        self.stats = {'interruptionsFollowed': 0, 'hangupsYielded': 0, 'responseDelaysMs': [],
-                      'pauses': 0, 'backchannels': 0, 'stopDelaysMs': []}
+        self.stats = {'interruptionsFollowed': 0, 'talkedOver': 0, 'hangupsYielded': 0,
+                      'responseDelaysMs': []}
         self.detector = SpeechDetector()
         self._hello_heard = asyncio.Event()  # they finished their first words (heard locally)
         self._trace = None  # SMITLINE_AUDIO_TRACE=1: timing of audio events, for diagnosis
         self._trace_start = None
-        self._barge = None  # 'paused' while deciding, 'dropped' after an interruption
-        self._dropped_at = None
         self.last_activity = None
         self.started_at = None
         self.stream_ended_at = None
@@ -838,7 +808,7 @@ class PhoneSession:
             pass
 
     async def _hear(self, payload):
-        """Stop talking the moment the other person does (see barge_in.py)."""
+        """Hear the other person locally: when they start and stop talking (see barge_in.py)."""
         if self.pacer is None:
             return
         try:
@@ -853,29 +823,13 @@ class PhoneSession:
             self._note('vad_' + change)
         if change == 'end':
             self._hello_heard.set()
-        if change == 'start':
-            if (self._barge is None and not self._hanging_up and not self.keying
-                    and self.pacer.unplayed_seconds() >= BARGE_MIN_QUEUED):
-                self.pacer.pause()
-                await self._twilio_send({'event': 'clear'})
-                self._barge = 'paused'
-                self.stats['pauses'] += 1
-                self.stats['stopDelaysMs'].append(self.detector.speech_ms)
-        elif change == 'end':
-            if self._barge == 'paused':  # a short "mhm": carry on where it paused
-                self.pacer.resume()
-                self.stats['backchannels'] += 1
-            self._barge = None
-            if self.detector.last_speech_ms >= TURN_MIN_MS:
-                # The reply delay runs from their last word, not from when the quiet after it
-                # was long enough to call the turn over.
-                self._awaiting_reply_since = now - self.detector.end_ms / 1000
-        elif self._barge == 'paused' and self.detector.speech_ms >= BARGE_COMMIT_MS:
-            self.pacer.flush()
-            self._barge = 'dropped'
-            self._dropped_at = now
-            self.stats['interruptionsFollowed'] += 1
-            self.ctx.event('call.interrupted')
+        if change == 'start' or (change is None and self.detector.speaking):
+            # While they talk (or a TV does), each stretch of the model's speech is watched.
+            self._maybe_follow_yield(now)
+        elif change == 'end' and self.detector.last_speech_ms >= TURN_MIN_MS:
+            # The reply delay runs from their last word, not from when the quiet after it
+            # was long enough to call the turn over.
+            self._awaiting_reply_since = now - self.detector.end_ms / 1000
 
     # GPT-Live side -------------------------------------------------------
 
@@ -893,10 +847,8 @@ class PhoneSession:
         if _is_speech(event.get('delta') or ''):
             # GPT-Live streams silence between turns: only its speech keeps a call from going quiet.
             self.last_activity = now
+            self._speech_out_at = now
         self._note('delta', bytes=len(event.get('delta') or '') * 3 // 4)
-        if (self._barge == 'dropped' and self._dropped_at is not None
-                and now - self._dropped_at < BARGE_STALE_SECONDS):
-            return  # the rest of what they interrupted, still arriving
         if self.keying:
             return  # keys are playing: nothing is said over them
         if self._awaiting_reply_since is not None:
@@ -1077,12 +1029,6 @@ class PhoneSession:
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
-            start, end = event.get('start_ms'), event.get('end_ms')
-            if self._other_span is None or self.joiner.speaker != 'other':
-                self._other_span = [start, end]
-            elif end is not None:
-                self._other_span[1] = end
-            self._maybe_follow_interruption(now)
         if source == 'agent':
             self._agent_said += delta
             self._agent_turn += delta
@@ -1120,35 +1066,43 @@ class PhoneSession:
         if source == 'agent' and self.joiner.speaker == 'agent':
             self._check_disclosure(self._agent_turn)
 
-    def _maybe_follow_interruption(self, spoke_at):
-        """Stop playing when GPT-Live has stopped talking because the other person interrupted.
+    def _maybe_follow_yield(self, heard_at):
+        """The other person started talking: watch whether GPT-Live stops for them.
 
-        GPT-Live owns barge-in but sends no event for it, and it produces speech faster
-        than it is played, so speech it has abandoned can still be queued. When the other
-        person has talked for a moment and no new audio follows, the rest is dropped here
-        and at the provider. A short backchannel ("mhm") does not count.
+        Only the model decides (see YIELD_GAP). Nothing is paused or dropped because the line
+        got loud: background talk, a TV or a "mhm" that the model talks through plays on.
         """
-        if self._barge is not None or self.keying:
-            return  # the local detector is already handling it, or keys are playing
-        if self.pacer is None or self.pacer.unplayed_seconds() < INTERRUPT_MIN_QUEUED:
+        if self.pacer is None or self.keying or self._hanging_up:
             return
-        span = self._other_span or [None, None]
-        if span[0] is not None and span[1] is not None and span[1] - span[0] < INTERRUPT_MIN_SPEECH_MS:
+        if self._yield_watch is not None and not self._yield_watch.done():
             return
-        if self._interrupt_check is not None and not self._interrupt_check.done():
+        if self._speech_out_at is None or heard_at - self._speech_out_at > YIELD_ACTIVE:
+            return  # the model had already finished: nothing it could stop
+        if not self.pacer.speech_pending():
             return
-        self._interrupt_check = self._spawn(self._follow_interruption(spoke_at))
+        self._yield_watch = self._spawn(self._follow_yield(heard_at))
 
-    async def _follow_interruption(self, spoke_at):
-        await asyncio.sleep(INTERRUPT_SETTLE)
-        if self.last_output_at is not None and self.last_output_at > spoke_at:
-            return  # still talking: GPT-Live chose to continue
-        if self.pacer is None or self.pacer.unplayed_seconds() < INTERRUPT_MIN_QUEUED:
-            return
-        self.pacer.flush()
-        await self._twilio_send({'event': 'clear'})
-        self.stats['interruptionsFollowed'] += 1
-        self.ctx.event('call.interrupted')
+    async def _follow_yield(self, heard_at):
+        while True:
+            await asyncio.sleep(YIELD_POLL)
+            if self.pacer is None or self.keying or self._hanging_up:
+                return
+            if not self.pacer.speech_pending():
+                self.stats['talkedOver'] += 1  # all it said was heard: it did not stop for them
+                return
+            now = time.monotonic()
+            heard_words = self._other_spoke_at is not None and self._other_spoke_at >= heard_at
+            if heard_words and now - self._speech_out_at >= YIELD_GAP:
+                # It stopped making speech for them: drop what it made that nobody has heard.
+                self._note('yield', unplayed_ms=int(self.pacer.unplayed_seconds() * 1000))
+                self.pacer.flush()
+                await self._twilio_send({'event': 'clear'})
+                self.stats['interruptionsFollowed'] += 1
+                self.ctx.event('call.interrupted')
+                return
+            if now - heard_at >= YIELD_WINDOW:
+                self.stats['talkedOver'] += 1  # it talked on, or it was noise it did not stop for
+                return
 
     def audio_stats(self):
         def spread(values):
@@ -1157,9 +1111,8 @@ class PhoneSession:
         stats = {
             'maxUnplayedMs': int((self.pacer.max_unplayed if self.pacer else 0) * 1000),
             'interruptionsFollowed': self.stats['interruptionsFollowed'],
+            'talkedOver': self.stats['talkedOver'],
             'hangupsYielded': self.stats['hangupsYielded'],
-            'pauses': self.stats['pauses'],
-            'backchannels': self.stats['backchannels'],
         }
         if self.pacer is not None:
             stats['gaps'] = dict(self.pacer.gaps)
@@ -1168,9 +1121,6 @@ class PhoneSession:
             stats['clockRate'] = round(self.provider_clock.rate, 4)
         if self.stats['responseDelaysMs']:
             stats['replyDelayMs'] = spread(self.stats['responseDelaysMs'])
-        if self.stats['stopDelaysMs']:
-            # Their speech heard before playback paused; the provider stops within one frame.
-            stats['stopDelayMs'] = spread(self.stats['stopDelaysMs'])
         return stats
 
     def _check_disclosure(self, text):
