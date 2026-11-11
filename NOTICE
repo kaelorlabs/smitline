@@ -6,3 +6,13 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 This product includes portions of software developed by the Joinly project
 (https://github.com/joinly-ai/joinly), vendored in the joinly/ directory and
 licensed under the MIT License. See joinly/LICENSE and THIRD_PARTY.md.
+
+This product includes model files from FireRedVAD
+(https://github.com/FireRedTeam/FireRedVAD), Copyright 2026 Xiaohongshu,
+vendored in the meeting-runtime/hold_models/ directory and licensed under the
+Apache License, Version 2.0. See meeting-runtime/hold_models/LICENSE-FireRedVAD.
+
+This product includes the Silero VAD model (https://github.com/snakers4/silero-vad),
+Copyright (c) 2020-present Silero Team, vendored in the meeting-runtime/hold_models/
+directory and licensed under the MIT License. See
+meeting-runtime/hold_models/LICENSE-silero-vad.

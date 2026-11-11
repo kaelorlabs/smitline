@@ -46,6 +46,11 @@ REQUEST_EVENTS = frozenset({'call.request'})
 # reported, nor summarizing: the conversation is over, and the end, which wakes the wait too,
 # follows in seconds with the result. Each wake is one more tool call for the agent.
 WAKING_STATUSES = frozenset({'ringing', 'waiting', 'in_progress'})
+# So do these: a phone call going on hold and coming off it (phone_hold.py), and the owner's phone
+# answering or not when the call rings it (phone_owner.py). On hold nothing is said for a long
+# time, so the agent learns at once that it can wait longer, and when someone picks up.
+WAKING_EVENTS = frozenset({'call.on_hold', 'call.hold_ended', 'call.owner_connected',
+                           'call.owner_unavailable'})
 # An agent counts as following a call while it waits on it live, and this many seconds after
 # its last contact (a wait, a reply): long enough to act on what a wait brought back.
 FOLLOW_GRACE = 90.0
@@ -133,6 +138,12 @@ class CallContext:
 
     def event(self, event_type, **data):
         self.service._event(self.call_id, event_type, **data)
+
+    def set_hold(self, hold):
+        """A phone call's time on hold, as the call shows it (phone_hold.py): onHold, since
+        (while on hold), seconds and times in all, the detector, and timedOut."""
+        self.service.store.update(self.call_id, hold=dict(hold))
+        self.service._signal(self.call_id)
 
     def recording_path(self):
         """Where the line writes this call's own recording (call_recorder.py)."""
@@ -1136,6 +1147,8 @@ class CallService:
 
         def at_once(event):
             if event['type'] in REQUEST_EVENTS:
+                return True
+            if only != 'requests' and event['type'] in WAKING_EVENTS:
                 return True
             return (only != 'requests' and event['type'] == 'call.status'
                     and (event.get('data') or {}).get('status') in WAKING_STATUSES)

@@ -271,6 +271,9 @@ class DialInSession(PhoneSession):
 
     # A bridge's "say your name after the tone" is not a voicemail greeting.
     voicemail_possible = False
+    # A meeting is never put on hold, and the owner joins it themselves (phone_hold.py).
+    hold_possible = False
+    relays_audio = False
 
     def __init__(self, line, ctx, **kwargs):
         from call_requests import MAX_REQUESTS

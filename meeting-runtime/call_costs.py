@@ -90,14 +90,20 @@ def _phone_item(record, environ):
     seconds = usage.get('phoneSeconds')
     price = usage.get('phonePrice')
     item = {'kind': 'phone', 'provider': provider, 'seconds': seconds}
+    rate, per_call = _phone_rate(provider, environ)
+    # The owner's phone, when the call rang it (phone_owner.py), is a second call: always an
+    # estimate, since the provider price looked up is the first call's.
+    owner_seconds = usage.get('ownerLegSeconds') or 0
+    owner = math.ceil(owner_seconds / 60) * rate + per_call if owner_seconds else 0
+    if owner_seconds:
+        item['ownerLegSeconds'] = owner_seconds
     if isinstance(price, dict) and price.get('amount') is not None \
             and str(price.get('currency') or CURRENCY).upper() == CURRENCY:
-        return dict(item, amount=_money(price['amount']), source='provider')
+        return dict(item, amount=_money(price['amount'] + owner), source='provider')
     if not seconds:
         return None  # never answered: carriers do not charge for unanswered calls
-    rate, per_call = _phone_rate(provider, environ)
-    item = dict(item, amount=_money(math.ceil(seconds / 60) * rate + per_call), source='estimate',
-                ratePerMinute=rate)
+    item = dict(item, amount=_money(math.ceil(seconds / 60) * rate + per_call + owner),
+                source='estimate', ratePerMinute=rate)
     return dict(item, ratePerCall=per_call) if per_call else item
 
 

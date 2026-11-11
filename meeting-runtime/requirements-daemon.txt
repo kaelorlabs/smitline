@@ -1,2 +1,7 @@
 aiohttp>=3.14.5
 phonenumbers==9.0.41
+# Hold for Me: hold_listener.py's local voice activity models (wheels for Python 3.12 on
+# linux x86_64 and aarch64).
+numpy==2.5.4
+onnxruntime==1.31.1
+kaldi-native-fbank==1.22.3

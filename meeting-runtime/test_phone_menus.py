@@ -1,4 +1,5 @@
-"""Phone menus: a brief with phoneMenus lets the voice press keys ("press 2 for billing")."""
+"""Phone menus: the voice presses keys ("press 2 for billing") on phone calls, unless the brief
+says phoneMenus: false."""
 import base64
 import json
 import math
@@ -39,13 +40,21 @@ def parsed(**overrides):
 
 
 class BriefTests(unittest.TestCase):
-    def test_off_unless_the_brief_turns_it_on(self):
-        self.assertFalse(parsed().phone_menus)
+    def test_on_for_phone_calls_unless_the_brief_turns_it_off(self):
+        # Any business may answer with a menu: a call is ready for one without being told.
+        self.assertTrue(parsed().phone_menus)
         self.assertNotIn('phoneMenus', parsed().to_dict())
-        on = parsed(phoneMenus=True)
-        self.assertTrue(on.phone_menus)
-        self.assertIs(on.to_dict()['phoneMenus'], True)
-        self.assertEqual(CallBrief.from_dict(on.to_dict()), on)
+        self.assertTrue(parsed(phoneMenus=True).phone_menus)
+        self.assertNotIn('phoneMenus', parsed(phoneMenus=True).to_dict())
+        off = parsed(phoneMenus=False)
+        self.assertFalse(off.phone_menus)
+        self.assertIs(off.to_dict()['phoneMenus'], False)
+        for value in (parsed(), off):
+            self.assertEqual(CallBrief.from_dict(value.to_dict()), value)
+        meeting = CallBrief.from_dict({'channel': 'meeting', 'to': 'https://zoom.us/j/123456789',
+                                       'onBehalfOf': 'Robin', 'objective': 'Take notes'})
+        self.assertFalse(meeting.phone_menus)
+        self.assertNotIn('phoneMenus', meeting.to_dict())
 
     def test_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -61,18 +70,20 @@ class PromptTests(unittest.TestCase):
         return [tool['name'] for tool in delegation_config(brief_, **kwargs)['responses']['tools']]
 
     def test_the_key_tool_comes_only_with_the_brief(self):
-        self.assertEqual(self.tools(parsed()), ['end_call'])
+        self.assertEqual(self.tools(parsed(phoneMenus=False)), ['end_call'])
+        self.assertEqual(self.tools(parsed()), ['end_call', 'press_keys'])
         self.assertEqual(self.tools(parsed(phoneMenus=True)), ['end_call', 'press_keys'])
-        self.assertEqual(self.tools(parsed(phoneMenus=True), inbound=True), ['end_call'])
+        self.assertEqual(self.tools(parsed(), inbound=True), ['end_call'])
         self.assertTrue(PRESS_KEYS_TOOL['strict'])
 
-    def test_without_it_the_voice_gives_up_at_a_menu_as_before(self):
-        text = voice_instructions(parsed())
+    def test_turned_off_the_voice_gives_up_at_a_menu_as_before(self):
+        off = parsed(phoneMenus=False)
+        text = voice_instructions(off)
         self.assertIn('automated menu will not let you through. Say that', text)
         self.assertNotIn('Phone menus:', text)
-        self.assertNotIn('Phone menus:', backend_instructions(parsed()))
-        self.assertNotIn('phone menu', opening_cue(parsed()))
-        self.assertIn('a voicemail system or an automated call screener', machine_hint(parsed()))
+        self.assertNotIn('Phone menus:', backend_instructions(off))
+        self.assertNotIn('phone menu', opening_cue(off))
+        self.assertIn('a voicemail system or an automated call screener', machine_hint(off))
 
     def test_with_it_the_voice_works_the_menu(self):
         on = parsed(phoneMenus=True)
@@ -205,9 +216,9 @@ class RelayedKeyTests(unittest.IsolatedAsyncioTestCase):
         ws.push({'event': 'stop'})
         await task
 
-    async def test_without_phone_menus_nothing_is_pressed(self):
+    async def test_with_phone_menus_off_nothing_is_pressed(self):
         self.h.twilio.flavor = 'signalwire'
-        record, session = await self.h.dial()
+        record, session = await self.h.dial(phoneMenus=False)
         ws, live, task = await self.h.connect(record, session)
         live.push({'type': 'session.started', 'session': {}})
         live.push(press('2'))

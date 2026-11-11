@@ -348,6 +348,18 @@ test('start_call and wait_for_call results start with what to do next', async ()
   result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Smith' }] }));
   assert.match(result.next, /live\.otherRequests \(on its own callId\)/);
 
+  // On hold nothing is said for a long time: wait longer, and hear at once when someone picks up.
+  result = await wait({ ...live(), brief: { maxHoldMinutes: 90 }, hold: { onHold: true, seconds: 300, times: 1 } });
+  assert.match(result.next, /^The call is on hold: Smitline waits by itself/);
+  assert.match(result.next, /timeoutSeconds 280/);
+  assert.match(result.next, /90 minutes on hold/);
+  assert.match(result.next, /since "41"/);
+  result = await wait({ ...live(), hold: { onHold: false, seconds: 300, times: 1 } });
+  assert.match(result.next, /^The call is in progress/);
+  // A request still comes first while on hold.
+  result = await wait({ ...live({ requests: [asked] }), requests: [{ id: 'r1', state: 'open' }], hold: { onHold: true } });
+  assert.match(result.next, /^Answer each item in live\.requests/);
+
   result = await wait({ ...live(), status: 'summarizing' });
   assert.match(result.next, /result is being written/);
   result = await wait({ id: callId, status: 'completed', live: { cursor: '60' }, result: { outcome: 'achieved', openRequests: [] } });

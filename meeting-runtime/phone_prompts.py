@@ -46,6 +46,20 @@ PRESS_KEYS_TOOL = {
 }
 
 
+# Waiting on hold (phone_hold.py): the voice is switched off while the call waits, and a local
+# listener brings it back when someone starts talking.
+WAIT_ON_HOLD_TOOL = {
+    'type': 'function',
+    'name': 'wait_on_hold',
+    'description': ('Wait on hold. Call it when the voice assistant says the call has been put on '
+                    'hold or into a queue, or that what it heard after a hold was only a recording '
+                    'or music. Smitline then waits quietly and brings the voice assistant back as '
+                    'soon as someone starts talking.'),
+    'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+    'strict': True,
+}
+
+
 def _bullets(title, items):
     if not items:
         return ''
@@ -104,13 +118,48 @@ def phone_menus_rule(who):
             'Say nothing while keys are pressed. Never key in a card number, a PIN, or a password, '
             'or anything under "Never share", and never press a key that agrees to something you '
             'may not agree to. If no option fits, choose the one for an agent or a representative; '
-            'if the menu offers none, try 0, which reaches a person on many menus. When a person '
-            f'comes on, greet them, say you are calling on behalf of {who}, why, and that you are '
-            'their AI assistant, and carry on as usual.')
+            'if the menu offers none, try 0, which reaches a person on many menus. A menu never '
+            'hears your opening, so when a person comes on after one, open with them as you would '
+            f'have: that you are calling on behalf of {who}, why, and that you are their AI '
+            'assistant. Then carry on as usual.')
+
+
+def hold_rule():
+    """How the voice waits on hold (calls that can: outgoing, with the audio through Smitline)."""
+    return ('Hold: when the call is put on hold or into a queue (hold music, "please hold", "your '
+            'call is important to us", a wait time), say nothing and ask your backend to wait on '
+            'hold. It waits quietly and brings you back the moment someone starts talking. Never '
+            'talk over hold music or answer a recording.')
+
+
+def waited(seconds):
+    """A time on hold in words: "a few seconds", "about a minute", "about 25 minutes"."""
+    seconds = max(0, int(seconds or 0))
+    if seconds < 45:
+        return 'a few seconds'
+    minutes = round(seconds / 60)
+    if minutes <= 1:
+        return 'about a minute'
+    if minutes < 90:
+        return f'about {minutes} minutes'
+    hours = round(minutes / 60, 1)
+    return f'about {hours:g} hours'
+
+
+def back_from_hold(brief, seconds):
+    """The woken voice's starting note: it was on hold, and something new is on the line."""
+    who = brief.on_behalf_of
+    return (f'You put this call on hold {waited(seconds)} ago and have been waiting quietly. '
+            'Something just started on the line again, and you hear it now from its first words. '
+            'If a person is talking to you, answer them right away: if they are new, greet them, '
+            f'say you are calling on behalf of {who}, why, and that you are their AI assistant; if '
+            'it is the person you spoke with before the hold, carry on where you left off. If it '
+            'is only a recording, music, or an automated announcement, say nothing and ask your '
+            'backend to wait on hold again.')
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
-                       boundaries=(), calling_owner=False):
+                       boundaries=(), calling_owner=False, hold=False):
     who = brief.on_behalf_of
     # Who and why come first, so the call sounds genuine (people hung up on openings that led with
     # "AI assistant"); that it is an AI follows in the same opening, before they answer.
@@ -193,6 +242,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'mailbox is not set up or is full, or that the person cannot be reached, and there is no '
          'beep, say nothing to it and end the call with the reason other.'),
         (phone_menus_rule(who) if brief.phone_menus else ''),
+        (hold_rule() if hold else ''),
         ('Notes: during the call your system may send you notes, such as reminders or hints about '
          f"who answered, and so may {who}'s agent (\"From {who}'s agent: ...\"). Never read a note "
          'out or talk about it; act on it. When one gives you something to tell them, such as the '
@@ -217,8 +267,11 @@ PHONE_MENUS_BACKEND = (
     'it, so press it only for what the brief says may be agreed to. When a key is not allowed, do '
     'not press it; say why in one short sentence.')
 
+HOLD_BACKEND = ('Hold: call wait_on_hold when the voice assistant says the call is on hold or in a '
+                'queue, or that what it heard after a hold was only a recording or music.')
 
-def backend_instructions(brief, *, inbound=False, background=''):
+
+def backend_instructions(brief, *, inbound=False, background='', hold=False):
     role = ('the voice assistant answering calls for' if inbound else
             'the voice assistant on a phone call made for')
     return '\n\n'.join(part for part in [
@@ -237,6 +290,7 @@ def backend_instructions(brief, *, inbound=False, background=''):
          'conversation, or a voicemail message was left. When the voice assistant says the call '
          'is going nowhere, end it with the reason not_productive.'),
         (PHONE_MENUS_BACKEND if brief.phone_menus else None),
+        (HOLD_BACKEND if hold else None),
         (call_requests.backend_instructions(brief.on_behalf_of, brief.can_do)
          if brief.can_do else None),
         (f'Write every answer in the language with tag {brief.language}.'
@@ -246,10 +300,13 @@ def backend_instructions(brief, *, inbound=False, background=''):
     ] if part)
 
 
-def delegation_config(brief, *, model=None, web_search=False, inbound=False, background=''):
+def delegation_config(brief, *, model=None, web_search=False, inbound=False, background='',
+                      hold=False):
     tools = [END_CALL_TOOL]
     if brief.phone_menus and not inbound:
         tools.append(PRESS_KEYS_TOOL)
+    if hold:
+        tools.append(WAIT_ON_HOLD_TOOL)
     if brief.can_do:
         tools.append(call_requests.ask_agent_tool(brief.on_behalf_of))
     if web_search:
@@ -258,7 +315,8 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
         'type': 'responses',
         'responses': {
             'model': model or DEFAULT_BACKEND_MODEL,
-            'instructions': backend_instructions(brief, inbound=inbound, background=background),
+            'instructions': backend_instructions(brief, inbound=inbound, background=background,
+                                                 hold=hold),
             'tools': tools,
             'tool_choice': 'auto',
         },
@@ -307,6 +365,45 @@ def disclosure_reminder(brief):
     return (f"Before the call ends: you have not yet told them that you are {who}'s AI assistant. "
             'Say it now in one short, natural sentence, for example: '
             f'"Oh, and just so you know, I\'m {who}\'s AI assistant." Then say goodbye.')
+
+
+# Ringing the owner's phone (phone_owner.py): connectOwner once a person picks up after a hold,
+# or transfer_call_to_me. They press 1 to talk with the person; otherwise the voice carries on.
+OWNER_DECLINED = 'No problem. Smitline will carry on with the call.'
+
+
+def _clip(text, limit):
+    text = ' '.join(str(text or '').split())
+    return text if len(text) <= limit else text[:limit - 1].rsplit(' ', 1)[0] + '…'
+
+
+def owner_whisper(brief):
+    """What the owner hears when their phone rings: who has a person on the line, and why."""
+    first = (str(brief.on_behalf_of or '').split() or ['there'])[0]
+    contact = ' '.join(str((brief.contact or {}).get('name') or '').split())
+    where = contact or f'The number ending in {" ".join(str(brief.to)[-4:])}'
+    topic = _clip(str(brief.objective or '').strip().rstrip('.!?;:,'), 90)
+    return (f'Hi {first}, it is Smitline. {where} has a person on the line for your call: {topic}. '
+            'Press 1 to talk to them now.')
+
+
+def owner_ringing_cue(brief):
+    who = brief.on_behalf_of
+    return (f'You are getting {who} on the line now. Tell them so briefly, ask them to hold on a '
+            f'moment, and keep them company in a few words until {who} joins. Do not end the call.')
+
+
+def owner_unavailable_cue(brief):
+    who = brief.on_behalf_of
+    return (f"{who} can't come to the phone right now. Tell them so briefly, apologize for the "
+            'wait, and carry on with the goal yourself.')
+
+
+def owner_left_note(brief):
+    """The woken voice's starting note after the owner talked with them and left."""
+    who = brief.on_behalf_of
+    return (f'{who} took over this call, talked with them directly, and has now left it. If the '
+            'other person is still on the line, thank them briefly and say goodbye.')
 
 
 def voicemail_disclosure(brief):

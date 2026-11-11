@@ -29,7 +29,7 @@ The console serves MCP over Streamable HTTP at `http://127.0.0.1:8095/mcp`, with
 | `send_call_instruction` | Pass new guidance to a call in progress, or with `silent: true` a background note. |
 | `reply_to_call_request` | Answer a [request from the call](#requests-from-the-call): `status` as you work, then `done`. |
 | `end_call` | Wrap up politely, or cancel a call that has not connected. |
-| `transfer_call_to_me` | Hand a connected phone call to `SMITLINE_OWNER_PHONE`. |
+| `transfer_call_to_me` | Ring `SMITLINE_OWNER_PHONE` and connect it to a phone call in progress when the user presses 1; the voice carries on if they don't. |
 | `list_voices` | GPT-Live voices, and the default voices for phone calls and for meetings. |
 | `get_profile`, `update_profile` | Read or update the user's profile: who they are and the people they call. Every phone call gets it as background. `voices` changes the default voice for phone calls or meetings; a call keeps its voice until it ends. |
 | `how_to_smitline` | Information about Smitline itself for the user, by `topic`: `overview` (what it is, who makes it and first things to try, the default), `using`, `following` (letting a call run, or following it live), `pricing`, `account`, `troubleshooting` or `rules`. Self-hosted, pricing and account say that the owner pays their own providers, and account reads this installation's calling hours and limits; a hosted service gives its own plans and the account's numbers. Read-only. |
