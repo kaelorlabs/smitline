@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.12 — 2026-11-10
 
 - **Background noise no longer cuts the voice off on phone calls.** Since 0.1.0 Smitline stopped the voice itself whenever the other person's line got loud: 160 ms of sound paused it and 700 ms dropped the rest of what it was saying. It measured loudness only, so a TV, traffic or people talking near the phone stopped it again and again; recorded calls show up to 44 pauses and 20 dropped replies in one call. GPT-Live tells those apart from someone taking the floor and talks on through them. Now only the model decides: the unheard rest of a reply is dropped once the other person started talking while it was still making speech, it has since made no speech for 0.5 seconds, and it has transcribed words from them. A real interruption now stops the voice about half a second to a second after they start, instead of at once. The local detector still times the opening and the hang-up and tells a quiet line. `usage.audio` drops `pauses`, `backchannels` and `stopDelayMs` and adds `talkedOver`; `interruptionsFollowed` counts the times it stopped for them. See [Phone calls](docs/phone.md).
 
