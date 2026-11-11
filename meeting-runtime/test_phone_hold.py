@@ -617,6 +617,8 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 5)
         done = await self.h.service.wait(record['id'], timeout=5, owner='local')
         self.assertEqual(done['endReason'], 'hold_timeout')
+        # The call's length is its connected time, not the voice's seconds (it was off on hold).
+        self.assertEqual(done['result']['durationSeconds'], done['usage']['phoneSeconds'])
         self.assertEqual(done['result']['outcome'], 'not_reached')
         self.assertEqual(done['result']['summary'],
                          'Nobody picked up after about a minute on hold; Smitline hung up.')
@@ -781,6 +783,10 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 3)
         done = await self.h.service.wait(record['id'], timeout=5, owner='local')
         self.assertGreaterEqual(done['usage']['ownerTalkedSeconds'], 1)
+        # The summary is told that Robin took over, since that talk is not in the transcript.
+        from test_phone import FakeSummarizer
+        self.assertTrue(any(fact.startswith('Robin took over the call and talked with them directly')
+                            for fact in FakeSummarizer.facts), FakeSummarizer.facts)
 
     async def test_the_person_hanging_up_while_the_owner_talks_ends_it_quietly(self):
         class RealisticSocket(FakeTwilioSocket):
@@ -829,6 +835,17 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecordTests(unittest.TestCase):
+    def test_the_summary_hears_about_the_hold_and_the_owner(self):
+        from call_result import phone_facts
+        self.assertEqual(phone_facts({}, 'Robin'), [])
+        self.assertEqual(phone_facts({'holdSeconds': 20}, 'Robin'), [])
+        self.assertEqual(phone_facts({'holdSeconds': 1500, 'ownerTalkedSeconds': 44}, 'Robin'), [
+            'The call waited on hold for about 25 minutes in all.',
+            'Robin took over the call and talked with them directly for about 44 seconds. '
+            'That conversation is not in the transcript.'])
+        self.assertEqual(phone_facts({'holdSeconds': 70}, ''), [
+            'The call waited on hold for about 1 minute in all.'])
+
     def test_the_owners_phone_is_a_second_call_in_the_cost(self):
         record = {'channel': 'phone', 'status': 'completed',
                   'usage': {'phoneSeconds': 120, 'phoneProvider': 'twilio', 'ownerLegSeconds': 90}}

@@ -175,9 +175,11 @@ class FakeJudge:
 
 class FakeSummarizer:
     calls = 0
+    facts = ()  # what the last call's summary was told besides its transcript
 
     async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
         FakeSummarizer.calls += 1
+        FakeSummarizer.facts = tuple(facts)
         return {'outcome': 'achieved', 'summary': 'Booked.', 'details': [], 'decisions': [],
                 'actionItems': [], 'openQuestions': [], 'transcript': transcript,
                 'durationSeconds': duration_seconds, 'source': 'summary_model'}

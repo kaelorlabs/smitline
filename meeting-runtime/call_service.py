@@ -14,7 +14,8 @@ from call_hooks import (
 )
 from call_result import (
     DEFAULT_SUMMARY_MODEL, ResponsesSummarizer, SummaryUnavailable, fallback_result,
-    meeting_facts, result_from_handoff, result_without_conversation, transcript_entries,
+    meeting_facts, phone_facts, result_from_handoff, result_without_conversation,
+    transcript_entries,
 )
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
@@ -1545,7 +1546,10 @@ class CallService:
 
     async def _build_result(self, context, end_reason, usage, handoff):
         record = self.store.get(context.call_id)
-        duration = usage.get('voiceSeconds') or 0
+        # A phone call's length is its connected time: its voice is switched off on hold
+        # (phone_hold.py) and while the owner talks (phone_owner.py), so voiceSeconds can be less.
+        duration = ((usage.get('phoneSeconds') if record['channel'] == 'phone' else None)
+                    or usage.get('voiceSeconds') or 0)
         transcript = transcript_entries(context.transcript)
         if record['channel'] == 'meeting':
             # A meeting is judged from its transcript like a call; the handoff only stands in
@@ -1561,7 +1565,10 @@ class CallService:
                                                  duration_seconds=duration)
             if simple is not None:
                 return simple
-        facts = self._meeting_facts(record, end_reason, handoff) if record['channel'] == 'meeting' else []
+        if record['channel'] == 'meeting':
+            facts = self._meeting_facts(record, end_reason, handoff)
+        else:
+            facts = phone_facts(usage, (record.get('brief') or {}).get('onBehalfOf'))
         try:
             summarizer = self._summarizer_factory(context.owner)
             result = await summarizer.summarize(record['brief'], transcript,
