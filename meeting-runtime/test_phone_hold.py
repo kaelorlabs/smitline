@@ -373,16 +373,29 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events(record, 'call.on_hold')[0]['why'], 'music')
         await self.end(ws, task, record)
 
-    async def test_line_hiss_and_a_short_burst_are_not_hold_music(self):
+    async def test_line_hiss_is_not_hold_music(self):
         from test_barge_in import QUIET
         record, session, ws, live, task = await self.call()
         hiss = base64.b64encode(QUIET).decode()  # about -55 dB: a quiet line, not music
+        with mock.patch.object(phone_hold, 'MUSIC_HOLD_SECONDS', 0.5),                 mock.patch.object(phone_hold, 'VOICE_QUIET_FOR_HOLD', 0.1):
+            session.started_at = time.monotonic() - 5
+            for _ in range(60):  # longer than the stretch music needs
+                ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': hiss}})
+            await until(lambda: session._frames_since_words >= 60)
+            await asyncio.sleep(0.1)
+        self.assertFalse(session.holdbook.on_hold)
+        await self.end(ws, task, record)
+
+    async def test_a_short_burst_after_a_long_quiet_is_not_hold_music(self):
+        # The clock says long since words, but only a moment of the line was heard: a burst of
+        # sound must not pass for a whole stretch of music.
+        record, session, ws, live, task = await self.call()
         loud = base64.b64encode(b'*' * 160).decode()
         with mock.patch.object(phone_hold, 'MUSIC_HOLD_SECONDS', 0.5),                 mock.patch.object(phone_hold, 'VOICE_QUIET_FOR_HOLD', 0.1):
-            session.started_at = time.monotonic() - 5  # long since anything was heard
-            for frame in [hiss] * 40 + [loud] * 10:  # a whole stretch of hiss, then a burst
-                ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': frame}})
-            await until(lambda: session._frames_since_words >= 50)
+            session.started_at = time.monotonic() - 5
+            for _ in range(10):  # 0.2 s of sound
+                ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': loud}})
+            await until(lambda: session._frames_since_words >= 10)
             await asyncio.sleep(0.1)
         self.assertFalse(session.holdbook.on_hold)
         self.assertEqual(self.events(record, 'call.on_hold'), [])
