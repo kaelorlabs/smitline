@@ -178,11 +178,14 @@ class OwnerLegMixin:
                     break
         finally:
             ended = time.monotonic()
+            # The call ending closes the owner's leg too (_end_owner_leg marks it done first).
+            call_over = (leg.get('state') == 'done' or self.stream_ended_at is not None
+                         or self._hanging_up)
             leg['talkedSeconds'] = (leg.get('talkedSeconds') or 0) + max(1, int(ended - leg['connectedAt']))
-            leg.update(state='left', ws=None, connectedAt=None)
+            leg.update(state='done' if call_over else 'left', ws=None, connectedAt=None)
             self.last_activity = ended
             # The owner hung up while the other person may still be there: not the call ending.
-            if self.stream_ended_at is None and not self._hanging_up:
+            if not call_over:
                 self.ctx.event('call.owner_left')
                 self._write_note(f'{who} left the call.')
                 self._wake_owner_left()

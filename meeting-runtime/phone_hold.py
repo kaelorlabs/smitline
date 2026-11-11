@@ -36,12 +36,30 @@ WAKE_GUARD_POLL = 0.5
 # With the voice left on (no listener), what it says this soon after the hold starts ("okay,
 # I'll hold") does not end the hold.
 VOICE_HOLD_SETTLE = 3.0
+# A woken voice that spoke has someone on the line once it has not gone back on hold for this
+# long: it may say "okay" to a recording before its backend calls wait_on_hold again.
+PICKUP_CONFIRM_SECONDS = 8.0
+# A voice started again takes no audio until its session has started; it must start this soon.
+WAKE_START_TIMEOUT = 20.0
+# A voice switched off that does not say it closed within this long is cut off, so it stops
+# billing and can be woken again.
+SLEEP_CLOSE_TIMEOUT = 5.0
 # A woken voice's starting context: room kept for the notes and the note on why it woke.
 RESUME_TOKEN_MARGIN = 400
 
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+async def _cut(live):
+    """Close a voice session's connection without waiting for it to say goodbye."""
+    shutdown = getattr(live, 'shutdown', None)
+    if shutdown is not None:
+        try:
+            await shutdown()
+        except Exception:
+            pass
 
 
 def message(role, text):
@@ -232,6 +250,13 @@ class HoldMixin:
         self._frames.clear()
         self.asleep = True  # from here the line's audio is kept for the voice that wakes
         self._close_reason = reason
+        # What was said so far becomes lines of its own: the next voice starts with them, and its
+        # transcript's timing starts again.
+        for speaker, said in self.joiner.flush():
+            self.ctx.add_transcript(speaker, said)
+            if speaker == 'agent':
+                self._check_disclosure(said)
+        self.joiner.last_end = None
         if self.pacer is not None:
             if reason == 'hold':
                 await self.pacer.speech_finished(timeout=3.0)  # a short "sure" may finish
@@ -242,8 +267,19 @@ class HoldMixin:
         try:
             await live.close()  # session.closed brings its final usage; _run_voice goes on
         except Exception:
-            await live.shutdown()
+            await _cut(live)
+            return True
+        self._spawn(self._closed_or_cut(live))
         return True
+
+    async def _closed_or_cut(self, live):
+        """A session switched off that never says it closed is cut off: it stops billing, and
+        _run_voice can go on to wait for the next wake."""
+        try:
+            await asyncio.wait_for(live.closed.wait(), SLEEP_CLOSE_TIMEOUT)
+        except asyncio.TimeoutError:
+            self._note('voice_cut')
+            await _cut(live)
 
     # While on hold ------------------------------------------------------------------------
 
@@ -300,30 +336,49 @@ class HoldMixin:
         if live is None:
             self._start_hangup('error', disclose=False)
             return False
+        self.live = live  # retired with the call, if it is ending
         if self._hanging_up or self.finished.is_set():
-            self.live = live  # retired with the call
             return False
-        self.live = live
-        while self._frames:  # what was said since, then the line as it comes
+        # Its events are read from here on (_run_voice). It takes no audio until its session has
+        # started, so the line's audio is still kept, and replayed once it has (_replay).
+        self._spawn(self._replay(live, why))
+        return True
+
+    async def _replay(self, live, why):
+        """The woken voice's session has started: give it what was said since just before they
+        started talking, then the line as it comes."""
+        try:
+            await asyncio.wait_for(live.started.wait(), WAKE_START_TIMEOUT)
+        except asyncio.TimeoutError:
+            if self.live is live and not self._hanging_up:
+                self.fail('The voice session did not start again.')
+                self._start_hangup('error', disclose=False)
+            return
+        if self.live is not live or self._hanging_up:
+            return
+        while self._frames:
             await live.send_audio(self._frames.popleft())
-        self.asleep = False
+        self.asleep = False  # in the same step as the last frame: none is lost or out of order
+        self._note('replayed')
         self._publish_hold()
-        for kind, args in self._held_notes:
+        held, self._held_notes = self._held_notes, []
+        for kind, args in held:
             if kind == 'deliver':
                 await self.deliver(args)
             else:
                 await self.instruct(args[0], silent=args[1])
-        self._held_notes = []
         if why == 'person':
-            self._waking = {'at': time.monotonic()}
-            self._spawn(self._wake_guard(self._waking))
-        return True
+            waking = {'at': time.monotonic(), 'spoke_at': None}
+            self._waking = waking
+            self._spawn(self._wake_guard(waking))
 
     async def _wake_guard(self, waking):
         """A woken voice that heard only music says nothing and calls nothing: it goes back to
         waiting once WAKE_GUARD_SECONDS have passed and nothing was said for WAKE_QUIET_SECONDS."""
         while self._waking is waking and not self._hanging_up:
             await asyncio.sleep(WAKE_GUARD_POLL)
+            if waking['spoke_at'] is not None:
+                continue  # it spoke: _confirm_pickup decides
             now = time.monotonic()
             said = max(self._other_spoke_at or 0.0, waking['at'])
             if now - waking['at'] >= WAKE_GUARD_SECONDS and now - said >= WAKE_QUIET_SECONDS:
@@ -333,22 +388,34 @@ class HoldMixin:
                 return
 
     def _voice_spoke_on_hold(self):
-        """The voice made speech while the call was on hold: someone is there, or it thinks so,
-        and the hold is over."""
+        """The voice made speech while the call was on hold. A woken voice has someone there once
+        it does not go back on hold soon after (_confirm_pickup); a voice left on (no listener),
+        once the hold has settled."""
         book = self.holdbook
         if not book.on_hold:
             return
-        if self._waking is not None:
-            self._waking = None
-        elif not (book.mode == 'voice' and book.current() >= VOICE_HOLD_SETTLE):
+        waking = self._waking
+        if waking is not None:
+            if waking['spoke_at'] is None:
+                waking['spoke_at'] = time.monotonic()
+                self._spawn(self._confirm_pickup(waking))
             return
-        self._end_hold('person')
+        if book.mode == 'voice' and book.current() >= VOICE_HOLD_SETTLE:
+            self._end_hold('person')
 
-    def _end_hold(self, by):
+    async def _confirm_pickup(self, waking):
+        """The woken voice spoke. Unless it goes back on hold within PICKUP_CONFIRM_SECONDS (it said
+        "okay" to a recording first), someone is there: the hold ended when it first spoke."""
+        await asyncio.sleep(PICKUP_CONFIRM_SECONDS)
+        if self._waking is waking and not self._hanging_up:
+            self._waking = None
+            self._end_hold('person', at=waking['spoke_at'])
+
+    def _end_hold(self, by, at=None):
         book = self.holdbook
         if not book.on_hold:
             return
-        seconds = book.end()
+        seconds = book.end(at)
         self.ctx.event('call.hold_ended', seconds=int(seconds), by=by)
         if by == 'person':
             self._write_note(f'Someone picked up after {waited(seconds)} on hold.')

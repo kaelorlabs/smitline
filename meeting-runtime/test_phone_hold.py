@@ -43,6 +43,25 @@ def parsed(**overrides):
     return CallBrief.from_dict(brief(**overrides))
 
 
+class StrictLive(FakeLive):
+    """Like GPT-Live: no audio before session.started (send_audio drops it), and the session starts
+    by itself once the socket is open. test_phone.FakeLive takes audio at any time."""
+    dropped = 0
+
+    async def __aenter__(self):
+        self.push({'type': 'session.started', 'session': {}})
+        return self
+
+    async def send_audio(self, audio):
+        if not self.started.is_set():
+            StrictLive.dropped += 1
+            return False
+        return await super().send_audio(audio)
+
+    async def shutdown(self):
+        self.push({'type': 'drop'})
+
+
 class Wake:
     def __init__(self, onset_ms_ago, speech_ms=800):
         self.onset_ms_ago = onset_ms_ago
@@ -206,6 +225,11 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         self.h = PhoneHarness(self.temp.name)
         self.listener = FakeListener()
         self.h.line.hold_listener_factory = lambda environ: self.listener
+        self.h.line.live_factory = StrictLive
+        StrictLive.dropped = 0
+        confirm = mock.patch.object(phone_hold, 'PICKUP_CONFIRM_SECONDS', 0.2)
+        confirm.start()
+        self.addCleanup(confirm.stop)
 
     async def asyncTearDown(self):
         await self.h.service.shutdown()
@@ -214,7 +238,7 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
     async def call(self, **overrides):
         record, session = await self.h.dial(**overrides)
         ws, live, task = await self.h.connect(record, session)
-        live.push({'type': 'session.started', 'session': {}})
+        await until(lambda: live.started.is_set())
         return record, session, ws, live, task
 
     async def hold(self, session, live, call_id='fc-hold'):
@@ -282,7 +306,9 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         await self.hold(session, live)
         woken, payloads = await self.wake(session, ws, frames=30, onset_ms_ago=200)
         # From 300 ms before they started (200 ms ago): the last 25 frames, then the line live.
+        # GPT-Live takes no audio before its session started: none of it was lost waiting.
         self.assertEqual(woken.audio, payloads[5:])
+        self.assertEqual(StrictLive.dropped, 0)
         later = [payload(100 + index) for index in range(5)]
         self.frames(ws, later)
         await until(lambda: len(woken.audio) == 30)
@@ -322,6 +348,78 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(FakeLive.instances), 3)
         self.assertEqual(session.holdbook.wakes, 2)
         await self.end(ws, task, record)
+
+    async def test_okay_to_a_recording_then_back_on_hold_is_not_a_pickup(self):
+        self.h.env['SMITLINE_OWNER_PHONE'] = OWNER_PHONE
+        record, session, ws, live, task = await self.call(connectOwner=True)
+        await self.hold(session, live)
+        woken, _payloads = await self.wake(session, ws)
+        woken.push({'type': 'session.output_audio.delta', 'delta': SPEECH})  # "okay"
+        await until(lambda: session._waking and session._waking['spoke_at'] is not None)
+        woken.push(tool_call('wait_on_hold', 'fc-hold-2'))
+        await until(lambda: woken.close_requested and session.asleep and session.live is None)
+        await asyncio.sleep(0.4)  # longer than the pickup takes to be sure
+        self.assertTrue(session.holdbook.on_hold)
+        self.assertEqual(self.listener.remembered, 1)
+        self.assertEqual(self.events(record, 'call.hold_ended'), [])
+        self.assertFalse(any(line['text'].startswith('Someone picked up')
+                             for line in session.ctx.transcript))
+        self.assertEqual([c for c in self.h.twilio.created if c['to'] == OWNER_PHONE], [])
+        await self.end(ws, task, record)
+
+    async def test_a_pickup_counts_from_when_the_voice_first_spoke(self):
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        woken, _payloads = await self.wake(session, ws)
+        woken.push({'type': 'session.output_audio.delta', 'delta': SPEECH})
+        await until(lambda: session._waking and session._waking['spoke_at'] is not None)
+        spoke = session._waking['spoke_at']
+        self.assertTrue(session.holdbook.on_hold)  # not yet: it may still go back on hold
+        await until(lambda: not session.holdbook.on_hold)
+        on_hold = session.holdbook.ended_seconds
+        self.assertLess(abs((spoke - session.holdbook.clock()) + 0.2 + on_hold - on_hold), 1)
+        self.assertEqual(self.events(record, 'call.hold_ended')[0]['by'], 'person')
+        await self.end(ws, task, record)
+
+    async def test_a_voice_that_never_says_it_closed_is_cut_off(self):
+        class Mute(StrictLive):
+            async def close(self):
+                if self is not FakeLive.instances[0]:
+                    return await super().close()
+                self.close_requested = True  # the first one: no session.closed ever comes
+
+        self.h.line.live_factory = Mute
+        record, session, ws, live, task = await self.call()
+        with mock.patch.object(phone_hold, 'SLEEP_CLOSE_TIMEOUT', 0.2):
+            live.push(tool_call('wait_on_hold'))
+            await until(lambda: session.asleep and session.live is None)
+        self.assertTrue(live.close_requested)
+        self.assertIsNone(session.end_reason)
+        self.assertIsNone(session.error_detail)
+        woken, _payloads = await self.wake(session, ws)  # and it still wakes
+        self.assertIsNot(woken, live)
+        await self.end(ws, task, record)
+
+    async def test_lines_do_not_run_across_a_sleep(self):
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        woken, _payloads = await self.wake(session, ws)
+        woken.push({'type': 'session.input_transcript.delta', 'delta': 'Your call is important to us.',
+                    'start_ms': 0, 'end_ms': 2000})
+        await until(lambda: session.joiner.parts)
+        woken.push(tool_call('wait_on_hold', 'fc-hold-2'))
+        await until(lambda: session.asleep and session.live is None)
+        self.assertIn({'speaker': 'other', 'text': 'Your call is important to us.'},
+                      session.ctx.transcript)
+        again, _payloads = await self.wake(session, ws, frames=5)
+        start = json.dumps(again.config['input'])
+        self.assertIn('Your call is important to us.', start)
+        again.push({'type': 'session.input_transcript.delta', 'delta': 'Hi, this is Dana.',
+                    'start_ms': 0, 'end_ms': 900})
+        await until(lambda: session.joiner.parts)
+        done = await self.end(ws, task, record)
+        others = [line['text'] for line in done['result']['transcript'] if line['speaker'] == 'other']
+        self.assertEqual(others, ['Your call is important to us.', 'Hi, this is Dana.'])
 
     async def test_a_woken_voice_that_hears_only_music_goes_back_to_waiting(self):
         record, session, ws, live, task = await self.call()
@@ -429,6 +527,10 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         self.h.env['SMITLINE_OWNER_PHONE'] = OWNER_PHONE
         self.listener = FakeListener()
         self.h.line.hold_listener_factory = lambda environ: self.listener
+        self.h.line.live_factory = StrictLive
+        confirm = mock.patch.object(phone_hold, 'PICKUP_CONFIRM_SECONDS', 0.2)
+        confirm.start()
+        self.addCleanup(confirm.stop)
 
     async def asyncTearDown(self):
         await self.h.service.shutdown()
@@ -437,7 +539,7 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
     async def call(self, **overrides):
         record, session = await self.h.dial(**overrides)
         ws, live, task = await self.h.connect(record, session)
-        live.push({'type': 'session.started', 'session': {}})
+        await until(lambda: live.started.is_set())
         return record, session, ws, live, task
 
     def events(self, record, kind):
@@ -503,6 +605,27 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 3)
         done = await self.h.service.wait(record['id'], timeout=5, owner='local')
         self.assertGreaterEqual(done['usage']['ownerTalkedSeconds'], 1)
+
+    async def test_the_person_hanging_up_while_the_owner_talks_ends_it_quietly(self):
+        class RealisticSocket(FakeTwilioSocket):
+            async def close(self, **kwargs):
+                await super().close(**kwargs)
+                await asyncio.sleep(0.05)  # a real socket's close takes a moment: others run
+
+        record, session, ws, live, task = await self.call()
+        await self.h.service.transfer(record['id'], owner='local')
+        self.h.line.owner_answer(record['id'], {'Digits': '1'}, PUBLIC)
+        owner_ws = RealisticSocket()
+        owner_task = asyncio.create_task(session.run_owner_leg(owner_ws, {'streamSid': 'MZ9'}))
+        await until(lambda: session._owner_on_line() and session.live is None)
+        ws.push({'event': 'stop'})  # the person hangs up
+        await asyncio.wait_for(task, 3)
+        await asyncio.wait_for(owner_task, 3)
+        self.assertTrue(owner_ws.closed)
+        self.assertEqual(self.events(record, 'call.owner_left'), [])
+        self.assertNotIn({'speaker': 'note', 'text': 'Robin left the call.'}, session.ctx.transcript)
+        self.assertEqual(len(FakeLive.instances), 1)  # no voice woken to see them off
+        self.assertEqual(session.owner_leg['state'], 'done')
 
     async def test_any_other_key_and_the_voice_carries_on(self):
         record, session, ws, live, task = await self.call()
