@@ -157,6 +157,22 @@ class FakeTwilioSocket:
         return item
 
 
+class FakeJudge:
+    """The hold judge (hold_judge.py) without the Decisions API: answers what a test scripts in
+    kinds (a kind, sure, or a (kind, confidence) pair), else other."""
+    model = 'fake-judge'
+
+    def __init__(self):
+        self.kinds = []
+        self.asked = []
+        self.tokens = {'input': 0, 'cached': 0, 'output': 0}
+
+    async def decide(self, earlier, latest):
+        self.asked.append(latest)
+        answer = self.kinds.pop(0) if self.kinds else 'other'
+        return answer if isinstance(answer, tuple) else (answer, 0.95)
+
+
 class FakeSummarizer:
     calls = 0
 
@@ -192,9 +208,11 @@ class PhoneHarness:
         async def public_url():
             await self.url_ready.wait()
             return PUBLIC
+        self.judge = FakeJudge()
         self.line = PhoneLine(public_url=public_url, environ=lambda: self.env,
                               twilio_factory=lambda creds: self.twilio,
-                              live_factory=FakeLive, status_grace=0.2)
+                              live_factory=FakeLive, status_grace=0.2,
+                              hold_judge_factory=lambda key, model: self.judge)
         self.service = CallService(self.store, hooks=self.hooks, lines={'phone': self.line},
                                    summarizer_factory=lambda owner: FakeSummarizer(), environ={},
                                    shutdown_grace=0.2)

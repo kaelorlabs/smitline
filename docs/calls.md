@@ -153,7 +153,7 @@ Every finished call carries `cost`, in US dollars:
     { "kind": "voice", "model": "gpt-live-1", "seconds": 30, "amount": 0.025, "source": "list_price" },
     { "kind": "summary", "model": "gpt-5.6-luna", "input": 478, "output": 316, "amount": 0.000475, "source": "list_price" }
   ],
-  "pricesAsOf": "2026-10-06"
+  "pricesAsOf": "2026-11-11"
 }
 ```
 

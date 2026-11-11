@@ -44,6 +44,17 @@ WAKE_START_TIMEOUT = 20.0
 # A voice switched off that does not say it closed within this long is cut off, so it stops
 # billing and can be woken again.
 SLEEP_CLOSE_TIMEOUT = 5.0
+# The other side's words are judged (hold_judge.py) once they have stopped for this long.
+JUDGE_QUIET = 1.0
+# Sound on the line with no words for this long, while the voice has said nothing for
+# VOICE_QUIET_FOR_HOLD, is hold music: the call goes on hold. Of the line's frames since its last
+# words, at least MUSIC_SHARE must have been sound (louder than MUSIC_LEVEL_DB) rather than
+# silence. Plain loudness, not barge_in's detector: that one adapts to steady sound and counted
+# only 56% of the test hold music as sound; every frame of it is louder than -45 dB.
+MUSIC_HOLD_SECONDS = 10.0
+VOICE_QUIET_FOR_HOLD = 6.0
+MUSIC_SHARE = 0.6
+MUSIC_LEVEL_DB = -45.0
 # A woken voice's starting context: room kept for the notes and the note on why it woke.
 RESUME_TOKEN_MARGIN = 400
 
@@ -147,6 +158,15 @@ class HoldMixin:
         self._wake_ready = asyncio.Event()
         self._wake_why = None       # (why, Wake or None): what the sleeping voice wakes for
         self._held_notes = []       # notes for the voice that came while it was off
+        # What is talking on the line (hold_judge.py), and the sound with no words (hold music).
+        self._judge = None
+        self._judge_off = False
+        self._unjudged = ''
+        self._judge_timer = None
+        self._words_at = None
+        self._frames_since_words = 0
+        self._loud_since_words = 0
+        self._music_hold = None
 
     def can_hold(self):
         return self.hold_possible and not self.inbound
@@ -218,22 +238,125 @@ class HoldMixin:
         if self.holdbook.on_hold:
             await self._hold_tool_output(call, {'ok': True, 'waiting': True})
             return
+        await self._start_hold('voice', call=call)
+
+    async def _start_hold(self, by, *, why=None, call=None):
+        """The call is on hold: the voice's backend said so ('voice'), or the line did ('line':
+        its words, judged, or hold music)."""
         listener = await self._hold_listener()
-        if self._hanging_up or self.finished.is_set():
+        if self._hanging_up or self.finished.is_set() or self.holdbook.on_hold or self.asleep:
             return
         self.holdbook.start('listener' if listener is not None else 'voice')
         self._unanswered = 0  # what went unanswered before the hold says nothing about after it
         self._write_note('On hold.')
-        self.ctx.event('call.on_hold', times=self.holdbook.times,
-                       detector=listener.name if listener is not None else None)
+        self.ctx.event('call.on_hold', times=self.holdbook.times, by=by,
+                       detector=listener.name if listener is not None else None,
+                       **({'why': why} if why else {}))
         self._publish_hold()
         if listener is None:
             # Nothing to listen with here: the voice stays on and waits quietly.
-            await self._hold_tool_output(call, {
-                'ok': True, 'waiting': True,
-                'note': 'Wait quietly. Answer as soon as a person talks to you.'})
+            note = 'Wait quietly. Answer as soon as a person talks to you.'
+            if call is not None:
+                await self._hold_tool_output(call, {'ok': True, 'waiting': True, 'note': note})
+            elif self.live is not None:
+                await self.live.append('session.instructions.append',
+                                       f'The call is on hold. {note}')
             return
         await self._go_to_sleep('hold')
+
+    # What is talking on the line ------------------------------------------------------------
+
+    def _hold_judge(self):
+        """The judge of the other side's words (hold_judge.py); None when it is turned off."""
+        if self._judge is None and not self._judge_off:
+            environ = self.line.environ()
+            model = str(environ.get('SMITLINE_HOLD_JUDGE_MODEL') or '').strip()
+            if model.lower() == 'off':
+                self._judge_off = True
+                return None
+            factory = getattr(self.line, 'hold_judge_factory', None)
+            if factory is not None:
+                self._judge = factory(self.api_key, model or None)
+            else:
+                from hold_judge import HoldJudge
+                self._judge = HoldJudge(self.api_key, model=model or None)
+        return self._judge
+
+    def _heard_words(self, delta, now):
+        """The other side said something (GPT-Live's transcript): judged once they pause."""
+        self._words_at = now
+        self._frames_since_words = self._loud_since_words = 0
+        if not self.can_hold() or self._hanging_up or self.asleep:
+            return
+        if self.holdbook.on_hold and self._waking is None:
+            return  # the voice was left on to wait: it answers whoever talks
+        self._unjudged += delta
+        if self._judge_timer is not None and not self._judge_timer.done():
+            self._judge_timer.cancel()
+        self._judge_timer = self._spawn(self._judge_after_quiet())
+
+    async def _judge_after_quiet(self):
+        await asyncio.sleep(JUDGE_QUIET)
+        text, self._unjudged = ' '.join(self._unjudged.split()), ''
+        if len(text.split()) < 2 or self._hanging_up:
+            return
+        judge = self._hold_judge()
+        if judge is None:
+            return
+        waking = self._waking
+        earlier = [(entry.get('speaker'), entry.get('text')) for entry in self.ctx.transcript[-12:]
+                   if entry.get('speaker') in ('agent', 'other')]
+        from hold_judge import sure
+        found, confidence = await judge.decide(earlier, text)
+        self.ctx.event('call.line_judged', kind=found or 'unknown', confidence=round(confidence, 2),
+                       waking=waking is not None)
+        kind = sure(found, confidence)  # unsure: the free signals and timers decide instead
+        if self._hanging_up or self.finished.is_set():
+            return
+        if waking is not None:
+            # The voice was woken: what it heard is someone picking up, or the hold loop again.
+            if self._waking is not waking:
+                return
+            if kind == 'person':
+                self._waking = None
+                self._end_hold('person', at=waking['at'])
+            elif kind in ('hold', 'menu'):
+                if self._listener is not None:
+                    self._listener.remember_recording()
+                self.ctx.event('call.hold_rewait', why='recording')
+                await self._go_to_sleep('hold')
+            return
+        if kind == 'hold' and not self.holdbook.on_hold and not self.asleep and self.live is not None:
+            await self._start_hold('line', why='words')
+
+    def _line_sound(self, loud, now):
+        """Each 20 ms of the line while the call is not on hold: sound with no words for a while,
+        and the voice quiet, is hold music."""
+        if (not self.can_hold() or self.holdbook.on_hold or self.asleep or self._hanging_up
+                or self.keying or self.voicemail_heard or self.started_at is None):
+            return
+        self._frames_since_words += 1
+        if loud:
+            self._loud_since_words += 1
+        since_words = now - (self._words_at or self.started_at)
+        voice_quiet = now - (self._speech_out_at or self.started_at)
+        # The line must have been heard for the whole stretch (frames, not just the clock), so a
+        # short burst of sound cannot pass for minutes of music.
+        heard = self._frames_since_words * FRAME_MS / 1000
+        if (since_words >= MUSIC_HOLD_SECONDS and heard >= 0.9 * MUSIC_HOLD_SECONDS
+                and voice_quiet >= VOICE_QUIET_FOR_HOLD
+                and self._loud_since_words >= MUSIC_SHARE * self._frames_since_words
+                and (self._music_hold is None or self._music_hold.done())):
+            self._music_hold = self._spawn(self._start_hold('line', why='music'))
+
+    def judge_usage(self):
+        """The judge's tokens for the call's usage, when it was asked anything."""
+        judge = self._judge
+        if judge is None or not any(judge.tokens.values()):
+            return {}
+        return {'holdJudgeTokens': {key: value for key, value in judge.tokens.items()
+                                    if value or key in ('input', 'output')},
+                'holdJudgeModel': judge.model}
 
     async def _hold_tool_output(self, call, output):
         if self.live is not None:

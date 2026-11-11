@@ -125,11 +125,17 @@ def phone_menus_rule(who):
 
 
 def hold_rule():
-    """How the voice waits on hold (calls that can: outgoing, with the audio through Smitline)."""
-    return ('Hold: when the call is put on hold or into a queue (hold music, "please hold", "your '
-            'call is important to us", a wait time), say nothing and ask your backend to wait on '
-            'hold. It waits quietly and brings you back the moment someone starts talking. Never '
-            'talk over hold music or answer a recording.')
+    """How the voice waits on hold (calls that can: outgoing, with the audio through Smitline).
+
+    In simulated calls the voice stayed silent through a whole queue without asking its backend:
+    like keys, it must be told plainly that only its backend can put the call on hold."""
+    return ('Hold: you cannot wait on hold by yourself. Staying quiet keeps you on the line and '
+            'costs money every second, and only your backend can put the call on hold: it waits '
+            'quietly for you and brings you back the moment someone starts talking. As soon as you '
+            'hear that the call is on hold or in a queue (hold music, "please hold", "all of our '
+            'representatives are busy", "your call is important to us", a wait time), hand it to '
+            'your backend right away, saying the call is on hold. Say nothing to a hold queue: do '
+            'not greet it, introduce yourself, or answer a recording.')
 
 
 def waited(seconds):
@@ -154,8 +160,9 @@ def back_from_hold(brief, seconds):
             'If a person is talking to you, answer them right away: if they are new, greet them, '
             f'say you are calling on behalf of {who}, why, and that you are their AI assistant; if '
             'it is the person you spoke with before the hold, carry on where you left off. If it '
-            'is only a recording, music, or an automated announcement, say nothing and ask your '
-            'backend to wait on hold again.')
+            'is only a recording, music, or an automated announcement, say nothing to it and hand '
+            'it to your backend right away, saying the call is still on hold: only your backend '
+            'can put you back on hold.')
 
 
 def voice_instructions(brief, *, inbound=False, recording=False, contact=None, has_notes=False,
@@ -323,7 +330,8 @@ def delegation_config(brief, *, model=None, web_search=False, inbound=False, bac
     }
 
 
-def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_owner=False):
+def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_owner=False,
+                hold=False):
     """Spoken-content prompt sent once the line is live; GPT-Live paraphrases commentary."""
     who = brief.on_behalf_of
     if calling_owner:
@@ -344,7 +352,9 @@ def opening_cue(brief, *, inbound=False, name=None, recording=False, calling_own
             f'{disclosure_line(brief)}.", then stop and wait for them to answer. If an automated '
             'assistant or voicemail greeting is still talking, let it finish first.'
             + (' If it is an automated phone menu, do not say hello: listen to its options.'
-               if brief.phone_menus else ''))
+               if brief.phone_menus else '')
+            + (' If it is a recording saying the call is on hold or in a queue, do not say hello: '
+               'hand the hold to your backend.' if hold else ''))
 
 
 def machine_hint(brief):

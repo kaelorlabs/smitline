@@ -23,7 +23,7 @@ from meeting_lifecycle import (
 )
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
-from phone_hold import HoldMixin, resume_input
+from phone_hold import MUSIC_LEVEL_DB, HoldMixin, resume_input
 from phone_keys import KEY_GAP_SECONDS, PAUSE, PAUSE_SECONDS, key_payload, menu_keys, shown_keys
 from phone_owner import OWNER_MAX_MINUTES, OwnerLegMixin
 from phone_prompts import (
@@ -889,6 +889,7 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
         change = self.detector.feed(frame, playing=self.pacer.playing())
         if self.detector.speaking:
             self.last_activity = now
+        self._line_sound(frame_level_db(frame) > MUSIC_LEVEL_DB, now)  # hold music? (phone_hold.py)
         if change:
             self._note('vad_' + change)
         if change == 'end':
@@ -1110,6 +1111,7 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
+            self._heard_words(delta, now)  # a hold queue or a person? (phone_hold.py)
         if source == 'agent':
             self._agent_said += delta
             self._agent_turn += delta
@@ -1268,7 +1270,7 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
         await live.append('session.commentary.append',
                           opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
                                       recording=self.recording,
-                                      calling_owner=self.calling_owner))
+                                      calling_owner=self.calling_owner, hold=self.can_hold()))
         self._note('opening_cue')
         await asyncio.Event().wait()
 
@@ -1827,15 +1829,18 @@ class PhoneLine:
 
     def __init__(self, *, public_url, environ, twilio_factory=None, live_factory=None,
                  status_grace=5.0, public_available=None, connect_timeout=CONNECT_TIMEOUT,
-                 sip_client_factory=None, sideband_factory=None, hold_listener_factory=None):
+                 sip_client_factory=None, sideband_factory=None, hold_listener_factory=None,
+                 hold_judge_factory=None):
         """public_url: async callable returning the https base URL Twilio can reach.
         hold_listener_factory(environ): the listener a call on hold uses (default
-        hold_listener.HoldListener.create; phone_hold.py)."""
+        hold_listener.HoldListener.create); hold_judge_factory(api_key, model): what tells a hold
+        queue or a person from the line's words (default hold_judge.HoldJudge). See phone_hold.py."""
         self._public_url = public_url
         self._public_available = public_available
         self.environ = environ
         self.twilio_factory = twilio_factory or client_for
         self.hold_listener_factory = hold_listener_factory
+        self.hold_judge_factory = hold_judge_factory
         self.live_factory = live_factory or (lambda key, config: LiveSession(key, config))
         self.sip_client_factory = sip_client_factory or (lambda key: LiveSipClient(key))
         self.sideband_factory = sideband_factory or (lambda key, session_id: LiveSideband(key, session_id))
@@ -2213,6 +2218,7 @@ class PhoneLine:
         if session.holdbook.times:
             usage['holdSeconds'] = int(session.holdbook.seconds())
         usage.update(session.owner_usage())
+        usage.update(session.judge_usage())
         if any(session.backend_tokens.values()):
             usage['backendTokens'] = {key: value for key, value in session.backend_tokens.items()
                                       if value or key in ('input', 'output')}

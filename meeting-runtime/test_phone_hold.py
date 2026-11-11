@@ -103,6 +103,52 @@ class FakeListener:
         self.remembered += 1
 
 
+class JudgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_it_asks_the_decisions_api_with_the_call_so_far_and_counts_its_tokens(self):
+        from hold_judge import DECISIONS_URL, HOLD_JUDGE_MODEL, HoldJudge
+        seen = []
+
+        async def post(payload):
+            seen.append(payload)
+            return {'answers': [{'type': 'choice', 'name': 'line', 'choice': 'hold',
+                                 'confidence': 0.97,
+                                 'probabilities': [{'value': 'hold', 'probability': 0.97}]}],
+                    'usage': {'input_tokens': 232, 'output_tokens': 0,
+                              'input_tokens_details': {'cached_tokens': 100}}}
+        judge = HoldJudge('key', post=post)
+        decided = await judge.decide([('other', 'Northwind Telecom.'), ('agent', 'Hi, calling for Robin.')],
+                                     'All of our representatives are busy.')
+        self.assertEqual(decided, ('hold', 0.97))
+        self.assertEqual((judge.model, DECISIONS_URL),
+                         ('gpt-6-luna', 'https://api.openai.com/v1/decisions'))
+        self.assertEqual(HOLD_JUDGE_MODEL, 'gpt-6-luna')
+        request = seen[0]
+        self.assertEqual(request['model'], 'gpt-6-luna')
+        self.assertIn('Line: Northwind Telecom.', request['input'])
+        self.assertIn('Assistant: Hi, calling for Robin.', request['input'])
+        self.assertTrue(request['input'].endswith('All of our representatives are busy.'))
+        question = request['questions'][0]
+        self.assertEqual((question['type'], question['name']), ('choice', 'line'))
+        self.assertEqual([choice['value'] for choice in question['choices']],
+                         ['person', 'hold', 'menu', 'other'])
+        self.assertIn('in any language', question['instructions'])
+        self.assertEqual(judge.tokens, {'input': 232, 'cached': 100, 'output': 0})
+
+    async def test_when_unsure_or_unreachable_it_says_nothing(self):
+        from hold_judge import HoldJudge, sure
+
+        async def failing(payload):
+            raise RuntimeError('down')
+
+        async def odd(payload):
+            return {'answers': [{'name': 'line', 'choice': 'robot', 'confidence': 0.99}]}
+        self.assertEqual(await HoldJudge('key', post=failing).decide([], 'Hello?'), (None, 0.0))
+        self.assertEqual(await HoldJudge('key', post=odd).decide([], 'Hello?'), (None, 0.0))
+        self.assertEqual(sure('hold', 0.97), 'hold')
+        self.assertIsNone(sure('hold', 0.55))
+        self.assertIsNone(sure(None, 0.99))
+
+
 class BriefTests(unittest.TestCase):
     def test_max_hold_minutes(self):
         self.assertIsNone(parsed().max_hold_minutes)
@@ -142,8 +188,17 @@ class PromptTests(unittest.TestCase):
         self.assertNotIn('wait_on_hold', [tool['name'] for tool in
                                           delegation_config(call)['responses']['tools']])
         self.assertTrue(WAIT_ON_HOLD_TOOL['strict'])
-        self.assertIn('Hold: when the call is put on hold', voice_instructions(call, hold=True))
+        text = voice_instructions(call, hold=True)
+        # In simulated calls the voice sat through a whole queue without asking its backend until
+        # it was told plainly, as with keys, that only its backend can put the call on hold.
+        self.assertIn('Hold: you cannot wait on hold by yourself.', text)
+        self.assertIn('only your backend can put the call on hold', text)
+        self.assertIn('hand it to your backend right away, saying the call is on hold', text)
+        self.assertIn('Say nothing to a hold queue', text)
         self.assertNotIn('Hold:', voice_instructions(call))
+        from phone_prompts import opening_cue
+        self.assertIn('do not say hello: hand the hold to your backend', opening_cue(call, hold=True))
+        self.assertNotIn('hold', opening_cue(call))
         self.assertIn('call wait_on_hold when', backend_instructions(call, hold=True))
         self.assertNotIn('wait_on_hold', backend_instructions(call))
 
@@ -167,7 +222,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn('on hold about 12 minutes ago', note)
         self.assertIn('If a person is talking to you, answer them right away', note)
         self.assertIn('the person you spoke with before the hold, carry on', note)
-        self.assertIn('ask your backend to wait on hold again', note)
+        self.assertIn('hand it to your backend right away, saying the call is still on hold', note)
 
 
 class ResumeInputTests(unittest.TestCase):
@@ -270,8 +325,128 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         record, session, ws, live, task = await self.call()
         tools = [tool['name'] for tool in live.config['delegation']['responses']['tools']]
         self.assertIn('wait_on_hold', tools)
-        self.assertIn('Hold: when the call is put on hold', live.config['instructions'])
+        self.assertIn('Hold: you cannot wait on hold by yourself.', live.config['instructions'])
         await self.end(ws, task, record)
+
+    async def test_a_queue_saying_so_puts_the_call_on_hold(self):
+        # In simulated calls GPT-Live never asked to wait on hold: the line's words decide.
+        record, session, ws, live, task = await self.call()
+        self.h.judge.kinds = ['hold']
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05):
+            live.push({'type': 'session.input_transcript.delta',
+                       'delta': 'All of our representatives are busy helping other customers.'})
+            await until(lambda: session.asleep and session.live is None)
+        self.assertEqual(self.h.judge.asked, ['All of our representatives are busy helping other customers.'])
+        self.assertEqual(self.events(record, 'call.on_hold'),
+                         [{'times': 1, 'by': 'line', 'detector': 'fake', 'why': 'words'}])
+        self.assertEqual(self.events(record, 'call.line_judged'),
+                         [{'kind': 'hold', 'confidence': 0.95, 'waking': False}])
+        self.assertTrue(live.close_requested)
+        await self.end(ws, task, record)
+
+    async def test_a_menu_or_a_person_talking_is_not_a_hold(self):
+        record, session, ws, live, task = await self.call()
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05):
+            for kind, words in (('menu', 'For billing, press two.'),
+                                ('person', 'Hi, this is Dana, how can I help?'),
+                                ('other', 'Hmm okay.')):
+                self.h.judge.kinds = [kind]
+                live.push({'type': 'session.input_transcript.delta', 'delta': words})
+                await until(lambda: self.h.judge.asked and self.h.judge.asked[-1] == words)
+                await asyncio.sleep(0.05)
+        self.assertFalse(session.holdbook.on_hold)
+        self.assertFalse(live.close_requested)
+        await self.end(ws, task, record)
+
+    async def test_hold_music_puts_the_call_on_hold(self):
+        record, session, ws, live, task = await self.call()
+        loud = base64.b64encode(b'\x2a' * 160).decode()
+        with mock.patch.object(phone_hold, 'MUSIC_HOLD_SECONDS', 0.5), \
+                mock.patch.object(phone_hold, 'VOICE_QUIET_FOR_HOLD', 0.1):
+            session.started_at = time.monotonic()
+            for _ in range(60):
+                ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': loud}})
+                await asyncio.sleep(0.02)
+                if session.asleep:
+                    break
+            await until(lambda: session.asleep and session.live is None)
+        self.assertEqual(self.events(record, 'call.on_hold')[0]['why'], 'music')
+        await self.end(ws, task, record)
+
+    async def test_line_hiss_and_a_short_burst_are_not_hold_music(self):
+        from test_barge_in import QUIET
+        record, session, ws, live, task = await self.call()
+        hiss = base64.b64encode(QUIET).decode()  # about -55 dB: a quiet line, not music
+        loud = base64.b64encode(b'*' * 160).decode()
+        with mock.patch.object(phone_hold, 'MUSIC_HOLD_SECONDS', 0.5),                 mock.patch.object(phone_hold, 'VOICE_QUIET_FOR_HOLD', 0.1):
+            session.started_at = time.monotonic() - 5  # long since anything was heard
+            for frame in [hiss] * 40 + [loud] * 10:  # a whole stretch of hiss, then a burst
+                ws.push({'event': 'media', 'media': {'track': 'inbound', 'payload': frame}})
+            await until(lambda: session._frames_since_words >= 50)
+            await asyncio.sleep(0.1)
+        self.assertFalse(session.holdbook.on_hold)
+        self.assertEqual(self.events(record, 'call.on_hold'), [])
+        await self.end(ws, task, record)
+
+    async def test_after_a_wake_the_judge_tells_a_person_from_the_hold_loop(self):
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05), \
+                mock.patch.object(phone_hold, 'PICKUP_CONFIRM_SECONDS', 30):
+            # The loop's next announcement: back to waiting, and remembered.
+            woken, _payloads = await self.wake(session, ws)
+            self.h.judge.kinds = ['hold']
+            woken.push({'type': 'session.input_transcript.delta',
+                        'delta': 'Your call is important to us.'})
+            await until(lambda: woken.close_requested and session.asleep and session.live is None)
+            self.assertEqual(self.listener.remembered, 1)
+            self.assertTrue(session.holdbook.on_hold)
+            # Someone picking up: the hold is over at once, without waiting to be sure.
+            again, _payloads = await self.wake(session, ws, frames=5)
+            self.h.judge.kinds = ['person']
+            again.push({'type': 'session.input_transcript.delta',
+                        'delta': 'Thanks for holding, this is Dana.'})
+            await until(lambda: not session.holdbook.on_hold)
+        self.assertEqual(self.events(record, 'call.hold_ended')[0]['by'], 'person')
+        self.assertEqual([e['kind'] for e in self.events(record, 'call.line_judged')], ['hold', 'person'])
+        await self.end(ws, task, record)
+
+    async def test_an_unsure_answer_changes_nothing(self):
+        record, session, ws, live, task = await self.call()
+        self.h.judge.kinds = [('hold', 0.55)]
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05):
+            live.push({'type': 'session.input_transcript.delta', 'delta': 'Please wait a moment.'})
+            await until(lambda: self.events(record, 'call.line_judged'))
+            await asyncio.sleep(0.1)
+        self.assertEqual(self.events(record, 'call.line_judged'),
+                         [{'kind': 'hold', 'confidence': 0.55, 'waking': False}])
+        self.assertFalse(session.holdbook.on_hold)
+        self.assertFalse(live.close_requested)
+        await self.end(ws, task, record)
+
+    async def test_the_judge_can_be_turned_off(self):
+        self.h.env['SMITLINE_HOLD_JUDGE_MODEL'] = 'off'
+        record, session, ws, live, task = await self.call()
+        self.h.judge.kinds = ['hold']
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05):
+            live.push({'type': 'session.input_transcript.delta', 'delta': 'Please stay on the line.'})
+            await asyncio.sleep(0.3)
+        self.assertEqual(self.h.judge.asked, [])
+        self.assertFalse(session.holdbook.on_hold)
+        await self.end(ws, task, record)
+
+    async def test_the_judges_tokens_are_in_the_usage_and_the_cost(self):
+        record, session, ws, live, task = await self.call()
+        self.h.judge.kinds = ['other']
+        self.h.judge.tokens = {'input': 1200, 'cached': 0, 'output': 30}
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05):
+            live.push({'type': 'session.input_transcript.delta', 'delta': 'Hello there friend.'})
+            await until(lambda: self.h.judge.asked)
+        done = await self.end(ws, task, record)
+        self.assertEqual(done['usage']['holdJudgeTokens'], {'input': 1200, 'output': 30})
+        self.assertEqual(done['usage']['holdJudgeModel'], 'fake-judge')
+        kinds = [item['kind'] for item in done['cost']['items']]
+        self.assertIn('hold_judge', kinds)
 
     async def test_on_hold_the_voice_is_switched_off_and_the_line_kept(self):
         record, session, ws, live, task = await self.call()
@@ -282,7 +457,8 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((stored['onHold'], stored['times'], stored['detector']), (True, 1, 'fake'))
         self.assertIn('since', stored)
         self.assertIn({'speaker': 'note', 'text': 'On hold.'}, session.ctx.transcript)
-        self.assertEqual(self.events(record, 'call.on_hold'), [{'times': 1, 'detector': 'fake'}])
+        self.assertEqual(self.events(record, 'call.on_hold'),
+                         [{'times': 1, 'by': 'voice', 'detector': 'fake'}])
         before = len(live.audio)
         self.frames(ws, [payload(index) for index in range(10)])
         await until(lambda: self.listener.frames >= 10)

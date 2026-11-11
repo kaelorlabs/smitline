@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from call_result import DEFAULT_SUMMARY_MODEL
 from phone_prompts import DEFAULT_BACKEND_MODEL
 
-PRICES_AS_OF = '2026-10-06'
+PRICES_AS_OF = '2026-11-11'
 CURRENCY = 'USD'
 # GPT-Live bills voice sessions per second at a per-minute rate.
 VOICE_MODEL = 'gpt-live-1'
@@ -25,6 +25,8 @@ TOKEN_PRICES = {
     'gpt-5.6-sol': (4.00, 0.40, 20.00),
     'gpt-5.6-terra': (2.00, 0.20, 12.00),
     'gpt-5.6-luna': (0.20, 0.02, 1.20),
+    # The Decisions API's prices for its only model (hold_judge.py): input only, no output charge.
+    'gpt-6-luna': (0.10, 0.01, 0.0),
     'gpt-5.5': (5.00, 0.50, 30.00),
 }
 WEB_SEARCH_PER_CALL = 0.01
@@ -152,6 +154,9 @@ def call_cost(record, environ=None):
     summary_model = usage.get('summaryModel') or environ.get('SMITLINE_SUMMARY_MODEL') \
         or DEFAULT_SUMMARY_MODEL
     items.append(_model_item('summary', usage.get('summaryTokens'), summary_model))
+    # Phone calls on hold: the check of what is talking on the line (hold_judge.py).
+    items.append(_model_item('hold_judge', usage.get('holdJudgeTokens'),
+                             usage.get('holdJudgeModel') or 'gpt-6-luna'))
     items = [item for item in items if item is not None]
     priced = [item['amount'] for item in items if item['amount'] is not None]
     phone = sum(item['amount'] for item in items if item['kind'] == 'phone' and item['amount'] is not None)
