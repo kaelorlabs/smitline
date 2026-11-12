@@ -456,8 +456,9 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         await self.end(ws, task, record)
 
     def hold_clock(self, session):
-        """The hold book's clock, moved by hand from the real one (the call's watchdog reads it)."""
-        now = [time.monotonic()]
+        """The hold book's clock, moved by hand from the real one (the call's watchdog reads it).
+        It starts on a whole second, so whole seconds added to it subtract back exactly."""
+        now = [float(int(time.monotonic()))]
         session.holdbook.clock = lambda: now[0]
         return now
 
