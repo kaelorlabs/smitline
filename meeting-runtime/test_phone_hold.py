@@ -264,6 +264,37 @@ class HoldBookTests(unittest.TestCase):
         self.assertEqual((book.times, book.seconds()), (2, 90.0))
         self.assertTrue(book.on_hold)
 
+    def test_counts_the_time_on_hold_with_the_voice_off(self):
+        now = [50.0]
+        book = HoldBook(clock=lambda: now[0])
+        book.voice_off()                   # not on hold: the voice off is not hold time
+        now[0] = 100.0
+        self.assertEqual(book.voice_off_seconds(), 0.0)
+        book.start('listener')
+        book.voice_off()                   # switched off at 100
+        now[0] = 700.0
+        self.assertEqual(book.voice_off_seconds(), 600.0)
+        book.voice_on()                    # woken at 700 to check who is talking
+        now[0] = 712.0
+        self.assertEqual(book.voice_off_seconds(), 600.0)
+        book.voice_off()                   # only the loop's recording: off again at 712
+        now[0] = 1000.0
+        self.assertEqual(book.end(), 900.0)  # the hold ends with the voice off
+        self.assertEqual(book.voice_off_seconds(), 888.0)
+        now[0] = 1100.0
+        book.voice_off()                   # the owner talks with them after the hold: not counted
+        now[0] = 1200.0
+        self.assertEqual((book.seconds(), book.voice_off_seconds()), (900.0, 888.0))
+
+    def test_a_hold_ended_at_a_moment_past_keeps_only_its_time_off(self):
+        now = [0.0]
+        book = HoldBook(clock=lambda: now[0])
+        book.start('listener')
+        book.voice_off()
+        now[0] = 50.0
+        book.end(40.0)                     # over when they first spoke, ten seconds ago
+        self.assertEqual((book.seconds(), book.voice_off_seconds()), (40.0, 40.0))
+
 
 class SessionKindTests(unittest.TestCase):
     def test_only_relayed_outgoing_calls_hold(self):
@@ -423,6 +454,44 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events(record, 'call.hold_ended')[0]['by'], 'person')
         self.assertEqual([e['kind'] for e in self.events(record, 'call.line_judged')], ['hold', 'person'])
         await self.end(ws, task, record)
+
+    def hold_clock(self, session):
+        """The hold book's clock, moved by hand from the real one (the call's watchdog reads it)."""
+        now = [time.monotonic()]
+        session.holdbook.clock = lambda: now[0]
+        return now
+
+    async def test_the_usage_says_how_long_the_voice_was_off_on_hold(self):
+        record, session, ws, live, task = await self.call()
+        now = self.hold_clock(session)
+        start = now[0]
+        await self.hold(session, live)
+        now[0] = start + 600
+        with mock.patch.object(phone_hold, 'JUDGE_QUIET', 0.05), \
+                mock.patch.object(phone_hold, 'PICKUP_CONFIRM_SECONDS', 30):
+            woken, _payloads = await self.wake(session, ws)
+            now[0] = start + 612       # the woken voice hears the loop's recording for 12 s
+            self.h.judge.kinds = ['hold']
+            woken.push({'type': 'session.input_transcript.delta',
+                        'delta': 'Your call is important to us.'})
+            await until(lambda: woken.close_requested and session.asleep and session.live is None)
+        now[0] = start + 900
+        done = await self.end(ws, task, record)
+        self.assertEqual(done['usage']['holdSeconds'], 900)
+        self.assertEqual(done['usage']['holdVoiceOffSeconds'], 888)
+
+    async def test_a_voice_left_on_while_on_hold_is_no_time_with_the_voice_off(self):
+        def unavailable(environ):
+            raise RuntimeError('model files are missing')
+        self.h.line.hold_listener_factory = unavailable
+        record, session, ws, live, task = await self.call()
+        now = self.hold_clock(session)
+        live.push(tool_call('wait_on_hold'))
+        await until(lambda: session.holdbook.on_hold)
+        now[0] += 300
+        done = await self.end(ws, task, record)
+        self.assertEqual(done['usage']['holdSeconds'], 300)
+        self.assertEqual(done['usage']['holdVoiceOffSeconds'], 0)
 
     async def test_an_unsure_answer_changes_nothing(self):
         record, session, ws, live, task = await self.call()

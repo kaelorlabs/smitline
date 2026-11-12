@@ -2217,6 +2217,8 @@ class PhoneLine:
             usage['phoneSeconds'] = session.phone_seconds
         if session.holdbook.times:
             usage['holdSeconds'] = int(session.holdbook.seconds())
+            # The part of it with the voice off: only the phone line costs anything then.
+            usage['holdVoiceOffSeconds'] = int(session.holdbook.voice_off_seconds())
         usage.update(session.owner_usage())
         usage.update(session.judge_usage())
         if any(session.backend_tokens.values()):

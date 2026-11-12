@@ -102,7 +102,9 @@ def resume_input(seed, transcript, note):
 
 
 class HoldBook:
-    """Time on hold: how often, how long in all, and the hold going on now."""
+    """Time on hold: how often, how long in all, and the hold going on now. Also how much of it
+    had the voice switched off, which costs only the phone line (usage.holdVoiceOffSeconds): a
+    voice woken to check who is talking, or one waiting quietly without a listener, is billed."""
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
@@ -113,6 +115,8 @@ class HoldBook:
         self.mode = None          # 'listener' (the voice is off) or 'voice' (it waits quietly)
         self.wakes = 0
         self.timed_out = False
+        self.off_ended = 0.0      # time on hold with the voice off, stretches that are over
+        self.off_since = None     # the voice went off during the hold going on now (clock)
 
     @property
     def on_hold(self):
@@ -129,7 +133,21 @@ class HoldBook:
             return 0.0
         return max(0.0, (now if now is not None else self.clock()) - self.since)
 
+    def voice_off(self, now=None):
+        """The voice was switched off during this hold; nothing outside a hold counts."""
+        if self.since is not None and self.off_since is None:
+            self.off_since = now if now is not None else self.clock()
+
+    def voice_on(self, now=None):
+        """The voice is back (woken), or the hold is over: the stretch with it off ends."""
+        if self.off_since is not None:
+            now = now if now is not None else self.clock()
+            self.off_ended += max(0.0, now - self.off_since)
+            self.off_since = None
+
     def end(self, now=None):
+        now = now if now is not None else self.clock()
+        self.voice_on(now)
         seconds = self.current(now)
         self.ended_seconds += seconds
         self.since = self.since_at = None
@@ -137,6 +155,11 @@ class HoldBook:
 
     def seconds(self, now=None):
         return self.ended_seconds + self.current(now)
+
+    def voice_off_seconds(self, now=None):
+        if self.off_since is None:
+            return self.off_ended
+        return self.off_ended + max(0.0, (now if now is not None else self.clock()) - self.off_since)
 
 
 class HoldMixin:
@@ -372,6 +395,7 @@ class HoldMixin:
             self._listener.listen()
         self._frames.clear()
         self.asleep = True  # from here the line's audio is kept for the voice that wakes
+        self.holdbook.voice_off()
         self._close_reason = reason
         # What was said so far becomes lines of its own: the next voice starts with them, and its
         # transcript's timing starts again.
@@ -482,6 +506,7 @@ class HoldMixin:
         while self._frames:
             await live.send_audio(self._frames.popleft())
         self.asleep = False  # in the same step as the last frame: none is lost or out of order
+        self.holdbook.voice_on()
         self._note('replayed')
         self._publish_hold()
         held, self._held_notes = self._held_notes, []
