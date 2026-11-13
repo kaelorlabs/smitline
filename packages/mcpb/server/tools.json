@@ -745,6 +745,9 @@
     {
       "name": "send_call_instruction",
       "title": "Guide a call in progress",
+      "_meta": {
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "title": "Guide a call in progress",
         "readOnlyHint": false,
@@ -778,6 +781,9 @@
     {
       "name": "reply_to_call_request",
       "title": "Answer a request from a call",
+      "_meta": {
+        "openai/widgetAccessible": true
+      },
       "annotations": {
         "title": "Answer a request from a call",
         "readOnlyHint": false,
