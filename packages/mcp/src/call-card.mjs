@@ -18,6 +18,9 @@ export const CALL_CARD_TOOL_META = Object.freeze({
   'openai/widgetAccessible': true,
 });
 
+/** Tool _meta for the in-call tools the card calls itself, when the user answers from it. */
+export const CALL_CARD_ACTION_META = Object.freeze({ 'openai/widgetAccessible': true });
+
 /** What the card shows for a call record. Pure: it also runs inside the card. */
 export function callCardView(record, now = Date.now()) {
   const STATUS = {

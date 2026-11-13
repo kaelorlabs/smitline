@@ -72,6 +72,9 @@ test('start_call and get_call show the card, served as a self-contained MCP Apps
     assert.equal(_meta.ui.resourceUri, CALL_CARD_URI);
     assert.equal(_meta['openai/outputTemplate'], CALL_CARD_URI);
   }
+  // The card answers from itself with these two, so ChatGPT must let it call them.
+  const fromCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.['openai/widgetAccessible']).map((tool) => tool.name);
+  assert.deepEqual(fromCard.sort(), ['get_call', 'reply_to_call_request', 'send_call_instruction', 'start_call']);
   const listed = await session.dispatch({ jsonrpc: '2.0', id: 2, method: 'resources/list' });
   assert.deepEqual(listed.result.resources.map((item) => [item.uri, item.mimeType]), [[CALL_CARD_URI, CALL_CARD_MIME]]);
   const read = await session.dispatch({ jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri: CALL_CARD_URI } });
