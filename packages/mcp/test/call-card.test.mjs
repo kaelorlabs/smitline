@@ -160,6 +160,9 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   const card = loadCard();
   const [hello] = card.sent;
   assert.equal(hello.method, 'ui/initialize');
+  // MCP Apps hosts reject any other fields (no clientInfo or capabilities, as in MCP's initialize).
+  assert.deepEqual(Object.keys(hello.params).sort(), ['appCapabilities', 'appInfo', 'protocolVersion']);
+  assert.deepEqual(hello.params.appInfo, { name: 'smitline-call-card', version: '1' });
   assert.equal(hello.params.protocolVersion, '2026-01-26');
   card.deliver({ jsonrpc: '2.0', id: hello.id, result: { hostContext: { theme: 'dark' } } });
   await card.settle();
