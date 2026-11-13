@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.13 — 2026-11-13
 
 - **The call card has a new address, `ui://smitline/call-card-v2.html`.** Hosts may keep a copy of a card by its address, and ChatGPT asks apps to change it when the page changes. Without it, ChatGPT could keep showing the old card, which never started up there, after an update. `start_call` and `get_call` point to the new address; the old one is no longer served.
 - **The call card opens in ChatGPT.** ChatGPT showed "This app timed out" in place of the card. The card started up with MCP's own field names (`clientInfo`, `capabilities`) instead of the ones MCP Apps requires (`appInfo`), so hosts that check them, the official MCP Apps host among them, refused it, and the card never told the host it was ready. It now sends exactly `protocolVersion`, `appInfo` and `appCapabilities`.
