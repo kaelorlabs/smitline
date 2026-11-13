@@ -1,8 +1,9 @@
 // The call card: one phone call or meeting shown inside the chat, for clients that support MCP
-// Apps (ChatGPT, Claude and others). It says who the call was for and how it went, what it
-// cost, plays the recording when there is a link to one, and holds the transcript. start_call
-// and get_call return it; while the call runs, the card follows it by calling get_call itself.
-// Clients without MCP Apps ignore it and read the same result as text.
+// Apps (ChatGPT, Claude and others). It says who the call was for and how it went, plays the
+// recording when there is a link to one, and holds the transcript. It leaves out what the call
+// cost: the agent still reads that in the result. start_call and get_call return it; while the
+// call runs, the card follows it by calling get_call itself. Clients without MCP Apps ignore it
+// and read the same result as text.
 //
 // Everything the card shows comes from the call record and is treated as text: it is set with
 // textContent, never parsed as HTML.
@@ -16,6 +17,9 @@ export const CALL_CARD_TOOL_META = Object.freeze({
   'openai/outputTemplate': CALL_CARD_URI,
   'openai/widgetAccessible': true,
 });
+
+/** Tool _meta for the in-call tools the card calls itself, when the user answers from it. */
+export const CALL_CARD_ACTION_META = Object.freeze({ 'openai/widgetAccessible': true });
 
 /** What the card shows for a call record. Pure: it also runs inside the card. */
 export function callCardView(record, now = Date.now()) {
@@ -75,20 +79,6 @@ export function callCardView(record, now = Date.now()) {
     seconds = Math.max(0, ((Number.isFinite(ended) ? ended : now) - answered) / 1000);
   }
 
-  let cost = '';
-  const charge = object(call.charge);
-  if (charge.status === 'pending') {
-    const price = text(charge.pricePerMinute);
-    cost = price ? `Billed when the call ends, at ${price}/min` : 'Worked out when the call ends';
-  } else if (text(charge.amount)) {
-    const billed = count(charge.billedSeconds);
-    const price = text(charge.pricePerMinute);
-    cost = [text(charge.amount), billed !== null ? `${length(billed)}${price ? ` at ${price}/min` : ''}` : '']
-      .filter(Boolean).join(' · ');
-  } else if (typeof object(call.cost).total === 'number' && Number.isFinite(call.cost.total)) {
-    cost = `$${call.cost.total.toFixed(2)} at your providers' prices${call.cost.estimated ? ', estimated' : ''}`;
-  }
-
   const recorded = object(call.recording);
   const recording = call.recording && typeof call.recording === 'object'
     ? { url: https(call.recordingUrl), length: count(recorded.seconds) !== null ? clock(recorded.seconds) : '' }
@@ -110,66 +100,129 @@ export function callCardView(record, now = Date.now()) {
         .filter(Boolean),
     }))
     .filter((list) => list.items.length);
+  // Questions from the call nobody has finished, so the user can answer them from the card
+  // while the agent is busy (some apps take no message until the agent's turn ends).
+  const live = !ENDED.includes(call.status);
+  const requests = (live && Array.isArray(call.requests) ? call.requests : [])
+    .map((request) => object(request))
+    .filter((request) => ['open', 'working'].includes(request.state) && /^r[1-9][0-9]{0,2}$/.test(text(request.id)))
+    .map((request) => {
+      const added = (Array.isArray(request.thread) ? request.thread : [])
+        .map((entry) => object(entry))
+        .filter((entry) => entry.from === 'call' && entry.type === 'add' && text(entry.text));
+      return {
+        id: text(request.id),
+        text: text(request.text),
+        added: added.length ? text(added[added.length - 1].text) : '',
+        askedBy: text(request.askedBy),
+      };
+    })
+    .filter((request) => request.text);
 
   return {
     id: text(call.id),
     title: meeting ? 'Meeting' : `Call to ${contact || to || 'someone'}`,
     subtitle: [
-      text(brief.onBehalfOf) ? `for ${text(brief.onBehalfOf)}` : '',
       contact && to ? to : '',
       seconds !== null ? length(seconds) : '',
     ].filter(Boolean).join(' · '),
     status,
     tone,
-    live: !ENDED.includes(call.status),
+    live,
     outcome: OUTCOMES[result.outcome] || '',
     summary: text(result.summary) || (call.status === 'failed' ? text(call.error) || 'Something went wrong.' : ''),
     details,
     lists,
-    cost,
+    requests,
+    canTell: call.status === 'in_progress',
     recording,
     transcript,
     callUrl: https(call.callUrl),
   };
 }
 
+// The card's colors, fonts and corners are the host's MCP Apps style variables
+// (hostContext.styles, set on :root when the host sends them), so it looks like the app it sits
+// in; each falls back to the card's own value for hosts that send none.
 const STYLE = `
-:root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --line: rgba(0, 0, 0, 0.1);
-  --chip: rgba(0, 0, 0, 0.05); --live: #0b7a3b; --bad: #b42318; --accent: #2457d6;
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-:root[data-theme="dark"] { --fg: #f2f2f3; --muted: #a1a1a6; --line: rgba(255, 255, 255, 0.14);
-  --chip: rgba(255, 255, 255, 0.08); --live: #4ade80; --bad: #f87171; --accent: #8ab4ff; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f2f2f3; --muted: #a1a1a6;
-  --line: rgba(255, 255, 255, 0.14); --chip: rgba(255, 255, 255, 0.08); --live: #4ade80; --bad: #f87171;
-  --accent: #8ab4ff; } }
-html, body { margin: 0; background: transparent; color: var(--fg); }
-main { padding: 14px 16px 16px; display: grid; gap: 12px; }
-.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-h1 { font-size: 16px; font-weight: 600; margin: 0; }
-.sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-.pill { flex: none; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
-  background: var(--chip); }
-.pill.live { color: var(--live); } .pill.bad { color: var(--bad); } .pill.muted { color: var(--muted); }
-.pill.live::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
-  border-radius: 50%; background: currentColor; vertical-align: middle; animation: pulse 1.6s infinite; }
-@keyframes pulse { 50% { opacity: 0.3; } }
-@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
+:root { color-scheme: light dark;
+  --fg: var(--color-text-primary, #1d1d1f); --muted: var(--color-text-secondary, #6e6e73);
+  --line: var(--color-border-primary, rgba(0, 0, 0, 0.1)); --chip: var(--color-background-secondary, rgba(0, 0, 0, 0.05));
+  --live: var(--color-text-success, #0b7a3b); --bad: var(--color-text-danger, #b42318);
+  --accent: var(--color-text-info, #2457d6); --ring: var(--color-ring-primary, #2457d6);
+  --button: var(--color-background-inverse, #2457d6); --button-text: var(--color-text-inverse, #fff);
+  --radius: var(--border-radius-md, 8px); --round: var(--border-radius-full, 999px);
+  --strong: var(--font-weight-semibold, 600);
+  --small: var(--font-text-xs-size, 12px); --sub: var(--font-text-sm-size, 13px); --title: var(--font-text-lg-size, 16px);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+  font-size: var(--font-text-md-size, 14px); line-height: var(--font-text-md-line-height, 1.45); }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark;
+  --fg: var(--color-text-primary, #f2f2f3); --muted: var(--color-text-secondary, #a1a1a6);
+  --line: var(--color-border-primary, rgba(255, 255, 255, 0.14)); --chip: var(--color-background-secondary, rgba(255, 255, 255, 0.08));
+  --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
+  --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
+  --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --fg: var(--color-text-primary, #f2f2f3); --muted: var(--color-text-secondary, #a1a1a6);
+  --line: var(--color-border-primary, rgba(255, 255, 255, 0.14)); --chip: var(--color-background-secondary, rgba(255, 255, 255, 0.08));
+  --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
+  --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
+  --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); } }
+:root { --radius-lg: var(--border-radius-lg, 12px); }
+html, body { margin: 0; background: transparent; color: var(--fg); -webkit-font-smoothing: antialiased; }
+main { padding: 16px 18px; display: grid; gap: 16px; }
 p { margin: 0; }
-.outcome { font-weight: 600; margin-bottom: 4px; }
-dl { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 4px 14px; margin: 0; }
-dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
-h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.04em; margin: 0 0 4px; }
-ul { margin: 0; padding-left: 18px; }
-.facts { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
-.fact { display: grid; gap: 4px; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+h1 { font-size: var(--title); font-weight: var(--strong); line-height: 1.3; margin: 0; }
+.sub { margin-top: 2px; color: var(--muted); font-size: var(--sub); font-variant-numeric: tabular-nums; }
+.pill { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--small);
+  font-weight: var(--strong); padding: 4px 10px; border-radius: var(--round); background: var(--chip); color: var(--muted); }
+.pill.live { color: var(--live); } .pill.bad { color: var(--bad); } .pill.done { color: var(--fg); }
+.pill.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
+.result { display: grid; gap: 4px; }
+.outcome { font-weight: var(--strong); }
+dl { display: grid; grid-template-columns: fit-content(40%) 1fr; gap: 6px 16px; margin: 0; }
+dt { color: var(--muted); overflow-wrap: anywhere; } dd { margin: 0; overflow-wrap: anywhere; }
+.group { display: grid; gap: 6px; }
+h2 { font-size: var(--sub); font-weight: var(--strong); color: var(--muted); margin: 0; }
+ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.ask { display: grid; gap: 8px; }
+.label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: var(--sub); }
+.quote { padding: 10px 12px; border-radius: var(--radius-lg); background: var(--chip); overflow-wrap: anywhere; }
+.quote .note { margin-top: 4px; }
+.compose { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-lg); transition: border-color 0.15s; }
+.compose:focus-within { border-color: var(--ring); }
+textarea { box-sizing: border-box; flex: 1; min-width: 0; min-height: 30px; max-height: 120px; resize: none; border: 0; outline: none;
+  background: transparent; color: inherit; font: inherit; padding: 4px 0; }
+textarea::placeholder { color: var(--muted); }
+.send { flex: none; padding: 6px 14px; border-radius: var(--round); background: var(--button);
+  color: var(--button-text); font-weight: var(--strong); font-size: var(--sub); transition: opacity 0.15s; }
+.send:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius); }
+.note { color: var(--muted); font-size: var(--sub); }
+.note.bad { color: var(--bad); }
+.note.sent::before { content: "✓ "; color: var(--live); }
 audio { width: 100%; height: 36px; }
-details { border-top: 1px solid var(--line); padding-top: 10px; }
-summary { cursor: pointer; color: var(--muted); }
-details p { margin-top: 6px; }
-.open { justify-self: start; border: 1px solid var(--line); background: none; color: var(--accent);
-  border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
-.note { color: var(--muted); font-size: 12px; }
+.foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
+details { flex: 1; min-width: 0; }
+details[open] { display: grid; gap: 8px; }
+.open { flex: none; margin-left: auto; }
+summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; }
+details[open] summary::before { transform: rotate(45deg); }
+.line { color: var(--fg); font-size: var(--sub); }
+.line strong { font-weight: var(--strong); }
+.open { color: var(--accent); font-weight: var(--strong); }
+.open:hover { text-decoration: underline; }
 `;
 
 const CLIENT = `
@@ -181,6 +234,13 @@ let nextId = 1;
 let call = null;
 let timer = null;
 let closed = false;
+// Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
+let transcriptOpen = false;
+// What the user is typing in each answer box (a request id, or 'tell'), which ones are being
+// sent, and the note under each; the card redraws every few seconds and keeps them.
+const drafts = new Map();
+const sending = new Set();
+const notes = new Map();
 
 function post(message) { window.parent.postMessage(message, '*'); }
 function ask(method, params) {
@@ -192,6 +252,14 @@ function ask(method, params) {
   });
 }
 function tell(method, params) { post({ jsonrpc: '2.0', method, params }); }
+async function callTool(name, args) {
+  try {
+    return await ask('tools/call', { name, arguments: args });
+  } catch (error) {
+    if (window.openai && typeof window.openai.callTool === 'function') return window.openai.callTool(name, args);
+    throw error;
+  }
+}
 
 function node(tag, className, content) {
   const element = document.createElement(tag);
@@ -210,7 +278,7 @@ function render() {
   head.append(titles, node('span', 'pill ' + view.tone, view.status));
   parts.push(head);
   if (view.outcome || view.summary) {
-    const section = node('section');
+    const section = node('section', 'result');
     if (view.outcome) section.append(node('p', 'outcome', view.outcome));
     if (view.summary) section.append(node('p', null, view.summary));
     parts.push(section);
@@ -221,51 +289,58 @@ function render() {
     parts.push(list);
   }
   for (const group of view.lists) {
-    const section = node('section');
+    const section = node('section', 'group');
     const items = node('ul');
     for (const item of group.items) items.append(node('li', null, item));
     section.append(node('h2', null, group.title), items);
     parts.push(section);
   }
-  const facts = node('div', 'facts');
-  if (view.cost) {
-    const fact = node('div', 'fact');
-    fact.append(node('h2', null, 'Cost'), node('p', null, view.cost));
-    facts.append(fact);
+  if (view.live) {
+    const section = replies(view);
+    if (section.childElementCount) parts.push(section);
   }
-  if (view.recording) {
-    const fact = node('div', 'fact');
-    fact.append(node('h2', null, 'Recording' + (view.recording.length ? ' · ' + view.recording.length : '')));
-    if (view.recording.url) {
-      const audio = node('audio');
-      audio.controls = true;
-      audio.preload = 'none';
-      audio.src = view.recording.url;
-      fact.append(audio);
-    } else {
-      fact.append(node('p', 'note', 'Listen to it from the call in Smitline.'));
-    }
-    facts.append(fact);
+  if (view.recording && view.recording.url) {
+    const section = node('section', 'group');
+    const audio = node('audio');
+    audio.controls = true;
+    audio.preload = 'none';
+    audio.src = view.recording.url;
+    section.append(node('h2', null, 'Recording' + (view.recording.length ? ' · ' + view.recording.length : '')), audio);
+    parts.push(section);
   }
-  if (facts.childElementCount) parts.push(facts);
+  const foot = node('footer', 'foot');
   if (view.transcript.length) {
     const box = node('details');
-    box.append(node('summary', null, 'Transcript · ' + view.transcript.length + (view.transcript.length === 1 ? ' line' : ' lines')));
+    box.open = transcriptOpen;
+    box.addEventListener('toggle', () => { transcriptOpen = box.open; });
+    box.append(node('summary', null, 'Transcript · ' + view.transcript.length));
     for (const line of view.transcript) {
-      const said = node('p');
+      const said = node('p', 'line');
       said.append(node('strong', null, line.who + ': '), document.createTextNode(line.text));
       box.append(said);
     }
-    parts.push(box);
+    foot.append(box);
   }
   if (view.callUrl) {
-    const open = node('button', 'open', 'Open in Smitline');
+    const open = node('button', 'open', 'Open in Smitline ↗');
     open.type = 'button';
     open.addEventListener('click', () => openLink(view.callUrl));
-    parts.push(open);
+    foot.append(open);
   }
-  if (view.live) parts.push(node('p', 'note', 'This card follows the call as it happens.'));
+  if (foot.childElementCount) parts.push(foot);
+  // Redrawing replaces the answer boxes: put the cursor back where the user was typing.
+  const focused = document.activeElement;
+  const key = focused && focused.dataset ? focused.dataset.key : undefined;
+  const at = key ? [focused.selectionStart, focused.selectionEnd] : null;
   main.replaceChildren(...parts);
+  for (const box of main.querySelectorAll('textarea')) if (box.value) fit(box);
+  if (key) {
+    const box = [...main.querySelectorAll('textarea')].find((item) => item.dataset.key === key);
+    if (box) {
+      box.focus();
+      box.setSelectionRange(at[0], at[1]);
+    }
+  }
 }
 
 async function openLink(url) {
@@ -291,24 +366,139 @@ function follow() {
 }
 
 async function refresh() {
-  const args = { callId: call.id };
   try {
-    const result = await ask('tools/call', { name: 'get_call', arguments: args });
+    const result = await callTool('get_call', { callId: call.id });
     if (result && !result.isError) return show(result);
-  } catch {
-    if (window.openai && typeof window.openai.callTool === 'function') {
-      try {
-        const result = await window.openai.callTool('get_call', args);
-        if (result && !result.isError) return show(result);
-      } catch { /* try again below */ }
-    }
-  }
+  } catch { /* try again below */ }
   follow();
 }
 
+function failure(result) {
+  const said = result && Array.isArray(result.content) && result.content[0] && result.content[0].text;
+  let message = typeof said === 'string' ? said : '';
+  try { message = JSON.parse(message).message || message; } catch { /* plain text */ }
+  return 'Not sent' + (message ? ': ' + message.slice(0, 200) : '.');
+}
+
+async function send(key, name, args, about) {
+  const words = (drafts.get(key) || '').trim();
+  if (!words || sending.has(key) || !call) return;
+  sending.add(key);
+  notes.delete(key);
+  render();
+  try {
+    const result = await callTool(name, { callId: call.id, ...args, text: words });
+    if (result && !result.isError) {
+      drafts.delete(key);
+      // An answered question leaves the card with the next refresh; this line stays instead.
+      notes.set(key, {
+        text: 'Sent to the call.',
+        answered: about ? 'Replied “' + words + '” to “' + about + '”' : '',
+      });
+    } else {
+      notes.set(key, { text: failure(result), bad: true });
+    }
+  } catch {
+    notes.set(key, { text: 'Not sent: this app did not pass it on.', bad: true });
+  }
+  sending.delete(key);
+  render();
+  clearTimeout(timer);
+  refresh();
+}
+
+// The box grows with what is typed, up to about five lines.
+function fit(box) {
+  box.style.height = 'auto';
+  if (box.scrollHeight) box.style.height = box.scrollHeight + 'px';
+}
+
+function composer(key, label, placeholder, name, args, about) {
+  const form = node('form', 'compose');
+  const box = node('textarea');
+  box.rows = 1;
+  box.maxLength = key === 'tell' ? 2000 : 600;
+  box.placeholder = placeholder;
+  box.value = drafts.get(key) || '';
+  box.dataset.key = key;
+  box.setAttribute('aria-label', placeholder);
+  box.addEventListener('input', () => { drafts.set(key, box.value); fit(box); });
+  box.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      send(key, name, args, about);
+    }
+  });
+  const button = node('button', 'send', sending.has(key) ? 'Sending…' : 'Send');
+  button.type = 'submit';
+  button.disabled = sending.has(key);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    send(key, name, args, about);
+  });
+  form.append(box, button);
+  const wrap = node('div', 'ask');
+  wrap.append(label);
+  return { wrap, form, box };
+}
+
+// One box at a time, so the card keeps to one main action (ChatGPT's inline cards allow two,
+// with "Open in Smitline" the second): the oldest open question, else "Tell the call".
+function replies(view) {
+  const section = node('section', 'ask');
+  for (const [key, note] of notes) {
+    if (note.answered && !view.requests.some((request) => request.id === key)) {
+      section.append(node('p', 'note sent', note.answered));
+    }
+  }
+  const [request] = view.requests;
+  let key = '';
+  let parts = null;
+  if (request) {
+    key = request.id;
+    const label = node('div', 'label');
+    const waiting = view.requests.length - 1;
+    label.append(node('span', null, (request.askedBy || 'They') + ' asks'));
+    if (waiting) label.append(node('span', null, waiting + ' more waiting'));
+    parts = composer(key, label, 'Your reply', 'reply_to_call_request', { requestId: request.id, type: 'done' }, request.text);
+    const quote = node('div', 'quote');
+    quote.append(node('p', null, request.text));
+    if (request.added) quote.append(node('p', 'note', 'Then added: ' + request.added));
+    parts.wrap.append(quote);
+  } else if (view.canTell) {
+    key = 'tell';
+    const label = node('div', 'label');
+    label.append(node('span', null, 'Tell the call'));
+    parts = composer(key, label, 'Something for the voice to say or know', 'send_call_instruction', {});
+  }
+  if (parts) {
+    parts.wrap.append(parts.form);
+    const note = notes.get(key);
+    if (note) parts.wrap.append(node('p', note.bad ? 'note bad' : 'note sent', note.text));
+    section.append(parts.wrap);
+  }
+  return section;
+}
+
+// The host's theme, style variables and fonts, as the MCP Apps SDK applies them; whatever it
+// leaves out keeps the card's own value.
 function theme(context) {
-  if (context && (context.theme === 'dark' || context.theme === 'light')) {
-    document.documentElement.dataset.theme = context.theme;
+  if (!context || typeof context !== 'object') return;
+  const root = document.documentElement;
+  if (context.theme === 'dark' || context.theme === 'light') root.dataset.theme = context.theme;
+  const styles = context.styles && typeof context.styles === 'object' ? context.styles : {};
+  const variables = styles.variables && typeof styles.variables === 'object' ? styles.variables : {};
+  for (const [name, value] of Object.entries(variables)) {
+    if (/^--[a-z0-9-]{1,60}$/.test(name) && typeof value === 'string' && value.length <= 500) {
+      root.style.setProperty(name, value);
+    }
+  }
+  const fonts = styles.css && typeof styles.css.fonts === 'string' ? styles.css.fonts : '';
+  if (fonts && fonts.length <= 50000 && !document.getElementById('host-fonts')) {
+    const sheet = document.createElement('style');
+    sheet.id = 'host-fonts';
+    sheet.textContent = fonts;
+    document.head.append(sheet);
   }
 }
 
@@ -338,14 +528,18 @@ new ResizeObserver(() => tell('ui/notifications/size-changed', {
   height: document.documentElement.scrollHeight,
 })).observe(document.documentElement);
 
+// ChatGPT also says light or dark in its own globals.
+if (window.openai) theme({ theme: window.openai.theme });
 if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 window.addEventListener('openai:set_globals', () => {
+  if (window.openai) theme({ theme: window.openai.theme });
   if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 });
+// Exactly the fields MCP Apps allows here: hosts that check them answer anything else with an
+// error, and the card would never get past this step.
 ask('ui/initialize', {
   protocolVersion: '2026-01-26',
-  clientInfo: { name: 'smitline-call-card', version: '1' },
-  capabilities: {},
+  appInfo: { name: 'smitline-call-card', version: '1' },
   appCapabilities: { availableDisplayModes: ['inline'] },
 }).then((result) => {
   theme(result && result.hostContext);
@@ -384,14 +578,14 @@ export function callCardResource({ mediaOrigins = [] } = {}) {
   const meta = {
     ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: origins } },
     'openai/widgetCSP': { connect_domains: [], resource_domains: origins },
-    'openai/widgetDescription': 'A phone call or meeting placed through Smitline: how it went, what it cost, the recording and the transcript.',
+    'openai/widgetDescription': 'A phone call or meeting placed through Smitline: how it went, the recording and the transcript.',
   };
   return {
     descriptor: {
       uri: CALL_CARD_URI,
       name: 'call-card',
       title: 'Call card',
-      description: 'Shows one call or meeting: status, result, cost, recording and transcript.',
+      description: 'Shows one call or meeting: status, result, recording and transcript.',
       mimeType: CALL_CARD_MIME,
       _meta: meta,
     },
