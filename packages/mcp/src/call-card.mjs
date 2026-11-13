@@ -119,21 +119,40 @@ export function callCardView(record, now = Date.now()) {
   };
 }
 
+// The card's colors, fonts and corners are the host's MCP Apps style variables
+// (hostContext.styles, set on :root when the host sends them), so it looks like the app it sits
+// in; each falls back to the card's own value for hosts that send none.
 const STYLE = `
-:root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --line: rgba(0, 0, 0, 0.1);
-  --chip: rgba(0, 0, 0, 0.05); --live: #0b7a3b; --bad: #b42318; --accent: #2457d6;
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-:root[data-theme="dark"] { --fg: #f2f2f3; --muted: #a1a1a6; --line: rgba(255, 255, 255, 0.14);
-  --chip: rgba(255, 255, 255, 0.08); --live: #4ade80; --bad: #f87171; --accent: #8ab4ff; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f2f2f3; --muted: #a1a1a6;
-  --line: rgba(255, 255, 255, 0.14); --chip: rgba(255, 255, 255, 0.08); --live: #4ade80; --bad: #f87171;
-  --accent: #8ab4ff; } }
+:root { color-scheme: light dark;
+  --fg: var(--color-text-primary, #1d1d1f); --muted: var(--color-text-secondary, #6e6e73);
+  --line: var(--color-border-primary, rgba(0, 0, 0, 0.1)); --chip: var(--color-background-secondary, rgba(0, 0, 0, 0.05));
+  --live: var(--color-text-success, #0b7a3b); --bad: var(--color-text-danger, #b42318);
+  --accent: var(--color-text-info, #2457d6); --ring: var(--color-ring-primary, #2457d6);
+  --button: var(--color-background-inverse, #2457d6); --button-text: var(--color-text-inverse, #fff);
+  --radius: var(--border-radius-md, 8px); --round: var(--border-radius-full, 999px);
+  --strong: var(--font-weight-semibold, 600);
+  --small: var(--font-text-xs-size, 12px); --sub: var(--font-text-sm-size, 13px); --title: var(--font-text-lg-size, 16px);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+  font-size: var(--font-text-md-size, 14px); line-height: var(--font-text-md-line-height, 1.45); }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark;
+  --fg: var(--color-text-primary, #f2f2f3); --muted: var(--color-text-secondary, #a1a1a6);
+  --line: var(--color-border-primary, rgba(255, 255, 255, 0.14)); --chip: var(--color-background-secondary, rgba(255, 255, 255, 0.08));
+  --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
+  --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
+  --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --fg: var(--color-text-primary, #f2f2f3); --muted: var(--color-text-secondary, #a1a1a6);
+  --line: var(--color-border-primary, rgba(255, 255, 255, 0.14)); --chip: var(--color-background-secondary, rgba(255, 255, 255, 0.08));
+  --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
+  --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
+  --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); } }
 html, body { margin: 0; background: transparent; color: var(--fg); }
 main { padding: 14px 16px 16px; display: grid; gap: 12px; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-h1 { font-size: 16px; font-weight: 600; margin: 0; }
-.sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-.pill { flex: none; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+h1 { font-size: var(--title); font-weight: var(--strong); margin: 0; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: var(--sub); }
+.pill { flex: none; font-size: var(--small); font-weight: var(--strong); padding: 3px 10px; border-radius: var(--round);
   background: var(--chip); }
 .pill.live { color: var(--live); } .pill.bad { color: var(--bad); } .pill.muted { color: var(--muted); }
 .pill.live::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
@@ -141,10 +160,10 @@ h1 { font-size: 16px; font-weight: 600; margin: 0; }
 @keyframes pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
 p { margin: 0; }
-.outcome { font-weight: 600; margin-bottom: 4px; }
+.outcome { font-weight: var(--strong); margin-bottom: 4px; }
 dl { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 4px 14px; margin: 0; }
 dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
-h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+h2 { font-size: var(--small); font-weight: var(--strong); color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.04em; margin: 0 0 4px; }
 ul { margin: 0; padding-left: 18px; }
 .facts { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -154,8 +173,8 @@ details { border-top: 1px solid var(--line); padding-top: 10px; }
 summary { cursor: pointer; color: var(--muted); }
 details p { margin-top: 6px; }
 .open { justify-self: start; border: 1px solid var(--line); background: none; color: var(--accent);
-  border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
-.note { color: var(--muted); font-size: 12px; }
+  border-radius: var(--radius); padding: 6px 12px; font: inherit; cursor: pointer; }
+.note { color: var(--muted); font-size: var(--small); }
 `;
 
 const CLIENT = `
@@ -287,9 +306,25 @@ async function refresh() {
   follow();
 }
 
+// The host's theme, style variables and fonts, as the MCP Apps SDK applies them; whatever it
+// leaves out keeps the card's own value.
 function theme(context) {
-  if (context && (context.theme === 'dark' || context.theme === 'light')) {
-    document.documentElement.dataset.theme = context.theme;
+  if (!context || typeof context !== 'object') return;
+  const root = document.documentElement;
+  if (context.theme === 'dark' || context.theme === 'light') root.dataset.theme = context.theme;
+  const styles = context.styles && typeof context.styles === 'object' ? context.styles : {};
+  const variables = styles.variables && typeof styles.variables === 'object' ? styles.variables : {};
+  for (const [name, value] of Object.entries(variables)) {
+    if (/^--[a-z0-9-]{1,60}$/.test(name) && typeof value === 'string' && value.length <= 500) {
+      root.style.setProperty(name, value);
+    }
+  }
+  const fonts = styles.css && typeof styles.css.fonts === 'string' ? styles.css.fonts : '';
+  if (fonts && fonts.length <= 50000 && !document.getElementById('host-fonts')) {
+    const sheet = document.createElement('style');
+    sheet.id = 'host-fonts';
+    sheet.textContent = fonts;
+    document.head.append(sheet);
   }
 }
 
@@ -319,8 +354,11 @@ new ResizeObserver(() => tell('ui/notifications/size-changed', {
   height: document.documentElement.scrollHeight,
 })).observe(document.documentElement);
 
+// ChatGPT also says light or dark in its own globals.
+if (window.openai) theme({ theme: window.openai.theme });
 if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 window.addEventListener('openai:set_globals', () => {
+  if (window.openai) theme({ theme: window.openai.theme });
   if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 });
 // Exactly the fields MCP Apps allows here: hosts that check them answer anything else with an

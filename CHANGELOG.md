@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **The call card opens in ChatGPT.** ChatGPT showed "This app timed out" in place of the card. The card started up with MCP's own field names (`clientInfo`, `capabilities`) instead of the ones MCP Apps requires (`appInfo`), so hosts that check them, the official MCP Apps host among them, refused it, and the card never told the host it was ready. It now sends exactly `protocolVersion`, `appInfo` and `appCapabilities`.
+- **The call card looks like the app it sits in.** Its colors, fonts, text sizes and corners are the MCP Apps style variables the host sends (`hostContext.styles`: `--color-text-primary`, `--font-sans`, `--border-radius-md` and the rest, and its fonts), applied as the MCP Apps SDK does and updated when the host's theme changes; each falls back to the card's own value when the host sends none. It also follows ChatGPT's light or dark theme from `window.openai.theme`.
 - **The call card no longer shows what a call cost.** It shows who the call was for, how it went, the recording and the transcript. The agent still reads the cost (or a hosted service's charge) in the tool result.
 
 ## 0.3.12 — 2026-11-10

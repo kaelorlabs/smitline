@@ -100,6 +100,7 @@ class FakeElement {
     this.dataset = {};
     this.listeners = {};
     this.own = '';
+    this.style = { set: {}, setProperty(name, value) { this.set[name] = value; } };
   }
 
   set textContent(value) { this.children = []; this.own = String(value); }
@@ -130,10 +131,13 @@ function loadCard() {
     parent,
     addEventListener(type, listener) { (listeners[type] ||= []).push(listener); },
   };
+  const head = new FakeElement('head');
   const context = vm.createContext({
     window,
     document: {
       documentElement: root,
+      head,
+      getElementById: (id) => head.all().find((element) => element.id === id) || null,
       querySelector: (selector) => (selector === 'main' ? main : null),
       createElement: (tag) => new FakeElement(tag),
       createTextNode: (text) => new FakeText(text),
@@ -149,7 +153,7 @@ function loadCard() {
   const deliverFrom = (source, data) => { for (const listener of listeners.message || []) listener({ source, data }); };
   const deliver = (data) => deliverFrom(parent, data);
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  return { main, root, sent, timers, deliver, deliverFrom, settle };
+  return { main, root, head, sent, timers, deliver, deliverFrom, settle };
 }
 
 test('the card follows a live call through the MCP Apps bridge, and shows text as text', async () => {
@@ -213,4 +217,45 @@ test('messages from anywhere but the host are ignored', () => {
   assert.equal(card.main.childElementCount, 0);
   card.deliver(result);
   assert.ok(card.main.textContent.includes('Call to Bawarchi'));
+});
+
+test('the card takes the host’s colors, fonts and theme, and keeps its own for what the host leaves out', async () => {
+  const card = loadCard();
+  card.deliver({
+    jsonrpc: '2.0', id: card.sent[0].id, result: {
+      hostContext: {
+        theme: 'dark',
+        styles: {
+          variables: {
+            '--color-text-primary': 'light-dark(#111, #eee)', '--font-sans': '"Host Sans", sans-serif',
+            'color': 'red', '--Bad Name': 'x', '--color-text-secondary': 42, '--color-text-info': 'x'.repeat(501),
+          },
+          css: { fonts: '@font-face { font-family: "Host Sans"; src: local("Host Sans"); }' },
+        },
+      },
+    },
+  });
+  await card.settle();
+  assert.equal(card.root.dataset.theme, 'dark');
+  assert.deepEqual(card.root.style.set, {
+    '--color-text-primary': 'light-dark(#111, #eee)', '--font-sans': '"Host Sans", sans-serif',
+  });
+  const [fonts] = card.head.children;
+  assert.equal(fonts.id, 'host-fonts');
+  assert.match(fonts.textContent, /Host Sans/);
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: {
+    theme: 'light', styles: { variables: { '--color-text-primary': '#111' }, css: { fonts: '@font-face {}' } },
+  } });
+  assert.equal(card.root.dataset.theme, 'light');
+  assert.equal(card.root.style.set['--color-text-primary'], '#111');
+  assert.equal(card.head.children.length, 1); // fonts once
+
+  // Every color, font and corner in the stylesheet goes through a host variable with a fallback.
+  const sheet = callCardHtml().match(/<style>([\s\S]*?)<\/style>/)[1];
+  for (const name of ['--color-text-primary', '--color-text-secondary', '--color-border-primary', '--color-background-secondary',
+    '--color-background-inverse', '--color-text-inverse', '--font-sans', '--border-radius-md', '--font-text-md-size']) {
+    assert.match(sheet, new RegExp(`var\\(${name}, [^)]`), name);
+  }
+  const rules = sheet.replace(/:root[^{]*\{[^}]*\}/g, '').replace(/@media[^{]*\{\s*:root[^{]*\{[^}]*\}\s*\}/g, '');
+  assert.doesNotMatch(rules, /#[0-9a-f]{3,6}\b|rgba?\(|font-size: \d|border-radius: \d+px/i);
 });
