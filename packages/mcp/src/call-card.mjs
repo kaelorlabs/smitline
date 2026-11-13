@@ -342,10 +342,11 @@ if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 window.addEventListener('openai:set_globals', () => {
   if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
 });
+// Exactly the fields MCP Apps allows here: hosts that check them answer anything else with an
+// error, and the card would never get past this step.
 ask('ui/initialize', {
   protocolVersion: '2026-01-26',
-  clientInfo: { name: 'smitline-call-card', version: '1' },
-  capabilities: {},
+  appInfo: { name: 'smitline-call-card', version: '1' },
   appCapabilities: { availableDisplayModes: ['inline'] },
 }).then((result) => {
   theme(result && result.hostContext);
