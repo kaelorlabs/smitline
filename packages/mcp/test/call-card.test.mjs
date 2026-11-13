@@ -28,7 +28,7 @@ const DONE = {
   callUrl: 'https://app.example.com/app/calls/call-0123456789abcdef',
 };
 
-test('the view says how a hosted call went, what it cost, and where the recording is', () => {
+test('the view says how a hosted call went and where the recording is, not what it cost', () => {
   const view = callCardView(DONE);
   assert.equal(view.title, 'Call to Bawarchi');
   assert.equal(view.subtitle, 'for Ankit · +15146605678 · 2 min 35 s');
@@ -36,13 +36,13 @@ test('the view says how a hosted call went, what it cost, and where the recordin
   assert.equal(view.outcome, 'Got it done');
   assert.deepEqual(view.details, [{ label: 'Total', value: '$24.13' }]);
   assert.deepEqual(view.lists, [{ title: 'Action items', items: ['Pick up at 6:15'] }]);
-  assert.equal(view.cost, '$0.66 · 3 min 18 s at $0.20/min');
+  assert.equal('cost' in view, false);
   assert.deepEqual(view.recording, { url: 'https://app.example.com/r/abc', length: '2:35' });
   assert.deepEqual(view.transcript.map((line) => line.who), ['Smitline', 'Bawarchi']);
   assert.equal(view.callUrl, DONE.callUrl);
 });
 
-test('the view of a self-hosted or live call: provider cost, no player without a safe link', () => {
+test('the view of a self-hosted or live call: no provider cost, no player without a safe link', () => {
   const live = callCardView({
     id: ID, status: 'in_progress', brief: { to: '+15550100' }, answeredAt: '2026-11-02T17:00:00Z',
     cost: { total: 0.2198, estimated: true },
@@ -50,13 +50,9 @@ test('the view of a self-hosted or live call: provider cost, no player without a
   }, Date.parse('2026-11-02T17:00:42Z'));
   assert.deepEqual([live.title, live.status, live.live], ['Call to +15550100', 'On the call', true]);
   assert.equal(live.subtitle, '42 s');
-  assert.equal(live.cost, "$0.22 at your providers' prices, estimated");
+  assert.equal('cost' in live, false);
   assert.deepEqual(live.recording, { url: null, length: '0:07' });
   assert.equal(live.callUrl, null);
-  assert.equal(callCardView({ id: ID, status: 'completed', charge: { status: 'pending' } }).cost,
-    'Worked out when the call ends');
-  assert.equal(callCardView({ id: ID, status: 'in_progress', charge: { status: 'pending', pricePerMinute: '$0.20' } }).cost,
-    'Billed when the call ends, at $0.20/min');
   const failed = callCardView({ id: ID, status: 'failed', error: 'The number is not in service.' });
   assert.deepEqual([failed.status, failed.tone, failed.summary], ['Failed', 'bad', 'The number is not in service.']);
   assert.equal(callCardView({ id: ID, channel: 'meeting', status: 'waiting' }).title, 'Meeting');
@@ -190,9 +186,10 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   card.deliver({ jsonrpc: '2.0', id: refresh.id, result: { content: [], structuredContent: DONE } });
   await card.settle();
   const shown = card.main.textContent;
-  for (const part of ['Done', 'Got it done', '$0.66 · 3 min 18 s at $0.20/min', 'Transcript · 2 lines', 'Open in Smitline']) {
+  for (const part of ['Done', 'Got it done', 'Transcript · 2 lines', 'Open in Smitline']) {
     assert.ok(shown.includes(part), part);
   }
+  for (const part of ['Cost', '$0.66', '$0.20/min']) assert.ok(!shown.includes(part), part);
   const [audio] = card.main.all().filter((element) => element.tagName === 'AUDIO');
   assert.equal(audio.src, 'https://app.example.com/r/abc');
   assert.equal(card.timers.filter((timer) => timer.live).length, 0); // done: no more refreshes

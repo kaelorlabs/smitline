@@ -1,8 +1,9 @@
 // The call card: one phone call or meeting shown inside the chat, for clients that support MCP
-// Apps (ChatGPT, Claude and others). It says who the call was for and how it went, what it
-// cost, plays the recording when there is a link to one, and holds the transcript. start_call
-// and get_call return it; while the call runs, the card follows it by calling get_call itself.
-// Clients without MCP Apps ignore it and read the same result as text.
+// Apps (ChatGPT, Claude and others). It says who the call was for and how it went, plays the
+// recording when there is a link to one, and holds the transcript. It leaves out what the call
+// cost: the agent still reads that in the result. start_call and get_call return it; while the
+// call runs, the card follows it by calling get_call itself. Clients without MCP Apps ignore it
+// and read the same result as text.
 //
 // Everything the card shows comes from the call record and is treated as text: it is set with
 // textContent, never parsed as HTML.
@@ -75,20 +76,6 @@ export function callCardView(record, now = Date.now()) {
     seconds = Math.max(0, ((Number.isFinite(ended) ? ended : now) - answered) / 1000);
   }
 
-  let cost = '';
-  const charge = object(call.charge);
-  if (charge.status === 'pending') {
-    const price = text(charge.pricePerMinute);
-    cost = price ? `Billed when the call ends, at ${price}/min` : 'Worked out when the call ends';
-  } else if (text(charge.amount)) {
-    const billed = count(charge.billedSeconds);
-    const price = text(charge.pricePerMinute);
-    cost = [text(charge.amount), billed !== null ? `${length(billed)}${price ? ` at ${price}/min` : ''}` : '']
-      .filter(Boolean).join(' · ');
-  } else if (typeof object(call.cost).total === 'number' && Number.isFinite(call.cost.total)) {
-    cost = `$${call.cost.total.toFixed(2)} at your providers' prices${call.cost.estimated ? ', estimated' : ''}`;
-  }
-
   const recorded = object(call.recording);
   const recording = call.recording && typeof call.recording === 'object'
     ? { url: https(call.recordingUrl), length: count(recorded.seconds) !== null ? clock(recorded.seconds) : '' }
@@ -126,7 +113,6 @@ export function callCardView(record, now = Date.now()) {
     summary: text(result.summary) || (call.status === 'failed' ? text(call.error) || 'Something went wrong.' : ''),
     details,
     lists,
-    cost,
     recording,
     transcript,
     callUrl: https(call.callUrl),
@@ -228,11 +214,6 @@ function render() {
     parts.push(section);
   }
   const facts = node('div', 'facts');
-  if (view.cost) {
-    const fact = node('div', 'fact');
-    fact.append(node('h2', null, 'Cost'), node('p', null, view.cost));
-    facts.append(fact);
-  }
   if (view.recording) {
     const fact = node('div', 'fact');
     fact.append(node('h2', null, 'Recording' + (view.recording.length ? ' · ' + view.recording.length : '')));
@@ -385,14 +366,14 @@ export function callCardResource({ mediaOrigins = [] } = {}) {
   const meta = {
     ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: origins } },
     'openai/widgetCSP': { connect_domains: [], resource_domains: origins },
-    'openai/widgetDescription': 'A phone call or meeting placed through Smitline: how it went, what it cost, the recording and the transcript.',
+    'openai/widgetDescription': 'A phone call or meeting placed through Smitline: how it went, the recording and the transcript.',
   };
   return {
     descriptor: {
       uri: CALL_CARD_URI,
       name: 'call-card',
       title: 'Call card',
-      description: 'Shows one call or meeting: status, result, cost, recording and transcript.',
+      description: 'Shows one call or meeting: status, result, recording and transcript.',
       mimeType: CALL_CARD_MIME,
       _meta: meta,
     },
