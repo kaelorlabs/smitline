@@ -11,7 +11,7 @@ const DONE = {
   id: ID,
   channel: 'phone',
   status: 'completed',
-  brief: { to: '+15146605678', onBehalfOf: 'Ankit', contact: { name: 'Bawarchi' } },
+  brief: { to: '+15550100', onBehalfOf: 'Ankit', contact: { name: 'Bawarchi' } },
   answeredAt: '2026-11-02T17:24:38Z',
   endedAt: '2026-11-02T17:27:13Z',
   result: {
@@ -31,7 +31,7 @@ const DONE = {
 test('the view says how a hosted call went and where the recording is, not what it cost', () => {
   const view = callCardView(DONE);
   assert.equal(view.title, 'Call to Bawarchi');
-  assert.equal(view.subtitle, 'for Ankit · +15146605678 · 2 min 35 s');
+  assert.equal(view.subtitle, 'for Ankit · +15550100 · 2 min 35 s');
   assert.deepEqual([view.status, view.tone, view.live], ['Done', 'done', false]);
   assert.equal(view.outcome, 'Got it done');
   assert.deepEqual(view.details, [{ label: 'Total', value: '$24.13' }]);
@@ -168,7 +168,7 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   const name = '<img src=x onerror=alert(1)>';
   card.deliver({
     jsonrpc: '2.0', method: 'ui/notifications/tool-result',
-    params: { content: [], structuredContent: { id: ID, status: 'ringing', brief: { to: '+15146605678', contact: { name } } } },
+    params: { content: [], structuredContent: { id: ID, status: 'ringing', brief: { to: '+15550100', contact: { name } } } },
   });
   assert.match(card.main.textContent, /Ringing/);
   assert.ok(card.main.textContent.includes(`Call to ${name}`));
