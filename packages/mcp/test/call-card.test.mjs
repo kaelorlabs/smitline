@@ -31,7 +31,7 @@ const DONE = {
 test('the view says how a hosted call went and where the recording is, not what it cost', () => {
   const view = callCardView(DONE);
   assert.equal(view.title, 'Call to Bawarchi');
-  assert.equal(view.subtitle, 'for Ankit · +15550100 · 2 min 35 s');
+  assert.equal(view.subtitle, '+15550100 · 2 min 35 s');
   assert.deepEqual([view.status, view.tone, view.live], ['Done', 'done', false]);
   assert.equal(view.outcome, 'Got it done');
   assert.deepEqual(view.details, [{ label: 'Total', value: '$24.13' }]);
@@ -116,6 +116,8 @@ class FakeElement {
   addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
 
   all() { return [this, ...this.children.flatMap((child) => (child instanceof FakeElement ? child.all() : []))]; }
+
+  querySelectorAll(tag) { return this.all().filter((element) => element.tagName === tag.toUpperCase()); }
 }
 
 function loadCard() {
@@ -190,7 +192,7 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   card.deliver({ jsonrpc: '2.0', id: refresh.id, result: { content: [], structuredContent: DONE } });
   await card.settle();
   const shown = card.main.textContent;
-  for (const part of ['Done', 'Got it done', 'Transcript · 2 lines', 'Open in Smitline']) {
+  for (const part of ['Done', 'Got it done', 'Transcript · 2', 'Open in Smitline']) {
     assert.ok(shown.includes(part), part);
   }
   for (const part of ['Cost', '$0.66', '$0.20/min']) assert.ok(!shown.includes(part), part);
@@ -258,4 +260,18 @@ test('the card takes the host’s colors, fonts and theme, and keeps its own for
   }
   const rules = sheet.replace(/:root[^{]*\{[^}]*\}/g, '').replace(/@media[^{]*\{\s*:root[^{]*\{[^}]*\}\s*\}/g, '');
   assert.doesNotMatch(rules, /#[0-9a-f]{3,6}\b|rgba?\(|font-size: \d|border-radius: \d+px/i);
+});
+
+test('an opened transcript stays open while the card follows the call', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, transcript: [{ speaker: 'other', text: 'Hello?' }] };
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  const details = () => card.main.querySelectorAll('details')[0];
+  assert.equal(details().open, false);
+  details().open = true;
+  details().listeners.toggle[0]();
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  assert.equal(details().open, true);
 });

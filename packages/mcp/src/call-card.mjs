@@ -102,7 +102,6 @@ export function callCardView(record, now = Date.now()) {
     id: text(call.id),
     title: meeting ? 'Meeting' : `Call to ${contact || to || 'someone'}`,
     subtitle: [
-      text(brief.onBehalfOf) ? `for ${text(brief.onBehalfOf)}` : '',
       contact && to ? to : '',
       seconds !== null ? length(seconds) : '',
     ].filter(Boolean).join(' · '),
@@ -147,34 +146,44 @@ const STYLE = `
   --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
   --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
   --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); } }
-html, body { margin: 0; background: transparent; color: var(--fg); }
-main { padding: 14px 16px 16px; display: grid; gap: 12px; }
-.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-h1 { font-size: var(--title); font-weight: var(--strong); margin: 0; }
-.sub { margin: 2px 0 0; color: var(--muted); font-size: var(--sub); }
-.pill { flex: none; font-size: var(--small); font-weight: var(--strong); padding: 3px 10px; border-radius: var(--round);
-  background: var(--chip); }
-.pill.live { color: var(--live); } .pill.bad { color: var(--bad); } .pill.muted { color: var(--muted); }
-.pill.live::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
-  border-radius: 50%; background: currentColor; vertical-align: middle; animation: pulse 1.6s infinite; }
-@keyframes pulse { 50% { opacity: 0.3; } }
-@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
+html, body { margin: 0; background: transparent; color: var(--fg); -webkit-font-smoothing: antialiased; }
+main { padding: 16px 18px; display: grid; gap: 16px; }
 p { margin: 0; }
-.outcome { font-weight: var(--strong); margin-bottom: 4px; }
-dl { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 4px 14px; margin: 0; }
-dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
-h2 { font-size: var(--small); font-weight: var(--strong); color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.04em; margin: 0 0 4px; }
-ul { margin: 0; padding-left: 18px; }
-.facts { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
-.fact { display: grid; gap: 4px; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+h1 { font-size: var(--title); font-weight: var(--strong); line-height: 1.3; margin: 0; }
+.sub { margin-top: 2px; color: var(--muted); font-size: var(--sub); font-variant-numeric: tabular-nums; }
+.pill { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--small);
+  font-weight: var(--strong); padding: 4px 10px; border-radius: var(--round); background: var(--chip); color: var(--muted); }
+.pill.live { color: var(--live); } .pill.bad { color: var(--bad); } .pill.done { color: var(--fg); }
+.pill.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
+.result { display: grid; gap: 4px; }
+.outcome { font-weight: var(--strong); }
+dl { display: grid; grid-template-columns: fit-content(40%) 1fr; gap: 6px 16px; margin: 0; }
+dt { color: var(--muted); overflow-wrap: anywhere; } dd { margin: 0; overflow-wrap: anywhere; }
+.group { display: grid; gap: 6px; }
+h2 { font-size: var(--sub); font-weight: var(--strong); color: var(--muted); margin: 0; }
+ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius); }
+.note { color: var(--muted); font-size: var(--sub); }
 audio { width: 100%; height: 36px; }
-details { border-top: 1px solid var(--line); padding-top: 10px; }
-summary { cursor: pointer; color: var(--muted); }
-details p { margin-top: 6px; }
-.open { justify-self: start; border: 1px solid var(--line); background: none; color: var(--accent);
-  border-radius: var(--radius); padding: 6px 12px; font: inherit; cursor: pointer; }
-.note { color: var(--muted); font-size: var(--small); }
+.foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
+details { flex: 1; min-width: 0; }
+details[open] { display: grid; gap: 8px; }
+.open { flex: none; margin-left: auto; }
+summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; }
+details[open] summary::before { transform: rotate(45deg); }
+.line { color: var(--fg); font-size: var(--sub); }
+.line strong { font-weight: var(--strong); }
+.open { color: var(--accent); font-weight: var(--strong); }
+.open:hover { text-decoration: underline; }
 `;
 
 const CLIENT = `
@@ -186,6 +195,8 @@ let nextId = 1;
 let call = null;
 let timer = null;
 let closed = false;
+// Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
+let transcriptOpen = false;
 
 function post(message) { window.parent.postMessage(message, '*'); }
 function ask(method, params) {
@@ -215,7 +226,7 @@ function render() {
   head.append(titles, node('span', 'pill ' + view.tone, view.status));
   parts.push(head);
   if (view.outcome || view.summary) {
-    const section = node('section');
+    const section = node('section', 'result');
     if (view.outcome) section.append(node('p', 'outcome', view.outcome));
     if (view.summary) section.append(node('p', null, view.summary));
     parts.push(section);
@@ -226,45 +237,41 @@ function render() {
     parts.push(list);
   }
   for (const group of view.lists) {
-    const section = node('section');
+    const section = node('section', 'group');
     const items = node('ul');
     for (const item of group.items) items.append(node('li', null, item));
     section.append(node('h2', null, group.title), items);
     parts.push(section);
   }
-  const facts = node('div', 'facts');
-  if (view.recording) {
-    const fact = node('div', 'fact');
-    fact.append(node('h2', null, 'Recording' + (view.recording.length ? ' · ' + view.recording.length : '')));
-    if (view.recording.url) {
-      const audio = node('audio');
-      audio.controls = true;
-      audio.preload = 'none';
-      audio.src = view.recording.url;
-      fact.append(audio);
-    } else {
-      fact.append(node('p', 'note', 'Listen to it from the call in Smitline.'));
-    }
-    facts.append(fact);
+  if (view.recording && view.recording.url) {
+    const section = node('section', 'group');
+    const audio = node('audio');
+    audio.controls = true;
+    audio.preload = 'none';
+    audio.src = view.recording.url;
+    section.append(node('h2', null, 'Recording' + (view.recording.length ? ' · ' + view.recording.length : '')), audio);
+    parts.push(section);
   }
-  if (facts.childElementCount) parts.push(facts);
+  const foot = node('footer', 'foot');
   if (view.transcript.length) {
     const box = node('details');
-    box.append(node('summary', null, 'Transcript · ' + view.transcript.length + (view.transcript.length === 1 ? ' line' : ' lines')));
+    box.open = transcriptOpen;
+    box.addEventListener('toggle', () => { transcriptOpen = box.open; });
+    box.append(node('summary', null, 'Transcript · ' + view.transcript.length));
     for (const line of view.transcript) {
-      const said = node('p');
+      const said = node('p', 'line');
       said.append(node('strong', null, line.who + ': '), document.createTextNode(line.text));
       box.append(said);
     }
-    parts.push(box);
+    foot.append(box);
   }
   if (view.callUrl) {
-    const open = node('button', 'open', 'Open in Smitline');
+    const open = node('button', 'open', 'Open in Smitline ↗');
     open.type = 'button';
     open.addEventListener('click', () => openLink(view.callUrl));
-    parts.push(open);
+    foot.append(open);
   }
-  if (view.live) parts.push(node('p', 'note', 'This card follows the call as it happens.'));
+  if (foot.childElementCount) parts.push(foot);
   main.replaceChildren(...parts);
 }
 
