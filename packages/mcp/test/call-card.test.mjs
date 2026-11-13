@@ -104,6 +104,7 @@ class FakeElement {
     this.listeners = {};
     this.own = '';
     this.style = { set: {}, setProperty(name, value) { this.set[name] = value; } };
+    this.attributes = {};
   }
 
   set textContent(value) { this.children = []; this.own = String(value); }
@@ -119,6 +120,8 @@ class FakeElement {
   addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
 
   all() { return [this, ...this.children.flatMap((child) => (child instanceof FakeElement ? child.all() : []))]; }
+
+  setAttribute(name, value) { this.attributes[name] = String(value); }
 
   querySelectorAll(tag) { return this.all().filter((element) => element.tagName === tag.toUpperCase()); }
 }
@@ -222,6 +225,106 @@ test('messages from anywhere but the host are ignored', () => {
   assert.equal(card.main.childElementCount, 0);
   card.deliver(result);
   assert.ok(card.main.textContent.includes('Call to Bawarchi'));
+});
+
+test('the view lists the questions from a running call that nobody has finished', () => {
+  const running = {
+    id: ID, status: 'in_progress', brief: { to: '+15550100' },
+    requests: [
+      { id: 'r1', state: 'open', text: 'Should I bring anything?', askedBy: 'Sam',
+        thread: [{ from: 'call', type: 'ask', text: 'Should I bring anything?' },
+          { from: 'agent', type: 'status', text: 'Checking' }, { from: 'call', type: 'add', text: 'Drinks, maybe?' }] },
+      { id: 'r2', state: 'working', text: 'What time?' },
+      { id: 'r3', state: 'done', text: 'Answered already' },
+      { id: 'r4', state: 'canceled', text: 'Dropped' },
+      { id: 'x5', state: 'open', text: 'Not a request id' },
+      { id: 'r6', state: 'open', text: '  ' },
+    ],
+  };
+  const view = callCardView(running);
+  assert.deepEqual(view.requests, [
+    { id: 'r1', text: 'Should I bring anything?', added: 'Drinks, maybe?', askedBy: 'Sam' },
+    { id: 'r2', text: 'What time?', added: '', askedBy: '' },
+  ]);
+  assert.equal(view.canTell, true);
+  assert.deepEqual(callCardView({ ...running, status: 'completed' }).requests, []); // openRequests, for the agent
+  assert.equal(callCardView({ ...running, status: 'ringing' }).canTell, false);
+});
+
+test('the user answers a question and tells the call something from the card', async () => {
+  const card = loadCard();
+  const [hello] = card.sent;
+  card.deliver({ jsonrpc: '2.0', id: hello.id, result: {} });
+  await card.settle();
+  const live = {
+    id: ID, status: 'in_progress', brief: { to: '+15550100' },
+    requests: [{ id: 'r1', state: 'open', text: 'Should I bring anything?', askedBy: 'Sam' }],
+  };
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  assert.ok(card.main.textContent.includes('Sam asks'));
+  assert.ok(card.main.textContent.includes('Should I bring anything?'));
+  const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
+  const submit = (key) => {
+    const form = card.main.querySelectorAll('form').find((item) => item.children[0].dataset.key === key);
+    form.listeners.submit[0]({ preventDefault() {} });
+  };
+  const type = (key, words) => { box(key).value = words; box(key).listeners.input[0](); };
+  assert.ok(box('r1'));
+  assert.equal(box('tell'), undefined); // one box at a time: the question first
+
+  type('r1', 'Just yourself');
+  submit('r1');
+  const reply = card.sent.at(-1);
+  assert.deepEqual([reply.method, reply.params], ['tools/call', {
+    name: 'reply_to_call_request', arguments: { callId: ID, requestId: 'r1', type: 'done', text: 'Just yourself' },
+  }]);
+  assert.ok(card.main.textContent.includes('Sending…'));
+  submit('r1'); // a second press while it sends does nothing
+  assert.equal(card.sent.at(-1), reply);
+  card.deliver({ jsonrpc: '2.0', id: reply.id, result: { content: [], isError: false } });
+  await card.settle();
+  assert.ok(card.main.textContent.includes('Sent to the call.'));
+  assert.equal(box('r1').value, '');
+  const again = card.sent.at(-1); // and it asks for the call again at once
+  assert.deepEqual([again.method, again.params.name], ['tools/call', 'get_call']);
+  const closed = { ...live, requests: [{ ...live.requests[0], state: 'done' }] };
+  card.deliver({ jsonrpc: '2.0', id: again.id, result: { content: [], structuredContent: closed } });
+  await card.settle();
+  assert.equal(box('r1'), undefined); // the question has gone; what the user said stays
+  assert.ok(card.main.textContent.includes('Replied “Just yourself” to “Should I bring anything?”'));
+  assert.ok(box('tell')); // and with no question open, "Tell the call" takes its place
+
+  const before = card.sent.length;
+  submit('tell'); // an empty box sends nothing
+  assert.equal(card.sent.length, before);
+  type('tell', 'Say we are 10 minutes late');
+  submit('tell');
+  const note = card.sent.at(-1);
+  assert.deepEqual(note.params, { name: 'send_call_instruction', arguments: { callId: ID, text: 'Say we are 10 minutes late' } });
+  const refused = JSON.stringify({ code: 'call_not_active', message: 'The call has ended.' });
+  card.deliver({ jsonrpc: '2.0', id: note.id, result: { isError: true, content: [{ type: 'text', text: refused }] } });
+  await card.settle();
+  assert.ok(card.main.textContent.includes('Not sent: The call has ended.'));
+  assert.equal(box('tell').value, 'Say we are 10 minutes late'); // kept, to try again
+});
+
+test('the card asks one question at a time, oldest first, and says how many wait', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const live = {
+    id: ID, status: 'in_progress', brief: { to: '+15550100' },
+    requests: [
+      { id: 'r1', state: 'open', text: 'Should I bring anything?', askedBy: 'Sam' },
+      { id: 'r2', state: 'open', text: 'Is 5 still fine?', askedBy: 'Sam' },
+      { id: 'r3', state: 'working', text: 'Can you send the address?', askedBy: 'Sam' },
+    ],
+  };
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  const keys = card.main.querySelectorAll('textarea').map((item) => item.dataset.key);
+  assert.deepEqual(keys, ['r1']);
+  assert.ok(card.main.textContent.includes('2 more waiting'));
+  assert.equal(card.main.querySelectorAll('button').length, 1); // Answer; no Send while a question waits
 });
 
 test('the card takes the host’s colors, fonts and theme, and keeps its own for what the host leaves out', async () => {

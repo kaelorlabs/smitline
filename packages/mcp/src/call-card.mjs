@@ -100,6 +100,24 @@ export function callCardView(record, now = Date.now()) {
         .filter(Boolean),
     }))
     .filter((list) => list.items.length);
+  // Questions from the call nobody has finished, so the user can answer them from the card
+  // while the agent is busy (some apps take no message until the agent's turn ends).
+  const live = !ENDED.includes(call.status);
+  const requests = (live && Array.isArray(call.requests) ? call.requests : [])
+    .map((request) => object(request))
+    .filter((request) => ['open', 'working'].includes(request.state) && /^r[1-9][0-9]{0,2}$/.test(text(request.id)))
+    .map((request) => {
+      const added = (Array.isArray(request.thread) ? request.thread : [])
+        .map((entry) => object(entry))
+        .filter((entry) => entry.from === 'call' && entry.type === 'add' && text(entry.text));
+      return {
+        id: text(request.id),
+        text: text(request.text),
+        added: added.length ? text(added[added.length - 1].text) : '',
+        askedBy: text(request.askedBy),
+      };
+    })
+    .filter((request) => request.text);
 
   return {
     id: text(call.id),
@@ -110,11 +128,13 @@ export function callCardView(record, now = Date.now()) {
     ].filter(Boolean).join(' · '),
     status,
     tone,
-    live: !ENDED.includes(call.status),
+    live,
     outcome: OUTCOMES[result.outcome] || '',
     summary: text(result.summary) || (call.status === 'failed' ? text(call.error) || 'Something went wrong.' : ''),
     details,
     lists,
+    requests,
+    canTell: call.status === 'in_progress',
     recording,
     transcript,
     callUrl: https(call.callUrl),
@@ -149,6 +169,7 @@ const STYLE = `
   --live: var(--color-text-success, #4ade80); --bad: var(--color-text-danger, #f87171);
   --accent: var(--color-text-info, #8ab4ff); --ring: var(--color-ring-primary, #8ab4ff);
   --button: var(--color-background-inverse, #8ab4ff); --button-text: var(--color-text-inverse, #10131a); } }
+:root { --radius-lg: var(--border-radius-lg, 12px); }
 html, body { margin: 0; background: transparent; color: var(--fg); -webkit-font-smoothing: antialiased; }
 main { padding: 16px 18px; display: grid; gap: 16px; }
 p { margin: 0; }
@@ -170,8 +191,23 @@ dt { color: var(--muted); overflow-wrap: anywhere; } dd { margin: 0; overflow-wr
 .group { display: grid; gap: 6px; }
 h2 { font-size: var(--sub); font-weight: var(--strong); color: var(--muted); margin: 0; }
 ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.ask { display: grid; gap: 8px; }
+.label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: var(--sub); }
+.quote { padding: 10px 12px; border-radius: var(--radius-lg); background: var(--chip); overflow-wrap: anywhere; }
+.quote .note { margin-top: 4px; }
+.compose { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-lg); transition: border-color 0.15s; }
+.compose:focus-within { border-color: var(--ring); }
+textarea { box-sizing: border-box; flex: 1; min-width: 0; min-height: 30px; max-height: 120px; resize: none; border: 0; outline: none;
+  background: transparent; color: inherit; font: inherit; padding: 4px 0; }
+textarea::placeholder { color: var(--muted); }
+.send { flex: none; padding: 6px 14px; border-radius: var(--round); background: var(--button);
+  color: var(--button-text); font-weight: var(--strong); font-size: var(--sub); transition: opacity 0.15s; }
+.send:disabled { opacity: 0.4; cursor: default; }
 button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius); }
 .note { color: var(--muted); font-size: var(--sub); }
+.note.bad { color: var(--bad); }
+.note.sent::before { content: "✓ "; color: var(--live); }
 audio { width: 100%; height: 36px; }
 .foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
   border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
@@ -200,6 +236,11 @@ let timer = null;
 let closed = false;
 // Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
 let transcriptOpen = false;
+// What the user is typing in each answer box (a request id, or 'tell'), which ones are being
+// sent, and the note under each; the card redraws every few seconds and keeps them.
+const drafts = new Map();
+const sending = new Set();
+const notes = new Map();
 
 function post(message) { window.parent.postMessage(message, '*'); }
 function ask(method, params) {
@@ -211,6 +252,14 @@ function ask(method, params) {
   });
 }
 function tell(method, params) { post({ jsonrpc: '2.0', method, params }); }
+async function callTool(name, args) {
+  try {
+    return await ask('tools/call', { name, arguments: args });
+  } catch (error) {
+    if (window.openai && typeof window.openai.callTool === 'function') return window.openai.callTool(name, args);
+    throw error;
+  }
+}
 
 function node(tag, className, content) {
   const element = document.createElement(tag);
@@ -246,6 +295,10 @@ function render() {
     section.append(node('h2', null, group.title), items);
     parts.push(section);
   }
+  if (view.live) {
+    const section = replies(view);
+    if (section.childElementCount) parts.push(section);
+  }
   if (view.recording && view.recording.url) {
     const section = node('section', 'group');
     const audio = node('audio');
@@ -275,7 +328,19 @@ function render() {
     foot.append(open);
   }
   if (foot.childElementCount) parts.push(foot);
+  // Redrawing replaces the answer boxes: put the cursor back where the user was typing.
+  const focused = document.activeElement;
+  const key = focused && focused.dataset ? focused.dataset.key : undefined;
+  const at = key ? [focused.selectionStart, focused.selectionEnd] : null;
   main.replaceChildren(...parts);
+  for (const box of main.querySelectorAll('textarea')) if (box.value) fit(box);
+  if (key) {
+    const box = [...main.querySelectorAll('textarea')].find((item) => item.dataset.key === key);
+    if (box) {
+      box.focus();
+      box.setSelectionRange(at[0], at[1]);
+    }
+  }
 }
 
 async function openLink(url) {
@@ -301,19 +366,118 @@ function follow() {
 }
 
 async function refresh() {
-  const args = { callId: call.id };
   try {
-    const result = await ask('tools/call', { name: 'get_call', arguments: args });
+    const result = await callTool('get_call', { callId: call.id });
     if (result && !result.isError) return show(result);
+  } catch { /* try again below */ }
+  follow();
+}
+
+function failure(result) {
+  const said = result && Array.isArray(result.content) && result.content[0] && result.content[0].text;
+  let message = typeof said === 'string' ? said : '';
+  try { message = JSON.parse(message).message || message; } catch { /* plain text */ }
+  return 'Not sent' + (message ? ': ' + message.slice(0, 200) : '.');
+}
+
+async function send(key, name, args, about) {
+  const words = (drafts.get(key) || '').trim();
+  if (!words || sending.has(key) || !call) return;
+  sending.add(key);
+  notes.delete(key);
+  render();
+  try {
+    const result = await callTool(name, { callId: call.id, ...args, text: words });
+    if (result && !result.isError) {
+      drafts.delete(key);
+      // An answered question leaves the card with the next refresh; this line stays instead.
+      notes.set(key, {
+        text: 'Sent to the call.',
+        answered: about ? 'Replied “' + words + '” to “' + about + '”' : '',
+      });
+    } else {
+      notes.set(key, { text: failure(result), bad: true });
+    }
   } catch {
-    if (window.openai && typeof window.openai.callTool === 'function') {
-      try {
-        const result = await window.openai.callTool('get_call', args);
-        if (result && !result.isError) return show(result);
-      } catch { /* try again below */ }
+    notes.set(key, { text: 'Not sent: this app did not pass it on.', bad: true });
+  }
+  sending.delete(key);
+  render();
+  clearTimeout(timer);
+  refresh();
+}
+
+// The box grows with what is typed, up to about five lines.
+function fit(box) {
+  box.style.height = 'auto';
+  if (box.scrollHeight) box.style.height = box.scrollHeight + 'px';
+}
+
+function composer(key, label, placeholder, name, args, about) {
+  const form = node('form', 'compose');
+  const box = node('textarea');
+  box.rows = 1;
+  box.maxLength = key === 'tell' ? 2000 : 600;
+  box.placeholder = placeholder;
+  box.value = drafts.get(key) || '';
+  box.dataset.key = key;
+  box.setAttribute('aria-label', placeholder);
+  box.addEventListener('input', () => { drafts.set(key, box.value); fit(box); });
+  box.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      send(key, name, args, about);
+    }
+  });
+  const button = node('button', 'send', sending.has(key) ? 'Sending…' : 'Send');
+  button.type = 'submit';
+  button.disabled = sending.has(key);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    send(key, name, args, about);
+  });
+  form.append(box, button);
+  const wrap = node('div', 'ask');
+  wrap.append(label);
+  return { wrap, form, box };
+}
+
+// One box at a time, so the card keeps to one main action (ChatGPT's inline cards allow two,
+// with "Open in Smitline" the second): the oldest open question, else "Tell the call".
+function replies(view) {
+  const section = node('section', 'ask');
+  for (const [key, note] of notes) {
+    if (note.answered && !view.requests.some((request) => request.id === key)) {
+      section.append(node('p', 'note sent', note.answered));
     }
   }
-  follow();
+  const [request] = view.requests;
+  let key = '';
+  let parts = null;
+  if (request) {
+    key = request.id;
+    const label = node('div', 'label');
+    const waiting = view.requests.length - 1;
+    label.append(node('span', null, (request.askedBy || 'They') + ' asks'));
+    if (waiting) label.append(node('span', null, waiting + ' more waiting'));
+    parts = composer(key, label, 'Your reply', 'reply_to_call_request', { requestId: request.id, type: 'done' }, request.text);
+    const quote = node('div', 'quote');
+    quote.append(node('p', null, request.text));
+    if (request.added) quote.append(node('p', 'note', 'Then added: ' + request.added));
+    parts.wrap.append(quote);
+  } else if (view.canTell) {
+    key = 'tell';
+    const label = node('div', 'label');
+    label.append(node('span', null, 'Tell the call'));
+    parts = composer(key, label, 'Something for the voice to say or know', 'send_call_instruction', {});
+  }
+  if (parts) {
+    parts.wrap.append(parts.form);
+    const note = notes.get(key);
+    if (note) parts.wrap.append(node('p', note.bad ? 'note bad' : 'note sent', note.text));
+    section.append(parts.wrap);
+  }
+  return section;
 }
 
 // The host's theme, style variables and fonts, as the MCP Apps SDK applies them; whatever it
