@@ -10,7 +10,7 @@
 
 // Hosts may keep a copy of the card by its address (ChatGPT asks apps to version it), so the
 // version goes up whenever the card's page changes in a way an old copy would get wrong.
-export const CALL_CARD_URI = 'ui://smitline/call-card-v2.html';
+export const CALL_CARD_URI = 'ui://smitline/call-card-v3.html';
 export const CALL_CARD_MIME = 'text/html;profile=mcp-app';
 
 /** Tool _meta that shows the card: the MCP Apps key, and ChatGPT's alias for it. */
