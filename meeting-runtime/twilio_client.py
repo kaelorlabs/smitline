@@ -85,6 +85,23 @@ def hangup_twiml():
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
+def say_twiml(text, *, say_voice='Polly.Joanna'):
+    """Say something, then hang up."""
+    return ('<?xml version="1.0" encoding="UTF-8"?><Response>'
+            f'<Say voice={quoteattr(say_voice)}>{escape(text)}</Say><Hangup/></Response>')
+
+
+def gather_twiml(action, prompt, *, digits=1, timeout=8, after=None, say_voice='Polly.Joanna'):
+    """Say `prompt` (twice) and wait for a key, which goes to `action` (POST). With no key,
+    `after` is said and the call hangs up."""
+    tail = f'<Say voice={quoteattr(say_voice)}>{escape(after)}</Say>' if after else ''
+    return ('<?xml version="1.0" encoding="UTF-8"?><Response>'
+            f'<Gather numDigits="{int(digits)}" timeout="{int(timeout)}" action={quoteattr(action)} '
+            'method="POST">'
+            f'<Say voice={quoteattr(say_voice)} loop="2">{escape(prompt)}</Say></Gather>'
+            f'{tail}<Hangup/></Response>')
+
+
 def client_for(creds, **kwargs):
     """A REST client for phone credentials from the call hooks: Twilio or SignalWire."""
     return TwilioClient(creds['accountSid'], creds['authToken'],

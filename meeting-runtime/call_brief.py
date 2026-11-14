@@ -19,8 +19,8 @@ NEW_ROOM = 'new'
 BRIEF_FIELDS = (
     'channel', 'to', 'onBehalfOf', 'objective', 'context', 'questions', 'tone', 'contact',
     'mayAgreeTo', 'mustNotShare', 'successCriteria', 'language', 'voice', 'maxMinutes',
-    'rehearsal', 'afterHours', 'record', 'phoneMenus', 'notify', 'camera', 'task', 'carryFrom',
-    'canDo', 'forRequest', 'dialIn',
+    'rehearsal', 'afterHours', 'record', 'phoneMenus', 'maxHoldMinutes', 'connectOwner', 'notify',
+    'camera', 'task', 'carryFrom', 'canDo', 'forRequest', 'dialIn',
 )
 # A meeting's `to` that is neither a link, "new", nor its dial-in number.
 MEETING_TO_ERROR = ('to must be a Zoom, Teams, Google Meet, or Daily meeting link, "new", or the '
@@ -46,6 +46,10 @@ VOICE = re.compile(r'^[a-z][a-z0-9_-]{1,31}$')
 LANGUAGE = re.compile(r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$')
 DEFAULT_MAX_MINUTES = {'phone': 10, 'meeting': 120}
 MAX_MINUTES = {'phone': 60, 'meeting': 240}
+# Time on hold (phone_hold.py) is counted apart from maxMinutes: a phone call may wait on hold
+# this long in all before it gives up (maxHoldMinutes).
+DEFAULT_MAX_HOLD_MINUTES = 60
+MAX_HOLD_MINUTES = 180
 MAX_CONTEXT = 6000
 # Short numbers that reach emergency services or crisis lines somewhere in the world.
 # Smitline never dials them: a person in trouble must reach help directly.
@@ -213,8 +217,13 @@ class CallBrief:
     rehearsal: bool = False
     after_hours: bool = False
     record: bool = False
-    # Phone only, off unless the brief turns it on: the voice may press keys in a phone menu.
+    # Phone only: the voice may press keys in a phone menu. On for phone briefs unless the brief
+    # says phoneMenus: false (from_dict); off for briefs made in code without it.
     phone_menus: bool = False
+    # Phone only: how long the call may wait on hold in all (None: DEFAULT_MAX_HOLD_MINUTES).
+    max_hold_minutes: int = None
+    # Phone only: once a person picks up after a hold, ring the owner's phone and connect them.
+    connect_owner: bool = False
     webhook_url: str = None
     # Meetings only: {'enabled', 'defaultOn', 'avatarDataUri'}, as the meeting daemon takes it.
     camera: dict = field(default=None, compare=False)
@@ -252,6 +261,13 @@ class CallBrief:
         return context
 
     @property
+    def hold_minutes(self):
+        """How long a phone call may wait on hold in all; 0 for meetings."""
+        if self.channel != 'phone':
+            return 0
+        return self.max_hold_minutes or DEFAULT_MAX_HOLD_MINUTES
+
+    @property
     def platform(self):
         if self.channel != 'meeting':
             return 'phone'
@@ -278,7 +294,10 @@ class CallBrief:
             'rehearsal': self.rehearsal,
             'afterHours': True if self.after_hours else None,
             'record': True if self.record else None,
-            'phoneMenus': True if self.phone_menus else None,
+            # Phone menus are on by default, so only a phone brief that turned them off says so.
+            'phoneMenus': False if self.channel == 'phone' and not self.phone_menus else None,
+            'maxHoldMinutes': self.max_hold_minutes,
+            'connectOwner': True if self.connect_owner else None,
             'notify': {'webhookUrl': self.webhook_url} if self.webhook_url else None,
             # The avatar image stays out of the stored brief, which every call listing returns.
             'camera': ({'enabled': self.camera['enabled'], 'defaultOn': self.camera['defaultOn']}
@@ -338,9 +357,22 @@ class CallBrief:
         if record and channel != 'phone':
             raise ValueError('record is only for phone calls')
         phone_menus = optional_field(data, 'phoneMenus')
-        phone_menus = False if phone_menus is None else require_bool(phone_menus, 'phoneMenus')
-        if phone_menus and channel != 'phone':
-            raise ValueError('phoneMenus is only for phone calls')
+        if phone_menus is None:
+            phone_menus = channel == 'phone'  # any business may answer with a menu
+        else:
+            phone_menus = require_bool(phone_menus, 'phoneMenus')
+            if phone_menus and channel != 'phone':
+                raise ValueError('phoneMenus is only for phone calls')
+        max_hold_minutes = optional_field(data, 'maxHoldMinutes')
+        if max_hold_minutes is not None:
+            if channel != 'phone':
+                raise ValueError('maxHoldMinutes is only for phone calls')
+            max_hold_minutes = require_int(max_hold_minutes, 'maxHoldMinutes', min_value=1,
+                                           max_value=MAX_HOLD_MINUTES)
+        connect_owner = optional_field(data, 'connectOwner')
+        connect_owner = False if connect_owner is None else require_bool(connect_owner, 'connectOwner')
+        if connect_owner and channel != 'phone':
+            raise ValueError('connectOwner is only for phone calls')
         notify = optional_field(data, 'notify')
         webhook_url = None
         if notify is not None:
@@ -434,6 +466,8 @@ class CallBrief:
             after_hours=after_hours,
             record=record,
             phone_menus=phone_menus,
+            max_hold_minutes=max_hold_minutes,
+            connect_owner=connect_owner,
             webhook_url=webhook_url,
             camera=camera,
             task=task,

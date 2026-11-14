@@ -10,7 +10,7 @@
 
 // Hosts may keep a copy of the card by its address (ChatGPT asks apps to version it), so the
 // version goes up whenever the card's page changes in a way an old copy would get wrong.
-export const CALL_CARD_URI = 'ui://smitline/call-card-v2.html';
+export const CALL_CARD_URI = 'ui://smitline/call-card-v3.html';
 export const CALL_CARD_MIME = 'text/html;profile=mcp-app';
 
 /** Tool _meta that shows the card: the MCP Apps key, and ChatGPT's alias for it. */
@@ -86,10 +86,12 @@ export function callCardView(record, now = Date.now()) {
     ? { url: https(call.recordingUrl), length: count(recorded.seconds) !== null ? clock(recorded.seconds) : '' }
     : null;
   const them = meeting ? 'Meeting' : (contact || 'Them');
+  // A note says what happened on the line ("On hold."): nobody said it.
+  const who = (speaker) => (speaker === 'agent' ? 'Smitline' : speaker === 'note' ? 'Note' : them);
   const transcript = (Array.isArray(call.transcript) ? call.transcript : [])
     .map((line) => object(line))
     .filter((line) => text(line.text))
-    .map((line) => ({ who: line.speaker === 'agent' ? 'Smitline' : them, text: text(line.text) }));
+    .map((line) => ({ who: who(line.speaker), text: text(line.text) }));
   const details = (Array.isArray(result.details) ? result.details : [])
     .map((item) => object(item))
     .map((item) => ({ label: text(item.label), value: text(item.value == null ? '' : String(item.value)) }))

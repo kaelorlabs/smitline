@@ -1,5 +1,6 @@
 """The only public routes: Twilio (or SignalWire) call status, voicemail detection, recordings,
-media, and inbound calls, plus OpenAI's signed webhook for calls handed to it over SIP.
+media, inbound calls, and the owner's phone when a call rings it (phone_owner.py), plus OpenAI's
+signed webhook for calls handed to it over SIP.
 
 Runs as its own listener on loopback (default 127.0.0.1:8766) so a tunnel or
 proxy can expose it without exposing the daemon API. Every HTTP callback must
@@ -93,12 +94,32 @@ def create_gateway_app(line, service, *, current_url, owner=LOCAL_OWNER):
         except (asyncio.TimeoutError, ValueError):
             start = None
         parameters = (start or {}).get('customParameters') or {}
+        if parameters.get('leg') == 'owner':
+            # The owner pressed 1 to join a call (phone_owner.py): its own token, never the call's.
+            claim_owner = getattr(line, 'claim_owner', None)
+            session = claim_owner(parameters.get('callId'), parameters.get('token')) if claim_owner else None
+            if session is None:
+                await ws.close(code=1008, message=b'unknown call')
+                return ws
+            await session.run_owner_leg(ws, start)
+            return ws
         session = line.claim(parameters.get('callId'), parameters.get('token'))
         if session is None:
             await ws.close(code=1008, message=b'unknown call')
             return ws
         await session.run(ws, start)
         return ws
+
+    async def owner_answer(request):
+        """The owner's phone after the whisper: the key they pressed decides (phone_owner.py)."""
+        params = await verified_params(request, call_owner(request))
+        twiml = line.owner_answer(request.match_info['callId'], params, base_url())
+        return web.Response(text=twiml, content_type=XML)
+
+    async def owner_status(request):
+        params = await verified_params(request, call_owner(request))
+        line.on_owner_status(request.match_info['callId'], params)
+        return web.Response(status=204)
 
     async def recording(request):
         params = await verified_params(request, call_owner(request))
@@ -196,6 +217,8 @@ def create_gateway_app(line, service, *, current_url, owner=LOCAL_OWNER):
     app.router.add_post('/twilio/status/{callId}', status)
     app.router.add_post('/twilio/amd/{callId}', amd)
     app.router.add_post('/twilio/recording/{callId}', recording)
+    app.router.add_post('/twilio/owner/{callId}', owner_answer)
+    app.router.add_post('/twilio/owner-status/{callId}', owner_status)
     app.router.add_get('/twilio/media', media)
     app.router.add_post('/twilio/inbound', inbound)
     app.router.add_post('/openai/webhook', openai_webhook)

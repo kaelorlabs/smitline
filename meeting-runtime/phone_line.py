@@ -23,7 +23,9 @@ from meeting_lifecycle import (
 )
 from call_hooks import CallRefused
 from call_hooks import LineNotReady as NotReady
+from phone_hold import MUSIC_LEVEL_DB, HoldMixin, resume_input
 from phone_keys import KEY_GAP_SECONDS, PAUSE, PAUSE_SECONDS, key_payload, menu_keys, shown_keys
+from phone_owner import OWNER_MAX_MINUTES, OwnerLegMixin
 from phone_prompts import (
     DEFAULT_BACKEND_MODEL, HANGUP_YIELDED, delegation_config, disclosure_reminder, goodbye_cue,
     greeting_name, machine_hint, names, opening_cue, states_ai, voice_instructions,
@@ -460,12 +462,15 @@ def voicemail_max_seconds(env):
     return seconds if math.isfinite(seconds) and seconds >= 0 else VOICEMAIL_MAX_SECONDS
 
 
-class PhoneSession:
-    """One phone call bridged to GPT-Live."""
+class PhoneSession(HoldMixin, OwnerLegMixin):
+    """One phone call bridged to GPT-Live. Its audio passes through here, so it can wait on hold
+    with the voice switched off (phone_hold.py) and connect the owner's phone (phone_owner.py)."""
 
     # Whether the other side may be a voicemail (its greeting and beep end the call); not on a
     # meeting's phone line (dial_in.py), whose "say your name after the tone" is a bridge's.
     voicemail_possible = True
+    # The call's audio passes through here (not direct SIP): the owner's phone can be connected.
+    relays_audio = True
 
     def __init__(self, line, ctx, *, api_key, twilio, from_number, token, inbound=False,
                  recording=False, owner_phone=None):
@@ -556,12 +561,20 @@ class PhoneSession:
         # neither the voice nor the other side's talking interrupts it.
         self._keys_lock = asyncio.Lock()
         self.keying = False
+        # Voice sessions: across a hold the voice is switched off and on (phone_hold.py), so the
+        # session in use is kept with its context manager, and closed ones count their seconds.
+        self._live_manager = None
+        self._voice_closed_seconds = 0
+        self._voice_starts = 0
+        self._init_hold()
+        self._init_owner()
 
     # Configuration -------------------------------------------------------
 
-    def config(self):
+    def config(self, resume_note=None):
         """The goal leads (voice instructions); background is reference (starting context for
-        the voice, in full for the backend). See briefing.py."""
+        the voice, in full for the backend). See briefing.py. A voice started again after a hold
+        (resume_note) also starts with the call so far and why it woke (phone_hold.py)."""
         env = self.line.environ()
         profile = self.ctx.profile()
         # The brief can name the person; otherwise the profile may know the number.
@@ -577,19 +590,23 @@ class PhoneSession:
             self.disclosed.set()
         notes = voice_notes(profile, contact, session, owner)
         self.backend_model = env.get('SMITLINE_PHONE_BACKEND_MODEL') or DEFAULT_BACKEND_MODEL
+        hold = self.can_hold()
+        seed = voice_input(notes)
+        if resume_note:
+            seed = resume_input(seed, self.ctx.transcript, resume_note)
         return session_config(
             instructions=voice_instructions(self.brief, inbound=self.inbound,
                                             recording=self.recording, contact=contact,
                                             has_notes=bool(notes),
                                             boundaries=(profile or {}).get('boundaries') or (),
-                                            calling_owner=self.calling_owner),
+                                            calling_owner=self.calling_owner, hold=hold),
             audio_format=PCMU8,
             voice=self.brief.voice or default_voice(owner_settings(self.ctx, env)),
             delegation=delegation_config(
                 self.brief, model=self.backend_model,
                 web_search=env.get('SMITLINE_PHONE_WEB_SEARCH') == '1', inbound=self.inbound,
-                background=backend_background(profile, contact, session, owner)),
-            seed_input=voice_input(notes),
+                background=backend_background(profile, contact, session, owner), hold=hold),
+            seed_input=seed,
         )
 
     # Bookkeeping ---------------------------------------------------------
@@ -673,20 +690,19 @@ class PhoneSession:
                 self.recorder = CallRecorder(self.ctx.recording_path())
             except OSError as error:
                 self.ctx.event('call.recording_failed', detail=str(error)[:200])
-        manager = self.line.live_factory(self.api_key, self.config())
         try:
-            try:
-                live = await asyncio.wait_for(manager.__aenter__(), LIVE_CONNECT_TIMEOUT)
-            except Exception as error:
-                self.fail(f'The voice session could not start ({_error_code(error)}).')
+            live = await self._connect_voice(self.config())
+            if live is None:
                 await self.hangup('error')
                 return
             try:
                 await self._bridge(live)
             finally:
-                await manager.__aexit__(None, None, None)
+                await self._retire_voice()
         finally:
             self.stream_ended_at = time.monotonic()
+            if self.holdbook.on_hold:
+                self._end_hold('call_ended')  # it ended on hold: the record says how long
             self.tap.close()
             self._finish_recording()
             for speaker, text in self.joiner.flush():
@@ -713,13 +729,55 @@ class PhoneSession:
         ended = self.stream_ended_at if self.stream_ended_at is not None else time.monotonic()
         return max(0, int(ended - self.started_at))
 
+    async def _connect_voice(self, config):
+        """Start a GPT-Live session; None (and the call marked failed) when it cannot start."""
+        manager = self.line.live_factory(self.api_key, config)
+        try:
+            live = await asyncio.wait_for(manager.__aenter__(), LIVE_CONNECT_TIMEOUT)
+        except Exception as error:
+            again = ' again' if self._voice_starts else ''
+            self.fail(f'The voice session could not start{again} ({_error_code(error)}).')
+            return None
+        self._live_manager = manager
+        self._voice_starts += 1
+        return live
+
+    async def _retire_voice(self):
+        """The voice session in use is over: count its seconds and let it go."""
+        live, manager = self.live, self._live_manager
+        self.live, self._live_manager = None, None
+        if live is not None:
+            self._voice_closed_seconds += int(getattr(live, 'usage_seconds', 0) or 0)
+        if manager is not None:
+            try:
+                await manager.__aexit__(None, None, None)
+            except Exception:
+                pass
+
+    def voice_seconds(self):
+        """GPT-Live seconds of every voice session of this call."""
+        current = int(getattr(self.live, 'usage_seconds', 0) or 0) if self.live is not None else 0
+        return self._voice_closed_seconds + current
+
+    async def _run_voice(self):
+        """Read the voice's events. Across a hold the voice is switched off and started again
+        (phone_hold.py), so this outlives one session; it returns when the voice is done."""
+        while True:
+            await self._read_live()
+            if self._close_reason is None:
+                return  # it closed by itself, or with the call
+            self._close_reason = None
+            await self._retire_voice()
+            if not await self._sleep():
+                return
+
     async def _bridge(self, live):
         self.live = live
-        reader = asyncio.create_task(self._read_live(), name='live-events')
+        voice = asyncio.create_task(self._run_voice(), name='voice')
         ending = [
             asyncio.create_task(self._read_twilio(), name='twilio-in'),
             asyncio.create_task(self._watch(), name='call-watchdog'),
-            reader,
+            voice,
         ]
         helpers = [
             asyncio.create_task(self.pacer.run(), name='twilio-out'),
@@ -729,16 +787,17 @@ class PhoneSession:
         for task in done:
             if not task.cancelled() and task.exception():
                 self.fail(f'The call broke ({_error_code(task.exception())}).')
-        if not reader.done():
+        if not voice.done() and self.live is not None and not self.asleep:
             # Close gracefully so session.closed reports final usage.
-            await live.close()
+            await self.live.close()
             try:
-                await asyncio.wait_for(asyncio.shield(reader), 5.0)
+                await asyncio.wait_for(asyncio.shield(voice), 5.0)
             except (asyncio.TimeoutError, Exception):
                 pass
         for task in ending + helpers:
             task.cancel()
         await asyncio.gather(*ending, *helpers, return_exceptions=True)
+        await self._end_owner_leg()
         await self._close_stream()
         if self.error_detail and self.call_sid and not self._hanging_up:
             # The voice side failed while the caller was still on the line.
@@ -760,13 +819,24 @@ class PhoneSession:
             if event == 'media':
                 media = data.get('media') or {}
                 if media.get('track', 'inbound') == 'inbound' and media.get('payload'):
+                    payload = media['payload']
                     self.provider_clock.observe(media.get('timestamp'))
                     if self._trace is not None:
                         self._note('in', ts=media.get('timestamp'), seq=data.get('sequenceNumber'))
-                    await self.live.send_audio(media['payload'])
-                    self.tap.push('other', media['payload'])
-                    self._record('other', media['payload'])
-                    await self._hear(media['payload'])
+                    if self._owner_on_line():
+                        await self._to_owner(payload)  # the owner talks with them (phone_owner.py)
+                    if self.asleep:
+                        self._frames.append(payload)  # for the voice when it wakes (phone_hold.py)
+                    elif self.live is not None:
+                        await self.live.send_audio(payload)
+                    self.tap.push('other', payload)
+                    self._record('other', payload)
+                    if self.holdbook.on_hold:
+                        try:
+                            self._hear_hold(payload, base64.b64decode(payload))
+                        except ValueError:
+                            pass
+                    await self._hear(payload)
             elif event == 'mark':
                 self.pacer.mark_played((data.get('mark') or {}).get('name'))
             elif event == 'stop':
@@ -819,6 +889,7 @@ class PhoneSession:
         change = self.detector.feed(frame, playing=self.pacer.playing())
         if self.detector.speaking:
             self.last_activity = now
+        self._line_sound(frame_level_db(frame) > MUSIC_LEVEL_DB, now)  # hold music? (phone_hold.py)
         if change:
             self._note('vad_' + change)
         if change == 'end':
@@ -848,6 +919,8 @@ class PhoneSession:
             # GPT-Live streams silence between turns: only its speech keeps a call from going quiet.
             self.last_activity = now
             self._speech_out_at = now
+            if self.holdbook.on_hold:
+                self._voice_spoke_on_hold()  # someone picked up (phone_hold.py)
         self._note('delta', bytes=len(event.get('delta') or '') * 3 // 4)
         if self.keying:
             return  # keys are playing: nothing is said over them
@@ -873,6 +946,8 @@ class PhoneSession:
             elif (call and call['name'] == 'press_keys' and self.brief.phone_menus
                   and not self.inbound):
                 self._spawn(self._press_keys(call))
+            elif call and call['name'] == 'wait_on_hold' and self.can_hold():
+                self._spawn(self._wait_on_hold(call))
             elif call and call['name'] == 'end_call':
                 # Hanging up needs no tool result or further backend turn.
                 reason = call['arguments'].get('reason')
@@ -886,6 +961,8 @@ class PhoneSession:
             self.ctx.event('call.voice_error', code=error.get('code') or 'live_error')
         elif kind == 'session.closed':
             reason = event.get('reason')
+            if self._close_reason is not None:
+                return True  # switched off on purpose (phone_hold.py): the call goes on
             if reason in ('content', 'connection_lost', 'expired'):
                 self.fail(f'The voice session closed ({reason}).')
             elif reason == 'remote_hangup':
@@ -954,6 +1031,9 @@ class PhoneSession:
         """A note about a request, for the voice (call_requests.appends). An answer the person must
         hear (`say`) is also cued at the next pause (_tell_at_pause)."""
         if self.live is None:
+            if self.asleep and not self._hanging_up:
+                self._held_notes.append(('deliver', note))  # told when the voice wakes
+                return True
             return False
         sent = True
         for kind, text in appends(note):
@@ -1006,6 +1086,8 @@ class PhoneSession:
             self.ctx.request(message)
 
     def _live_ended(self):
+        if self._close_reason is not None:
+            return  # switched off on purpose (phone_hold.py)
         if self.end_reason is None:
             self.ctx.event('call.voice_error', code='connection_lost')
             self.fail('The voice connection was lost during the call.')
@@ -1029,6 +1111,7 @@ class PhoneSession:
         if source == 'other' and delta.strip():
             self.heard_other.set()
             self._other_spoke_at = now
+            self._heard_words(delta, now)  # a hold queue or a person? (phone_hold.py)
         if source == 'agent':
             self._agent_said += delta
             self._agent_turn += delta
@@ -1178,13 +1261,26 @@ class PhoneSession:
         for waiter in heard:
             waiter.cancel()
         await self._let_long_greeting_finish()
-        await self.live.started.wait()
-        await self.live.append('session.commentary.append',
-                               opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
-                                           recording=self.recording,
-                                           calling_owner=self.calling_owner))
+        live = self.live
+        if live is None or self.asleep:
+            return  # already on hold: a voice that wakes is told what to do (phone_hold.py)
+        await live.started.wait()
+        if self.live is not live or self.asleep:
+            return
+        await live.append('session.commentary.append',
+                          opening_cue(self.brief, inbound=self.inbound, name=self.greet_name,
+                                      recording=self.recording,
+                                      calling_owner=self.calling_owner, hold=self.can_hold()))
         self._note('opening_cue')
         await asyncio.Event().wait()
+
+    def talk_seconds(self, now=None):
+        """The call's time counted toward maxMinutes: not time on hold (phone_hold.py), nor the
+        owner's own talk with them (phone_owner.py)."""
+        now = now if now is not None else time.monotonic()
+        if self.started_at is None:
+            return 0.0
+        return max(0.0, now - self.started_at - self.holdbook.seconds(now) - self.owner_seconds(now))
 
     async def _watch(self):
         limit = self.brief.max_minutes * 60
@@ -1193,13 +1289,25 @@ class PhoneSession:
             await asyncio.sleep(1)
             self._claims_due()
             now = time.monotonic()
+            if self._hold_due(now):
+                await self._hold_timeout()
+                return
+            if self._owner_on_line() and self.owner_seconds(now) >= OWNER_MAX_MINUTES * 60:
+                await self.hangup('max_duration', disclose=False)
+                return
+            if self.asleep or self.holdbook.on_hold or self._owner_on_line():
+                # Waiting on hold, or the owner talks with them: no prompts, no hang-up for quiet.
+                self.last_activity = now
+                prompted = False
+                continue
             if self.pacer is not None and self.pacer.speech_pending():
                 self.last_activity = now  # its speech is still playing
-            elapsed = now - self.started_at
+            elapsed = self.talk_seconds(now)
             if not warned and elapsed >= max(limit - WRAP_UP_SECONDS, limit * 0.8):
                 warned = True
-                await self.live.append('session.commentary.append', self._goodbye_cue(
-                    'Time is almost up. Wrap up politely and say goodbye.'))
+                if self.live is not None:
+                    await self.live.append('session.commentary.append', self._goodbye_cue(
+                        'Time is almost up. Wrap up politely and say goodbye.'))
             if elapsed >= limit:
                 await self.hangup('max_duration')
                 return
@@ -1213,8 +1321,9 @@ class PhoneSession:
                 return
             if not prompted and quiet >= SILENCE_PROMPT_SECONDS:
                 prompted = True
-                await self.live.append('session.commentary.append',
-                                       'Nobody has spoken for a while. Ask if they are still there.')
+                if self.live is not None:
+                    await self.live.append('session.commentary.append',
+                                           'Nobody has spoken for a while. Ask if they are still there.')
             elif quiet < SILENCE_PROMPT_SECONDS:
                 prompted = False
             if quiet >= SILENCE_END_SECONDS:
@@ -1451,12 +1560,20 @@ class PhoneSession:
     async def instruct(self, text, *, silent=False):
         """Guidance acts now; a silent note is context the model uses when it helps."""
         if self.live is None:
+            if self.asleep and not self._hanging_up:
+                self._held_notes.append(('instruct', (text, silent)))  # given when it wakes
+                return True
             return False
         kind = 'session.thinking.append' if silent else 'session.instructions.append'
         return await self.live.append(kind, text)
 
     async def wrap_up(self):
         if self.live is None:
+            if self.asleep and not self._hanging_up:
+                # On hold, or the owner is talking with them: nobody to say goodbye to.
+                self.ctx.event('call.ended_while_away', onHold=self.holdbook.on_hold)
+                self._start_hangup('hangup', disclose=False)
+                return True
             return False
         if self.voicemail_heard:
             # A voicemail is recording: there is nobody to thank, and a goodbye would only leave a
@@ -1499,8 +1616,19 @@ class PhoneSession:
         if not self.owner_phone:
             raise NotReady('Set SMITLINE_OWNER_PHONE to transfer calls to your phone.')
         if self._pending_hangup is not None:
-            self._pending_hangup.cancel()
-            self._pending_hangup = None
+            # The goodbye's hang-up is off: wait until it really is, before anything else.
+            pending, self._pending_hangup = self._pending_hangup, None
+            pending.cancel()
+            await asyncio.wait([pending])
+        if self.relays_audio:
+            # Ring the owner first; pressing 1 connects them, else the voice carries on.
+            if self._owner_on_line():
+                return {'transferred': True, 'connected': True}
+            ringing = await self.ring_owner('transfer')
+            leg = self.owner_leg or {}
+            if not ringing and leg.get('state') not in ('ringing', 'answering'):
+                return {'transferred': False, 'ringing': False, 'reason': leg.get('state') or 'unavailable'}
+            return {'transferred': False, 'ringing': True}
         if self.live is not None:
             await self.live.append(
                 'session.commentary.append',
@@ -1525,8 +1653,12 @@ class SipPhoneSession(PhoneSession):
 
     The sideband carries call progress, transcripts, backend tool calls, and commands.
     Everything about the conversation (opening, disclosure check, hang-up rules, time
-    limits, results) is shared with the relayed PhoneSession.
+    limits, results) is shared with the relayed PhoneSession. The audio never passes through
+    here, so it cannot wait on hold with the voice off, and a transfer hands the call over blind.
     """
+
+    hold_possible = False
+    relays_audio = False
 
     def __init__(self, line, ctx, *, api_key, client, from_number, twilio=None, owner_phone=None,
                  bridged=False):
@@ -1697,12 +1829,18 @@ class PhoneLine:
 
     def __init__(self, *, public_url, environ, twilio_factory=None, live_factory=None,
                  status_grace=5.0, public_available=None, connect_timeout=CONNECT_TIMEOUT,
-                 sip_client_factory=None, sideband_factory=None):
-        """public_url: async callable returning the https base URL Twilio can reach."""
+                 sip_client_factory=None, sideband_factory=None, hold_listener_factory=None,
+                 hold_judge_factory=None):
+        """public_url: async callable returning the https base URL Twilio can reach.
+        hold_listener_factory(environ): the listener a call on hold uses (default
+        hold_listener.HoldListener.create); hold_judge_factory(api_key, model): what tells a hold
+        queue or a person from the line's words (default hold_judge.HoldJudge). See phone_hold.py."""
         self._public_url = public_url
         self._public_available = public_available
         self.environ = environ
         self.twilio_factory = twilio_factory or client_for
+        self.hold_listener_factory = hold_listener_factory
+        self.hold_judge_factory = hold_judge_factory
         self.live_factory = live_factory or (lambda key, config: LiveSession(key, config))
         self.sip_client_factory = sip_client_factory or (lambda key: LiveSipClient(key))
         self.sideband_factory = sideband_factory or (lambda key, session_id: LiveSideband(key, session_id))
@@ -1719,6 +1857,15 @@ class PhoneLine:
             raise CallRefused('recording_unavailable', 'Recording a call needs '
                               'SMITLINE_PHONE_AUDIO=relay; calls over direct SIP cannot be '
                               'recorded yet.')
+        if getattr(brief, 'connect_owner', False):
+            from call_hooks import owner_settings as hooks_owner_settings
+            if not hooks_owner_settings(hooks, owner).get('SMITLINE_OWNER_PHONE'):
+                raise CallRefused('owner_phone_missing', 'connectOwner rings your own phone: set '
+                                  'SMITLINE_OWNER_PHONE (verify your phone number) first.')
+            if mode != 'relay':
+                raise CallRefused('connect_owner_unavailable', 'connectOwner needs '
+                                  'SMITLINE_PHONE_AUDIO=relay; calls over direct SIP cannot '
+                                  'connect your phone yet.')
         if mode == 'sip':
             return  # OpenAI dials out: nothing on this computer has to be reachable
         if not self.gateway_ready:
@@ -1778,6 +1925,36 @@ class PhoneLine:
         if session.connected.is_set() or session.canceled or session.finished.is_set():
             return None
         return session
+
+    def _owner_session(self, call_id):
+        session = self.sessions.get(call_id)
+        if session is None or not getattr(session, 'relays_audio', False):
+            return None
+        return session
+
+    def claim_owner(self, call_id, token):
+        """Match the owner's leg (they pressed 1, phone_owner.py) to its call: its own token."""
+        session = self._owner_session(call_id)
+        if session is None or not secrets.compare_digest(session.owner_token, token or ''):
+            return None
+        if session.finished.is_set() or (session.owner_leg or {}).get('state') != 'answering':
+            return None
+        return session
+
+    def owner_answer(self, call_id, params, base):
+        """TwiML for the owner's phone after the whisper (the key they pressed)."""
+        from twilio_client import hangup_twiml
+        session = self._owner_session(call_id)
+        if session is None:
+            return hangup_twiml()
+        return session.owner_answer_twiml(params, base)
+
+    def on_owner_status(self, call_id, params):
+        session = self._owner_session(call_id)
+        if session is None:
+            return False
+        session.on_owner_status(params)
+        return True
 
     async def start(self, ctx):
         mode = ctx.credentials('sip')['mode']
@@ -1907,7 +2084,7 @@ class PhoneLine:
                 # A recorded call is recorded by Smitline itself (call_recorder.py): providers
                 # stop at their answering-machine check and keep the audio behind their URLs.
                 timeout=RING_SECONDS,
-                time_limit=ctx.brief.max_minutes * 60 + 90)
+                time_limit=longest_call_seconds(ctx.brief) + 90)
             session.call_sid = created.get('sid')
             ctx.link(providerCallSid=session.call_sid, fromNumber=session.from_number)
             if session.canceled:
@@ -1929,7 +2106,7 @@ class PhoneLine:
         if not done:
             await self._resolve_silent_call(session)
             return
-        limit = ctx.brief.max_minutes * 60 + OVERRUN_SECONDS
+        limit = longest_call_seconds(ctx.brief) + OVERRUN_SECONDS
         try:
             await asyncio.wait_for(session.finished.wait(), limit)
         except asyncio.TimeoutError:
@@ -2035,9 +2212,15 @@ class PhoneLine:
 
     @staticmethod
     def _usage(session):
-        usage = {'voiceSeconds': int(getattr(session.live, 'usage_seconds', 0) or 0)}
+        usage = {'voiceSeconds': int(session.voice_seconds())}
         if session.phone_seconds is not None:
             usage['phoneSeconds'] = session.phone_seconds
+        if session.holdbook.times:
+            usage['holdSeconds'] = int(session.holdbook.seconds())
+            # The part of it with the voice off: only the phone line costs anything then.
+            usage['holdVoiceOffSeconds'] = int(session.holdbook.voice_off_seconds())
+        usage.update(session.owner_usage())
+        usage.update(session.judge_usage())
         if any(session.backend_tokens.values()):
             usage['backendTokens'] = {key: value for key, value in session.backend_tokens.items()
                                       if value or key in ('input', 'output')}
@@ -2123,6 +2306,12 @@ class PhoneLine:
         if session is None or not session.connected.is_set():
             raise NotReady('The call is not connected.')
         return await session.transfer()
+
+
+def longest_call_seconds(brief):
+    """The longest a phone call can last: its talk (maxMinutes), its time on hold
+    (maxHoldMinutes) and the owner talking with them (phone_owner.OWNER_MAX_MINUTES)."""
+    return (brief.max_minutes + brief.hold_minutes + OWNER_MAX_MINUTES) * 60
 
 
 def owner_settings(ctx, fallback):

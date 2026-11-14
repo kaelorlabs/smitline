@@ -54,6 +54,10 @@ jobs:
           tags: smitline:test
           cache-from: type=gha,scope=smitline
           cache-to: type=gha,scope=smitline,mode=max
+      - name: Hold listener tests, inside the smitline image (it has onnxruntime)
+        run: >
+          docker run --rm --entrypoint python -w /app/meeting-runtime
+          smitline:test -m unittest test_hold_listener -v
       - name: The smitline image starts and answers
         run: |
           docker volume create smitline-test

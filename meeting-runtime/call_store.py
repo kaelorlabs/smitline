@@ -17,8 +17,8 @@ STATUSES = (
 )
 TERMINAL = frozenset({'completed', 'failed', 'canceled'})
 END_REASONS = (
-    'hangup', 'remote_hangup', 'no_answer', 'busy', 'voicemail', 'max_duration', 'canceled',
-    'meeting_ended', 'transferred', 'error',
+    'hangup', 'remote_hangup', 'no_answer', 'busy', 'voicemail', 'max_duration', 'hold_timeout',
+    'canceled', 'meeting_ended', 'transferred', 'error',
 )
 RECORD_VERSION = 1
 

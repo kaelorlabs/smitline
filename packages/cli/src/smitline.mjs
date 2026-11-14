@@ -65,7 +65,8 @@ function requestInterrupt() {
 const USAGE = `Usage:
   smitline call --to <+E.164> --objective <text> [--on-behalf-of <name>] [--context <text>]
                [--agree <a; b>] [--never-share <a; b>] [--success <text>] [--voice <name>]
-               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--phone-menus] [--webhook <url>]
+               [--language <tag>] [--max-minutes <n>] [--rehearsal] [--after-hours] [--record] [--no-phone-menus]
+               [--max-hold-minutes <n>] [--connect-owner] [--webhook <url>]
                [--questions <a; b>] [--tone <text>] [--context-file <json or text>]
                [--task <id> [--task-title <text>]] [--carry-task] [--carry-contact | --no-carry-contact]
                [--carry-call <id,id>] [--can-do <what you do when people ask>] [--for-request <call id>:<r1>]
@@ -261,7 +262,10 @@ async function briefFromArgs(args, root) {
     rehearsal: args.rehearsal === true ? true : undefined,
     afterHours: args['after-hours'] === true ? true : undefined,
     record: args.record === true ? true : undefined,
-    phoneMenus: args['phone-menus'] === true ? true : undefined,
+    // Phone menus are on by default; --phone-menus is still accepted for older scripts.
+    phoneMenus: args['no-phone-menus'] === true ? false : (args['phone-menus'] === true ? true : undefined),
+    maxHoldMinutes: text(args['max-hold-minutes']) === undefined ? undefined : Number(args['max-hold-minutes']),
+    connectOwner: args['connect-owner'] === true ? true : undefined,
     notify: text(args.webhook) ? { webhookUrl: text(args.webhook) } : undefined,
     task: text(args.task) ? { id: text(args.task), ...(text(args['task-title']) ? { title: text(args['task-title']) } : {}) } : undefined,
     carryFrom: carryFromArgs(args, text),
@@ -289,7 +293,7 @@ const OUTCOME_TEXT = {
 };
 const END_REASON_TEXT = {
   hangup: 'ended normally', remote_hangup: 'they hung up', no_answer: 'no answer', busy: 'the line was busy',
-  voicemail: 'left a voicemail', max_duration: 'time limit reached', canceled: 'canceled', meeting_ended: 'the meeting ended',
+  voicemail: 'left a voicemail', max_duration: 'time limit reached', hold_timeout: 'nobody picked up while on hold', canceled: 'canceled', meeting_ended: 'the meeting ended',
   transferred: 'handed to you', error: 'something went wrong',
 };
 
