@@ -292,6 +292,7 @@ test('the user answers a question and tells the call something from the card', a
   await card.settle();
   assert.equal(box('r1'), undefined); // the question has gone; what the user said stays
   assert.ok(card.main.textContent.includes('Replied “Just yourself” to “Should I bring anything?”'));
+  assert.ok(!card.main.textContent.includes('Already answered')); // the user's own answer, said once
   assert.ok(box('tell')); // and with no question open, "Tell the call" takes its place
 
   const before = card.sent.length;
@@ -380,4 +381,47 @@ test('an opened transcript stays open while the card follows the call', async ()
   details().listeners.toggle[0]();
   card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
   assert.equal(details().open, true);
+});
+
+test('a question closed elsewhere while the user types says so, and keeps what they typed', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const ask = (id, text) => ({ id, state: 'open', text, askedBy: 'Sam', thread: [{ from: 'call', type: 'ask', text }] });
+  const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests: [ask('r1', 'Should I bring anything?')] };
+  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: record } });
+  const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
+  show(live);
+  box('r1').value = 'Just yours';
+  box('r1').listeners.input[0]();
+
+  // The agent answers the same question before the user sends theirs.
+  const answered = { ...ask('r1', 'Should I bring anything?'), state: 'done' };
+  answered.thread = [...answered.thread, { from: 'agent', type: 'done', text: 'Nothing, just yourself.' }];
+  show({ ...live, requests: [answered, ask('r2', 'Is 5 fine?')] });
+  assert.ok(card.main.textContent.includes('Already answered “Should I bring anything?”: “Nothing, just yourself.”'));
+  assert.equal(box('r1'), undefined);
+  assert.equal(box('r2').value, ''); // the next question starts empty: the text was for the first one
+
+  // The person drops the next question; with none open, the typed text waits in "Tell the call".
+  show({ ...live, requests: [answered, { ...ask('r2', 'Is 5 fine?'), state: 'canceled' }] });
+  assert.ok(card.main.textContent.includes('Sam dropped the question “Is 5 fine?”.'));
+  assert.equal(box('tell').value, 'Just yours');
+  assert.ok(card.main.textContent.includes('What you typed is kept here.'));
+  show({ ...live, requests: [answered, { ...ask('r2', 'Is 5 fine?'), state: 'canceled' }] });
+  assert.equal(card.main.textContent.split('Already answered').length, 2); // each line once
+});
+
+test('the card says nothing about questions it never showed, or that the user answered', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const done = (id, text) => ({ id, state: 'done', text, thread: [{ from: 'agent', type: 'done', text: 'Done.' }] });
+  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
+    structuredContent: { id: ID, status: 'in_progress', requests: [done('r1', 'Before the card opened?')] },
+  } });
+  assert.ok(!card.main.textContent.includes('Already answered'));
+  assert.deepEqual(callCardView({ id: ID, status: 'completed', requests: [done('r1', 'x')] }).closed, []);
+  assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [done('r1', 'x')] }).closed,
+    [{ id: 'r1', text: 'x', askedBy: '', canceled: false, answer: 'Done.' }]);
 });

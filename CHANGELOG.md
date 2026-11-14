@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A question answered elsewhere no longer vanishes from the call card.** When the agent (also following the call) answered a question the user was typing a reply to, or the person dropped it, the card removed it on its next refresh, with the user's text and cursor and no word of why. Now the card says "Already answered", with the answer that was given, or that the person dropped the question; moves what the user typed into "Tell the call", where they can still send it; and keeps the cursor there.
+
 ## 0.3.13 — 2026-11-13
 
 - **The call card has a new address, `ui://smitline/call-card-v2.html`.** Hosts may keep a copy of a card by its address, and ChatGPT asks apps to change it when the page changes. Without it, ChatGPT could keep showing the old card, which never started up there, after an update. `start_call` and `get_call` point to the new address; the old one is no longer served.
