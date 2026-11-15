@@ -4,7 +4,7 @@
 
 - **A question answered elsewhere no longer vanishes from the call card.** When the agent (also following the call) answered a question the user was typing a reply to, or the person dropped it, the card removed it on its next refresh, with the user's text and cursor and no word of why. Now the question stays on the card, with how it closed underneath: "Answered for you" and the answer that was given, or that the person dropped it. What the user typed moves into "Tell the call", with the cursor, where they can still send it.
 - **A late answer reaches the call as the user's own.** Text sent from "Tell the call" after its question closed goes with that question and the answer already given, so the voice passes it on as the user's own answer, saying it just came from them, and corrects the earlier answer where they differ. The card shows it under the question as "You, later". Clearing the kept text and writing something else sends a plain note.
-- **Closed questions read as a short thread.** Each question the card showed stays above the box once it closes: who asked and what, then an indented line with the answer, whether the user's ("You replied"), the agent's ("Answered for you"), or that the person dropped it.
+- **Closed questions read as a short thread.** Each question the card showed stays above the box once it closes: who asked and what, then an indented line with the answer, whether the user's ("You replied"), the agent's ("Answered for you"), or that the person dropped it. Each note the user sends with "Tell the call" joins it in turn as "You told the call", with their words: the card used to say only "Sent to the call", so the words of every note but the last were gone.
 
 ## 0.3.13 — 2026-11-13
 

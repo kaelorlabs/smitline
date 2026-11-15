@@ -223,7 +223,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); ou
 .by { color: var(--muted); font-size: var(--sub); }
 .reply { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; margin-top: 4px; }
 .reply::before { content: "↳"; grid-row: span 2; color: var(--muted); }
-.reply.mine .by { color: var(--live); }
+.reply.mine .by, .by.mine { color: var(--live); }
 audio { width: 100%; height: 36px; }
 .foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
   border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
@@ -261,6 +261,7 @@ const notes = new Map();
 // user answered it, the agent did, or the person dropped it. A question never just disappears.
 const shown = new Set();
 const past = new Map();
+let told = 0; // notes the user sent with "Tell the call", which join the thread in turn
 // Those questions whose typed answer moved to "Tell the call": sent from there, the text goes
 // with the question it answers, so the voice can pass it on as the user's own late answer.
 let late = [];
@@ -424,6 +425,7 @@ async function send(key, name, args, about) {
       for (const question of answering) past.get(question.id).late = words;
       // An answered question leaves the card with the next refresh; it shows with the reply instead.
       if (about) past.set(key, { ...about, answer: words, mine: true });
+      else if (key === 'tell' && !answering.length) past.set('told-' + ++told, { told: words });
       notes.set(key, { text: 'Sent to the call.' });
     } else {
       notes.set(key, { text: failure(result), bad: true });
@@ -516,6 +518,11 @@ function lateAnswer(questions, words) {
 // A closed question as a short thread: who asked and what, then how it was answered, and the
 // user's own answer if they sent it later.
 function earlier(question) {
+  if (question.told) {
+    const note = node('div', 'past');
+    note.append(node('p', 'by mine', 'You told the call'), node('p', null, question.told));
+    return note;
+  }
   const who = question.askedBy || 'They';
   const item = node('div', 'past');
   item.append(node('p', 'by', who + ' asked'), node('p', null, question.text));

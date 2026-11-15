@@ -306,6 +306,7 @@ test('the user answers a question and tells the call something from the card', a
   card.deliver({ jsonrpc: '2.0', id: note.id, result: { isError: true, content: [{ type: 'text', text: refused }] } });
   await card.settle();
   assert.ok(card.main.textContent.includes('Not sent: The call has ended.'));
+  assert.ok(!card.main.textContent.includes('You told the call')); // only notes that went
   assert.equal(box('tell').value, 'Say we are 10 minutes late'); // kept, to try again
 });
 
@@ -446,6 +447,15 @@ test('kept text goes to the call as the user’s own late answer to the question
   type('tell', 'We are 10 minutes late'); // the next note is just a note
   submit('tell');
   assert.equal(card.sent.at(-1).params.arguments.text, 'We are 10 minutes late');
+  card.deliver({ jsonrpc: '2.0', id: card.sent.at(-1).id, result: { content: [], isError: false } });
+  await card.settle();
+  type('tell', 'And bring the cake');
+  submit('tell');
+  card.deliver({ jsonrpc: '2.0', id: card.sent.at(-1).id, result: { content: [], isError: false } });
+  await card.settle();
+  // Every note stays on the card, in the order sent, under the question it followed.
+  assert.ok(card.main.textContent.includes('You, laterJust yourself, see you at 5'
+    + 'You told the callWe are 10 minutes late' + 'You told the callAnd bring the cake'));
 });
 
 test('kept text the user clears, or a dropped question, frames the note to match', async () => {
