@@ -59,6 +59,10 @@ RETELL_AFTER = 35.0
 # Extra seconds after that for an answer the voice is still in the middle of saying: the
 # transcript has a sentence only once it is finished.
 RETELL_GRACE = 10.0
+# An answer also counts as said once the voice, cued to say it at a pause, spoke a turn of at
+# least this many words that nobody cut off. Matching its words alone failed when the voice said
+# it in another language or its own way: a Hindi call heard one answer three times (2026-11-16).
+TOLD_TURN_WORDS = 6
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -101,6 +105,10 @@ class CallContext:
         self.transcript = []
         # The agent's recent lines, with when they arrived: did it say what it was told to?
         self.agent_lines = collections.deque(maxlen=80)
+        # When each request's answer was cued at a pause, and when the voice stopped for someone
+        # (the line's call.answer_cued and call.interrupted events), for the same question.
+        self.cued = {}
+        self.interruptions = collections.deque(maxlen=80)
         self.ended = False
         # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
         self.disclosure = None
@@ -132,7 +140,21 @@ class CallContext:
         self.service.store.update(self.call_id, line=line)
 
     def event(self, event_type, **data):
+        if event_type == 'call.answer_cued' and data.get('sent'):
+            self.cued[data.get('request')] = time.monotonic()
+        elif event_type == 'call.interrupted':
+            self.interruptions.append(time.monotonic())
         self.service._event(self.call_id, event_type, **data)
+
+    def said_after_cue(self, request_id, since):
+        """Whether the voice, cued after `since` to say this request's answer, then spoke a whole
+        turn (TOLD_TURN_WORDS or more) without being cut off."""
+        cued = self.cued.get(request_id)
+        if cued is None or cued < since:
+            return False
+        return any(at > cued and len(line.split()) >= TOLD_TURN_WORDS
+                   and not any(cued < stopped <= at for stopped in self.interruptions)
+                   for at, line in self.agent_lines)
 
     def recording_path(self):
         """Where the line writes this call's own recording (call_recorder.py)."""
@@ -1405,7 +1427,7 @@ class CallService:
             if context is None or record['status'] != 'in_progress':
                 return
             said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
-            if told(text, said):
+            if told(text, said) or context.said_after_cue(request_id, sent_at):
                 return
             if waited >= self.retell_grace:
                 break

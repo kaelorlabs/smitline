@@ -644,6 +644,34 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.3)
         self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
 
+    async def test_an_answer_said_after_its_cue_in_other_words_is_not_told_again(self):
+        self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.event('call.answer_cued', request='r1', sent=True)
+        # The call had moved to Hindi: none of the answer's words, but a whole turn after the cue.
+        ctx.add_transcript('agent', 'Ho gaya Priya ji, launch ki tareekh ab likhi hui hai.')
+        await asyncio.sleep(0.4)
+        self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
+        self.assertFalse(any(e['type'] == 'call.request_retold' for e in self.service.events(call_id)))
+
+    async def test_a_cued_answer_that_was_cut_off_is_told_again(self):
+        self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.event('call.answer_cued', request='r1', sent=True)
+        ctx.event('call.interrupted')
+        ctx.add_transcript('agent', 'Ho gaya Priya ji, launch ki tareekh ab likhi')
+        await until(lambda: any('has not heard what' in n['text'] for n in self.line.notes))
+        # A short turn after the cue, or a cue for another request, does not count either.
+        self.assertFalse(ctx.said_after_cue('r2', 0))
+
     async def test_a_line_that_cannot_deliver_says_so(self):
         call_id, ctx = await self.start()
         ctx.request(ask())
