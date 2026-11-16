@@ -8,6 +8,7 @@ Smitline is listed so agents and developers can find it. Every listing describes
 | [Glama](https://glama.ai/mcp/servers) | [`kaelorlabs/smitline`](https://glama.ai/mcp/servers/kaelorlabs/smitline) | The GitHub repository; `glama.json` names the maintainers. Glama's build check runs `node packages/mcp/src/server.mjs` from a clone (no install step, no keys) behind its `mcp-proxy`, and lists the tools. |
 | [MCP Market](https://mcpmarket.com) | [`smitline`](https://mcpmarket.com/server/smitline) | Listed from the GitHub repository. A maintainer can claim it with GitHub to edit it. |
 | [LobeHub](https://lobehub.com/mcp) | [`kaelorlabs-smitline`](https://lobehub.com/mcp/kaelorlabs-smitline) | Built from the GitHub repository. A maintainer can claim it to update it. |
+| [Ext Ops Panel](https://extops.dev/plugins) | [`io.github.kaelorlabs/smitline`](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline) | Listed from the official MCP Registry entry. A maintainer can verify ownership to show as its author. It offers a banner for the README, which the README shows. |
 
 Smithery listed Smitline until it became part of Arcade: its proxy and accounts shut down on 2026-10-31, and the listing page is gone. PulseMCP has paused new listings.
 

@@ -19,6 +19,7 @@ Read these before proposing product, architecture, or runtime changes:
 | [docs/meeting-adapters.md](docs/meeting-adapters.md) | Zoom, Teams, and Meet adapter behavior |
 | [docs/control-panel.md](docs/control-panel.md) | Local console: Meetings, Calls, Contacts, and Account |
 | [docs/product-roadmap.md](docs/product-roadmap.md) | Near-term milestones |
+| [docs/releasing.md](docs/releasing.md) | Releasing a version, step by step; only maintainers release, and agents check before they do |
 
 Agent skills for setup and for placing calls live under [`.agents/skills/`](.agents/skills/).
 
@@ -47,3 +48,5 @@ cd packages/sdk-python && python3 -m unittest discover -s tests
 ```
 
 Do not commit `.env`, `.smitline/`, recordings, browser profiles, credentials, or other gitignored runtime state.
+
+Do not change version numbers, tag, or publish a release unless you work for a maintainer who asked for it: follow [docs/releasing.md](docs/releasing.md).
