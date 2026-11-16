@@ -19,7 +19,7 @@ from call_result import (
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
     MAX_REQUEST_TEXT, MAX_REQUESTS, MAX_STATUSES, OPEN_STATES, REQUEST_ID, chat_message, clean,
-    clean_block, done_note, late_note, retell_note, status_note, told,
+    clean_block, done_note, late_note, reply_note, retell_note, status_note, told,
 )
 from call_store import TERMINAL, CallNotFound, new_call_id
 
@@ -1332,9 +1332,11 @@ class CallService:
             limit = MAX_REQUESTS.get(record.get('channel'), MAX_REQUESTS['phone'])
             if existing is not None or len(requests) >= limit or not text:
                 return None
-            request = {'id': request_id,
-                       'kind': message.get('kind') if message.get('kind') in KINDS else 'question',
-                       'text': text, 'state': 'open', 'openedAt': now, 'updatedAt': now}
+            kind = message.get('kind') if message.get('kind') in KINDS else 'question'
+            # A message is only noted: the voice said it will pass it on, and nobody must answer.
+            request = {'id': request_id, 'kind': kind, 'text': text,
+                       'state': 'noted' if kind == 'message' else 'open',
+                       'openedAt': now, 'updatedAt': now}
             asked_by = clean(message.get('askedBy'), MAX_ASKED_BY)
             if asked_by:
                 request['askedBy'] = asked_by
@@ -1356,7 +1358,7 @@ class CallService:
                         **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context',
                                                          'source') if key in request})
             self._signal_owner(record.get('owner'))
-            if self.agent_following(call_id):
+            if kind != 'message' and self.agent_following(call_id):
                 self._spawn(self._check_pickup(call_id, request_id))
             return request
         if action not in ('add', 'cancel') or existing is None or existing['state'] not in OPEN_STATES:
@@ -1449,7 +1451,11 @@ class CallService:
         if not text:
             raise CallError(422, 'invalid_request', 'text is required')
         details = clean_block(details, MAX_DETAILS) or None
-        if request['state'] not in OPEN_STATES:
+        message = request.get('kind') == 'message'
+        if message and type != 'done':
+            raise CallError(422, 'invalid_request',
+                            'a message takes only done: the user\'s own reply, if they have one')
+        if request['state'] not in OPEN_STATES and not (message and request['state'] == 'noted'):
             raise CallError(409, 'request_closed',
                             f'request {request_id} is already {request["state"]}')
         ended = record['status'] in TERMINAL or record['status'] == 'summarizing'
@@ -1462,6 +1468,8 @@ class CallService:
         owner_name = record['brief'].get('onBehalfOf')
         if type == 'status':
             note = status_note(request, text, owner=owner_name, announce=bool(announce))
+        elif message:
+            note = reply_note(request, text, owner=owner_name)
         else:
             note = done_note(request, text, owner=owner_name, ok=bool(ok))
         if details:
@@ -1610,6 +1618,17 @@ class CallService:
                           if request['state'] in OPEN_STATES]
             if still_open:
                 result['openRequests'] = still_open
+            # Messages people gave for the user, with the user's reply when there was one.
+            messages = []
+            for request in self.store.get(call_id).get('requests') or ():
+                if request.get('kind') != 'message':
+                    continue
+                item = {key: request[key] for key in ('id', 'text', 'askedBy') if key in request}
+                if request.get('answer'):
+                    item['reply'] = request['answer']
+                messages.append(item)
+            if messages:
+                result['messages'] = messages
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
             if 'summaryModel' in result:

@@ -82,6 +82,10 @@ The agent answers with `reply_to_call_request`, of two types:
 - **`status`**, any number of times. The first one says it picked the request up. The voice keeps a status to itself and uses it if someone asks how it is going; `announce: true` has it say the status now, for a question or a blocker. Their answer comes back as a request message of type `add` with the same id.
 - **`done`**, once. It closes the request; `ok: false` when it could not be done. The voice tells the person who asked at the next natural pause. Links, code, and numbers go in `details`: a meeting posts them in its chat, and on a phone call the voice reads them out only if asked.
 
+**Messages for the user.** When someone gives the voice a message for the user ("tell Sam thanks for coming", "we missed you"), the voice says itself that it will pass it on, with no "one moment", and carries on. The message is noted as a request of `kind: "message"` in state `noted`: it reaches the agent in `live.requests` like any request, but nothing waits on it, nobody is asked to answer it, and it never becomes a follow-up. The agent tells the user and does not answer for them. If the user wants to reply, the agent sends their words with `reply_to_call_request` (`done`; a message takes no `status`), and the voice tells the person it is the user's reply. The call's result lists them in `messages`, each with the user's `reply` if there was one.
+
+The voice drives the call itself throughout: it answers what it can from the brief and the user's profile, hands on only what it cannot, and never waits in silence for an answer; an answer comes as a note when it is ready.
+
 A small question gets `done` straight away. A bigger task gets a `status` first, then `done`; meanwhile the agent keeps following the call (a subagent can do the work). The voice says the reply itself, so the agent never sends the same answer as an instruction too: it would be said twice. The voice can also cancel a request when they drop it (`cancel`). For a long meeting, `only: "requests"` wakes the agent only for requests, and each request carries who asked and the last lines said, so the agent need not read the whole meeting.
 
 ### Several calls at once
@@ -99,7 +103,7 @@ Nobody is left waiting:
 
 - If no agent is following the call (no live wait in the last 90 seconds), the voice says so at once and that the user will follow up.
 - If a request is not picked up within 30 seconds, the voice is told, and says it is still waiting if anyone asks.
-- Requests still open when the call ends are in the result as `openRequests`. A `done` after the call is still recorded; it is not spoken.
+- Requests still open when the call ends are in the result as `openRequests`. A `done` after the call is still recorded; it is not spoken. Messages are never open: they are in the result as `messages`.
 
 Requests come from the people on the call, not from the user, and a voice cannot prove who is speaking. Agents should do only what `canDo` says and the user would approve, and answer questions only with what the user would want these people to know: anything that changes things, sends data, or spends money needs the user's go-ahead unless they already gave it. A call takes at most 20 requests (a meeting 50), and each request at most 20 status updates.
 

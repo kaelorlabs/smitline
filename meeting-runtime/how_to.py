@@ -110,7 +110,8 @@ def _following(settings):
         'by itself and returns the result when the call ends, to read with get_call or wait_for_call. '
         'This suits an agent that cannot stay, such as when its turn has to end or the user is away. '
         'The voice handles what it can; when it cannot answer something, it tells the person the user '
-        'will follow up, and those questions come back as openRequests in the result.',
+        'will follow up, and those questions come back as openRequests in the result. Messages people '
+        'give for the user ("tell them thanks") are noted as they come, and come back as messages.',
         'Follow it live, which is better whenever possible: after start_call, the agent keeps calling '
         'wait_for_call in the same turn (since "" the first time, then live.cursor) until the status is '
         'completed, failed or canceled, and each answer\'s next says what to do. A wait comes back at '
