@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.kaelorlabs/smitline",
-  "title": "Smitline",
-  "description": "Make phone calls and join Zoom, Teams and Google Meet meetings from any AI agent. Self-hosted.",
+  "title": "Smitline: AI Phone Calls & Meetings",
+  "description": "Let AI agents make phone calls and join Zoom, Teams and Google Meet meetings. Hosted or self-hosted.",
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/kaelorlabs/smitline/main/packages/mcpb/icon.png",
@@ -81,6 +81,12 @@
           }
         ]
       }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://app.smitline.com/mcp"
     }
   ]
 }
