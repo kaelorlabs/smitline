@@ -266,7 +266,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'list_voices',
     title: "List voices",
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "List the GPT-Live voices calls can use, and the user's default voices: defaults.phone for phone calls, defaults.meeting for meetings (joined by link or by phone). A brief's voice wins over both for that call; update_profile with voices changes a default. Read-only and takes no arguments.",
+    description: "List the GPT-Live voices calls can use, with each one's language (languages: English, Hindi, German and others; pick a voice in the language the call is in), and the user's default voices: defaults.phone for phone calls, defaults.meeting for meetings (joined by link or by phone). A brief's voice wins over both for that call; update_profile with voices changes a default. Read-only and takes no arguments.",
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {

@@ -225,7 +225,7 @@
       "get": {
         "summary": "List GPT-Live voices and the owner's default voices",
         "operationId": "listVoices",
-        "responses": { "200": { "description": "Voices; default is defaults.phone", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "defaults": { "$ref": "#/components/schemas/VoiceDefaults" }, "voices": { "type": "array", "items": { "type": "string" } } }, "required": ["default", "defaults", "voices"] } } } } }
+        "responses": { "200": { "description": "Voices; default is defaults.phone", "content": { "application/json": { "schema": { "type": "object", "properties": { "default": { "type": "string" }, "defaults": { "$ref": "#/components/schemas/VoiceDefaults" }, "voices": { "type": "array", "items": { "type": "string" } }, "languages": { "type": "object", "description": "Each documented voice's language, such as English or Hindi. A voice added with SMITLINE_EXTRA_VOICES has none.", "additionalProperties": { "type": "string" } } }, "required": ["default", "defaults", "voices", "languages"] } } } } }
       }
     },
     "/v1/how-to": {

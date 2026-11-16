@@ -21,11 +21,21 @@ DEFAULT_VOICE = 'marin'
 # uses a different list, so these are not interchangeable.
 GPT_LIVE_VOICES = (
     'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
-    'tempo', 'beacon', 'delta', 'cinder',
+    'tempo', 'beacon', 'delta', 'cinder', 'nuri', 'juni', 'flitz', 'brise', 'sillage', 'nira',
+    'harema', 'shida', 'noeul',
 )
-# How each voice presents, from the "Presentation" column of OpenAI's GPT-Live voice table, which
-# also lists voices that only SMITLINE_EXTRA_VOICES offers here. marin, the default, is not in that
-# table; it is described elsewhere as a woman's voice, and spoke of itself as one on calls.
+# Each voice's language, from the "Language" column of OpenAI's GPT-Live voice table, so a voice
+# is chosen for the language the call is in. marin, the default, is not in that table.
+VOICE_LANGUAGES = {
+    'marin': 'English', 'vesper': 'English', 'quartz': 'English', 'ripple': 'English',
+    'willow': 'English', 'stone': 'English', 'gleam': 'English', 'meridian': 'English',
+    'bossa': 'Portuguese', 'tempo': 'Portuguese', 'beacon': 'English', 'delta': 'English',
+    'cinder': 'English', 'nuri': 'German', 'juni': 'German', 'flitz': 'German', 'brise': 'French',
+    'sillage': 'French', 'nira': 'Hindi', 'harema': 'Japanese', 'shida': 'Japanese',
+    'noeul': 'Korean',
+}
+# How each voice presents, from the "Presentation" column of the same table. marin is described
+# elsewhere as a woman's voice, and spoke of itself as one on calls.
 VOICE_GENDERS = {
     'marin': 'feminine', 'quartz': 'feminine', 'ripple': 'masculine', 'vesper': 'masculine',
     'willow': 'feminine', 'stone': 'masculine', 'gleam': 'feminine', 'meridian': 'masculine',
