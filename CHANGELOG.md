@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Clearer tool descriptions.** `start_call` now points to `check_call_brief` for checking a brief without placing the call, and `get_profile` points to `list_contacts` for everyone Smitline has called, as their partners already pointed back. `list_contacts` says how a number gets a name (a person with that phone in the profile, through `update_profile`), and `save_call_note` says that saving again replaces the note. Agents and directory graders such as Glama's read these descriptions to tell the tools apart; no tool, input or result changed.
+
 ## 0.3.13 — 2026-11-13
 
 - **The call card has a new address, `ui://smitline/call-card-v2.html`.** Hosts may keep a copy of a card by its address, and ChatGPT asks apps to change it when the page changes. Without it, ChatGPT could keep showing the old card, which never started up there, after an update. `start_call` and `get_call` point to the new address; the old one is no longer served.
