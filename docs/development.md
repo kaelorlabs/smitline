@@ -44,7 +44,7 @@ Smitline runs as one container, `smitline`, which starts a second container for 
 | `Dockerfile`, `docker/` | The `smitline` image: daemon, console, CLI, and MCP, with Node and Python inside |
 | `Dockerfile.meeting`, `compose.meeting.image.yaml` | The meeting image, and how the `smitline` container starts it |
 | `compose.meeting.yaml`, `Dockerfile.daemon`, `start-*.sh` | Running from a checkout |
-| `.github/workflows/images.yml` | Tests every pull request and push to `main`; a version tag (`git tag v0.1.2 && git push origin v0.1.2`) publishes both images to GHCR |
+| `.github/workflows/images.yml` | Tests every pull request and push to `main`; a version tag publishes both images to GHCR (maintainers only: [releasing](releasing.md)) |
 
 ## Run from a checkout
 
