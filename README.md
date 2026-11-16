@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  Don't want to run it yourself? <a href="https://smitline.com"><b>Smitline Cloud</b></a>, the hosted version by Kaelor Labs, is at <a href="https://smitline.com">smitline.com</a>.
+  Don't want to run it yourself? Connect your agent to <a href="https://smitline.com"><b>Smitline Cloud</b></a>, the hosted version by Kaelor Labs, at <code>https://app.smitline.com/mcp</code>. It's in private beta: <a href="https://smitline.com/early-access">ask for early access</a>.
 </p>
 
 <p align="center">
@@ -108,7 +108,7 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then 
 
 </details>
 
-**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline), [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline) and [Ext Ops Panel](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline). Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
+**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline), [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline), [mcp.so](https://mcp.so/servers/smitline) and [Ext Ops Panel](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline). Run the listed container yourself and your keys stay on your computer, or connect Smitline Cloud at `https://app.smitline.com/mcp`. See [MCP directories](docs/mcp-directories.md).
 
 <a href="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline"><picture><source media="(prefers-color-scheme: dark)" srcset="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-dark.svg"><img src="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-light.svg" alt="Smitline: listed on Ext Ops Panel" width="400" height="120"></picture></a>
 
