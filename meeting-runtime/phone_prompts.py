@@ -203,6 +203,7 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     if brief.language:
         lines.append(f'Speak in the language with tag {brief.language} unless the other person '
                      'switches language.')
+    lines.append(call_requests.SAME_SELF.strip())
     if brief.can_do:
         lines.append(call_requests.voice_instructions(who, brief.can_do, meeting=False).strip())
     return '\n\n'.join(line for line in lines if line)

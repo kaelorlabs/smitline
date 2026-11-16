@@ -314,6 +314,19 @@ class NoteTests(unittest.TestCase):
         self.assertEqual(late['kind'], 'thinking')
         self.assertIn('not been picked up', late['text'])
 
+    def test_answers_are_said_in_the_voice_s_own_words_and_language(self):
+        done = done_note(self.request, 'Nothing to bring.', owner='Robin', ok=True)
+        self.assertIn('in the language you are speaking now', done['text'])
+        self.assertIn('not a line to read out, so speak of yourself as you have all along', done['text'])
+
+    def test_the_voice_keeps_one_gender_for_itself(self):
+        from meeting_intro import identity_instructions, phone_identity_instructions
+        from phone_prompts import voice_instructions
+        rule = call_requests.SAME_SELF.strip()
+        self.assertIn(rule, voice_instructions(CallBrief.from_dict(brief())))
+        self.assertIn(rule, identity_instructions('Robin'))
+        self.assertIn(rule, phone_identity_instructions('Robin'))
+
     def test_the_owners_reply_to_a_message_says_whose_it_is(self):
         message = {'id': 'r2', 'kind': 'message', 'text': 'We missed Kim at dinner', 'askedBy': 'Sam'}
         note = reply_note(message, 'Kim missed you too.', owner='Robin')

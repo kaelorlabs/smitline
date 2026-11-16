@@ -29,6 +29,11 @@ ACTIONS = ('ask', 'add', 'cancel')
 OPEN_STATES = frozenset({'open', 'working'})
 # A message is noted, not open: nothing waits on an answer, and the owner's reply is optional.
 STATES = ('open', 'working', 'noted', 'done', 'canceled')
+# How the voice speaks of itself in languages that mark it ("main bata dungi" or "dunga"). An
+# agent once wrote its answers in the first person and the voice read them out, switching from
+# one to the other in a Hindi call (2026-11-16).
+SAME_SELF = (' In a language that marks your gender when you speak of yourself (Hindi, French, '
+             'Spanish and others), keep the same gender for yourself the whole time.')
 # Note kinds a line can deliver to the voice (GPT-Live context appends).
 NOTE_KINDS = ('thinking', 'instructions', 'commentary')
 
@@ -380,8 +385,9 @@ WHEN_TO_TELL = (
     'If they are waiting for it or it matters now, tell them at the next natural pause; '
     'otherwise, first thing the next time you speak. Finish what you are saying first: never '
     'cut yourself off in the middle of something important. Say it in your own words, as a '
-    'person would. If someone interrupts you before you have told them, tell them the next '
-    'time you speak.')
+    'person would, in the language you are speaking now: it is what you were told, not a line '
+    'to read out, so speak of yourself as you have all along. If someone interrupts you before '
+    'you have told them, tell them the next time you speak.')
 
 
 # An answer to tell (a note's `say`) is cued once nobody, the voice included, has been heard for
