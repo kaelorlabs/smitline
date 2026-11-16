@@ -20,7 +20,7 @@ from call_result import (
 from call_requests import (
     CONTEXT_LINES, KINDS, MAX_ASKED_BY, MAX_CONTEXT_LINE, MAX_DETAILS, MAX_REPLY_TEXT,
     MAX_REQUEST_TEXT, MAX_REQUESTS, MAX_STATUSES, OPEN_STATES, REQUEST_ID, chat_message, clean,
-    clean_block, done_note, late_note, retell_note, status_note, told,
+    clean_block, done_note, late_note, reply_note, retell_note, status_note, told,
 )
 from call_store import TERMINAL, CallNotFound, new_call_id
 
@@ -65,6 +65,10 @@ RETELL_AFTER = 35.0
 # Extra seconds after that for an answer the voice is still in the middle of saying: the
 # transcript has a sentence only once it is finished.
 RETELL_GRACE = 10.0
+# An answer also counts as said once the voice, cued to say it at a pause, spoke a turn of at
+# least this many words that nobody cut off. Matching its words alone failed when the voice said
+# it in another language or its own way: a Hindi call heard one answer three times (2026-11-16).
+TOLD_TURN_WORDS = 6
 # Seconds between checks for the phone provider's price after a call ends; providers fill
 # it in within a minute or two, sometimes later.
 PRICE_CHECK_DELAYS = (20, 60, 300, 1800)
@@ -107,6 +111,10 @@ class CallContext:
         self.transcript = []
         # The agent's recent lines, with when they arrived: did it say what it was told to?
         self.agent_lines = collections.deque(maxlen=80)
+        # When each request's answer was cued at a pause, and when the voice stopped for someone
+        # (the line's call.answer_cued and call.interrupted events), for the same question.
+        self.cued = {}
+        self.interruptions = collections.deque(maxlen=80)
         self.ended = False
         # Outbound phone calls: whether the opening was heard to say it is an AI (None: not heard).
         self.disclosure = None
@@ -138,6 +146,10 @@ class CallContext:
         self.service.store.update(self.call_id, line=line)
 
     def event(self, event_type, **data):
+        if event_type == 'call.answer_cued' and data.get('sent'):
+            self.cued[data.get('request')] = time.monotonic()
+        elif event_type == 'call.interrupted':
+            self.interruptions.append(time.monotonic())
         self.service._event(self.call_id, event_type, **data)
 
     def set_hold(self, hold):
@@ -145,6 +157,16 @@ class CallContext:
         (while on hold), seconds and times in all, the detector, and timedOut."""
         self.service.store.update(self.call_id, hold=dict(hold))
         self.service._signal(self.call_id)
+
+    def said_after_cue(self, request_id, since):
+        """Whether the voice, cued after `since` to say this request's answer, then spoke a whole
+        turn (TOLD_TURN_WORDS or more) without being cut off."""
+        cued = self.cued.get(request_id)
+        if cued is None or cued < since:
+            return False
+        return any(at > cued and len(line.split()) >= TOLD_TURN_WORDS
+                   and not any(cued < stopped <= at for stopped in self.interruptions)
+                   for at, line in self.agent_lines)
 
     def recording_path(self):
         """Where the line writes this call's own recording (call_recorder.py)."""
@@ -1346,9 +1368,11 @@ class CallService:
             limit = MAX_REQUESTS.get(record.get('channel'), MAX_REQUESTS['phone'])
             if existing is not None or len(requests) >= limit or not text:
                 return None
-            request = {'id': request_id,
-                       'kind': message.get('kind') if message.get('kind') in KINDS else 'question',
-                       'text': text, 'state': 'open', 'openedAt': now, 'updatedAt': now}
+            kind = message.get('kind') if message.get('kind') in KINDS else 'question'
+            # A message is only noted: the voice said it will pass it on, and nobody must answer.
+            request = {'id': request_id, 'kind': kind, 'text': text,
+                       'state': 'noted' if kind == 'message' else 'open',
+                       'openedAt': now, 'updatedAt': now}
             asked_by = clean(message.get('askedBy'), MAX_ASKED_BY)
             if asked_by:
                 request['askedBy'] = asked_by
@@ -1370,7 +1394,7 @@ class CallService:
                         **{key: request[key] for key in ('id', 'kind', 'text', 'askedBy', 'context',
                                                          'source') if key in request})
             self._signal_owner(record.get('owner'))
-            if self.agent_following(call_id):
+            if kind != 'message' and self.agent_following(call_id):
                 self._spawn(self._check_pickup(call_id, request_id))
             return request
         if action not in ('add', 'cancel') or existing is None or existing['state'] not in OPEN_STATES:
@@ -1417,7 +1441,7 @@ class CallService:
             if context is None or record['status'] != 'in_progress':
                 return
             said = ' '.join(line for at, line in context.agent_lines if at >= sent_at)
-            if told(text, said):
+            if told(text, said) or context.said_after_cue(request_id, sent_at):
                 return
             if waited >= self.retell_grace:
                 break
@@ -1463,7 +1487,11 @@ class CallService:
         if not text:
             raise CallError(422, 'invalid_request', 'text is required')
         details = clean_block(details, MAX_DETAILS) or None
-        if request['state'] not in OPEN_STATES:
+        message = request.get('kind') == 'message'
+        if message and type != 'done':
+            raise CallError(422, 'invalid_request',
+                            'a message takes only done: the user\'s own reply, if they have one')
+        if request['state'] not in OPEN_STATES and not (message and request['state'] == 'noted'):
             raise CallError(409, 'request_closed',
                             f'request {request_id} is already {request["state"]}')
         ended = record['status'] in TERMINAL or record['status'] == 'summarizing'
@@ -1476,6 +1504,8 @@ class CallService:
         owner_name = record['brief'].get('onBehalfOf')
         if type == 'status':
             note = status_note(request, text, owner=owner_name, announce=bool(announce))
+        elif message:
+            note = reply_note(request, text, owner=owner_name)
         else:
             note = done_note(request, text, owner=owner_name, ok=bool(ok))
         if details:
@@ -1630,6 +1660,17 @@ class CallService:
                           if request['state'] in OPEN_STATES]
             if still_open:
                 result['openRequests'] = still_open
+            # Messages people gave for the user, with the user's reply when there was one.
+            messages = []
+            for request in self.store.get(call_id).get('requests') or ():
+                if request.get('kind') != 'message':
+                    continue
+                item = {key: request[key] for key in ('id', 'text', 'askedBy') if key in request}
+                if request.get('answer'):
+                    item['reply'] = request['answer']
+                messages.append(item)
+            if messages:
+                result['messages'] = messages
             if 'summaryTokens' in result:
                 usage = dict(usage, summaryTokens=result.pop('summaryTokens'))
             if 'summaryModel' in result:

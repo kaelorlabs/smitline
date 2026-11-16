@@ -533,3 +533,27 @@ test('the card keeps the last three entries of the thread, and shows the rest on
   show(done); // and it stays open as the card follows the call
   assert.ok(text().includes('Question r1'));
 });
+
+test('messages for the user join the thread as said, never as a question to answer', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const message = (id, text, extra = {}) => ({ id, kind: 'message', state: 'noted', text, askedBy: 'Sam',
+    thread: [{ from: 'call', type: 'ask', text }], ...extra });
+  const show = (requests) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
+    structuredContent: { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests } } });
+  const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
+  show([message('r1', 'Thanks for coming to dinner')]);
+  assert.ok(card.main.textContent.includes('Sam saidThanks for coming to dinner'));
+  assert.ok(!card.main.textContent.includes('Sam asks'));
+  assert.ok(box('tell')); // the box stays "Tell the call"
+  assert.equal(box('r1'), undefined);
+  // The user's reply, sent through their agent, shows under it.
+  show([message('r1', 'Thanks for coming to dinner', { state: 'done',
+    thread: [{ from: 'call', type: 'ask', text: 'x' }, { from: 'agent', type: 'done', text: 'So glad we came' }] })]);
+  assert.ok(card.main.textContent.includes('Sam saidThanks for coming to dinnerYou repliedSo glad we came'));
+  assert.equal(card.main.textContent.split('Sam said').length, 2);
+  assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [message('r2', 'Hi')] }).messages,
+    [{ id: 'r2', text: 'Hi', askedBy: 'Sam', reply: '' }]);
+  assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [message('r2', 'Hi')] }).requests, []);
+});

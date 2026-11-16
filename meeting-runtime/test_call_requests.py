@@ -15,7 +15,7 @@ import call_requests
 from api_tokens import ApiTokenStore
 from call_brief import CallBrief
 from call_requests import (
-    CHAT_POINTER, MAX_STATUSES, RequestDesk, appends, done_note, late_note, status_note,
+    CHAT_POINTER, MAX_STATUSES, RequestDesk, appends, done_note, late_note, reply_note, status_note,
 )
 from call_service import CallError
 from call_store import CallNotFound
@@ -101,6 +101,33 @@ class RequestDeskTests(unittest.TestCase):
         desk.handle({'action': 'ask', 'text': 'Another'})
         desk.close('r2')
         self.assertIsNone(desk.handle({'action': 'add', 'requestId': 'r2', 'text': 'x'})[0])
+
+    def test_a_message_for_the_owner_is_noted_and_nobody_waits_on_it(self):
+        desk = RequestDesk('Robin', limit=5)
+        message, output = desk.handle({'action': 'ask', 'requestId': '', 'kind': 'message',
+                                       'text': 'Thanks for coming to dinner', 'askedBy': 'Sam'})
+        self.assertEqual((message['id'], message['kind'], message['askedBy']), ('r1', 'message', 'Sam'))
+        self.assertEqual(output['status'], 'noted')
+        self.assertIn('carry on with the conversation', output['say'])
+        self.assertNotIn('will let them know', output['say'])
+        # Nothing to add to or cancel, and the agent following or not makes no difference.
+        self.assertFalse(desk.is_open('r1'))
+        self.assertIsNone(desk.handle({'action': 'add', 'requestId': 'r1', 'text': 'more'})[0])
+        _, output = desk.handle({'action': 'ask', 'kind': 'message', 'text': 'Say hi'}, following=False)
+        self.assertEqual(output['status'], 'noted')
+        self.assertNotIn('not following', output['say'])
+
+    def test_the_voice_says_itself_it_will_pass_a_message_on_and_never_waits(self):
+        voice = call_requests.voice_instructions('Robin', 'answer questions', meeting=False)
+        self.assertIn('When someone gives you a message for Robin', voice)
+        self.assertIn('say yourself, in a few words, that you will pass it on, with no "One moment"', voice)
+        self.assertIn('Never wait in silence for an answer', voice)
+        self.assertIn('you keep the call going meanwhile', voice)
+        backend = call_requests.backend_instructions('Robin', 'answer questions')
+        self.assertIn('call ask_agent with action ask and kind message', backend)
+        tool = call_requests.ask_agent_tool('Robin')
+        self.assertEqual(tool['parameters']['properties']['kind']['enum'], ['question', 'task', 'message'])
+        self.assertIn('to note a message for Robin', tool['description'])
 
     def test_the_voice_knows_only_the_backend_passes_requests_on(self):
         text = call_requests.voice_instructions('Robin', 'look things up', meeting=True)
@@ -286,6 +313,27 @@ class NoteTests(unittest.TestCase):
         late = late_note(self.request, owner='Robin')
         self.assertEqual(late['kind'], 'thinking')
         self.assertIn('not been picked up', late['text'])
+
+    def test_answers_are_said_in_the_voice_s_own_words_and_language(self):
+        done = done_note(self.request, 'Nothing to bring.', owner='Robin', ok=True)
+        self.assertIn('in the language you are speaking now', done['text'])
+        self.assertIn('not a line to read out, so speak of yourself as you have all along', done['text'])
+
+    def test_the_voice_keeps_one_gender_for_itself(self):
+        from meeting_intro import identity_instructions, phone_identity_instructions
+        from phone_prompts import voice_instructions
+        rule = call_requests.SAME_SELF.strip()
+        self.assertIn(rule, voice_instructions(CallBrief.from_dict(brief())))
+        self.assertIn(rule, identity_instructions('Robin'))
+        self.assertIn(rule, phone_identity_instructions('Robin'))
+
+    def test_the_owners_reply_to_a_message_says_whose_it_is(self):
+        message = {'id': 'r2', 'kind': 'message', 'text': 'We missed Kim at dinner', 'askedBy': 'Sam'}
+        note = reply_note(message, 'Kim missed you too.', owner='Robin')
+        self.assertEqual((note['kind'], note['request'], note['closes'], note['say']),
+                         ('instructions', 'r2', True, 'Kim missed you too.'))
+        self.assertIn('Robin replied to the message Sam gave you', note['text'])
+        self.assertIn("Tell Sam that this is Robin's reply", note['text'])
 
     def test_details_go_to_the_chat_or_to_the_voice(self):
         note = dict(done_note(self.request, 'Added it.', owner='Robin', ok=True), details='https://x/pr/81')
@@ -483,6 +531,35 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
             await self.service.reply(call_id, 'r2', owner='local', type='done', text='Fixed.')
         self.assertEqual(caught.exception.code, 'request_closed')
 
+    async def test_a_message_is_noted_and_the_owners_reply_is_optional(self):
+        self.service.pickup_seconds = 0.01
+        call_id, ctx = await self.start()
+        await self.follow(call_id)
+        noted = ctx.request(ask(kind='message', text='Thanks for coming to dinner', askedBy='Sam'))
+        self.assertEqual(noted['state'], 'noted')
+        woke = await self.service.wait(call_id, owner='local', timeout=0, since='')
+        self.assertEqual([(r['id'], r['kind']) for r in woke['live']['requests']], [('r1', 'message')])
+        await asyncio.sleep(0.1)
+        self.assertEqual(self.line.notes, [])  # no pickup check: nobody has to answer it
+        with self.assertRaises(CallError) as caught:
+            await self.service.reply(call_id, 'r1', owner='local', type='status', text='Seen.')
+        self.assertEqual((caught.exception.status, caught.exception.code), (422, 'invalid_request'))
+        result = await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                          text='So glad we came.')
+        self.assertEqual((result['request']['state'], result['request']['answer']),
+                         ('done', 'So glad we came.'))
+        self.assertIn('Robin replied to the message Sam gave you', self.line.notes[-1]['text'])
+        with self.assertRaises(CallError) as caught:
+            await self.service.reply(call_id, 'r1', owner='local', type='done', text='Again.')
+        self.assertEqual(caught.exception.code, 'request_closed')
+        ctx.request(ask('r2', kind='message', text='Say hi to Kim', askedBy='Sam'))
+        self.line.proceed.set()
+        done = await self.service.wait(call_id, owner='local', timeout=5)
+        self.assertNotIn('openRequests', done['result'])  # messages are not follow-ups
+        self.assertEqual(done['result']['messages'], [
+            {'id': 'r1', 'text': 'Thanks for coming to dinner', 'askedBy': 'Sam', 'reply': 'So glad we came.'},
+            {'id': 'r2', 'text': 'Say hi to Kim', 'askedBy': 'Sam'}])
+
     async def test_the_phone_line_context_is_the_call_s_last_lines(self):
         call_id, ctx = await self.start()
         ctx.request(ask(context=None))
@@ -566,6 +643,34 @@ class ServiceRequestTests(unittest.IsolatedAsyncioTestCase):
         ctx.add_transcript('agent', 'Priya, that is done: pull request 81 has it.')
         await asyncio.sleep(0.3)
         self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
+
+    async def test_an_answer_said_after_its_cue_in_other_words_is_not_told_again(self):
+        self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.event('call.answer_cued', request='r1', sent=True)
+        # The call had moved to Hindi: none of the answer's words, but a whole turn after the cue.
+        ctx.add_transcript('agent', 'Ho gaya Priya ji, launch ki tareekh ab likhi hui hai.')
+        await asyncio.sleep(0.4)
+        self.assertFalse(any('has not heard' in n['text'] for n in self.line.notes))
+        self.assertFalse(any(e['type'] == 'call.request_retold' for e in self.service.events(call_id)))
+
+    async def test_a_cued_answer_that_was_cut_off_is_told_again(self):
+        self.service.retell_after = 0.1
+        self.service.retell_grace = 0.2
+        call_id, ctx = await self.start()
+        ctx.request(ask())
+        await self.service.reply(call_id, 'r1', owner='local', type='done',
+                                 text='Added it in pull request 81.')
+        ctx.event('call.answer_cued', request='r1', sent=True)
+        ctx.event('call.interrupted')
+        ctx.add_transcript('agent', 'Ho gaya Priya ji, launch ki tareekh ab likhi')
+        await until(lambda: any('has not heard what' in n['text'] for n in self.line.notes))
+        # A short turn after the cue, or a cue for another request, does not count either.
+        self.assertFalse(ctx.said_after_cue('r2', 0))
 
     async def test_a_line_that_cannot_deliver_says_so(self):
         call_id, ctx = await self.start()

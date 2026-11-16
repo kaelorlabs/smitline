@@ -23,6 +23,17 @@ GPT_LIVE_VOICES = (
     'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
     'tempo', 'beacon', 'delta', 'cinder',
 )
+# How each voice presents, from the "Presentation" column of OpenAI's GPT-Live voice table, which
+# also lists voices that only SMITLINE_EXTRA_VOICES offers here. marin, the default, is not in that
+# table; it is described elsewhere as a woman's voice, and spoke of itself as one on calls.
+VOICE_GENDERS = {
+    'marin': 'feminine', 'quartz': 'feminine', 'ripple': 'masculine', 'vesper': 'masculine',
+    'willow': 'feminine', 'stone': 'masculine', 'gleam': 'feminine', 'meridian': 'masculine',
+    'bossa': 'feminine', 'tempo': 'masculine', 'beacon': 'masculine', 'delta': 'feminine',
+    'cinder': 'masculine', 'nuri': 'feminine', 'juni': 'feminine', 'flitz': 'masculine',
+    'brise': 'feminine', 'sillage': 'masculine', 'nira': 'feminine', 'harema': 'feminine',
+    'shida': 'masculine', 'noeul': 'feminine',
+}
 APPEND_KINDS = ('session.thinking.append', 'session.commentary.append',
                 'session.instructions.append')
 
@@ -48,12 +59,26 @@ def append_event(kind, content, delegation_id=None):
     }
 
 
+def gender_instructions(voice):
+    """Which gender the voice speaks of itself in, matching how it sounds (no voice means GPT-Live's
+    default). A voice whose presentation is unknown gets nothing, and keeps whichever it starts with."""
+    gender = VOICE_GENDERS.get(str(voice or DEFAULT_VOICE).strip().lower())
+    if not gender:
+        return ''
+    person = 'woman' if gender == 'feminine' else 'man'
+    example = 'dungi' if gender == 'feminine' else 'dunga'
+    return (f'\nYour voice sounds like a {person}\'s. In a language that marks your gender when you '
+            f'speak of yourself (Hindi, French, Spanish and others), always use the {gender} forms '
+            f'for yourself, as in Hindi "main bata {example}", even when an answer you pass on was '
+            'written otherwise.')
+
+
 def session_config(*, instructions, audio_format=PCM24, voice=None, delegation=None,
                    seed_input=None):
     config = {
         'model': LIVE_MODEL,
         'store': False,
-        'instructions': instructions,
+        'instructions': instructions + gender_instructions(voice),
         'audio': {'format': dict(audio_format)},
         'delegation': delegation or {'type': 'client'},
     }
