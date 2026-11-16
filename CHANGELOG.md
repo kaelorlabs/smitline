@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Clearer tool descriptions.** `start_call` now points to `check_call_brief` for checking a brief without placing the call, and `get_profile` points to `list_contacts` for everyone Smitline has called, as their partners already pointed back. `list_contacts` says how a number gets a name (a person with that phone in the profile, through `update_profile`), and `save_call_note` says that saving again replaces the note. Agents and directory graders such as Glama's read these descriptions to tell the tools apart; no tool, input or result changed.
+- **`end_call`, `transfer_call_to_me` and `update_profile` say what they do.** `end_call` says how each kind of call ends (a goodbye, a cancel before the phone rings, leaving a meeting), that billing stops and it cannot be undone, and that the result follows through `wait_for_call`. `transfer_call_to_me` says what the other person hears, that it rings the user's phone for up to 30 seconds, and what happens when nobody answers. `update_profile` says that nothing is saved when part of an update is invalid and that it returns the saved profile, and its `voices`, `boundaries`, `people` and `removePeople` fields now have descriptions. No tool, input or result changed.
 
 ## 0.3.13 — 2026-11-13
 
