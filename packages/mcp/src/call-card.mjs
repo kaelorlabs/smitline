@@ -107,21 +107,29 @@ export function callCardView(record, now = Date.now()) {
   // Questions from the call nobody has finished, so the user can answer them from the card
   // while the agent is busy (some apps take no message until the agent's turn ends).
   const live = !ENDED.includes(call.status);
-  const requests = (live && Array.isArray(call.requests) ? call.requests : [])
+  const asked = (live && Array.isArray(call.requests) ? call.requests : [])
     .map((request) => object(request))
-    .filter((request) => ['open', 'working'].includes(request.state) && /^r[1-9][0-9]{0,2}$/.test(text(request.id)))
+    .filter((request) => /^r[1-9][0-9]{0,2}$/.test(text(request.id)) && text(request.text))
     .map((request) => {
-      const added = (Array.isArray(request.thread) ? request.thread : [])
-        .map((entry) => object(entry))
-        .filter((entry) => entry.from === 'call' && entry.type === 'add' && text(entry.text));
+      const thread = (Array.isArray(request.thread) ? request.thread : []).map((entry) => object(entry));
+      const added = thread.filter((entry) => entry.from === 'call' && entry.type === 'add' && text(entry.text));
+      const done = thread.filter((entry) => entry.from === 'agent' && entry.type === 'done' && text(entry.text));
       return {
         id: text(request.id),
         text: text(request.text),
         added: added.length ? text(added[added.length - 1].text) : '',
         askedBy: text(request.askedBy),
+        open: ['open', 'working'].includes(request.state),
+        canceled: request.state === 'canceled',
+        answer: done.length ? text(done[done.length - 1].text) : '',
       };
-    })
-    .filter((request) => request.text);
+    });
+  const requests = asked.filter((request) => request.open)
+    .map(({ id, text: said, added, askedBy }) => ({ id, text: said, added, askedBy }));
+  // Questions that closed while the call runs: answered (by the agent, or from another card) or
+  // dropped by the person who asked. The card says so when it was showing one of them.
+  const closed = asked.filter((request) => !request.open)
+    .map(({ id, text: said, askedBy, canceled, answer }) => ({ id, text: said, askedBy, canceled, answer }));
 
   return {
     id: text(call.id),
@@ -138,6 +146,7 @@ export function callCardView(record, now = Date.now()) {
     details,
     lists,
     requests,
+    closed,
     canTell: call.status === 'in_progress',
     recording,
     transcript,
@@ -212,6 +221,13 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); ou
 .note { color: var(--muted); font-size: var(--sub); }
 .note.bad { color: var(--bad); }
 .note.sent::before { content: "✓ "; color: var(--live); }
+.past { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
+.by { color: var(--muted); font-size: var(--sub); }
+.reply { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; margin-top: 4px; }
+.reply::before { content: "↳"; grid-row: span 2; color: var(--muted); }
+.reply.mine .by, .by.mine { color: var(--live); }
+.told { padding-left: 18px; margin-top: 2px; }
+.more { justify-self: start; color: var(--accent); font-weight: var(--strong); font-size: var(--sub); }
 audio { width: 100%; height: 36px; }
 .foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
   border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
@@ -240,11 +256,22 @@ let timer = null;
 let closed = false;
 // Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
 let transcriptOpen = false;
+// Whether the user opened the older entries of the thread, which the card keeps open the same way.
+let earlierOpen = false;
+const RECENT_ENTRIES = 3;
 // What the user is typing in each answer box (a request id, or 'tell'), which ones are being
 // sent, and the note under each; the card redraws every few seconds and keeps them.
 const drafts = new Map();
 const sending = new Set();
 const notes = new Map();
+// Questions the card has shown in its box, and each one that has since closed, with how: the
+// user answered it, the agent did, or the person dropped it. A question never just disappears.
+const shown = new Set();
+const past = new Map();
+let told = 0; // runs of notes the user sent with "Tell the call", which join the thread in turn
+// Those questions whose typed answer moved to "Tell the call": sent from there, the text goes
+// with the question it answers, so the voice can pass it on as the user's own late answer.
+let late = [];
 
 function post(message) { window.parent.postMessage(message, '*'); }
 function ask(method, params) {
@@ -339,10 +366,16 @@ function render() {
   main.replaceChildren(...parts);
   for (const box of main.querySelectorAll('textarea')) if (box.value) fit(box);
   if (key) {
-    const box = [...main.querySelectorAll('textarea')].find((item) => item.dataset.key === key);
+    const boxes = [...main.querySelectorAll('textarea')];
+    const box = boxes.find((item) => item.dataset.key === key);
+    // The question being answered closed: carry on in "Tell the call", where its text went.
+    const moved = !box && (past.get(key) || {}).elsewhere ? boxes.find((item) => item.dataset.key === 'tell') : null;
     if (box) {
       box.focus();
       box.setSelectionRange(at[0], at[1]);
+    } else if (moved) {
+      moved.focus();
+      moved.setSelectionRange(moved.value.length, moved.value.length);
     }
   }
 }
@@ -387,18 +420,26 @@ function failure(result) {
 async function send(key, name, args, about) {
   const words = (drafts.get(key) || '').trim();
   if (!words || sending.has(key) || !call) return;
+  const answering = key === 'tell' ? [...late] : [];
   sending.add(key);
   notes.delete(key);
   render();
   try {
-    const result = await callTool(name, { callId: call.id, ...args, text: words });
+    const result = await callTool(name, { callId: call.id, ...args, text: lateAnswer(answering, words) });
     if (result && !result.isError) {
       drafts.delete(key);
-      // An answered question leaves the card with the next refresh; this line stays instead.
-      notes.set(key, {
-        text: 'Sent to the call.',
-        answered: about ? 'Replied “' + words + '” to “' + about + '”' : '',
-      });
+      late = late.filter((question) => !answering.includes(question));
+      for (const question of answering) past.get(question.id).late = words;
+      // An answered question leaves the card with the next refresh; it shows with the reply instead.
+      if (about) {
+        past.set(key, { ...about, answer: words, mine: true });
+        notes.set(key, { text: 'Sent to the call.' });
+      } else if (key === 'tell' && !answering.length) {
+        // Notes in a row share one label; the note itself shows there, so no "sent" line.
+        const last = [...past.values()].at(-1);
+        if (last && last.told) last.told.push(words);
+        else past.set('told-' + ++told, { told: [words] });
+      }
     } else {
       notes.set(key, { text: failure(result), bad: true });
     }
@@ -426,7 +467,11 @@ function composer(key, label, placeholder, name, args, about) {
   box.value = drafts.get(key) || '';
   box.dataset.key = key;
   box.setAttribute('aria-label', placeholder);
-  box.addEventListener('input', () => { drafts.set(key, box.value); fit(box); });
+  box.addEventListener('input', () => {
+    drafts.set(key, box.value);
+    if (key === 'tell' && !box.value.trim()) late = []; // cleared: what comes next is a new note
+    fit(box);
+  });
   box.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -448,14 +493,80 @@ function composer(key, label, placeholder, name, args, about) {
 
 // One box at a time, so the card keeps to one main action (ChatGPT's inline cards allow two,
 // with "Open in Smitline" the second): the oldest open question, else "Tell the call".
-function replies(view) {
-  const section = node('section', 'ask');
-  for (const [key, note] of notes) {
-    if (note.answered && !view.requests.some((request) => request.id === key)) {
-      section.append(node('p', 'note sent', note.answered));
+// A question the card showed closed without the user's answer: say how, and keep anything the
+// user had typed for it in "Tell the call", so it is never lost.
+function settle(view) {
+  for (const request of view.closed) {
+    if (!shown.has(request.id) || past.has(request.id)) continue;
+    past.set(request.id, { ...request, elsewhere: true });
+    const typed = (drafts.get(request.id) || '').trim();
+    drafts.delete(request.id);
+    if (typed) {
+      const tell = (drafts.get('tell') || '').trim();
+      drafts.set('tell', tell ? tell + '\\n' + typed : typed);
+      late.push(request);
+      notes.set('tell', { text: 'Your reply, kept. Send it as your answer.', plain: true });
     }
   }
+}
+
+function clip(words, size) {
+  return words.length > size ? words.slice(0, size - 1) + '…' : words;
+}
+
+// What the voice gets for a late answer: the question and what was said meanwhile, then the
+// user's words as typed (the tool takes 2000 characters).
+function lateAnswer(questions, words) {
+  if (!questions.length) return words;
+  const about = questions.slice(-3).map((question) => {
+    const asked = (question.askedBy ? question.askedBy + '’s' : 'the') + ' question “' + clip(question.text, 160) + '”';
+    if (question.canceled) return asked + ', which ' + (question.askedBy || 'they') + ' then dropped';
+    return asked + ', already answered' + (question.answer ? ' with “' + clip(question.answer, 160) + '”' : '');
+  });
+  const lead = 'The user’s own answer, sent late, to ' + about.join('; and to ') + '. Pass it on at the next pause as '
+    + 'their answer, saying it just came from them; where it differs from the earlier answer, theirs counts: ';
+  return lead + words.slice(0, 2000 - lead.length);
+}
+
+// A closed question as a short thread: who asked and what, then how it was answered, and the
+// user's own answer if they sent it later.
+function earlier(question) {
+  if (question.told) {
+    const group = node('div', 'past');
+    group.append(node('p', 'by mine', 'You told the call'));
+    for (const words of question.told) group.append(node('p', 'told', words));
+    return group;
+  }
+  const who = question.askedBy || 'They';
+  const item = node('div', 'past');
+  item.append(node('p', 'by', who + ' asked'), node('p', null, question.text));
+  const said = (by, words, mine) => {
+    const line = node('p', mine ? 'reply mine' : 'reply');
+    line.append(node('span', 'by', by));
+    if (words) line.append(node('span', null, words));
+    item.append(line);
+  };
+  if (question.canceled) said(who + ' dropped the question');
+  else said(question.mine ? 'You replied' : 'Answered for you', question.answer, question.mine);
+  if (question.late) said('You, later', question.late, true);
+  return item;
+}
+
+function replies(view) {
+  settle(view);
+  const section = node('section', 'ask');
+  // The last few entries; the rest open with one click, and stay open.
+  const entries = [...past].filter(([id]) => !view.requests.some((request) => request.id === id));
+  const hidden = earlierOpen ? 0 : Math.max(0, entries.length - RECENT_ENTRIES);
+  if (hidden) {
+    const more = node('button', 'more', 'Show ' + hidden + ' earlier');
+    more.type = 'button';
+    more.addEventListener('click', () => { earlierOpen = true; render(); });
+    section.append(more);
+  }
+  for (const [, question] of entries.slice(hidden)) section.append(earlier(question));
   const [request] = view.requests;
+  if (request) shown.add(request.id);
   let key = '';
   let parts = null;
   if (request) {
@@ -464,7 +575,8 @@ function replies(view) {
     const waiting = view.requests.length - 1;
     label.append(node('span', null, (request.askedBy || 'They') + ' asks'));
     if (waiting) label.append(node('span', null, waiting + ' more waiting'));
-    parts = composer(key, label, 'Your reply', 'reply_to_call_request', { requestId: request.id, type: 'done' }, request.text);
+    parts = composer(key, label, 'Your reply', 'reply_to_call_request', { requestId: request.id, type: 'done' },
+      { id: request.id, text: request.text, askedBy: request.askedBy });
     const quote = node('div', 'quote');
     quote.append(node('p', null, request.text));
     if (request.added) quote.append(node('p', 'note', 'Then added: ' + request.added));
@@ -478,7 +590,7 @@ function replies(view) {
   if (parts) {
     parts.wrap.append(parts.form);
     const note = notes.get(key);
-    if (note) parts.wrap.append(node('p', note.bad ? 'note bad' : 'note sent', note.text));
+    if (note) parts.wrap.append(node('p', note.bad ? 'note bad' : note.plain ? 'note' : 'note sent', note.text));
     section.append(parts.wrap);
   }
   return section;
