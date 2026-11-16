@@ -117,17 +117,22 @@ export function callCardView(record, now = Date.now()) {
         text: text(request.text),
         added: added.length ? text(added[added.length - 1].text) : '',
         askedBy: text(request.askedBy),
+        message: request.kind === 'message',
         open: ['open', 'working'].includes(request.state),
         canceled: request.state === 'canceled',
         answer: done.length ? text(done[done.length - 1].text) : '',
       };
     });
-  const requests = asked.filter((request) => request.open)
+  const requests = asked.filter((request) => request.open && !request.message)
     .map(({ id, text: said, added, askedBy }) => ({ id, text: said, added, askedBy }));
   // Questions that closed while the call runs: answered (by the agent, or from another card) or
   // dropped by the person who asked. The card says so when it was showing one of them.
-  const closed = asked.filter((request) => !request.open)
+  const closed = asked.filter((request) => !request.open && !request.message)
     .map(({ id, text: said, askedBy, canceled, answer }) => ({ id, text: said, askedBy, canceled, answer }));
+  // Messages people gave for the user ("tell them thanks"): noted, never asked of the user, with
+  // the user's reply if they sent one.
+  const messages = asked.filter((request) => request.message)
+    .map(({ id, text: said, askedBy, answer }) => ({ id, text: said, askedBy, reply: answer }));
 
   return {
     id: text(call.id),
@@ -145,6 +150,7 @@ export function callCardView(record, now = Date.now()) {
     lists,
     requests,
     closed,
+    messages,
     canTell: call.status === 'in_progress',
     recording,
     transcript,
@@ -529,6 +535,16 @@ function lateAnswer(questions, words) {
 // A closed question as a short thread: who asked and what, then how it was answered, and the
 // user's own answer if they sent it later.
 function earlier(question) {
+  if (question.said !== undefined) {
+    const message = node('div', 'past');
+    message.append(node('p', 'by', (question.askedBy || 'They') + ' said'), node('p', null, question.said));
+    if (question.reply) {
+      const line = node('p', 'reply mine');
+      line.append(node('span', 'by', 'You replied'), node('span', null, question.reply));
+      message.append(line);
+    }
+    return message;
+  }
   if (question.told) {
     const group = node('div', 'past');
     group.append(node('p', 'by mine', 'You told the call'));
@@ -552,6 +568,12 @@ function earlier(question) {
 
 function replies(view) {
   settle(view);
+  // Messages join the thread as they come, as something said, not something to answer.
+  for (const message of view.messages) {
+    const seen = past.get(message.id);
+    if (seen) seen.reply = message.reply;
+    else past.set(message.id, { said: message.text, askedBy: message.askedBy, reply: message.reply });
+  }
   const section = node('section', 'ask');
   // The last few entries; the rest open with one click, and stay open.
   const entries = [...past].filter(([id]) => !view.requests.some((request) => request.id === id));
