@@ -140,6 +140,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 | [Security and privacy](docs/security.md) | What stays local, what goes where, and how it's protected |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
 | [Development](docs/development.md) | Running from a checkout, tests, project layout |
+| [Releasing](docs/releasing.md) | How maintainers release a version |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 | [Roadmap](docs/product-roadmap.md) | What's next |
 
