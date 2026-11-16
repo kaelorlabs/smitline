@@ -52,8 +52,12 @@ export interface CallBrief {
   afterHours?: boolean;
   /** Phone only: record this call; Smitline keeps the recording, each side on its own channel. */
   record?: boolean;
-  /** Phone only: let the assistant press keys in an automated phone menu. Off by default; menus make calls longer and cost more. */
+  /** Phone only: whether the assistant may press keys in an automated phone menu. On by default; false makes it end the call politely at a menu. */
   phoneMenus?: boolean;
+  /** Phone only: how long the call may wait on hold in all, 1 to 180 minutes (default 60). Not counted toward maxMinutes. */
+  maxHoldMinutes?: number;
+  /** Phone only: once a person picks up after a hold, ring the owner's phone and connect them when they press 1. */
+  connectOwner?: boolean;
   notify?: { webhookUrl?: string };
   /** Meetings only: Smitline's virtual camera tile; the avatar is a PNG, JPEG, WebP, or SVG data: URI of up to 80 KB. */
   camera?: { enabled?: boolean; defaultOn?: boolean; avatarDataUri?: string };
@@ -189,6 +193,22 @@ export interface CallCheck {
   carried?: number;
 }
 
+/** A phone call's time on hold. While on hold the voice is switched off and Smitline listens. */
+export interface CallHold {
+  onHold: boolean;
+  /** While on hold: when this hold started. */
+  since?: string;
+  /** Time on hold in all, and how many times. */
+  seconds: number;
+  times: number;
+  /** What listened while the voice was off (firered or silero); null when the voice stayed on. */
+  detector?: string | null;
+  wakes?: number;
+  skippedRepeats?: number;
+  skippedMusic?: number;
+  timedOut?: boolean;
+}
+
 export interface Call {
   id: string;
   owner?: string;
@@ -204,6 +224,8 @@ export interface Call {
   line?: Record<string, unknown>;
   result: CallResult | null;
   usage?: Record<string, unknown>;
+  /** Phone calls that went on hold: kept up to date while the call runs. */
+  hold?: CallHold;
   /** The notes of earlier calls this call started with. */
   carried?: CarriedNote[];
   /** A note saved on this finished call for later calls. */

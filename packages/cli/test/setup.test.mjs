@@ -693,6 +693,12 @@ test('profile commands and the new call flags reach the daemon', async (t) => {
   assert.equal(late.code, 0, late.stderr);
   const lateBrief = daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body;
   assert.equal(lateBrief.afterHours, true);
+  assert.equal('phoneMenus' in lateBrief, false);  // on by default: the brief leaves it out
+  const held = await runCli(['call', ...common, '--to', '+14155550143', '--objective', 'Ask about the bill',
+    '--max-hold-minutes', '90', '--connect-owner', '--no-phone-menus']);
+  assert.equal(held.code, 0, held.stderr);
+  const heldBrief = daemon.seen.filter((item) => item.method === 'POST' && item.url === '/v1/calls').at(-1).body;
+  assert.deepEqual([heldBrief.maxHoldMinutes, heldBrief.connectOwner, heldBrief.phoneMenus], [90, true, false]);
   for (const args of [['do-not-call', 'add', '+14155550143', '--reason', 'Asked by text'],
     ['do-not-call', 'remove', '+14155550143'], ['do-not-call', 'list']]) {
     const result = await runCli([...args, ...common]);

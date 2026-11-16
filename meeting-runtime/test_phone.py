@@ -47,10 +47,15 @@ class FakeTwilio:
         self.updates = []
         self.remote_status = 'ringing'
         self.refuse_twiml = False
+        self.refuse_calls = False
 
     async def create_call(self, **kwargs):
+        if self.refuse_calls:
+            from twilio_client import TwilioError
+            raise TwilioError(400, 21211, "The 'To' number is not a valid phone number.")
         self.created.append(kwargs)
-        return {'sid': 'CA123'}
+        # The owner's own phone, when a call rings it (phone_owner.py), is a call of its own.
+        return {'sid': 'CAOWNER' if '/owner-status/' in (kwargs.get('status_callback') or '') else 'CA123'}
 
     async def get_call(self, call_sid):
         return {'sid': call_sid, 'status': self.remote_status,
@@ -152,11 +157,29 @@ class FakeTwilioSocket:
         return item
 
 
+class FakeJudge:
+    """The hold judge (hold_judge.py) without the Decisions API: answers what a test scripts in
+    kinds (a kind, sure, or a (kind, confidence) pair), else other."""
+    model = 'fake-judge'
+
+    def __init__(self):
+        self.kinds = []
+        self.asked = []
+        self.tokens = {'input': 0, 'cached': 0, 'output': 0}
+
+    async def decide(self, earlier, latest):
+        self.asked.append(latest)
+        answer = self.kinds.pop(0) if self.kinds else 'other'
+        return answer if isinstance(answer, tuple) else (answer, 0.95)
+
+
 class FakeSummarizer:
     calls = 0
+    facts = ()  # what the last call's summary was told besides its transcript
 
     async def summarize(self, brief, transcript, *, duration_seconds=0, facts=()):
         FakeSummarizer.calls += 1
+        FakeSummarizer.facts = tuple(facts)
         return {'outcome': 'achieved', 'summary': 'Booked.', 'details': [], 'decisions': [],
                 'actionItems': [], 'openQuestions': [], 'transcript': transcript,
                 'durationSeconds': duration_seconds, 'source': 'summary_model'}
@@ -187,9 +210,11 @@ class PhoneHarness:
         async def public_url():
             await self.url_ready.wait()
             return PUBLIC
+        self.judge = FakeJudge()
         self.line = PhoneLine(public_url=public_url, environ=lambda: self.env,
                               twilio_factory=lambda creds: self.twilio,
-                              live_factory=FakeLive, status_grace=0.2)
+                              live_factory=FakeLive, status_grace=0.2,
+                              hold_judge_factory=lambda key, model: self.judge)
         self.service = CallService(self.store, hooks=self.hooks, lines={'phone': self.line},
                                    summarizer_factory=lambda owner: FakeSummarizer(), environ={},
                                    shutdown_grace=0.2)
@@ -361,7 +386,10 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         text = voice_instructions(call)
         self.assertIn('Also end it politely when the call is going nowhere', text)
         self.assertIn('going around in circles', text)
-        self.assertIn('an automated menu will not let you through', text)
+        # Phone menus are on by default: the voice tries a menu's options before giving up.
+        self.assertIn('an automated menu still will not let you through after you have tried', text)
+        off = voice_instructions(CallBrief.from_dict(brief(phoneMenus=False)))
+        self.assertIn('an automated menu will not let you through', off)
         self.assertIn('nobody answers when you check a couple of times', text)
         self.assertIn('Robin will follow up', text)
         self.assertIn('reason not_productive', backend_instructions(call))
@@ -845,15 +873,21 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'not_ready')
         self.h.env['SMITLINE_OWNER_PHONE'] = '+14155550199'
         session.owner_phone = '+14155550199'
+        # The owner's phone rings first, from the call's number; pressing 1 connects them.
         result = await self.h.service.transfer(record['id'], owner='local')
-        self.assertEqual(result, {'transferred': True})
-        twiml = self.h.twilio.updates[-1][1]['twiml']
-        self.assertIn('+14155550199', twiml)
-        self.assertIn('callerId="+15005550006"', twiml)
+        self.assertEqual(result, {'transferred': False, 'ringing': True})
+        owner_call = self.h.twilio.created[-1]
+        self.assertEqual((owner_call['to'], owner_call['from_']), ('+14155550199', '+15005550006'))
+        self.assertIn(f'/twilio/owner/{record["id"]}', owner_call['twiml'])
+        self.assertIn('Press 1 to talk to them now', owner_call['twiml'])
+        # The voice keeps them company meanwhile.
+        await until(lambda: any('getting Robin on the line' in text for _kind, text in live.appends))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
         done = await self.h.service.wait(record['id'], timeout=5, owner='local')
-        self.assertEqual(done['endReason'], 'transferred')
+        self.assertEqual(done['endReason'], 'remote_hangup')
+        # The call ended before the owner answered: their phone stops ringing.
+        self.assertIn(('CAOWNER', {'status': 'completed'}), self.h.twilio.updates)
 
     async def test_end_while_ringing_cancels(self):
         record, _session = await self.h.dial()
@@ -935,15 +969,16 @@ class PhoneLineTests(unittest.IsolatedAsyncioTestCase):
         await self.h.service.end(record['id'], owner='local')
         pending = session._pending_hangup
         self.assertIsNotNone(pending)
-        self.h.twilio.refuse_twiml = True
+        self.h.twilio.refuse_calls = True
         with self.assertRaises(CallError) as caught:
             await self.h.service.transfer(record['id'], owner='local')
         self.assertEqual((caught.exception.status, caught.exception.code), (502, 'provider_error'))
         self.assertIsNone(session.end_reason)
         self.assertTrue(pending.cancelled() or pending.done())
-        self.h.twilio.refuse_twiml = False
-        await self.h.service.transfer(record['id'], owner='local')
-        self.assertEqual(session.end_reason, 'transferred')
+        self.h.twilio.refuse_calls = False
+        self.assertEqual(await self.h.service.transfer(record['id'], owner='local'),
+                         {'transferred': False, 'ringing': True})
+        self.assertIsNone(session.end_reason)  # the call goes on while the owner's phone rings
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
         await asyncio.sleep(0.05)
@@ -975,7 +1010,10 @@ class PromptTests(unittest.TestCase):
         self.assertIn("reached Robin's AI assistant", voice_instructions(parsed, inbound=True))
         config = delegation_config(parsed, model='gpt-5.6-luna', web_search=True)
         self.assertEqual([tool.get('name', tool['type']) for tool in config['responses']['tools']],
-                         ['end_call', 'web_search'])
+                         ['end_call', 'press_keys', 'web_search'])
+        held = delegation_config(parsed, model='gpt-5.6-luna', hold=True)
+        self.assertEqual([tool['name'] for tool in held['responses']['tools']],
+                         ['end_call', 'press_keys', 'wait_on_hold'])
         self.assertEqual(config['responses']['model'], 'gpt-5.6-luna')
 
     def test_notes_are_acted_on_and_what_they_carry_is_told_at_a_pause(self):

@@ -42,6 +42,12 @@ test('the view says how a hosted call went and where the recording is, not what 
   assert.equal(view.callUrl, DONE.callUrl);
 });
 
+test('a note in the transcript, such as a hold, is shown as a note, not as said by them', () => {
+  const view = callCardView({ ...DONE, transcript: [...DONE.transcript, { speaker: 'note', text: 'On hold.' }] });
+  assert.deepEqual(view.transcript.map((line) => [line.who, line.text]),
+    [['Smitline', 'Hi, calling for Ankit.'], ['Bawarchi', 'Sure.'], ['Note', 'On hold.']]);
+});
+
 test('the view of a self-hosted or live call: no provider cost, no player without a safe link', () => {
   const live = callCardView({
     id: ID, status: 'in_progress', brief: { to: '+15550100' }, answeredAt: '2026-11-02T17:00:00Z',
