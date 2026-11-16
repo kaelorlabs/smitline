@@ -108,7 +108,9 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then 
 
 </details>
 
-**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline) and [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline). Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
+**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline), [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline) and [Ext Ops Panel](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline). Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
+
+<a href="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline"><picture><source media="(prefers-color-scheme: dark)" srcset="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-dark.svg"><img src="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-light.svg" alt="Smitline: listed on Ext Ops Panel" width="400" height="120"></picture></a>
 
 ## Safe by default
 
@@ -140,6 +142,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 | [Security and privacy](docs/security.md) | What stays local, what goes where, and how it's protected |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
 | [Development](docs/development.md) | Running from a checkout, tests, project layout |
+| [Releasing](docs/releasing.md) | How maintainers release a version |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 | [Roadmap](docs/product-roadmap.md) | What's next |
 

@@ -145,7 +145,7 @@ export const CALL_TOOL_DEFINITIONS = [
     title: "Start a phone call or join a meeting",
     _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    description: "Place a phone call, join a video meeting, or start a new meeting room for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass the facts the call needs as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story, and set canDo whenever you could help the people on the call, at least by answering questions about the user's work. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. For a first call to someone new, offer a rehearsal on the user's own phone. A phone call gets through automated menus and waits on hold by itself, up to maxHoldMinutes (default 60). Returns at once. Then follow the call in the same turn: call wait_for_call again and again until its status is completed, failed, or canceled, because once your turn ends nothing from the call reaches you. next, the result's first field, says what to do now. If your app asks the user before each tool call, suggest once, as you start the first call, that they set wait_for_call, get_call and list_calls, and the two tools you use during a call (send_call_instruction, reply_to_call_request), to \"Always allow\" so you can follow and help a call without a click each time; never suggest it for start_call.",
+    description: "Place a phone call, join a video meeting, or start a new meeting room for the user. Smitline talks with people in real time using GPT-Live and returns a structured result when the call ends. Write a complete brief: the goal, what to find out (questions), what may be agreed to, and what must not be shared. Pass the facts the call needs as context (summary, facts, and long details) so the assistant can answer questions like someone who knows the story, and set canDo whenever you could help the people on the call, at least by answering questions about the user's work. The user's profile (who they are, the people they know) is added automatically; keep it current with update_profile. If anything required is unknown, ask the user instead of guessing. To check a brief without placing the call, use check_call_brief. For a first call to someone new, offer a rehearsal on the user's own phone. A phone call gets through automated menus and waits on hold by itself, up to maxHoldMinutes (default 60). Returns at once. Then follow the call in the same turn: call wait_for_call again and again until its status is completed, failed, or canceled, because once your turn ends nothing from the call reaches you. next, the result's first field, says what to do now. If your app asks the user before each tool call, suggest once, as you start the first call, that they set wait_for_call, get_call and list_calls, and the two tools you use during a call (send_call_instruction, reply_to_call_request), to \"Always allow\" so you can follow and help a call without a click each time; never suggest it for start_call.",
     inputSchema: BRIEF_SCHEMA,
   },
   {
@@ -201,7 +201,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'save_call_note',
     title: "Save notes from a call",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    description: "After a call ends, save a short note for later calls, such as the quote, terms, and dates a business gave. Later calls start with it when their brief's carryFrom names this call, its task, or its number. Without a note, later calls use the call's summary instead.",
+    description: "After a call ends, save a short note for later calls, such as the quote, terms, and dates a business gave. Later calls start with it when their brief's carryFrom names this call, its task, or its number. Without a note, later calls use the call's summary instead. Saving again replaces the call's note.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -213,7 +213,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'list_contacts',
     title: "List your contacts",
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "List the people and businesses Smitline has called or been called by: each phone number with the name and notes the user saved, how many calls, the latest call, and whether earlier calls carry over automatically. Read-only and takes no arguments. Use list_calls with contact to see one contact's calls, and get_profile for the people the user described.",
+    description: "List the people and businesses Smitline has called or been called by: each phone number with the name and notes the user saved, how many calls, the latest call, and whether earlier calls carry over automatically. Read-only and takes no arguments. Use list_calls with contact to see one contact's calls, and get_profile for the people the user described. To give a number a name for later calls, add the person with that phone to the profile with update_profile.",
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
@@ -275,7 +275,7 @@ export const CALL_TOOL_DEFINITIONS = [
     name: 'get_profile',
     title: "Read your profile",
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries. voices has the default voices for phone calls and for meetings. On a hosted service such as Smitline Cloud it also has the account's wallet: what is left to spend, and this month's spend.",
+    description: "Read the user's profile, which every call gets as background: who they are, the people they know (name, relationship, phone, notes), how they like to come across, and standing boundaries. voices has the default voices for phone calls and for meetings. On a hosted service such as Smitline Cloud it also has the account's wallet: what is left to spend, and this month's spend. For everyone Smitline has called or been called by, use list_contacts.",
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
