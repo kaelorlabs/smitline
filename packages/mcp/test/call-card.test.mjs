@@ -408,7 +408,7 @@ test('a question closed elsewhere while the user types says so, and keeps what t
   show({ ...live, requests: [answered, { ...ask('r2', 'Is 5 fine?'), state: 'canceled' }] });
   assert.ok(card.main.textContent.includes('Sam askedIs 5 fine?Sam dropped the question'));
   assert.equal(box('tell').value, 'Just yours');
-  assert.ok(card.main.textContent.includes('What you typed is kept here.'));
+  assert.ok(card.main.textContent.includes('Your reply, kept. Send it as your answer.'));
   show({ ...live, requests: [answered, { ...ask('r2', 'Is 5 fine?'), state: 'canceled' }] });
   assert.equal(card.main.textContent.split('Answered for you').length, 2); // each question once
 });
@@ -453,9 +453,12 @@ test('kept text goes to the call as the user’s own late answer to the question
   submit('tell');
   card.deliver({ jsonrpc: '2.0', id: card.sent.at(-1).id, result: { content: [], isError: false } });
   await card.settle();
-  // Every note stays on the card, in the order sent, under the question it followed.
+  // Every note stays on the card, in the order sent; notes in a row share one label, and the
+  // note itself is the sign it went.
   assert.ok(card.main.textContent.includes('You, laterJust yourself, see you at 5'
-    + 'You told the callWe are 10 minutes late' + 'You told the callAnd bring the cake'));
+    + 'You told the callWe are 10 minutes lateAnd bring the cake'));
+  assert.equal(card.main.textContent.split('You told the call').length, 2);
+  assert.ok(!card.main.textContent.includes('Sent to the call.'));
 });
 
 test('kept text the user clears, or a dropped question, frames the note to match', async () => {
@@ -498,4 +501,29 @@ test('the card says nothing about questions it never showed, or that the user an
   assert.deepEqual(callCardView({ id: ID, status: 'completed', requests: [done('r1', 'x')] }).closed, []);
   assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [done('r1', 'x')] }).closed,
     [{ id: 'r1', text: 'x', askedBy: '', canceled: false, answer: 'Done.' }]);
+});
+
+test('the card keeps the last three entries of the thread, and shows the rest on a click', async () => {
+  const card = loadCard();
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
+  await card.settle();
+  const ask = (id, text, state = 'open') => ({ id, state, text, askedBy: 'Sam',
+    thread: [{ from: 'call', type: 'ask', text }, ...(state === 'done' ? [{ from: 'agent', type: 'done', text: 'Answer ' + id }] : [])] });
+  const show = (requests) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
+    structuredContent: { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests } } });
+  const ids = ['r1', 'r2', 'r3', 'r4', 'r5'];
+  const done = [];
+  for (const id of ids) { // each question shows, then the agent answers it
+    show([...done, ask(id, 'Question ' + id)]);
+    done.push(ask(id, 'Question ' + id, 'done'));
+  }
+  show(done);
+  const text = () => card.main.textContent;
+  assert.ok(text().includes('Show 2 earlier'));
+  assert.ok(!text().includes('Question r2') && text().includes('Question r3') && text().includes('Question r5'));
+  const more = card.main.querySelectorAll('button').find((item) => item.textContent === 'Show 2 earlier');
+  more.listeners.click[0]();
+  assert.ok(text().includes('Question r1') && !text().includes('earlier'));
+  show(done); // and it stays open as the card follows the call
+  assert.ok(text().includes('Question r1'));
 });

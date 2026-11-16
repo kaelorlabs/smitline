@@ -10,7 +10,7 @@
 
 // Hosts may keep a copy of the card by its address (ChatGPT asks apps to version it), so the
 // version goes up whenever the card's page changes in a way an old copy would get wrong.
-export const CALL_CARD_URI = 'ui://smitline/call-card-v2.html';
+export const CALL_CARD_URI = 'ui://smitline/call-card-v3.html';
 export const CALL_CARD_MIME = 'text/html;profile=mcp-app';
 
 /** Tool _meta that shows the card: the MCP Apps key, and ChatGPT's alias for it. */
@@ -224,6 +224,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); ou
 .reply { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; margin-top: 4px; }
 .reply::before { content: "↳"; grid-row: span 2; color: var(--muted); }
 .reply.mine .by, .by.mine { color: var(--live); }
+.told { padding-left: 18px; margin-top: 2px; }
+.more { justify-self: start; color: var(--accent); font-weight: var(--strong); font-size: var(--sub); }
 audio { width: 100%; height: 36px; }
 .foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
   border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: var(--sub); }
@@ -252,6 +254,9 @@ let timer = null;
 let closed = false;
 // Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
 let transcriptOpen = false;
+// Whether the user opened the older entries of the thread, which the card keeps open the same way.
+let earlierOpen = false;
+const RECENT_ENTRIES = 3;
 // What the user is typing in each answer box (a request id, or 'tell'), which ones are being
 // sent, and the note under each; the card redraws every few seconds and keeps them.
 const drafts = new Map();
@@ -261,7 +266,7 @@ const notes = new Map();
 // user answered it, the agent did, or the person dropped it. A question never just disappears.
 const shown = new Set();
 const past = new Map();
-let told = 0; // notes the user sent with "Tell the call", which join the thread in turn
+let told = 0; // runs of notes the user sent with "Tell the call", which join the thread in turn
 // Those questions whose typed answer moved to "Tell the call": sent from there, the text goes
 // with the question it answers, so the voice can pass it on as the user's own late answer.
 let late = [];
@@ -424,9 +429,15 @@ async function send(key, name, args, about) {
       late = late.filter((question) => !answering.includes(question));
       for (const question of answering) past.get(question.id).late = words;
       // An answered question leaves the card with the next refresh; it shows with the reply instead.
-      if (about) past.set(key, { ...about, answer: words, mine: true });
-      else if (key === 'tell' && !answering.length) past.set('told-' + ++told, { told: words });
-      notes.set(key, { text: 'Sent to the call.' });
+      if (about) {
+        past.set(key, { ...about, answer: words, mine: true });
+        notes.set(key, { text: 'Sent to the call.' });
+      } else if (key === 'tell' && !answering.length) {
+        // Notes in a row share one label; the note itself shows there, so no "sent" line.
+        const last = [...past.values()].at(-1);
+        if (last && last.told) last.told.push(words);
+        else past.set('told-' + ++told, { told: [words] });
+      }
     } else {
       notes.set(key, { text: failure(result), bad: true });
     }
@@ -492,7 +503,7 @@ function settle(view) {
       const tell = (drafts.get('tell') || '').trim();
       drafts.set('tell', tell ? tell + '\\n' + typed : typed);
       late.push(request);
-      notes.set('tell', { text: 'What you typed is kept here. Send it, and the voice passes it on as your answer.', plain: true });
+      notes.set('tell', { text: 'Your reply, kept. Send it as your answer.', plain: true });
     }
   }
 }
@@ -519,9 +530,10 @@ function lateAnswer(questions, words) {
 // user's own answer if they sent it later.
 function earlier(question) {
   if (question.told) {
-    const note = node('div', 'past');
-    note.append(node('p', 'by mine', 'You told the call'), node('p', null, question.told));
-    return note;
+    const group = node('div', 'past');
+    group.append(node('p', 'by mine', 'You told the call'));
+    for (const words of question.told) group.append(node('p', 'told', words));
+    return group;
   }
   const who = question.askedBy || 'They';
   const item = node('div', 'past');
@@ -541,9 +553,16 @@ function earlier(question) {
 function replies(view) {
   settle(view);
   const section = node('section', 'ask');
-  for (const [id, question] of past) {
-    if (!view.requests.some((request) => request.id === id)) section.append(earlier(question));
+  // The last few entries; the rest open with one click, and stay open.
+  const entries = [...past].filter(([id]) => !view.requests.some((request) => request.id === id));
+  const hidden = earlierOpen ? 0 : Math.max(0, entries.length - RECENT_ENTRIES);
+  if (hidden) {
+    const more = node('button', 'more', 'Show ' + hidden + ' earlier');
+    more.type = 'button';
+    more.addEventListener('click', () => { earlierOpen = true; render(); });
+    section.append(more);
   }
+  for (const [, question] of entries.slice(hidden)) section.append(earlier(question));
   const [request] = view.requests;
   if (request) shown.add(request.id);
   let key = '';
