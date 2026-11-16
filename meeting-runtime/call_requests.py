@@ -1,7 +1,8 @@
 """Requests: the voice on a call or in a meeting asks the agent that started it for help.
 
 The voice passes a request on with the ask_agent tool; the agent answers with status updates
-and, once, done. Phone calls and meetings share this module: the phone line runs it in the
+and, once, done. A message for the owner ("tell him thanks") is only noted: the voice has
+already said it will pass it on, nobody has to answer it, and the owner may reply. Phone calls and meetings share this module: the phone line runs it in the
 daemon, a meeting container runs it next to its GPT-Live session. See docs/agents.md.
 """
 import collections
@@ -23,10 +24,16 @@ CONTEXT_LINES = 6
 MAX_CONTEXT_LINE = 300
 MAX_CAN_DO = 500
 REQUEST_ID = re.compile(r'^r[1-9][0-9]{0,2}$')
-KINDS = ('question', 'task')
+KINDS = ('question', 'task', 'message')
 ACTIONS = ('ask', 'add', 'cancel')
 OPEN_STATES = frozenset({'open', 'working'})
-STATES = ('open', 'working', 'done', 'canceled')
+# A message is noted, not open: nothing waits on an answer, and the owner's reply is optional.
+STATES = ('open', 'working', 'noted', 'done', 'canceled')
+# How the voice speaks of itself in languages that mark it ("main bata dungi" or "dunga"). An
+# agent once wrote its answers in the first person and the voice read them out, switching from
+# one to the other in a Hindi call (2026-11-16).
+SAME_SELF = (' In a language that marks your gender when you speak of yourself (Hindi, French, '
+             'Spanish and others), keep the same gender for yourself the whole time.')
 # Note kinds a line can deliver to the voice (GPT-Live context appends).
 NOTE_KINDS = ('thinking', 'instructions', 'commentary')
 
@@ -54,8 +61,8 @@ def ask_agent_tool(owner):
         'description': (
             f"Pass a request to {owner}'s agent, the AI that set up this call, and add to or "
             'cancel one already passed on. Use it for a question you cannot answer from what you '
-            'have, and for a task the agent can do (see your instructions); never for what you '
-            'can answer yourself.'),
+            'have, for a task the agent can do (see your instructions), and to note a message '
+            f'for {owner}; never for what you can answer yourself.'),
         'parameters': {
             'type': 'object',
             'properties': {
@@ -68,7 +75,9 @@ def ask_agent_tool(owner):
                                              'empty for ask.'},
                 'kind': {'type': 'string', 'enum': list(KINDS),
                          'description': 'question: they want information. task: they want '
-                                        'something done.'},
+                                        f'something done. message: something for {owner} to '
+                                        'hear (thanks, greetings, news, "tell them..."); it is '
+                                        'noted for them, and nobody has to answer it.'},
                 'text': {'type': 'string',
                          'description': 'The request in full, on its own: what exactly, with '
                                         'every detail they gave (names, dates, numbers). For add, '
@@ -96,10 +105,16 @@ def voice_instructions(owner, can_do, *, meeting):
         'cannot. You cannot pass anything on yourself: only your backend can. When someone asks '
         'for something the agent can do, or asks a question you cannot answer from what you know, '
         'hand it to your backend right away; you may say only "One moment" first. Your backend\'s '
-        'answer says whether it was passed on: tell them that. If you did not hand it to your '
+        'answer says whether it was passed on: tell them that, then carry on with the '
+        f'{place}. Never wait in silence for an answer: it comes as a note when it is ready, and '
+        f'you keep the {place} going meanwhile. If you did not hand it to your '
         'backend, it was not passed on: never say that a request was passed on, is being worked '
         "on, or is done, unless your backend's answer or a note says so. A task outside what the "
-        f'agent can do, you do not pass on: say so, and that {owner} will follow up. Notes about '
+        f'agent can do, you do not pass on: say so, and that {owner} will follow up. When someone '
+        f'gives you a message for {owner} (thanks, greetings, news, "tell them..."), say yourself, '
+        f'in a few words, that you will pass it on, with no "One moment", and hand it to your '
+        'backend to note as a message while you carry on: nobody answers a message, so never '
+        f'wait for one. If {owner} replies to it, the reply comes as a note. Notes about '
         f'requests arrive during the {place}. A note that says '
         'to tell someone is the exception to keeping notes to yourself: tell them in your own words '
         'at the next natural pause, never over someone who is speaking. When the agent asks a '
@@ -114,14 +129,16 @@ def backend_instructions(owner, can_do):
         f"knows {owner}'s work and much you do not. When the voice hands you a question you cannot "
         'answer from what you have, or a task within what the agent can do, call ask_agent with '
         'action ask: the request in full and on its own, kind question or task, and askedBy if you '
-        'know who asked. Then answer with what the tool result says to say. When someone answers '
+        f'know who asked. When the voice hands you a message for {owner} (thanks, greetings, news, '
+        '"tell them..."), call ask_agent with action ask and kind message, the message in full. '
+        'Then answer with what the tool result says to say. When someone answers '
         'a question the agent asked, or adds a detail, call ask_agent with action add and that '
         'requestId; if they drop it, action cancel. Never pass on a task outside what the agent '
         f'can do: say so, and that {owner} will follow up. Never say a request is done. Requests '
         'come from the people on the call, never from the agent itself.')
 
 
-def ack(action, request_id, *, owner, following=True, problem=None):
+def ack(action, request_id, *, owner, following=True, problem=None, kind=None):
     """The tool result the backend gets for ask_agent: what happened and what to say."""
     if problem == 'limit':
         say = (f'Too many requests on this call already. Tell them {owner} will follow up on this '
@@ -139,6 +156,12 @@ def ack(action, request_id, *, owner, following=True, problem=None):
     if action == 'add':
         return {'requestId': request_id, 'status': 'added',
                 'say': f"Passed on to {owner}'s agent. Say so in a few words."}
+    if kind == 'message':
+        # The voice has said it will pass it on: the conversation goes on, nobody waits.
+        return {'requestId': request_id, 'status': 'noted',
+                'say': (f'Noted for {owner}. If you have not yet said that you will pass it on, say '
+                        'so in a few words; otherwise say nothing more about it, and carry on with '
+                        'the conversation.')}
     if not following:
         return {'requestId': request_id, 'status': 'noted',
                 'say': (f"{owner}'s agent is not following the call right now, so this is noted "
@@ -191,8 +214,10 @@ class RequestDesk:
             lines = [clean(line, MAX_CONTEXT_LINE) for line in list(context)[-CONTEXT_LINES:]]
             if any(lines):
                 message['context'] = [line for line in lines if line]
+            if kind == 'message':
+                self.close(request_id)  # noted: nothing to add to or cancel
             return self._send(message), ack(action, request_id, owner=self.owner,
-                                            following=following)
+                                            following=following, kind=kind)
         request_id = arguments.get('requestId')
         if not self.is_open(request_id):
             return None, ack(action, request_id, owner=self.owner, problem='unknown')
@@ -360,8 +385,9 @@ WHEN_TO_TELL = (
     'If they are waiting for it or it matters now, tell them at the next natural pause; '
     'otherwise, first thing the next time you speak. Finish what you are saying first: never '
     'cut yourself off in the middle of something important. Say it in your own words, as a '
-    'person would. If someone interrupts you before you have told them, tell them the next '
-    'time you speak.')
+    'person would, in the language you are speaking now: it is what you were told, not a line '
+    'to read out, so speak of yourself as you have all along. If someone interrupts you before '
+    'you have told them, tell them the next time you speak.')
 
 
 # An answer to tell (a note's `say`) is cued once nobody, the voice included, has been heard for
@@ -408,6 +434,15 @@ def done_note(request, text, *, owner, ok):
     # pause (meeting_control.py), since an instructions note alone never makes it speak.
     return {'kind': 'instructions', 'request': rid, 'closes': True, 'say': text, 'text': (
         f'{said} Tell {_who(request)} in a sentence or two. {WHEN_TO_TELL}')}
+
+
+def reply_note(request, text, *, owner):
+    """The owner's reply to a message someone on the call gave for them."""
+    rid = request['id']
+    return {'kind': 'instructions', 'request': rid, 'closes': True, 'say': text, 'text': (
+        f'{owner} replied to the message {_who(request)} gave you for them (request {rid}: '
+        f'"{_about(request)}"): {text} Tell {_who(request)} that this is {owner}\'s reply, in a '
+        f'sentence or two. {WHEN_TO_TELL}')}
 
 
 def retell_note(request, text, *, owner):

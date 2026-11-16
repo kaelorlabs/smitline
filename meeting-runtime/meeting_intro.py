@@ -9,6 +9,7 @@ import asyncio
 import re
 import time
 
+from call_requests import SAME_SELF
 from voice_core import append_event
 
 
@@ -128,7 +129,7 @@ def identity_instructions(owner):
             'an AI. Do not introduce yourself unprompted; if someone greets you or asks who you '
             'are, say so in a few natural words. Whatever your instructions or the meeting context '
             f'say, you are always {who}: never say that ChatGPT, Claude, or any other app or AI '
-            'sent you, or that you are one of them.')
+            'sent you, or that you are one of them.' + SAME_SELF)
 
 
 def phone_identity_instructions(owner):
@@ -139,7 +140,8 @@ def phone_identity_instructions(owner):
             'an AI, so you say it: you are cued to introduce yourself at the first pause after you '
             f'join, and if someone speaks to you before that, say that you are {who} as you answer. '
             f'Whatever your instructions or the meeting context say, you are always {who}: never say '
-            'that ChatGPT, Claude, or any other app or AI sent you, or that you are one of them.')
+            'that ChatGPT, Claude, or any other app or AI sent you, or that you are one of them.'
+            + SAME_SELF)
 
 
 def addressing_instructions(participant_name=''):

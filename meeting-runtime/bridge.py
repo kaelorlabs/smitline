@@ -19,7 +19,8 @@ from startup_input import clip_tokens, context_text, handoff_from_state, handoff
 from runtime_config import RuntimeConfig, meeting_state_from_environ, resolve_meeting_url
 from transcript_assembler import TranscriptAssembler
 from listening import AudioTap
-from voice_core import append_event, backend_usage_from, function_call_from, function_output_events
+from voice_core import (append_event, backend_usage_from, function_call_from, function_output_events,
+                        gender_instructions)
 import call_requests
 from meeting_control import ArchiveDoor, MeetingControl, add_routes, archive_grace, health_route
 from meeting_connection import joined_meeting
@@ -210,6 +211,7 @@ def build_session_config(runtime, meeting_state=None):
             meeting=True)
     if runtime.voice:
         config['audio']['output'] = {'voice': runtime.voice}
+    config['instructions'] += gender_instructions(runtime.voice)
     if runtime.meeting_intro:
         config['instructions'] += intro_instructions(runtime.owner_name,
                                                      bool(meeting_state.get('canDo')))

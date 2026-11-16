@@ -345,6 +345,12 @@ test('start_call and wait_for_call results start with what to do next', async ()
   assert.doesNotMatch(result.next, /reply_to_call_request/);
   result = await wait({ ...live({ requests: [asked, { type: 'add', id: 'r1', text: 'Nov 3' }] }), requests: [{ id: 'r1', state: 'working' }] });
   assert.match(result.next, /^Answer each item in live\.requests/);
+  // A message for the user is noted, not asked of the agent: nothing to answer.
+  const message = { type: 'ask', id: 'r4', kind: 'message', text: 'Tell them thanks for dinner' };
+  result = await wait({ ...live({ requests: [message] }), requests: [{ id: 'r4', state: 'noted' }] });
+  assert.doesNotMatch(result.next, /reply_to_call_request/);
+  result = await wait(live({ requests: [message] })); // even read before the record lists it
+  assert.doesNotMatch(result.next, /reply_to_call_request/);
   result = await wait(live({ otherRequests: [{ callId: otherId, id: 'r2', text: 'Call Smith' }] }));
   assert.match(result.next, /live\.otherRequests \(on its own callId\)/);
 
@@ -355,6 +361,10 @@ test('start_call and wait_for_call results start with what to do next', async ()
   assert.doesNotMatch(result.next, /openRequests/);
   result = await wait({ id: callId, status: 'completed', result: { outcome: 'partial', openRequests: [{ id: 'r3' }] } });
   assert.match(result.next, /finish result\.openRequests/);
+  assert.doesNotMatch(result.next, /result\.messages/);
+  result = await wait({ id: callId, status: 'completed', result: { outcome: 'achieved', messages: [{ id: 'r4', text: 'Thanks' }] } });
+  assert.match(result.next, /^The call has ended: tell the user the outcome/);
+  assert.match(result.next, /Pass on result\.messages too/);
   result = await wait({ id: callId, status: 'failed', error: 'The call could not be placed.' });
   assert.match(result.next, /^The call failed: tell the user what went wrong/);
   // A hint the daemon sent is replaced, still first.

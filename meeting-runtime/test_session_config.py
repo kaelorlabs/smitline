@@ -91,6 +91,15 @@ class SessionConfigTests(unittest.TestCase):
         self.assertEqual(build_session_config(extra)['audio']['output'], {'voice': 'aurora'})
         self.assertNotIn('output', build_session_config(RuntimeConfig.from_environ({}))['audio'])
 
+    def test_the_voice_speaks_of_itself_as_its_voice_sounds(self):
+        man = build_session_config(RuntimeConfig.from_environ({'SMITLINE_VOICE': 'cinder'}))
+        self.assertIn("Your voice sounds like a man's", man['instructions'])
+        # No voice set: GPT-Live speaks with marin, a woman's voice.
+        default = build_session_config(RuntimeConfig.from_environ({}))
+        self.assertIn("Your voice sounds like a woman's", default['instructions'])
+        extra = RuntimeConfig.from_environ({'SMITLINE_VOICE': 'aurora', 'SMITLINE_EXTRA_VOICES': 'aurora'})
+        self.assertNotIn('Your voice sounds', build_session_config(extra)['instructions'])
+
     def test_unknown_voice_is_ignored_with_a_log_line(self):
         with self.assertLogs('colleague.meeting', 'WARNING') as logs:
             runtime = RuntimeConfig.from_environ({'SMITLINE_VOICE': 'alloy'})

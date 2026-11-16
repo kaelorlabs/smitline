@@ -22,6 +22,7 @@ from call_store import CallStore
 from meeting_line import MeetingLine, meeting_payload, meeting_voice, voice_defaults
 from runtime_daemon import create_app
 from test_call_service import ZOOM, ServiceHarness, brief
+from voice_core import GPT_LIVE_VOICES, VOICE_GENDERS, gender_instructions
 
 BOTH = {'SMITLINE_VOICE': 'quartz', 'SMITLINE_MEETING_VOICE': 'cinder'}
 
@@ -186,6 +187,38 @@ class DialInVoiceTests(unittest.TestCase):
         self.assertEqual(self.voice({'SMITLINE_VOICE': 'quartz', 'SMITLINE_MEETING_VOICE': 'alloy'}), 'quartz')
         self.assertEqual(self.voice({}), 'marin')
 
+    def test_the_voice_speaks_of_itself_as_it_sounds(self):
+        from test_dial_in import ZOOM_INVITE, ZOOM_LINK, meeting_brief
+        for voice, person in (('vesper', "a man's"), ('willow', "a woman's"), (None, "a woman's")):
+            overrides = {'voice': voice} if voice else {}
+            parsed = CallBrief.from_dict(meeting_brief(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE}, **overrides),
+                                         environ={})
+            with self.subTest(voice=voice):
+                self.assertIn(f'Your voice sounds like {person}', dial_in.voice_config(parsed, {})['instructions'])
+
+
+class VoiceGenderTests(unittest.TestCase):
+    """In Hindi, French and other languages that mark it, the voice speaks of itself in the gender
+    its voice sounds: a woman's voice once said "dungi" and then "dunga" in one call."""
+
+    def test_every_voice_offered_has_a_gender(self):
+        self.assertLessEqual(set(GPT_LIVE_VOICES), set(VOICE_GENDERS))
+        self.assertEqual(set(VOICE_GENDERS.values()), {'feminine', 'masculine'})
+
+    def test_it_names_the_forms_to_use(self):
+        woman = gender_instructions('marin')
+        self.assertIn("sounds like a woman's", woman)
+        self.assertIn('feminine forms', woman)
+        self.assertIn('"main bata dungi"', woman)
+        man = gender_instructions('Cinder ')
+        self.assertIn("sounds like a man's", man)
+        self.assertIn('"main bata dunga"', man)
+        self.assertIn('even when an answer you pass on was written otherwise', man)
+
+    def test_no_voice_is_the_default_one_and_an_unknown_voice_gets_nothing(self):
+        self.assertEqual(gender_instructions(None), gender_instructions('marin'))
+        self.assertEqual(gender_instructions('aurora'), '')
+
 
 class DialInCallVoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_line_reads_the_owners_meeting_voice(self):
@@ -198,6 +231,7 @@ class DialInCallVoiceTests(unittest.IsolatedAsyncioTestCase):
             try:
                 record, session = await h.join(to=ZOOM_LINK, dialIn={'invite': ZOOM_INVITE})
                 self.assertEqual(session.config()['audio']['output'], {'voice': 'cinder'})
+                self.assertIn(gender_instructions('cinder'), session.config()['instructions'])
                 await h.service.end(record['id'], owner='local')
                 await h.service.wait(record['id'], timeout=5, owner='local')
             finally:
@@ -215,6 +249,7 @@ class PhoneVoiceTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     record, session = await h.dial(**overrides)
                     self.assertEqual(session.config()['audio']['output'], {'voice': expected})
+                    self.assertIn(gender_instructions(expected), session.config()['instructions'])
                     await h.service.end(record['id'], owner='local')
                     await h.service.wait(record['id'], timeout=5, owner='local')
                 finally:
