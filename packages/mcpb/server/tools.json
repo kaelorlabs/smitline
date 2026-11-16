@@ -849,7 +849,7 @@
         "idempotentHint": false,
         "openWorldHint": true
       },
-      "description": "Ask the assistant to wrap up politely and hang up, or cancel a call that has not connected yet.",
+      "description": "Ask the assistant to wrap up politely and hang up, or cancel a call that has not connected yet. A connected phone call ends after a short goodbye (at a voicemail it hangs up at once), a call that has not connected is canceled before the phone rings, and in a meeting it leaves. Billing stops when the call ends, and it cannot be undone: to talk again, start a new call. Returns the call; its result follows through wait_for_call.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -874,7 +874,7 @@
         "idempotentHint": false,
         "openWorldHint": true
       },
-      "description": "Hand a connected phone call to the user's own phone. Only when the user asks to take over.",
+      "description": "Hand a connected phone call to the user's own phone. Only when the user asks to take over. The assistant tells the other person it is connecting them, then Smitline rings the user's phone for up to 30 seconds and puts them through, and the assistant leaves the call. If the user does not answer, the other person hears that the user will get back to them, and the call ends. The call's endReason is transferred, and it cannot be undone. Phone calls only.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -929,7 +929,7 @@
         "idempotentHint": true,
         "openWorldHint": false
       },
-      "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. voices changes the user's default voice for phone calls, for meetings, or both, when the user wants another one. A call keeps its voice until it ends: when someone on a call asks for a different voice, it can only apply from the next call, so offer to change the default and do it once the user agrees. Never put passwords, keys, or payment details here.",
+      "description": "Update the user's profile with what you know about them. Fields you pass replace the saved ones; people are added or updated by name; removePeople drops people. voices changes the user's default voice for phone calls, for meetings, or both, when the user wants another one. A call keeps its voice until it ends: when someone on a call asks for a different voice, it can only apply from the next call, so offer to change the default and do it once the user agrees. Never put passwords, keys, or payment details here. Nothing is saved if any part is invalid. Returns the saved profile; calls started from now on get it.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -941,11 +941,13 @@
             "properties": {
               "phone": {
                 "type": "string",
-                "maxLength": 32
+                "maxLength": 32,
+                "description": "Default voice for phone calls."
               },
               "meeting": {
                 "type": "string",
-                "maxLength": 32
+                "maxLength": 32,
+                "description": "Default voice for meetings."
               }
             }
           },
@@ -962,6 +964,7 @@
           "boundaries": {
             "type": "array",
             "maxItems": 20,
+            "description": "Standing rules every call follows, one per item. Replaces the saved list.",
             "items": {
               "type": "string",
               "maxLength": 300
@@ -970,6 +973,7 @@
           "people": {
             "type": "array",
             "maxItems": 100,
+            "description": "People the user knows. Each is added, or updated when its name matches one already saved. Calls get them as background, and list_contacts uses a person's name for their phone number when the user has not named it.",
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -979,11 +983,13 @@
               "properties": {
                 "name": {
                   "type": "string",
-                  "maxLength": 80
+                  "maxLength": 80,
+                  "description": "How the user refers to them. People are matched by this name."
                 },
                 "relationship": {
                   "type": "string",
-                  "maxLength": 120
+                  "maxLength": 120,
+                  "description": "Who they are to the user, such as their dentist or landlord."
                 },
                 "phone": {
                   "type": "string",
@@ -991,7 +997,8 @@
                 },
                 "notes": {
                   "type": "string",
-                  "maxLength": 600
+                  "maxLength": 600,
+                  "description": "What a call should know about them."
                 }
               }
             }
@@ -1000,7 +1007,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Names of saved people to remove."
           }
         }
       }
