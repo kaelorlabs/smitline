@@ -379,7 +379,8 @@ class Smitline:
         return self._transport.transfer_call(call_id)
 
     async def list_voices(self):
-        """{'voices': [...], 'defaults': {'phone': ..., 'meeting': ...}, 'default': the phone one}."""
+        """{'voices': [...], 'languages': {voice: its language}, 'defaults': {'phone': ...,
+        'meeting': ...}, 'default': the phone one}."""
         return self._transport.list_voices()
 
     async def how_to(self, topic=None, client=None):

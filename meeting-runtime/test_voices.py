@@ -22,7 +22,7 @@ from call_store import CallStore
 from meeting_line import MeetingLine, meeting_payload, meeting_voice, voice_defaults
 from runtime_daemon import create_app
 from test_call_service import ZOOM, ServiceHarness, brief
-from voice_core import GPT_LIVE_VOICES, VOICE_GENDERS, gender_instructions
+from voice_core import GPT_LIVE_VOICES, VOICE_GENDERS, VOICE_LANGUAGES, gender_instructions
 
 BOTH = {'SMITLINE_VOICE': 'quartz', 'SMITLINE_MEETING_VOICE': 'cinder'}
 
@@ -205,6 +205,15 @@ class VoiceGenderTests(unittest.TestCase):
         self.assertLessEqual(set(GPT_LIVE_VOICES), set(VOICE_GENDERS))
         self.assertEqual(set(VOICE_GENDERS.values()), {'feminine', 'masculine'})
 
+    def test_every_voice_offered_has_its_language(self):
+        # OpenAI's language voices (2026-10-16), so nobody picks the Hindi one for an English call.
+        self.assertEqual(set(GPT_LIVE_VOICES), set(VOICE_LANGUAGES))
+        self.assertEqual({name: VOICE_LANGUAGES[name] for name in ('marin', 'bossa', 'nuri', 'brise',
+                                                                    'nira', 'harema', 'noeul')},
+                         {'marin': 'English', 'bossa': 'Portuguese', 'nuri': 'German',
+                          'brise': 'French', 'nira': 'Hindi', 'harema': 'Japanese',
+                          'noeul': 'Korean'})
+
     def test_it_names_the_forms_to_use(self):
         woman = gender_instructions('marin')
         self.assertIn("sounds like a woman's", woman)
@@ -291,6 +300,8 @@ class VoicesApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed['default'], 'vesper')
         self.assertEqual(listed['defaults'], {'phone': 'vesper', 'meeting': 'vesper'})
         self.assertIn('cinder', listed['voices'])
+        self.assertEqual(listed['voices'], list(GPT_LIVE_VOICES))
+        self.assertEqual(listed['languages'], VOICE_LANGUAGES)
         status, profile = await self.patch({'voices': {'meeting': 'cinder'}})
         self.assertEqual((status, profile['voices']), (200, {'phone': 'vesper', 'meeting': 'cinder'}))
         self.assertEqual(read_env_file(self.env_file)['SMITLINE_MEETING_VOICE'], 'cinder')
@@ -335,6 +346,10 @@ class VoicesApiTests(unittest.IsolatedAsyncioTestCase):
         self.environ['SMITLINE_EXTRA_VOICES'] = 'aurora'
         status, profile = await self.patch({'voices': {'meeting': 'aurora'}})
         self.assertEqual((status, profile['voices']['meeting']), (200, 'aurora'))
+        # Its language is unknown, so it has none.
+        listed = await self.get('/v1/voices')
+        self.assertIn('aurora', listed['voices'])
+        self.assertNotIn('aurora', listed['languages'])
 
     async def test_a_voice_set_in_the_environment_stays(self):
         self.environ['SMITLINE_VOICE'] = 'quartz'

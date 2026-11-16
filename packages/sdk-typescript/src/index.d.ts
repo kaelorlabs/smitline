@@ -258,6 +258,8 @@ export interface Voices {
   default: string;
   defaults: VoiceDefaults;
   voices: string[];
+  /** Each documented voice's language, such as 'English' or 'Hindi'; extra voices have none. */
+  languages: Record<string, string>;
 }
 
 export type HowToTopic = 'overview' | 'using' | 'following' | 'pricing' | 'account' | 'troubleshooting' | 'rules';

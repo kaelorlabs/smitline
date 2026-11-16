@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { readEnv, validateSetting } from '../src/setup.mjs';
+import { GPT_LIVE_VOICES, readEnv, validateSetting } from '../src/setup.mjs';
 
 const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 
@@ -25,6 +25,15 @@ test('the meeting voice is a setting of its own, checked like the phone calls\' 
   assert.throws(() => validateSetting('SMITLINE_MEETING_VOICE', 'alloy'), /SMITLINE_MEETING_VOICE must be one of: marin/);
   const env = { SMITLINE_EXTRA_VOICES: 'aurora' };
   assert.equal(validateSetting('SMITLINE_MEETING_VOICE', 'aurora', { env }), 'aurora');
+});
+
+test('the CLI offers the same voices as the runtime, OpenAI\'s language voices among them', async () => {
+  const runtime = await fs.readFile(new URL('../../../meeting-runtime/voice_core.py', import.meta.url), 'utf8');
+  const listed = runtime.match(/^GPT_LIVE_VOICES = \(([^)]*)\)/m)[1].match(/'[a-z]+'/g).map((name) => name.slice(1, -1));
+  assert.deepEqual(GPT_LIVE_VOICES, listed);
+  for (const voice of ['nuri', 'juni', 'flitz', 'brise', 'sillage', 'nira', 'harema', 'shida', 'noeul']) {
+    assert.equal(validateSetting('SMITLINE_VOICE', voice), voice);
+  }
 });
 
 test('setup voice --meeting sets the meeting voice, and --meeting default goes back to the phone one', async (t) => {

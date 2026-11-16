@@ -31,7 +31,8 @@ export const PHONE_AUDIO_MODES = Object.freeze(['relay', 'sip', 'sip-webhook']);
 export const CONNECTOR_PASSPHRASE_MIN = 12;
 export const GPT_LIVE_VOICES = Object.freeze([
   'marin', 'vesper', 'quartz', 'ripple', 'willow', 'stone', 'gleam', 'meridian', 'bossa',
-  'tempo', 'beacon', 'delta', 'cinder',
+  'tempo', 'beacon', 'delta', 'cinder', 'nuri', 'juni', 'flitz', 'brise', 'sillage', 'nira',
+  'harema', 'shida', 'noeul',
 ]);
 const E164 = /^\+[1-9][0-9]{7,14}$/;
 const VOICE_NAME = /^[a-z][a-z0-9_-]{1,31}$/;

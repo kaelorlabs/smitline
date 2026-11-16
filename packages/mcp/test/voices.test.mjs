@@ -16,6 +16,7 @@ test('the tools say what each default voice is for and that a call keeps its voi
   assert.match(voices.description, /"" to go back to the default/);
   assert.match(tools.list_voices.description, /defaults\.phone for phone calls, defaults\.meeting for meetings/);
   assert.match(tools.list_voices.description, /A brief's voice wins/);
+  assert.match(tools.list_voices.description, /each one's language .*pick a voice in the language the call is in/);
   assert.match(tools.get_profile.description, /default voices for phone calls and for meetings/);
   assert.match(tools.update_profile.description, /A call keeps its voice until it ends/);
   assert.match(tools.update_profile.description, /once the user agrees/);

@@ -281,10 +281,14 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
     async def list_voices(request):
         from meeting_line import voice_defaults
         env = service.settings(await owner(request))
+        from voice_core import VOICE_LANGUAGES
         defaults = voice_defaults(env)
-        # default: the phone calls' one, as before there were two.
-        return public_json({'default': defaults['phone'], 'defaults': defaults,
-                            'voices': list(available_voices(env))})
+        voices = list(available_voices(env))
+        # default: the phone calls' one, as before there were two. languages: each documented
+        # voice's language; a voice from SMITLINE_EXTRA_VOICES has none.
+        return public_json({'default': defaults['phone'], 'defaults': defaults, 'voices': voices,
+                            'languages': {name: VOICE_LANGUAGES[name] for name in voices
+                                          if name in VOICE_LANGUAGES}})
 
     @handle
     async def how_to(request):
