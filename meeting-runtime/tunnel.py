@@ -7,6 +7,7 @@ binary when installed or from the official Docker image otherwise. Only the
 phone gateway is exposed; the daemon API stays on loopback.
 """
 import asyncio
+import os
 import re
 import shutil
 import socket
@@ -150,11 +151,19 @@ def configured_url(environ):
     return value
 
 
+# They name a program the daemon runs, so only the daemon's own environment may set them, never a
+# settings file such as .env.
+PROGRAM_SETTINGS = ('SMITLINE_CLOUDFLARED', 'SMITLINE_CLOUDFLARED_IMAGE')
+
+
 class PublicUrl:
     def __init__(self, environ, local_port, *, spawn=None, which=shutil.which,
                  timeout=START_TIMEOUT, probe=None, probe_timeout=PROBE_TIMEOUT,
-                 attempts=QUICK_TUNNEL_ATTEMPTS, log=print):
+                 attempts=QUICK_TUNNEL_ATTEMPTS, log=print, own_environ=None):
         self._environ = environ
+        # The daemon's own environment, the only one PROGRAM_SETTINGS are read from.
+        self._own = os.environ if own_environ is None else own_environ
+        self._ignored = set()
         self.local_port = local_port
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._which = which
@@ -169,14 +178,23 @@ class PublicUrl:
         self._reader = None
         self._last_error = None
 
+    def _program_setting(self, name):
+        """One of PROGRAM_SETTINGS, from the daemon's own environment. One set only in .env is
+        ignored, and the log says so once."""
+        value = self._own.get(name) or ''
+        if not value and self._environ().get(name) and name not in self._ignored:
+            self._ignored.add(name)
+            self._log(f'{name} in .env is ignored: it names a program to run, so set it in '
+                      "Smitline's own environment instead", flush=True)
+        return value
+
     def command(self):
-        env = self._environ()
         target = f'http://127.0.0.1:{self.local_port}'
-        binary = env.get('SMITLINE_CLOUDFLARED') or self._which('cloudflared')
+        binary = self._program_setting('SMITLINE_CLOUDFLARED') or self._which('cloudflared')
         if binary:
             return [binary, 'tunnel', '--no-autoupdate', '--url', target]
         if self._which('docker'):
-            image = env.get('SMITLINE_CLOUDFLARED_IMAGE') or DEFAULT_IMAGE
+            image = self._program_setting('SMITLINE_CLOUDFLARED_IMAGE') or DEFAULT_IMAGE
             return ['docker', 'run', '--rm', '--network', 'host', '--name', self.container(),
                     image, 'tunnel', '--no-autoupdate', '--url', target]
         return None

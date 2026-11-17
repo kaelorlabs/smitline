@@ -25,6 +25,7 @@ import call_requests
 from meeting_control import ArchiveDoor, MeetingControl, add_routes, archive_grace, health_route
 from meeting_connection import joined_meeting
 from meeting_input import InputMonitor
+from meeting_view import start_meeting_view
 from meeting_intro import (
     addressing_instructions, camera_caption, identity_instructions, introduce, intro_instructions,
     others_in, participants_note, speaker_note)
@@ -100,7 +101,7 @@ PRIVATE_SUFFIX = re.compile(r'(?:KEY|TOKEN|SECRET|PASSWORD|PASSPHRASE)$')
 
 
 def browser_environment(environ):
-    """Everything in .env reaches this container; keep keys and meeting details from the browser."""
+    """Keep keys, tokens and meeting details out of the browser's and the display's environment."""
     return {k: v for k, v in environ.items() if k not in PRIVATE_NAMES and not PRIVATE_SUFFIX.search(k)}
 
 
@@ -817,7 +818,8 @@ async def main():
         camera_feed = camera_feed_for(runtime, microphone, pack)
         presence = Presence(state, camera_feed)
         presence.sync()
-        viewer = await asyncio.create_subprocess_exec('/usr/bin/websockify', '--web=/usr/share/novnc', '6080', '127.0.0.1:5900', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        # The meeting view, for this start's token only (meeting_view.py).
+        viewer = await start_meeting_view(env)
         # Drain the speaker while waiting for admission, before starting billed audio.
         async def drain():
             while True:
@@ -850,8 +852,7 @@ async def main():
         finally:
             listening.close()
             drain_task.cancel()
-            viewer.terminate()
-            await viewer.wait()
+            await viewer.stop()
             # The archive is complete before the server stops, so /archive can hand it over.
             try:
                 close_record(runtime)

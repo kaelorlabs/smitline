@@ -147,6 +147,20 @@ def pool_meeting_environment(hooks, owner, meeting_env_file=None):
     return env
 
 
+def single_meeting_environment(hooks, owner, meeting_env_file=None, *, by_hand=False):
+    """Everything the one meeting container (SMITLINE_MAX_MEETINGS=1) gets, and nothing else: a
+    pool meeting's environment, plus the meeting passcode the console's meeting page saves in
+    .env.meeting. Started by hand (start-meeting-agent.sh), the meeting's URL from there too; the
+    daemon's meetings take theirs from the runtime state."""
+    env = pool_meeting_environment(hooks, owner, meeting_env_file)
+    saved = read_env_file(meeting_env_file)
+    for key in ('MEETING_URL', 'MEETING_PASSCODE') if by_hand else ('MEETING_PASSCODE',):
+        value = str(saved.get(key) or '')
+        if value and not any(ord(char) < 32 or ord(char) == 127 for char in value):
+            env[key] = value
+    return env
+
+
 def meeting_voice(settings):
     """The owner's default voice for meetings, SMITLINE_MEETING_VOICE, when it names a voice this
     installation has; else ''. Then a meeting keeps its own default: in the browser, a presence

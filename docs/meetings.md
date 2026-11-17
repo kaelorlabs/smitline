@@ -96,11 +96,11 @@ The console talks to the **loopback daemon** in the same container. API keys are
 | MCP for local agents (bearer token from `smitline setup register`) | http://127.0.0.1:8095/mcp |
 | Calls (live transcript, results, costs, take over) | http://127.0.0.1:8095/calls |
 | Account (keys and setup checklist) | http://127.0.0.1:8095/setup |
-| Meeting browser viewer | http://127.0.0.1:6082/vnc.html?autoconnect=true |
+| Meeting browser viewer | **Open meeting view** in the console (port 6082, with a token made for each start) |
 | Meeting status and transcript | http://127.0.0.1:8094/health |
 | Runtime daemon (loopback) | http://127.0.0.1:8765 |
 
-A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path. `leaveState` says whether Smitline has left the meeting (`leaving`, `left`, or `leave_failed` with `leaveError`); when a meeting ends, the daemon waits for it, at most 15 seconds, before it writes the handoff and stops the container or deletes the machine.
+`/health` takes no token on this computer, and it answers only a request whose `Host` is an IP address or `localhost`, as `127.0.0.1:8094` is. A `live` health status means the bridge reached the meeting audio loop. Verify a spoken exchange to confirm the complete audio path. `leaveState` says whether Smitline has left the meeting (`leaving`, `left`, or `leave_failed` with `leaveError`); when a meeting ends, the daemon waits for it, at most 15 seconds, before it writes the handoff and stops the container or deletes the machine.
 
 While a meeting runs, the daemon reaches it through `POST /control` on the same port, with a token made for that meeting alone (`SMITLINE_CONTROL_TOKEN`, in the container's environment and the daemon's memory, never on disk): `send_call_instruction` guidance, and answers to [requests](agents.md#requests-from-the-call) from the people in the meeting. Listening in (`/listen`) needs the same token. Requests leave the meeting through `/health`, as its captions do. A meeting the daemon adopted after a restart has no token, so it runs on without either until it ends. A meeting on a [machine of its own](#each-meeting-on-a-machine-of-its-own) is the exception: its token is also kept on the daemon's disk, so a restarted daemon still has it.
 
@@ -156,7 +156,7 @@ chmod 600 .env.meeting
 bash start-meeting-agent.sh
 ```
 
-It reads `.env.meeting` (`MEETING_URL`, `MEETING_PASSCODE`, the participant name, and the backend settings), checks it with `python3`, and starts the container. Stop it with:
+It reads `.env.meeting` (`MEETING_URL`, `MEETING_PASSCODE`, the participant name, and the backend settings), checks it with `python3`, and starts the container. The container gets the OpenAI key, the meeting and the settings a meeting reads (`meeting-runtime/meeting_env.py`), and nothing else from `.env` or `.env.meeting`. Stop it with:
 
 ```bash
 docker compose -f compose.meeting.yaml stop meeting-agent

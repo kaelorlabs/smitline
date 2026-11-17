@@ -56,6 +56,23 @@ export function consolePaths({ env = process.env, root, codeRoot = CODE_ROOT } =
 }
 export const DOCKER_INFO_TIMEOUT_MS = 8000;
 
+/**
+ * The meeting view's address for the running meeting or sign-in, or null. Its websockify opens
+ * the display only for the token of that start (meeting-runtime/meeting_view.py), which the
+ * daemon or start-meeting-agent.sh keeps in .smitline/meeting-view-token. The token goes in the
+ * fragment, where noVNC reads it: a fragment never reaches a server or a Referer.
+ */
+export function meetingViewUrl(root) {
+  let viewToken;
+  try {
+    viewToken = fs.readFileSync(path.join(root, '.smitline', 'meeting-view-token'), 'utf8').trim();
+  } catch {
+    return null;
+  }
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(viewToken)) return null;
+  return `http://127.0.0.1:6082/vnc.html#autoconnect=true&path=${encodeURIComponent(`websockify?token=${viewToken}`)}`;
+}
+
 export function loopbackHost(host) {
   const name = String(host || '').replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1').toLowerCase();
   return name === '127.0.0.1' || name === 'localhost' || name === '::1';
@@ -570,6 +587,14 @@ export function createServer(options = {}) {
       if (request.headers['x-smitline-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
       const verify = new URL(request.url, `http://127.0.0.1:${PORT}`).searchParams.get('verify') !== '0';
       return json(response, 200, await setupView({ verify }));
+    }
+    // The meeting view's address carries its token, so reading it takes the session token, like
+    // the setup status.
+    if (request.method === 'GET' && pathname === '/api/meeting-view') {
+      if (request.headers['x-smitline-token'] !== token) return json(response, 403, { error: 'Refresh the control panel and try again.' });
+      const url = meetingViewUrl(root);
+      if (!url) return json(response, 404, { error: 'The meeting view opens once a meeting or an account sign-in is running.' });
+      return json(response, 200, { url });
     }
     if (!authorized(request)) return json(response, 403, { error: 'Refresh the control panel and try again.' });
     // Writing keys: the session token and an Origin of this console, like every other change.

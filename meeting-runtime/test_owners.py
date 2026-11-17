@@ -552,11 +552,15 @@ class MeetingOwnerEnvironmentTests(unittest.IsolatedAsyncioTestCase):
             "Ana's assistant")
         await self.supervisor.cancel(meeting.id)
 
-    async def test_the_local_owner_meeting_reads_the_shared_env(self):
+    async def test_the_local_owner_meeting_gets_a_private_env_file_too(self):
+        # One container at a time reads no .env either: the same private file, deleted once the
+        # container exists.
         meeting = session()
         await self.supervisor.start(meeting)
-        self.assertNotIn('SMITLINE_MEETING_ENV_FILE', self.launcher.ups[0])
-        self.assertEqual(self.seen, [])
+        [(body, mode)] = self.seen
+        self.assertEqual(mode, 0o600)
+        self.assertIn('OPENAI_API_KEY="sk-shared"\n', body)
+        self.assertFalse(Path(self.launcher.ups[0]['SMITLINE_MEETING_ENV_FILE']).exists())
         state = read_json(meeting_state_path(self.runtime, meeting.id))
         self.assertEqual(state['participantName'], 'Smitline AI')
         await self.supervisor.cancel(meeting.id)

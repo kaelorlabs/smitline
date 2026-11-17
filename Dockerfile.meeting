@@ -8,6 +8,8 @@
 FROM python:3.12-slim-bookworm
 
 ARG NOVNC_VERSION=1.5.0
+# The SHA-256 of that noVNC archive: a build that downloads anything else stops.
+ARG NOVNC_SHA256=6a73e41f98388a5348b7902f54b02d177cb73b7e5eb0a7a0dcf688cc2c79b42a
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/joinly \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
@@ -18,9 +20,9 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pulseaudio pulseaudio-utils xvfb x11vnc \
     && python -m venv /app/.venv \
-    && /app/.venv/bin/pip install --no-cache-dir playwright==1.58.0 numpy aiohttp websockify \
+    && /app/.venv/bin/pip install --no-cache-dir playwright==1.58.0 numpy==2.5.5 aiohttp==3.14.5 websockify==0.13.0 \
     && ln -s /app/.venv/bin/websockify /usr/bin/websockify \
-    && python -c "import io, tarfile, urllib.request; tarfile.open(fileobj=io.BytesIO(urllib.request.urlopen('https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz').read())).extractall('/usr/share', filter='data')" \
+    && python -c "import hashlib, io, sys, tarfile, urllib.request; data = urllib.request.urlopen('https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz').read(); digest = hashlib.sha256(data).hexdigest(); digest == '${NOVNC_SHA256}' or sys.exit('the noVNC archive is not the one NOVNC_SHA256 names: ' + digest); tarfile.open(fileobj=io.BytesIO(data)).extractall('/usr/share', filter='data')" \
     && mv /usr/share/noVNC-${NOVNC_VERSION} /usr/share/novnc \
     && ln -s vnc.html /usr/share/novnc/index.html \
     && /app/.venv/bin/playwright install --with-deps --no-shell chromium \

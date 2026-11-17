@@ -352,6 +352,21 @@ $('#clear-context-button').addEventListener('click', async () => {
     announce('Saved meeting context cleared.');
   } catch (error) { announce(error.message, true); }
 });
+// The view's address carries a token for this meeting or sign-in only, so it is asked for on each
+// click. The window opens at once, while the click still counts, and goes to the view once known.
+$('#meeting-view-button').addEventListener('click', async () => {
+  const view = window.open('about:blank', '_blank');
+  if (view) view.opener = null;
+  try {
+    const { url } = await request('/api/meeting-view');
+    // A blocked pop-up leaves this page for the view instead.
+    if (view) view.location.replace(url);
+    else location.assign(url);
+  } catch (error) {
+    view?.close();
+    announce(error.message, true);
+  }
+});
 $('#stop-button').addEventListener('click', async () => {
   $('#stop-button').disabled = true; announce('Stopping Smitline…');
   try { await request('/api/stop', { method: 'POST', body: '{}' }); announce('Smitline stopped.'); await refresh(); }

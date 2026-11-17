@@ -77,7 +77,7 @@ Your agent starts Smitline with one Docker command, opens a setup page on your c
 
 **What you need**
 
-- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux. On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
+- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux (26 or newer for meetings). On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
 - **OpenAI:** an API key with access to GPT-Live (billing turned on).
 - **For phone calls:** a SignalWire account or a funded Twilio account. SignalWire's free trial calls only numbers you verify in SignalWire (up to 10); adding a card and $5 of credit lets it call anyone.
 - **For meetings:** nothing more. Smitline joins through the browser, like a guest.
