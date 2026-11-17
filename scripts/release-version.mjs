@@ -85,6 +85,14 @@ export function bumpVersion(next, { root = ROOT, date = new Date().toISOString()
   return Object.keys(writes);
 }
 
+/** The version and the --date of `<version> [--date YYYY-MM-DD]`, in either order. */
+export function parseArgs(args) {
+  const at = args.indexOf('--date');
+  const date = at === -1 ? undefined : args[at + 1];
+  const [next] = args.filter((arg, i) => !arg.startsWith('--') && (at === -1 || i !== at + 1));
+  return { next, date };
+}
+
 function main(args) {
   if (args[0] === '--check') {
     const problems = checkVersions();
@@ -95,9 +103,7 @@ function main(args) {
     console.log(`All ${Object.keys(VERSION_FILES).length} version files carry ${currentVersion()}.`);
     return;
   }
-  const at = args.indexOf('--date');
-  const date = at === -1 ? undefined : args[at + 1];
-  const [next] = args.filter((arg, i) => !arg.startsWith('--') && i !== at + 1);
+  const { next, date } = parseArgs(args);
   if (!next) {
     console.error('Usage: node scripts/release-version.mjs <version> [--date YYYY-MM-DD] | --check');
     process.exit(2);

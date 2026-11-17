@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { VERSION_FILES, bumpVersion, checkVersions, currentVersion } from './release-version.mjs';
+import { VERSION_FILES, bumpVersion, checkVersions, currentVersion, parseArgs } from './release-version.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,6 +24,14 @@ const next = (version) => version.replace(/\d+$/, (patch) => String(Number(patch
 
 test('every file that carries the version carries package.json\'s version', () => {
   assert.deepEqual(checkVersions(), []);
+});
+
+test('the version is read with or without --date, before or after it', () => {
+  // As docs/releasing.md runs it: no --date. The version used to be dropped then.
+  assert.deepEqual(parseArgs(['0.3.15']), { next: '0.3.15', date: undefined });
+  assert.deepEqual(parseArgs(['0.3.15', '--date', '2026-11-20']), { next: '0.3.15', date: '2026-11-20' });
+  assert.deepEqual(parseArgs(['--date', '2026-11-20', '0.3.15']), { next: '0.3.15', date: '2026-11-20' });
+  assert.deepEqual(parseArgs([]), { next: undefined, date: undefined });
 });
 
 test('a bump moves every version file and dates the Unreleased section', (t) => {
