@@ -23,14 +23,31 @@ fi
 # The container runs as this user so it can use the private runtime files.
 export SMITLINE_UID="${SMITLINE_UID:-$(id -u)}"
 export SMITLINE_GID="${SMITLINE_GID:-$(id -g)}"
-MOUNTS=("$MEETING_DATA/profiles" "$MEETING_DATA/recordings")
+# The folders it mounts; the published image mounts them as subpaths of the volume, which must exist.
+MOUNTS=("$MEETING_DATA/profiles" "$MEETING_DATA/recordings" "$MEETING_DATA/run")
 mkdir -p "${MOUNTS[@]}"
 if ! chmod 700 "${MOUNTS[@]}"; then
   echo "Those directories must belong to you: sudo chown -R \"\$(id -u):\$(id -g)\" ${MOUNTS[*]}" >&2
   exit 1
 fi
+# The meeting view opens only with this start's token (meeting_view.py), kept in a private file
+# where the console's Open meeting view finds it.
+SMITLINE_VIEWER_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+export SMITLINE_VIEWER_TOKEN
+mkdir -p "$DATA/.smitline"
+chmod 700 "$DATA/.smitline"
+rm -f "$DATA/.smitline/meeting-view-token"
+(umask 077 && printf '%s\n' "$SMITLINE_VIEWER_TOKEN" > "$DATA/.smitline/meeting-view-token")
+view() {
+  # In a terminal only: the console finds the token itself.
+  if [[ -t 1 ]]; then
+    echo "Meeting view: http://127.0.0.1:6082/vnc.html#autoconnect=true&path=websockify%3Ftoken%3D$SMITLINE_VIEWER_TOKEN"
+  fi
+}
 if [[ "${SMITLINE_AUTH_MODE:-}" == teams || "${SMITLINE_AUTH_MODE:-}" == google ]]; then
-  "${COMPOSE[@]}" up -d "${GET_IMAGE[@]}" meeting-agent
+  # Signing in needs no settings and no keys.
+  SMITLINE_MEETING_ENV_FILE='' "${COMPOSE[@]}" up -d "${GET_IMAGE[@]}" meeting-agent
+  view
   exit 0
 fi
 if [[ ! -f "$DATA/.env.meeting" ]]; then
@@ -38,6 +55,11 @@ if [[ ! -f "$DATA/.env.meeting" ]]; then
   exit 1
 fi
 SMITLINE_ROOT="$DATA" python3 "$CODE/meeting-runtime/preflight.py"
-"${COMPOSE[@]}" up -d "${GET_IMAGE[@]}" meeting-agent
-echo 'Agent browser: http://127.0.0.1:6082/vnc.html?autoconnect=true'
+# Only what the meeting reads, in a private file that compose copies into the container; it is
+# deleted once the container exists.
+PRIVATE="$(mktemp -d)"
+trap 'rm -rf "$PRIVATE"' EXIT
+python3 "$CODE/meeting-runtime/meeting_env.py" "$DATA" "$PRIVATE/meeting.env"
+SMITLINE_MEETING_ENV_FILE="$PRIVATE/meeting.env" "${COMPOSE[@]}" up -d "${GET_IMAGE[@]}" meeting-agent
+view
 echo 'Status and live captions: http://127.0.0.1:8094/health'

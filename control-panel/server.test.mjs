@@ -1028,3 +1028,28 @@ test('contacts read openly; changing or forgetting one needs this console', asyn
     ]);
   }, { daemon });
 });
+
+test('the meeting view address carries the start\'s token, and only this console\'s page gets it', async () => {
+  await withPanel(async panel => {
+    const file = path.join(panel.root, '.smitline', 'meeting-view-token');
+    // Without the session token, no address.
+    assert.equal((await fetch(`${panel.base}/api/meeting-view`)).status, 403);
+    const bootstrap = await panel.bootstrap();
+    const ask = () => fetch(`${panel.base}/api/meeting-view`, { headers: { 'X-Smitline-Token': bootstrap.token } });
+    assert.equal((await ask()).status, 404);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, 'not a token\n', { mode: 0o600 });
+    assert.equal((await ask()).status, 404);
+    const token = 'Vw_-'.repeat(11);
+    fs.writeFileSync(file, `${token}\n`, { mode: 0o600 });
+    const open = await ask();
+    assert.equal(open.status, 200);
+    assert.deepEqual(await open.json(), {
+      url: `http://127.0.0.1:6082/vnc.html#autoconnect=true&path=websockify%3Ftoken%3D${token}`,
+    });
+    // The page links to no view address of its own: it asks on each click.
+    const html = await (await fetch(`${panel.base}/meetings/new`)).text();
+    assert.equal(html.includes('6082'), false);
+    assert.match(html, /<button class="button ghost" id="meeting-view-button" type="button">Open meeting view<\/button>/);
+  });
+});

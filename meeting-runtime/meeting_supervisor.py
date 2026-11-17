@@ -9,7 +9,8 @@ from meeting_finalizer import MeetingFinalizer, archive_dir, load_finalization
 from meeting_lifecycle import AGENT_ENDINGS
 from runtime_state import (
     POOL_ACTIVE_DIR, active_meeting_path, control_root, ensure_private_dir, meeting_state_path,
-    pool_claim_path, read_json, state_from_session, write_private_file, write_private_json,
+    pool_claim_path, read_json, state_from_session, viewer_token_path, write_private_file,
+    write_private_json,
 )
 
 try:
@@ -32,13 +33,14 @@ POOL_PROJECT_PREFIX = 'smitline-meeting-'
 # Host ports the pool gives meetings, two each (noVNC, then /health), on 127.0.0.1.
 DEFAULT_POOL_PORTS = (18100, 18399)
 # One meeting container at a time uses the installation's signed-in browser profiles and sees
-# the whole data volume, so it runs the local owner's meetings only.
+# every meeting's folders, so it runs the local owner's meetings only.
 MEETING_POOL_REQUIRED = ('Meetings for other owners need the meeting pool: set SMITLINE_MAX_MEETINGS '
                          'to 2 or more.')
 SERVICE = 'meeting-agent'
 CODE_ROOT = Path(__file__).resolve().parent.parent
-# Bind-mount sources the container writes; Docker would create missing ones as root.
-MOUNTED_DIRS = ('recordings', 'profiles')
+# The folders the container mounts: Docker would create a missing bind-mount source as root, and
+# refuses to mount a missing subpath of the data volume.
+MOUNTED_DIRS = ('run', 'recordings', 'profiles')
 HEALTH_URL = 'http://127.0.0.1:8094/health'
 STAGE_TO_STATE = {
     'starting': 'joining',
@@ -76,8 +78,7 @@ def owner_env_file(values):
     """KEY="value" lines for compose's env_file. Inside double quotes compose reads a
     backslash before a backslash, a quote, or a dollar sign as that character, so a value
     arrives exactly as given (O'Neil, $5). Every key is written: a value with a control
-    character, or none, is blank, so the shared .env read before this file never fills in
-    for the owner."""
+    character, or none, is blank."""
     lines = []
     for key, value in values.items():
         value = str(value or '')
@@ -309,7 +310,11 @@ class ComposeMeetingAgent:
             env={**host_user_env(self.environ), **self.env, **(env or {})},
         )
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or 'failed to start meeting-agent')
+            message = result.stderr.strip() or 'failed to start meeting-agent'
+            if 'subpath' in message.lower():
+                # The published image mounts folders of the data volume as subpaths.
+                message += ' (the meeting container needs Docker Engine 26 or later)'
+            raise RuntimeError(message)
         return result
 
     async def stop(self):
@@ -392,10 +397,10 @@ class ProductionMeetingSupervisor:
         self.stop_timeout = stop_timeout
         self.archive_timeout = archive_timeout
         self.leave_wait = leave_wait
-        # owner_environment(owner): a pool meeting's whole environment besides HOME and its
-        # runtime state (meeting_line.pool_meeting_environment), written to a private env file
-        # that the pool's compose files read instead of .env. One meeting container at a time
-        # runs only the local owner's meetings, which read .env as always.
+        # owner_environment(owner): a meeting's whole environment besides HOME, its runtime state
+        # and its tokens (meeting_line.pool_meeting_environment, or single_meeting_environment
+        # for one container at a time), written to a private env file, the only one the meeting
+        # compose files read. No meeting container ever reads .env or .env.meeting itself.
         self.owner_environment = owner_environment
         self.daemon = None
         self._lock = asyncio.Lock()
@@ -420,7 +425,7 @@ class ProductionMeetingSupervisor:
     @property
     def local_only(self):
         """One meeting container at a time (not one meeting of a pool): the installation's
-        signed-in browser profiles and the whole data volume, so local meetings only."""
+        signed-in browser profiles and every meeting's folders, so local meetings only."""
         return self._claim is None
 
     def capacity_problem(self, owner):
@@ -432,7 +437,7 @@ class ProductionMeetingSupervisor:
             return 409, 'capacity_exceeded', 'meeting agent is already running'
         return None
 
-    def _container_env(self, session, owner_env=None):
+    def _container_env(self, session, owner_env=None, viewer_token=None):
         state_path = meeting_state_path(self.runtime_root, session.id)
         env = {
             'SMITLINE_RUNTIME_STATE': '/meeting-runtime/run/meetings/' + session.id + '/runtime.json',
@@ -441,20 +446,38 @@ class ProductionMeetingSupervisor:
         }
         if self._control_token:
             env['SMITLINE_CONTROL_TOKEN'] = self._control_token
+        if viewer_token:
+            env['SMITLINE_VIEWER_TOKEN'] = viewer_token
         if owner_env is not None:
-            # A pool meeting's compose file reads only this file for the container's settings.
+            # The meeting compose files read only this file for the container's settings.
             env['SMITLINE_MEETING_ENV_FILE'] = str(owner_env)
         return env
 
     def _owner_values(self, session):
-        """A pool meeting's environment (every owner's, the local one's too); nothing for one
-        container at a time, whose local meetings read .env as always."""
-        if self.owner_environment is None or self.local_only:
+        """A meeting's environment: every owner's, the local one's too, in a pool or one
+        container at a time."""
+        if self.owner_environment is None:
             return {}
         return dict(self.owner_environment(getattr(session, 'owner', 'local')) or {})
 
+    def _viewer_token_path(self):
+        """Where this meeting's view token is kept: for the one meeting container, where the
+        console's Open meeting view finds it; for a pool meeting, beside its claim."""
+        if self._claim:
+            return self._claim['path'].with_suffix('.view')
+        return viewer_token_path(self.project_root)
+
+    def _open_viewer(self):
+        """A new token for this start's meeting view (meeting_view.py), kept in a private file."""
+        token = secrets.token_urlsafe(32)
+        write_private_file(self._viewer_token_path(), token + '\n')
+        return token
+
+    def _close_viewer(self):
+        self._viewer_token_path().unlink(missing_ok=True)
+
     def _write_owner_env(self, session, values=None):
-        """The private env file of a pool meeting, or None."""
+        """The private env file of a meeting, or None."""
         body = owner_env_file(self._owner_values(session) if values is None else values)
         if not body:
             return None
@@ -505,8 +528,9 @@ class ProductionMeetingSupervisor:
         return payload
 
     def _drop_claim(self):
-        """Remove a pool meeting's claim, and a remote meeting's token beside it."""
+        """Remove a pool meeting's claim, and its view token or a remote meeting's token beside it."""
         self._claim['path'].unlink(missing_ok=True)
+        self._close_viewer()
         if self.remote:
             self._claim['path'].with_suffix('.token').unlink(missing_ok=True)
 
@@ -575,7 +599,8 @@ class ProductionMeetingSupervisor:
                     self._prepare_mounts()
                     owner_env = self._write_owner_env(session, values)
                     try:
-                        await self.launcher.up(self._container_env(session, owner_env))
+                        await self.launcher.up(self._container_env(
+                            session, owner_env, viewer_token=self._open_viewer()))
                     finally:
                         # Compose copied it into the container; no key stays on disk.
                         if owner_env is not None:
@@ -587,6 +612,7 @@ class ProductionMeetingSupervisor:
                 self._active_id = None
                 self._active_session = None
                 self._control_token = None
+                self._close_viewer()
                 if self._claim:
                     self._drop_claim()
                 raise
@@ -992,6 +1018,7 @@ class ProductionMeetingSupervisor:
             self._drop_claim()
         else:
             write_private_json(active_meeting_path(self.project_root), {})
+            self._close_viewer()
 
     async def shutdown(self):
         await self._stop_watch()
@@ -1282,8 +1309,9 @@ class MeetingPool:
     async def _remove_project(self, name):
         await self.runner.run(['docker', 'compose', '-p', name, 'down', '--remove-orphans'], env=None)
 
-    # A meeting's files in .smitline/active-meetings: its claim (and a remote meeting's token).
-    CLAIM_SUFFIXES = ('.json',)
+    # A meeting's files in .smitline/active-meetings: its claim and its meeting view's token (and
+    # a remote meeting's own token).
+    CLAIM_SUFFIXES = ('.json', '.view')
 
     async def reconcile(self, daemon=None):
         """After a restart: follow every pool meeting of this installation still running and
@@ -1440,7 +1468,7 @@ class RemoteMeetingPool(MeetingPool):
         self._meetings[meeting_id] = meeting
         return meeting
 
-    CLAIM_SUFFIXES = ('.json', '.token')
+    CLAIM_SUFFIXES = ('.json', '.view', '.token')
 
     # reconcile() (MeetingPool's): adopt every meeting of this installation whose machine still
     # runs, with the token kept beside its claim, and delete the machines of meetings that ended.

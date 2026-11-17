@@ -9,12 +9,11 @@ services:
     # the runtime daemon set both values automatically.
     user: "${SMITLINE_UID:-1000}:${SMITLINE_GID:-1000}"
     env_file:
-      - path: .env
-      - path: .env.meeting
-        required: false
-      # A hosted deployment's account settings for one meeting (OpenAI key, voice, name),
-      # written by the daemon just before the meeting starts; otherwise .env.meeting again.
-      - path: ${SMITLINE_MEETING_ENV_FILE:-.env.meeting}
+      # Only what the meeting reads, written for this start just before it: its OpenAI key and
+      # the meeting settings (meeting_line.single_meeting_environment). Never .env or
+      # .env.meeting themselves. A sign-in, and
+      # stopping or listing the container, need none (/dev/null).
+      - path: ${SMITLINE_MEETING_ENV_FILE:-/dev/null}
         required: false
     environment:
       HOME: /tmp
@@ -22,6 +21,8 @@ services:
       SMITLINE_RUNTIME_STATE: ${SMITLINE_RUNTIME_STATE:-}
       # This meeting's own token: only the daemon that started it may listen in or write to it.
       SMITLINE_CONTROL_TOKEN: ${SMITLINE_CONTROL_TOKEN:-}
+      # The meeting view's token for this start (meeting_view.py); without one the view stays shut.
+      SMITLINE_VIEWER_TOKEN: ${SMITLINE_VIEWER_TOKEN:-}
     shm_size: "2gb"
     ports:
       - "127.0.0.1:6082:6080"

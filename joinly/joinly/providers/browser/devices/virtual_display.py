@@ -87,6 +87,9 @@ class VirtualDisplay:
                 "-forever",
                 "-nopw",
                 "-shared",
+                # Smitline: inside the container only. Its viewer (meeting_view.py) is the one way
+                # in, and it asks for a token.
+                "-localhost",
             ]
             if self.vnc_port is not None:
                 cmd.extend(["-rfbport", str(self.vnc_port)])

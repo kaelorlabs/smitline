@@ -205,6 +205,10 @@ test('discovery, registration, approval, tokens, and a call over MCP', async (t)
   assert.match(form.html, /Allow Test agent to use Smitline\?/);
   assert.match(form.html, /https:\/\/agent\.example/);
   assert.match(form.html, /<label for="passphrase">Owner passphrase<\/label>/);
+  // It names everything an approved agent may do, not only the calls it places itself.
+  assert.match(form.html, /Read all your calls and meetings, not only its own/);
+  assert.match(form.html, /Read your contacts, and read and change your profile/);
+  assert.match(form.html, /save notes for later calls/);
   assert.equal(form.headers.get('x-frame-options'), 'DENY');
   assert.match(form.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const approved = await postForm(base, { ...form.fields, passphrase: PASSPHRASE, decision: 'approve' });

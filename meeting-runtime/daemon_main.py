@@ -206,12 +206,13 @@ def build_app(args):
         server_mode=args.server,
     )
     supervisor.bind_daemon(app.runtime_daemon)
-    if not supervisor.local_only:
-        # A pool meeting's container gets only what the meeting reads, never .env wholesale.
-        # One container at a time runs the local owner's meetings only, which read .env.
-        from meeting_line import pool_meeting_environment
-        supervisor.owner_environment = lambda owner: pool_meeting_environment(
-            app.call_service.hooks, owner, project_root / '.env.meeting')
+    # A meeting container gets only what the meeting reads, never .env or .env.meeting: a pool
+    # meeting its owner's OpenAI key and meeting settings, one container at a time also the
+    # passcode the console's meeting page saves.
+    from meeting_line import pool_meeting_environment, single_meeting_environment
+    environment = single_meeting_environment if supervisor.local_only else pool_meeting_environment
+    supervisor.owner_environment = lambda owner: environment(
+        app.call_service.hooks, owner, project_root / '.env.meeting')
     attach_phone_gateway(app, app.call_service)
     app.meeting_supervisor = supervisor
     app.auth_token_path = token_path

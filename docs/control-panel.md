@@ -66,7 +66,7 @@ The console reports the join stage, platform microphone state, listening state, 
 
 The platform may display Smitline as unmuted because the runtime keeps the browser audio connection stable. No audio is transmitted while the local gate is closed. If a host or participant mutes Smitline in Zoom, Teams, or Google Meet, that mute is respected and the runtime will not override it automatically. In Zoom, a host who has disabled self-unmute can click **Ask to unmute** on Smitline's tile; it accepts that explicit request.
 
-**Open meeting view** shows the container's browser. Stop Smitline from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory.
+**Open meeting view** shows the container's browser. The view opens with a token made for each start of the container: the console asks for the address when you click. Stop Smitline from the console before starting another meeting or changing configuration. Starting a new voice session clears the voice model's conversation memory.
 
 ### Review local records
 
@@ -85,7 +85,7 @@ cp meeting-runtime/meeting.env.example .env.meeting
 bash start-meeting-agent.sh
 ```
 
-It reads `.env.meeting`, checks the configuration with `python3`, and builds and starts the Docker participant. Runtime status is available at [http://127.0.0.1:8094/health](http://127.0.0.1:8094/health), and the browser viewer at [http://127.0.0.1:6082/vnc.html?autoconnect=true](http://127.0.0.1:6082/vnc.html?autoconnect=true).
+It reads `.env.meeting`, checks the configuration with `python3`, and builds and starts the Docker participant with only the OpenAI key and the settings a meeting reads. Runtime status is available at [http://127.0.0.1:8094/health](http://127.0.0.1:8094/health). The browser viewer is at the `Meeting view:` address the script prints in a terminal, or through the console's **Open meeting view**: that address carries a token made for this start (kept in `.smitline/meeting-view-token`).
 
 ## Troubleshooting
 

@@ -21,7 +21,7 @@ Smitline needs only Docker. It runs as one container, `smitline`, and starts a s
 docker info
 ```
 
-If Docker is missing or not running, help the user install or start it: Docker Desktop on a Mac or Windows, or Docker Engine on Linux or inside WSL (https://docs.docker.com/engine/install/).
+If Docker is missing or not running, help the user install or start it: Docker Desktop on a Mac or Windows, or Docker Engine on Linux or inside WSL (https://docs.docker.com/engine/install/). Meetings need Docker Engine 26 or newer (`docker version --format '{{.Server.Version}}'`); every Docker Desktop that has host networking already has it.
 
 Docker Desktop needs host networking so this computer can reach Smitline. It needs Docker Desktop 4.34 or newer, signed in to a Docker account: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. It does not work with Enhanced Container Isolation turned on. Docker Engine on Linux or in WSL needs nothing extra.
 
@@ -192,7 +192,7 @@ Placing calls afterwards: use the `start_call` and `wait_for_call` tools (pass `
 ## Updating and removing
 
 - **Update:** `docker pull ghcr.io/kaelorlabs/smitline`, then `docker rm -f smitline` and run the `docker run` command from step 2 again. The volume keeps everything.
-- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.3.13`, in both commands. The meeting image with the matching code is pulled for it.
+- **Pin a version:** use a version tag instead of `latest`, such as `ghcr.io/kaelorlabs/smitline:0.3.14`, in both commands. The meeting image with the matching code is pulled for it.
 - **Remove:** `docker rm -f smitline`. Also run `docker volume rm smitline` to delete keys and records.
 
 ## Troubleshooting

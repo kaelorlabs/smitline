@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 from aiohttp import web
 from joinly.providers.browser.browser_session import BrowserSession
 from joinly.providers.browser.devices.virtual_display import VirtualDisplay
+from meeting_control import health_route
+from meeting_view import start_meeting_view
 
 async def connect():
     root = Path('/meeting-runtime/profiles')
@@ -21,8 +23,8 @@ async def connect():
         asyncio.get_running_loop().add_signal_handler(sig, stop.set)
     state = {'stage': 'connecting_account', 'mode': 'teams_account', 'authenticationState': 'connecting'}
     app = web.Application()
-    async def health(_request): return web.json_response(state)
-    app.router.add_get('/health', health)
+    # The sign-in stage, for the console: like a meeting's, only to this computer's own requests.
+    app.router.add_get('/health', health_route(None, lambda: state))
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', 8094).start()
@@ -30,7 +32,8 @@ async def connect():
     env['JOINLY_BROWSER_PROFILE_DIR'] = str(profile)
     try:
         async with VirtualDisplay(env=env, use_vnc_server=True, vnc_port=5900):
-            viewer = await asyncio.create_subprocess_exec('/usr/bin/websockify', '--web=/usr/share/novnc', '6080', '127.0.0.1:5900', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            # The meeting view, for this start's token only (meeting_view.py).
+            viewer = await start_meeting_view(env)
             try:
                 async with BrowserSession(env=env) as browser:
                     page = await browser.get_page()
@@ -45,7 +48,6 @@ async def connect():
                                 state.update(stage='account_connected', authenticationState='connected')
                         await asyncio.sleep(1)
             finally:
-                viewer.terminate()
-                await viewer.wait()
+                await viewer.stop()
     finally:
         await runner.cleanup()
