@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.14 — 2026-11-17
 
 - **The meeting container gets only the settings a meeting needs.** With one meeting container at a time (the default), Smitline now starts it the way it starts each meeting of the pool: the OpenAI key and the meeting's settings go in a private file written for that start (`meeting_line.single_meeting_environment`, with the passcode the console keeps in `.env.meeting`), and `compose.meeting.yaml` and `compose.meeting.image.yaml` read no other env file. An account sign-in gets none. The published image's compose file mounts `meetings/run` (read-only), `meetings/recordings` and `meetings/profiles` as subpaths of the volume, **which needs Docker Engine 26 or later**, as the meeting pool already did (every Docker Desktop with host networking has it). `start-meeting-agent.sh` writes the same file for a meeting started by hand (`meeting-runtime/meeting_env.py`).
 - **Open meeting view asks the console for the view's address.** The view of each meeting or account sign-in opens with a token made for that start (`SMITLINE_VIEWER_TOKEN`), kept in `.smitline/meeting-view-token` (a pool meeting's in `.smitline/active-meetings/<id>.view`). In the console, **Open meeting view** is now a button that asks `GET /api/meeting-view` for the address. A bookmarked `http://127.0.0.1:6082/vnc.html?autoconnect=true` no longer opens the view.
