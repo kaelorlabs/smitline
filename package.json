@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "mammoth": "1.13.0",
-    "pdfjs-dist": "6.4.299"
+    "pdfjs-dist": "6.5.438"
   },
   "devDependencies": {
     "jszip": "3.10.2"
