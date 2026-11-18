@@ -23,6 +23,94 @@ export const CALL_CARD_TOOL_META = Object.freeze({
 /** Tool _meta for the in-call tools the card calls itself, when the user answers from it. */
 export const CALL_CARD_ACTION_META = Object.freeze({ 'openai/widgetAccessible': true });
 
+/** The tool the card follows a call with. Only the card calls it: hosts keep it from the model. */
+export const CALL_CARD_UPDATE_TOOL = 'get_call_update';
+export const CALL_CARD_UPDATE_META = Object.freeze({
+  ui: { visibility: ['app'] },
+  'openai/visibility': 'private',
+  'openai/widgetAccessible': true,
+});
+
+/**
+ * How long the card waits before asking for a call again, by status: a few seconds while it
+ * starts and rings, a little longer once people talk (the card shows the last line, not every
+ * word), and never again once it has ended.
+ */
+export const CALL_CARD_POLL_MS = Object.freeze({
+  queued: 3000,
+  connecting: 3000,
+  ringing: 3000,
+  waiting: 3000,
+  in_progress: 5000,
+  summarizing: 3000,
+  completed: 0,
+  failed: 0,
+  canceled: 0,
+});
+
+// The lines a live call's update carries: the card shows the last one and the count.
+const LIVE_TRANSCRIPT_LINES = 3;
+
+/**
+ * What get_call_update answers for a call record: { unchanged: true } when the card already has
+ * this version, else the record cut to what the card shows. A finished call keeps its whole
+ * transcript, for the card's last answer; a live one, its last few lines and the count.
+ */
+export function callCardUpdate(record, ifVersion) {
+  const call = record && typeof record === 'object' ? record : {};
+  const status = typeof call.status === 'string' ? call.status : '';
+  const version = Number.isInteger(call.version) && call.version > 0 ? call.version : 0;
+  const nextPollMs = CALL_CARD_POLL_MS[status] ?? 3000;
+  // A record without a version (an older daemon) is never "unchanged": the card gets it whole.
+  if (version && ifVersion === version) return { callId: call.id, status, version, unchanged: true, nextPollMs };
+  const ended = ['completed', 'failed', 'canceled'].includes(status);
+  const object = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
+  const brief = object(call.brief) || {};
+  const result = object(call.result);
+  const said = Array.isArray(call.transcript) ? call.transcript : Array.isArray(result?.transcript) ? result.transcript : [];
+  const lines = said.map(object).filter((line) => line && typeof line.text === 'string' && line.text.trim())
+    .map(({ speaker, text }) => ({ speaker, text }));
+  const requests = (Array.isArray(call.requests) ? call.requests : []).map(object).filter(Boolean);
+  const update = {
+    callId: call.id,
+    id: call.id,
+    status,
+    version,
+    nextPollMs,
+    channel: call.channel,
+    brief: {
+      channel: brief.channel,
+      to: brief.to,
+      ...(object(brief.contact) && typeof brief.contact.name === 'string' ? { contact: { name: brief.contact.name } } : {}),
+    },
+    answeredAt: call.answeredAt,
+    endedAt: call.endedAt,
+    error: call.error,
+    result: result ? (({ transcript: _whole, ...rest }) => rest)(result) : null,
+    cost: call.cost,
+    charge: call.charge,
+    callUrl: call.callUrl,
+    recording: call.recording,
+    recordingUrl: call.recordingUrl,
+    transcript: ended ? lines : lines.slice(-LIVE_TRANSCRIPT_LINES),
+    transcriptCount: lines.length,
+    requestCount: requests.length,
+  };
+  // While the call runs, the user answers its questions from the card.
+  if (!ended) {
+    update.requests = requests.map((request) => ({
+      id: request.id,
+      kind: request.kind,
+      state: request.state,
+      text: request.text,
+      askedBy: request.askedBy,
+      thread: (Array.isArray(request.thread) ? request.thread : []).map(object).filter(Boolean)
+        .map(({ from, type, text }) => ({ from, type, text })),
+    }));
+  }
+  return JSON.parse(JSON.stringify(update)); // without the fields the record does not have
+}
+
 /** What the card shows for a call record. Pure: it also runs inside the card. */
 export function callCardView(record, now = Date.now()) {
   const STATUS = {

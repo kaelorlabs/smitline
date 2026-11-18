@@ -34,7 +34,7 @@ test('initialize describes calls and meetings, and lists only the call tools', a
   const listed = await call(session, 'tools/list', {});
   const names = listed.result.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
-    'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'list_calls',
+    'start_call', 'check_call_brief', 'wait_for_call', 'get_call', 'get_call_update', 'list_calls',
     'save_call_note', 'list_contacts',
     'send_call_instruction', 'reply_to_call_request', 'end_call', 'transfer_call_to_me', 'list_voices',
     'get_profile', 'update_profile', 'how_to_smitline',
@@ -136,6 +136,82 @@ test('a result that says why and what next reaches the agent as is', async () =>
   const got = await call(session, 'tools/call', { name: 'get_call', arguments: { callId: 'call-0123456789abcdef' } });
   assert.equal(got.result.structuredContent.result.reason, result.reason);
   assert.equal(got.result.structuredContent.result.hint, result.hint);
+});
+
+test('the card follows a call with get_call_update: a read, cut to the card, and "unchanged" when nothing moved', async () => {
+  const callId = 'call-0123456789abcdef';
+  const asked = [];
+  let record = {
+    id: callId, version: 7, channel: 'phone', status: 'in_progress', owner: 'local',
+    brief: { channel: 'phone', to: '+15550100', objective: 'Book a table', contact: { name: 'Bawarchi', notes: 'x' }, context: 'long' },
+    answeredAt: '2026-11-02T17:00:00Z', line: { providerCallSid: 'CA1' }, usage: { voiceSeconds: 4 },
+    transcript: ['one', 'two', 'three', 'four'].map((text, index) => ({ speaker: index % 2 ? 'other' : 'agent', text, at: 'x' })),
+    requests: [{ id: 'r1', kind: 'question', state: 'open', text: 'Parking?', askedBy: 'Sam', openedAt: 'x', context: ['a'],
+      thread: [{ from: 'call', type: 'ask', text: 'Parking?', at: 'x' }] }],
+    charge: { status: 'pending', held: '$1.00' }, callUrl: 'https://app.example.com/app/calls/x',
+  };
+  const colleague = {
+    async getCall(id) { asked.push(['getCall', id]); return record; },
+    async waitForCall(...args) { asked.push(['waitForCall', ...args]); return record; },
+  };
+  const session = createMcpSession({ colleague, log() {} });
+  const update = async (args) => (await call(session, 'tools/call', { name: 'get_call_update', arguments: args })).result;
+
+  let got = await update({ callId });
+  assert.equal(got.isError, false);
+  assert.deepEqual(got._meta, { callId });
+  assert.equal(got.content[0].text.split('\n')[0], callId);
+  assert.deepEqual(JSON.parse(got.content[0].text.split('\n').slice(1).join('\n')), got.structuredContent);
+  const card = got.structuredContent;
+  assert.deepEqual([card.callId, card.id, card.status, card.version, card.nextPollMs], [callId, callId, 'in_progress', 7, 5000]);
+  assert.deepEqual(card.brief, { channel: 'phone', to: '+15550100', contact: { name: 'Bawarchi' } });
+  assert.deepEqual(card.transcript.map((line) => line.text), ['two', 'three', 'four']);
+  assert.deepEqual(card.transcript[0], { speaker: 'other', text: 'two' });
+  assert.equal(card.transcriptCount, 4);
+  assert.equal(card.requestCount, 1);
+  assert.deepEqual(card.requests, [{ id: 'r1', kind: 'question', state: 'open', text: 'Parking?', askedBy: 'Sam',
+    thread: [{ from: 'call', type: 'ask', text: 'Parking?' }] }]);
+  assert.deepEqual(card.charge, record.charge);
+  assert.equal(card.callUrl, record.callUrl);
+  for (const field of ['owner', 'line', 'usage', 'next', 'live']) assert.equal(field in card, false, field);
+
+  got = await update({ callId, ifVersion: 7 });
+  assert.deepEqual(got.structuredContent, { callId, status: 'in_progress', version: 7, unchanged: true, nextPollMs: 5000 });
+  assert.deepEqual(got._meta, { callId });
+  assert.equal((await update({ callId, ifVersion: 6 })).structuredContent.unchanged, undefined);
+
+  // The pace follows the status, and an ended call gets its whole transcript and no requests.
+  for (const [status, ms] of [['queued', 3000], ['connecting', 3000], ['ringing', 3000], ['waiting', 3000],
+    ['summarizing', 3000], ['completed', 0], ['failed', 0], ['canceled', 0]]) {
+    record = { ...record, status };
+    assert.equal((await update({ callId, ifVersion: 7 })).structuredContent.nextPollMs, ms, status);
+  }
+  record = { id: callId, version: 9, status: 'completed', brief: { to: '+15550100' }, requests: record.requests,
+    result: { outcome: 'achieved', summary: 'Booked.', transcript: [{ speaker: 'agent', text: 'a' }, { speaker: 'other', text: 'b' },
+      { speaker: 'agent', text: 'c' }, { speaker: 'other', text: 'd' }] } };
+  const done = (await update({ callId, ifVersion: 7 })).structuredContent;
+  assert.deepEqual(done.transcript.map((line) => line.text), ['a', 'b', 'c', 'd']);
+  assert.equal(done.result.transcript, undefined);
+  assert.equal(done.result.summary, 'Booked.');
+  assert.equal(done.requests, undefined);
+  assert.equal(done.requestCount, 1);
+  // A record without a version is never "unchanged".
+  record = { id: callId, status: 'ringing' };
+  assert.equal((await update({ callId, ifVersion: 0 })).structuredContent.unchanged, undefined);
+
+  // The card's reads never wait, so they never count as the agent following the call.
+  assert.ok(asked.length > 0 && asked.every(([method]) => method === 'getCall'));
+  for (const args of [{ callId: '../etc' }, { callId, ifVersion: -1 }, { callId, ifVersion: 1.5 }, { callId, ifVersion: '7' }]) {
+    const refused = await update(args);
+    assert.equal(refused.isError, true, JSON.stringify(args));
+    assert.equal(refused.structuredContent.code, 'validation');
+  }
+  const tool = TOOL_DEFINITIONS.find((item) => item.name === 'get_call_update');
+  assert.deepEqual(tool._meta.ui, { visibility: ['app'] });
+  assert.equal(tool._meta['openai/widgetAccessible'], true);
+  assert.equal(tool._meta['openai/outputTemplate'], undefined);
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.match(tool.description, /not for agents/);
 });
 
 test('startup errors are mapped without leaking tokens', async () => {
@@ -409,7 +485,7 @@ test('each tool says honestly what it does: only lookups are read-only', () => {
   // repeats a read-only call after a dropped connection, so an instruction could be spoken twice.
   const hints = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.name, tool.annotations]));
   const readOnly = Object.keys(hints).filter((name) => hints[name].readOnlyHint).sort();
-  assert.deepEqual(readOnly, ['check_call_brief', 'get_call', 'get_profile', 'how_to_smitline', 'list_calls',
+  assert.deepEqual(readOnly, ['check_call_brief', 'get_call', 'get_call_update', 'get_profile', 'how_to_smitline', 'list_calls',
     'list_contacts', 'list_voices', 'wait_for_call']);
   // Ending, handing over and replacing are destructive; the other write tools only add.
   const destructive = Object.keys(hints).filter((name) => hints[name].destructiveHint).sort();

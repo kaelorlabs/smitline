@@ -663,6 +663,43 @@
       }
     },
     {
+      "name": "get_call_update",
+      "title": "Refresh the call card",
+      "_meta": {
+        "ui": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true
+      },
+      "annotations": {
+        "title": "Refresh the call card",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Used by the call card to follow a call; not for agents: use get_call or wait_for_call. Returns the call cut to what the card shows, with its version and nextPollMs, how long to wait before asking again (0 once the call has ended). With ifVersion equal to the call's version, returns only unchanged: true.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          },
+          "ifVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The version the card already shows."
+          }
+        }
+      }
+    },
+    {
       "name": "list_calls",
       "title": "List calls and meetings",
       "annotations": {
