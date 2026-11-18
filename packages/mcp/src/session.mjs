@@ -175,9 +175,10 @@ export const CALL_TOOL_DEFINITIONS = [
     },
   },
   {
+    // No card: start_call's card follows the call by itself, and a card for every get_call would
+    // stack live copies of it in the chat.
     name: 'get_call',
     title: "Get call details",
-    _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A meeting joined by its link may stay connecting for a minute or two on a hosted service, while a machine starts for it; a new room starts in seconds. A finished call includes its result (outcome, summary, details, transcript) and what it cost: cost, at your providers' prices, when self-hosted; on a hosted service such as Smitline Cloud, charge, what the service billed for the call. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
     inputSchema: { type: 'object', additionalProperties: false, required: ['callId'], properties: { callId: CALL_ID_SCHEMA } },

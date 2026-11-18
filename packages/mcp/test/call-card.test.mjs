@@ -59,14 +59,15 @@ test('the view of a self-hosted or live call: no provider cost, no player withou
   assert.equal(callCardView(null).title, 'Call to someone');
 });
 
-test('start_call and get_call show the card, served as a self-contained MCP Apps resource', async () => {
+test('start_call alone shows the card, served as a self-contained MCP Apps resource', async () => {
   const session = createMcpSession({
     colleague: {}, log() {}, card: { mediaOrigins: ['https://app.example.com', 'http://plain.example.com', 'javascript:x'] },
   });
   const init = await session.dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
   assert.deepEqual(init.result.capabilities.resources, { listChanged: false });
   const withCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.ui?.resourceUri).map((tool) => tool.name);
-  assert.deepEqual(withCard, ['start_call', 'get_call']);
+  assert.deepEqual(withCard, ['start_call']);
+  assert.equal(TOOL_DEFINITIONS.filter((tool) => tool._meta?.['openai/outputTemplate']).length, 1);
   for (const name of withCard) {
     const { _meta } = TOOL_DEFINITIONS.find((tool) => tool.name === name);
     assert.equal(_meta.ui.resourceUri, CALL_CARD_URI);
@@ -74,7 +75,7 @@ test('start_call and get_call show the card, served as a self-contained MCP Apps
   }
   // The card answers from itself with these two, so ChatGPT must let it call them.
   const fromCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.['openai/widgetAccessible']).map((tool) => tool.name);
-  assert.deepEqual(fromCard.sort(), ['get_call', 'get_call_update', 'reply_to_call_request', 'send_call_instruction', 'start_call']);
+  assert.deepEqual(fromCard.sort(), ['get_call_update', 'reply_to_call_request', 'send_call_instruction', 'start_call']);
   const listed = await session.dispatch({ jsonrpc: '2.0', id: 2, method: 'resources/list' });
   assert.deepEqual(listed.result.resources.map((item) => [item.uri, item.mimeType]), [[CALL_CARD_URI, CALL_CARD_MIME]]);
   const read = await session.dispatch({ jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri: CALL_CARD_URI } });

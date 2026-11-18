@@ -635,13 +635,6 @@
     {
       "name": "get_call",
       "title": "Get call details",
-      "_meta": {
-        "ui": {
-          "resourceUri": "ui://smitline/call-card-v4.html"
-        },
-        "openai/outputTemplate": "ui://smitline/call-card-v4.html",
-        "openai/widgetAccessible": true
-      },
       "annotations": {
         "title": "Get call details",
         "readOnlyHint": true,

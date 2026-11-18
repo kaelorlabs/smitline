@@ -1,7 +1,8 @@
 // The call card: one phone call or meeting shown inside the chat, for clients that support MCP
 // Apps (ChatGPT, Claude and others). It says who the call was for and how it went, plays the
 // recording when there is a link to one, and holds the transcript. It leaves out what the call
-// cost: the agent still reads that in the result. start_call and get_call return it; while the
+// cost: the agent still reads that in the result. start_call returns it (get_call answers in
+// text, so the agent's checks do not stack copies of the card in the chat); while the
 // call runs, the card follows it by itself with get_call_update, a tool only the card calls, at
 // the pace the call's status sets, and stops once it has ended. Clients without MCP Apps ignore
 // it and read the same result as text.
