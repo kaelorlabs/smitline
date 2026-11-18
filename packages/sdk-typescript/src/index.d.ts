@@ -281,7 +281,15 @@ export interface DoNotCallEntry {
   number: string;
   addedAt: string;
   reason?: string;
+  /** True when the person asked on a call: the API cannot remove it, only the operator can. */
+  locked: boolean;
+  /** call: added because the person asked on a call; manual: added by the owner. */
+  source: 'call' | 'manual';
+  /** The owner's call the entry came from, when there is one. */
   callId?: string;
+  /** Set on entries taken off the list (GET /v1/do-not-call?removed=1). */
+  removedAt?: string;
+  removedBy?: 'owner' | 'operator';
 }
 
 export interface DoNotCallUpdate {

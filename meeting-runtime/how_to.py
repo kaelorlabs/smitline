@@ -161,8 +161,9 @@ def _troubleshooting(settings):
         'call later, or now if the user confirms the person expects the call (afterHours).',
         'Repeat limits (too_many_calls_to_number, too_many_calls): the refusal says when Smitline '
         'can call again.',
-        'Do not call (do_not_call): the person asked not to be called again. Smitline calls them '
-        'only after the number is taken off the do-not-call list, once they have agreed to calls.',
+        'Do not call (do_not_call): the person asked not to be called again. If they asked on a '
+        'call, only the operator can take the number off the list, once they have agreed to calls; '
+        'a number the user added themselves, the user can remove.',
         'Premium-rate and satellite numbers (high_cost_number) are refused.',
         'Missing setup: the refusal names the key or setting to add with smitline setup.',
         'Google Meet turning guests away: with the invitation\'s phone number and PIN (dialIn), '

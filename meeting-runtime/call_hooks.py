@@ -444,13 +444,13 @@ class DefaultCallHooks:
                 'destination_not_allowed',
                 'That country is not in SMITLINE_ALLOWED_CALLING_CODES for this installation.')
         from call_policy import (
-            PolicyProblem, check_cost, check_do_not_call, check_hours, check_repeats,
+            PolicyProblem, check_cost, check_hours, check_repeats,
         )
         own_number = brief.to == _usable(env.get('SMITLINE_OWNER_PHONE'))
         now = self.now()
         try:
             check_cost(brief.to, env)
-            check_do_not_call(brief.to, self.do_not_call_list(owner).entries())
+            self.check_do_not_call(owner, brief.to)
             if not (own_number or brief.after_hours):
                 check_hours(brief.to, now, env)
             if self.store is not None:
@@ -458,7 +458,7 @@ class DefaultCallHooks:
                 check_repeats(brief.to, self.store.list(owner=owner, limit=None), now, env,
                               own_number=own_number)
         except PolicyProblem as problem:
-            raise CallRefused(problem.code, problem.message) from problem
+            raise CallRefused(problem.code, problem.message, **problem.details) from problem
 
     def check_dial_in(self, owner, brief, *, dialing=True):
         """A meeting's dial-in number gets the phone guardrails: the calling codes, premium and
@@ -467,7 +467,7 @@ class DefaultCallHooks:
         platform's published bridge (dial_in_details.is_bridge). Anyone can put a number in a
         brief, and a number that is not a bridge may be someone's phone."""
         from call_policy import (
-            PolicyProblem, check_cost, check_do_not_call, check_hours, check_repeats,
+            PolicyProblem, check_cost, check_hours, check_repeats,
         )
         from dial_in_details import is_bridge
         number = brief.dial_in['number']
@@ -481,7 +481,7 @@ class DefaultCallHooks:
         now = self.now()
         try:
             check_cost(number, env)
-            check_do_not_call(number, self.do_not_call_list(owner).entries())
+            self.check_do_not_call(owner, number)
             if dialing and not is_bridge(number, env):
                 if not (own_number or brief.after_hours):
                     check_hours(number, now, env, dial_in=True)
@@ -489,21 +489,85 @@ class DefaultCallHooks:
                     check_repeats(number, self.store.list(owner=owner, limit=None), now, env,
                                   own_number=own_number, dial_in=True)
         except PolicyProblem as problem:
-            raise CallRefused(problem.code, problem.message) from problem
+            raise CallRefused(problem.code, problem.message, **problem.details) from problem
 
     def call_started(self, owner, record):
         """A call was recorded and its line is about to start. Raise CallRefused to stop it."""
         return None
 
-    def do_not_call(self, owner):
-        return {'numbers': self.do_not_call_list(owner).entries()}
+    def _own_call(self, owner, call_id):
+        """The owner's call record with this id, or None (another owner's call is none)."""
+        if self.store is None or not call_id:
+            return None
+        try:
+            record = self.store.get(str(call_id))
+        except Exception:
+            return None
+        return record if record.get('owner') == owner else None
+
+    def _locked(self, owner, entry):
+        """A locked entry; or one from a list older than locks (no `source`) that a call of this
+        owner put there because the person asked: its call's own result says so."""
+        from call_policy import is_locked
+        if is_locked(entry):
+            return True
+        if 'source' in entry or not entry.get('callId'):
+            return False
+        record = self._own_call(owner, entry['callId'])
+        return bool(record and ((record.get('result') or {}).get('doNotCall') is True))
+
+    def _shown(self, owner, entry):
+        """An entry as the owner reads it: whether it is locked, and the call only when it is one
+        of the owner's own."""
+        shown = {key: entry[key] for key in ('number', 'addedAt', 'reason', 'removedAt')
+                 if entry.get(key)}
+        shown['locked'] = self._locked(owner, entry)
+        shown['source'] = 'call' if shown['locked'] else 'manual'
+        if self._own_call(owner, entry.get('callId')) is not None:
+            shown['callId'] = entry['callId']
+        if entry.get('removedAt'):
+            shown['removedBy'] = 'operator' if entry.get('removedBy') == 'operator' else 'owner'
+        return shown
+
+    def do_not_call(self, owner, *, removed=False):
+        """The numbers in force; with removed=True also those taken off, kept on record."""
+        listing = self.do_not_call_list(owner)
+        answer = {'numbers': [self._shown(owner, entry) for entry in listing.active()]}
+        if removed:
+            answer['removed'] = [self._shown(owner, entry) for entry in listing.removed()]
+        return answer
 
     def update_do_not_call(self, owner, update):
+        """The owner's own change (PATCH /v1/do-not-call). A locked number cannot be removed
+        (call_policy.DoNotCallLocked); an added entry's callId must be one of the owner's calls."""
         from call_policy import PolicyProblem
+        for item in (update.get('add') or []) if isinstance(update, dict) else ():
+            call_id = item.get('callId') if isinstance(item, dict) else None
+            if call_id and self._own_call(owner, call_id) is None:
+                raise ValueError(f'callId {str(call_id)[:40]} is not one of your calls')
         try:
-            return {'numbers': self.do_not_call_list(owner).update(update, now=self.now())}
+            self.do_not_call_list(owner).update(update, now=self.now(),
+                                                locked=lambda entry: self._locked(owner, entry))
         except PolicyProblem as problem:
             raise ValueError(problem.message) from problem
+        return self.do_not_call(owner)
+
+    def check_do_not_call(self, owner, number):
+        """Refuse (CallRefused do_not_call) a number on the owner's do-not-call list, compared in
+        E.164 whatever its format. Run by precheck and check_dial_in, and again by the lines right
+        before they dial each leg (CallContext.do_not_call_refusal)."""
+        from call_policy import PolicyProblem, check_do_not_call
+        entries = [dict(entry, locked=self._locked(owner, entry))
+                   for entry in self.do_not_call_list(owner).active()]
+        try:
+            check_do_not_call(number, entries)
+        except PolicyProblem as problem:
+            raise CallRefused(problem.code, problem.message, **problem.details) from problem
+
+    def lock_do_not_call(self, owner, number, call_id):
+        """The person on the owner's call `call_id` asked not to be called again (the call service
+        only: the voice's tool, or the call's result). Their number goes on the list locked."""
+        self.do_not_call_list(owner).lock(number, call_id=call_id, now=self.now())
 
     def record_usage(self, owner, call, usage):
         if self.store is None:
