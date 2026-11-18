@@ -580,9 +580,10 @@
       },
       "Call": {
         "type": "object",
-        "required": ["id", "channel", "status", "brief", "createdAt"],
+        "required": ["id", "version", "channel", "status", "brief", "createdAt"],
         "properties": {
           "id": { "type": "string" },
+          "version": { "type": "integer", "minimum": 1, "description": "Goes up with any change to the call (status, a transcript line, a request, the result, cost, recording) and never down: of two copies of a call, the one with the higher version is newer." },
           "owner": { "type": "string", "description": "The owner the call belongs to; local on a self-hosted installation." },
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
           "status": { "type": "string", "enum": ["queued", "connecting", "ringing", "waiting", "in_progress", "summarizing", "completed", "failed", "canceled"] },

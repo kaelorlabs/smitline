@@ -8,6 +8,7 @@
 - **Only the call service locks a number.** No field an API client sends sets a lock, and an added entry's `callId` must be one of the owner's own calls; the list shows a call only when it is.
 - **Removals are kept on record.** A removed entry is marked removed, never deleted; checks and the list ignore it, and `GET /v1/do-not-call?removed=1` shows what came off. Entries now carry `locked` and `source` (`call` or `manual`). Lists written before load as they are.
 - **Every number Smitline dials is checked right before it dials.** The do-not-call list is checked again just before a phone call, the SIP fallback and a meeting's dial-in are dialed, so a number listed after the call was made is never rung (the call ends `refused`). Numbers are compared in E.164 whatever their format.
+- **Every call record has a `version`.** It goes up with any change to the call (its status, a transcript line, a request, the result, the cost, a recording) and never goes down, across daemon restarts too: of two copies of a call, the one with the higher version is newer. `GET /v1/calls/{id}`, `/wait`, the list and the JSON page of events carry it. See [Lifecycle](docs/calls.md#lifecycle).
 
 ## 0.3.14 — 2026-11-17
 
