@@ -975,7 +975,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn("reached Robin's AI assistant", voice_instructions(parsed, inbound=True))
         config = delegation_config(parsed, model='gpt-5.6-luna', web_search=True)
         self.assertEqual([tool.get('name', tool['type']) for tool in config['responses']['tools']],
-                         ['end_call', 'web_search'])
+                         ['end_call', 'record_do_not_call', 'web_search'])
         self.assertEqual(config['responses']['model'], 'gpt-5.6-luna')
 
     def test_notes_are_acted_on_and_what_they_carry_is_told_at_a_pause(self):

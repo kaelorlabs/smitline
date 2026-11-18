@@ -271,6 +271,7 @@
       "get": {
         "summary": "List the numbers Smitline refuses to call because the person asked not to be called again",
         "operationId": "getDoNotCall",
+        "parameters": [{ "name": "removed", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1", "true"] }, "description": "Also list the numbers taken off the list, which it keeps on record" }],
         "responses": {
           "200": { "description": "The list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
           "501": { "$ref": "#/components/responses/Error" }
@@ -282,6 +283,7 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallUpdate" } } } },
         "responses": {
           "200": { "description": "The saved list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
+          "403": { "description": "do_not_call_locked: the update removes a number that asked on a call not to be called again (error.numbers lists them). Only the operator can take such a number off, and nothing in the update was applied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "422": { "$ref": "#/components/responses/Error" },
           "501": { "$ref": "#/components/responses/Error" }
         }
@@ -488,19 +490,22 @@
         "type": "object",
         "required": ["numbers"],
         "properties": {
-          "numbers": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["number", "addedAt"],
-              "properties": {
-                "number": { "type": "string", "description": "E.164" },
-                "addedAt": { "type": "string", "format": "date-time" },
-                "reason": { "type": "string" },
-                "callId": { "type": "string", "description": "The call on which the person asked, when added automatically" }
-              }
-            }
-          }
+          "numbers": { "type": "array", "items": { "$ref": "#/components/schemas/DoNotCallEntry" } },
+          "removed": { "type": "array", "description": "With ?removed=1: numbers taken off the list, kept on record", "items": { "$ref": "#/components/schemas/DoNotCallEntry" } }
+        }
+      },
+      "DoNotCallEntry": {
+        "type": "object",
+        "required": ["number", "addedAt", "locked", "source"],
+        "properties": {
+          "number": { "type": "string", "description": "E.164" },
+          "addedAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string" },
+          "locked": { "type": "boolean", "description": "The person asked on a call: only the operator can take the number off" },
+          "source": { "type": "string", "enum": ["call", "manual"], "description": "call: added because the person asked on a call; manual: added by the owner" },
+          "callId": { "type": "string", "description": "The owner's call this entry came from, when there is one" },
+          "removedAt": { "type": "string", "format": "date-time" },
+          "removedBy": { "type": "string", "enum": ["owner", "operator"] }
         }
       },
       "DoNotCallUpdate": {

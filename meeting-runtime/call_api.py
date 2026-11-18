@@ -270,7 +270,9 @@ def register_call_routes(app, service, *, read_json, public_json, sse_poll_inter
 
     @handle
     async def get_do_not_call(request):
-        return public_json(service.do_not_call(await owner(request)))
+        # ?removed=1: also the numbers taken off the list, which it keeps on record.
+        return public_json(service.do_not_call(await owner(request),
+                                               removed=request.query.get('removed') in ('1', 'true')))
 
     @handle
     async def update_do_not_call(request):

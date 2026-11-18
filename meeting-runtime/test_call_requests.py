@@ -927,7 +927,7 @@ class PhoneRequestTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial(canDo=CAN_DO, contact={'name': 'Sam Rivera'})
         ws, live, task = await self.h.connect(record, session)
         responses = live.config['delegation']['responses']
-        self.assertEqual([tool.get('name') for tool in responses['tools']], ['end_call', 'ask_agent'])
+        self.assertEqual([tool.get('name') for tool in responses['tools']], ['end_call', 'record_do_not_call', 'ask_agent'])
         self.assertIn('ask_agent', responses['instructions'])
         self.assertIn(CAN_DO, live.config['instructions'])
         self.assertIn("Robin's agent", live.config['instructions'])
@@ -984,7 +984,7 @@ class PhoneRequestTests(unittest.IsolatedAsyncioTestCase):
         record, session = await self.h.dial()
         ws, live, task = await self.h.connect(record, session)
         responses = live.config['delegation']['responses']
-        self.assertEqual([tool.get('name') for tool in responses['tools']], ['end_call'])
+        self.assertEqual([tool.get('name') for tool in responses['tools']], ['end_call', 'record_do_not_call'])
         self.assertNotIn('ask_agent', responses['instructions'])
         self.assertIsNone(session.desk)
         live.push({'type': 'session.started', 'session': {'id': 'sess_1'}})

@@ -228,9 +228,17 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CallError) as caught:
             await self.h.service.create(brief())
         self.assertEqual((caught.exception.status, caught.exception.code), (403, 'do_not_call'))
-        self.assertIn('smitline do-not-call remove +14155550142', caught.exception.message)
+        # Locked: the refusal never says how to take it off, and the API cannot.
+        self.assertEqual(caught.exception.message, '+14155550142 asked on a call (on 2026-09-30) '
+                         'not to be called again. Only the operator can take it off the list.')
+        self.assertTrue(caught.exception.details['locked'])
+        self.assertNotIn('remove', caught.exception.message)
+        self.assertTrue(listed[0]['locked'])
+        with self.assertRaises(CallError) as caught:
+            self.h.service.update_do_not_call('local', {'remove': ['+14155550142']})
+        self.assertEqual((caught.exception.status, caught.exception.code), (403, 'do_not_call_locked'))
         # A rehearsal is the owner playing the other side; it never fills the list.
-        self.h.service.update_do_not_call('local', {'remove': ['+14155550142']})
+        self.h.hooks.do_not_call_list('local').lift('+14155550142', reason='Agreed again', by='op')
         self.h.hooks._environ['SMITLINE_OWNER_PHONE'] = '+14155550142'
         self.h.line.proceed = asyncio.Event()
         rehearsal = await self.h.service.create(brief(rehearsal=True))
