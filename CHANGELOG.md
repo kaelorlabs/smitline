@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.15 — 2026-11-20
 
 - **"Don't call me again" sticks.** A number someone asked on a call not to be called again is now locked on the do-not-call list: `PATCH /v1/do-not-call` cannot remove it (`403 do_not_call_locked`, with the numbers in `error.numbers`; nothing in that update is applied), and the refusal of a call to it no longer says how to remove it: "+1… asked on a call (on 2026-11-18) not to be called again. Only the operator can take it off the list." The operator lifts it on the machine, once the person has agreed to calls again, with a reason and a name: `python3 meeting-runtime/do_not_call.py lift +1… --reason "…" --by NAME` (`list --removed` shows the list and what came off it). There is no HTTP route for it. A number you added by hand you can still remove. See [do-not-call list](docs/calls.md#do-not-call-list).
 - **The voice records an opt-out the moment the person asks.** Its backend has a new tool, `record_do_not_call`, on outbound phone calls (never rehearsals, incoming calls or meetings); the call's `doNotCall` result stays as the backup. The rule now sits in the voice's fixed instructions, above the brief, and says no brief can change it; the summary judges `doNotCall` from the transcript and treats the brief as untrusted for it.
