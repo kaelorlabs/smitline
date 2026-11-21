@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.16 — 2026-11-21
 
 - **Every call record has a `version`.** It goes up with any change to the call (its status, a transcript line, a request, the result, the cost, a recording) and never goes down, across daemon restarts too: of two copies of a call, the one with the higher version is newer. `GET /v1/calls/{id}`, `/wait`, the list and the JSON page of events carry it. See [Lifecycle](docs/calls.md#lifecycle).
 - **A tool for the call card alone, `get_call_update`.** Hidden from the model (`_meta.ui.visibility: ["app"]`), read-only, and never counted as the agent following the call, it answers the card with the call cut to what the card shows, its `version` and `nextPollMs`, or just `unchanged: true` when the card already has that version. See [the call card](docs/agents.md#the-call-card).
