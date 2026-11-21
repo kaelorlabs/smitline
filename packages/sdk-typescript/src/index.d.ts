@@ -195,6 +195,9 @@ export interface Call {
   channel: 'phone' | 'meeting';
   direction?: 'outbound' | 'inbound';
   status: CallStatus;
+  /** Goes up with any change to the call (status, a transcript line, a request, the result, cost,
+   * recording) and never down: a record with a higher version is the newer one. */
+  version: number;
   endReason?: string;
   brief: CallBrief;
   createdAt: string;

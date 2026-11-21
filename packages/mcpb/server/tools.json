@@ -21,9 +21,9 @@
       "title": "Start a phone call or join a meeting",
       "_meta": {
         "ui": {
-          "resourceUri": "ui://smitline/call-card-v3.html"
+          "resourceUri": "ui://smitline/call-card-v4.html"
         },
-        "openai/outputTemplate": "ui://smitline/call-card-v3.html",
+        "openai/outputTemplate": "ui://smitline/call-card-v4.html",
         "openai/widgetAccessible": true
       },
       "annotations": {
@@ -635,13 +635,6 @@
     {
       "name": "get_call",
       "title": "Get call details",
-      "_meta": {
-        "ui": {
-          "resourceUri": "ui://smitline/call-card-v3.html"
-        },
-        "openai/outputTemplate": "ui://smitline/call-card-v3.html",
-        "openai/widgetAccessible": true
-      },
       "annotations": {
         "title": "Get call details",
         "readOnlyHint": true,
@@ -658,6 +651,43 @@
           "callId": {
             "type": "string",
             "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "get_call_update",
+      "title": "Refresh the call card",
+      "_meta": {
+        "ui": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true
+      },
+      "annotations": {
+        "title": "Refresh the call card",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Used by the call card to follow a call; not for agents: use get_call or wait_for_call. Returns the call cut to what the card shows, with its version and nextPollMs, how long to wait before asking again (0 once the call has ended). With ifVersion equal to the call's version, returns only unchanged: true.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "callId"
+        ],
+        "properties": {
+          "callId": {
+            "type": "string",
+            "description": "Call id returned by start_call, such as call-0123456789abcdef"
+          },
+          "ifVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The version the card already shows."
           }
         }
       }

@@ -22,6 +22,7 @@ Do not publish this package and do not install it globally.
 | `list_voices` | GPT-Live voices, and the default voices for phone calls and meetings |
 | `get_profile` / `update_profile` | The user's profile that every call gets as background, and the default voices (`voices`) |
 | `how_to_smitline` | Information about Smitline for the user, by topic: overview, using, following, pricing, account, troubleshooting, rules |
+| `get_call_update` | For the call card only, hidden from the model: the call's status, cut to what the card shows, or `unchanged` |
 
 See [calls](../../docs/calls.md) for the brief and the result.
 

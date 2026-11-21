@@ -166,6 +166,16 @@ class StoreTests(unittest.TestCase):
         reopened = CallStore(Path(self.temp.name) / 'calls')
         self.assertEqual(reopened.append_event(record['id'], 'call.status')['id'], '2')
 
+    def test_a_line_cut_short_in_the_events_leaves_the_call_readable(self):
+        record = self.store.create(self.record())
+        self.store.append_event(record['id'], 'call.status', status='ringing')
+        path = Path(self.temp.name) / 'calls' / record['id'] / 'events.jsonl'
+        with open(path, 'a', encoding='utf-8') as handle:
+            handle.write('{"id": "2", "type": "call.trans')       # a daemon stopped mid-write
+        reopened = CallStore(Path(self.temp.name) / 'calls')
+        self.assertEqual(reopened.get(record['id'])['version'], 3)    # created as 1, then two lines
+        self.assertEqual([found['id'] for found in reopened.list()], [record['id']])
+
     def test_unknown_and_malformed_ids(self):
         for value in ('call-0000000000000000', '../etc', 'call-XYZ'):
             with self.assertRaises(CallNotFound):

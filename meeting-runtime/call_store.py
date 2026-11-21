@@ -58,6 +58,12 @@ class CallStore:
 
     All writes happen on the daemon's event loop or under the store lock, so a
     call's snapshot and event sequence never interleave between writers.
+
+    Every record read from the store carries `version`, which goes up with any change to the
+    call: each write of call.json counts one (the stored `version`, 1 when created), and each
+    event one (its sequence number, the events cursor). Both are on disk, so the version a
+    reader saw stays below every later one, across restarts too. A transcript line is an
+    event only, so following a call does not rewrite its record.
     """
 
     def __init__(self, root, *, clock=None):
@@ -89,22 +95,32 @@ class CallStore:
             self._sequences[call_id] = 0
         return record
 
-    def get(self, call_id):
+    def _read(self, call_id):
         path = self._dir(call_id) / 'call.json'
         try:
             return json.loads(path.read_text(encoding='utf-8'))
         except FileNotFoundError as error:
             raise CallNotFound(call_id) from error
 
+    def _stored_version(self, record):
+        stored = record.get('version')
+        return stored if isinstance(stored, int) and not isinstance(stored, bool) and stored > 0 else 1
+
+    def get(self, call_id):
+        record = self._read(call_id)
+        record['version'] = self._stored_version(record) + self.sequence(call_id)
+        return record
+
     def update(self, call_id, **changes):
         with self._lock:
-            record = self.get(call_id)
+            record = self._read(call_id)
             record.update(changes)
+            record['version'] = self._stored_version(record) + 1
             record['updatedAt'] = self.now()
             reject_secrets(record, 'call')
             _atomic_write(self._dir(call_id) / 'call.json',
                           json.dumps(record, ensure_ascii=False, indent=2))
-            return record
+            return dict(record, version=record['version'] + self.sequence(call_id))
 
     def list(self, *, owner=None, limit=20):
         records = []
@@ -121,9 +137,21 @@ class CallStore:
         records.sort(key=lambda item: item.get('createdAt') or '', reverse=True)
         return records[:limit]
 
-    def _next_sequence(self, call_id):
+    def sequence(self, call_id):
+        """The number of the call's last event (0 before any): the events cursor. Lines are
+        counted, not parsed, so a line cut short (a daemon stopped mid-write) leaves the call
+        readable."""
         if call_id not in self._sequences:
-            self._sequences[call_id] = len(self.events(call_id))
+            path = self._dir(call_id) / 'events.jsonl'
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except FileNotFoundError as error:
+                raise CallNotFound(call_id) from error
+            self._sequences[call_id] = sum(1 for line in lines if line.strip())
+        return self._sequences[call_id]
+
+    def _next_sequence(self, call_id):
+        self.sequence(call_id)
         self._sequences[call_id] += 1
         return self._sequences[call_id]
 

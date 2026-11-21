@@ -59,14 +59,15 @@ test('the view of a self-hosted or live call: no provider cost, no player withou
   assert.equal(callCardView(null).title, 'Call to someone');
 });
 
-test('start_call and get_call show the card, served as a self-contained MCP Apps resource', async () => {
+test('start_call alone shows the card, served as a self-contained MCP Apps resource', async () => {
   const session = createMcpSession({
     colleague: {}, log() {}, card: { mediaOrigins: ['https://app.example.com', 'http://plain.example.com', 'javascript:x'] },
   });
   const init = await session.dispatch({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
   assert.deepEqual(init.result.capabilities.resources, { listChanged: false });
   const withCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.ui?.resourceUri).map((tool) => tool.name);
-  assert.deepEqual(withCard, ['start_call', 'get_call']);
+  assert.deepEqual(withCard, ['start_call']);
+  assert.equal(TOOL_DEFINITIONS.filter((tool) => tool._meta?.['openai/outputTemplate']).length, 1);
   for (const name of withCard) {
     const { _meta } = TOOL_DEFINITIONS.find((tool) => tool.name === name);
     assert.equal(_meta.ui.resourceUri, CALL_CARD_URI);
@@ -74,7 +75,7 @@ test('start_call and get_call show the card, served as a self-contained MCP Apps
   }
   // The card answers from itself with these two, so ChatGPT must let it call them.
   const fromCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.['openai/widgetAccessible']).map((tool) => tool.name);
-  assert.deepEqual(fromCard.sort(), ['get_call', 'reply_to_call_request', 'send_call_instruction', 'start_call']);
+  assert.deepEqual(fromCard.sort(), ['get_call_update', 'reply_to_call_request', 'send_call_instruction', 'start_call']);
   const listed = await session.dispatch({ jsonrpc: '2.0', id: 2, method: 'resources/list' });
   assert.deepEqual(listed.result.resources.map((item) => [item.uri, item.mimeType]), [[CALL_CARD_URI, CALL_CARD_MIME]]);
   const read = await session.dispatch({ jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri: CALL_CARD_URI } });
@@ -123,10 +124,14 @@ class FakeElement {
 
   setAttribute(name, value) { this.attributes[name] = String(value); }
 
+  removeAttribute(name) { delete this.attributes[name]; }
+
   querySelectorAll(tag) { return this.all().filter((element) => element.tagName === tag.toUpperCase()); }
 }
 
-function loadCard() {
+// A stand-in host: the page's window, document and timers, with a clock the test moves.
+// openai: what ChatGPT puts on window.openai (toolOutput, widgetState, setWidgetState, callTool).
+function loadCard({ openai } = {}) {
   const html = callCardHtml();
   const script = html.match(/<script type="module">([\s\S]*)<\/script>/)[1];
   const main = new FakeElement('main');
@@ -134,35 +139,85 @@ function loadCard() {
   const sent = [];
   const timers = [];
   const listeners = {};
+  const documentListeners = {};
+  const observers = [];
+  const clock = { now: Date.parse('2026-11-18T15:00:00Z') };
+  class FakeDate extends Date {
+    constructor(...args) { if (args.length) super(...args); else super(clock.now); }
+    static now() { return clock.now; }
+  }
   const parent = { postMessage(message) { sent.push(JSON.parse(JSON.stringify(message))); } };
   const window = {
     parent,
     addEventListener(type, listener) { (listeners[type] ||= []).push(listener); },
   };
+  if (openai) window.openai = openai;
   const head = new FakeElement('head');
+  const document = {
+    hidden: false,
+    documentElement: root,
+    head,
+    getElementById: (id) => head.all().find((element) => element.id === id) || null,
+    querySelector: (selector) => (selector === 'main' ? main : null),
+    createElement: (tag) => new FakeElement(tag),
+    createTextNode: (text) => new FakeText(text),
+    addEventListener(type, listener) { (documentListeners[type] ||= []).push(listener); },
+  };
   const context = vm.createContext({
     window,
-    document: {
-      documentElement: root,
-      head,
-      getElementById: (id) => head.all().find((element) => element.id === id) || null,
-      querySelector: (selector) => (selector === 'main' ? main : null),
-      createElement: (tag) => new FakeElement(tag),
-      createTextNode: (text) => new FakeText(text),
-    },
+    document,
     ResizeObserver: class { observe() {} },
-    setTimeout: (fn, ms) => { timers.push({ fn, ms, live: true }); return timers.length; },
+    IntersectionObserver: class {
+      constructor(callback) { observers.push(callback); }
+      observe() {}
+    },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms, at: clock.now + ms, live: true }); return timers.length; },
     clearTimeout: (handle) => { if (timers[handle - 1]) timers[handle - 1].live = false; },
     URL,
-    Date,
+    Date: FakeDate,
+    Math: Object.assign(Object.create(Math), { random: () => 0.5 }), // no jitter: 0.9 + 0.2 * 0.5 = 1
     Promise,
   });
   vm.runInContext(script, context);
   const deliverFrom = (source, data) => { for (const listener of listeners.message || []) listener({ source, data }); };
   const deliver = (data) => deliverFrom(parent, data);
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  return { main, root, head, sent, timers, deliver, deliverFrom, settle };
+  const fire = (type) => { for (const listener of listeners[type] || []) listener({}); };
+  const setHidden = (hidden) => {
+    document.hidden = hidden;
+    for (const listener of documentListeners.visibilitychange || []) listener({});
+  };
+  const setOnScreen = (seen) => { for (const callback of observers) callback([{ isIntersecting: seen }]); };
+  // Move the clock on, running each timer that comes due, in order.
+  const advance = async (ms) => {
+    const until = clock.now + ms;
+    for (;;) {
+      const next = timers.filter((timer) => timer.live && timer.at <= until).sort((a, b) => a.at - b.at)[0];
+      if (!next) break;
+      clock.now = next.at;
+      next.live = false;
+      next.fn();
+      await settle();
+    }
+    clock.now = until;
+  };
+  // The card's own timers, without the bridge's answer timeouts or the wait for a first call.
+  const pending = () => timers.filter((timer) => timer.live && !/waiting\.delete|gone\(\)/.test(String(timer.fn)));
+  const polls = () => sent.filter((message) => message.method === 'tools/call' && message.params.name === 'get_call_update');
+  const answer = async (message, result) => {
+    deliver({ jsonrpc: '2.0', id: message.id, result });
+    await settle();
+  };
+  return {
+    main, root, head, sent, timers, deliver, deliverFrom, settle, clock, fire, setHidden, setOnScreen, advance,
+    pending, polls, answer,
+  };
 }
+
+// Each copy of a call a test hands the card is newer than the one before.
+let versions = 100;
+const newer = (record) => ({ ...record, version: ++versions });
+const toolResult = (record) => ({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [], structuredContent: record } });
 
 test('the card follows a live call through the MCP Apps bridge, and shows text as text', async () => {
   const card = loadCard();
@@ -178,25 +233,23 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   assert.ok(card.sent.some((message) => message.method === 'ui/notifications/initialized'));
 
   const name = '<img src=x onerror=alert(1)>';
-  card.deliver({
-    jsonrpc: '2.0', method: 'ui/notifications/tool-result',
-    params: { content: [], structuredContent: { id: ID, status: 'ringing', brief: { to: '+15550100', contact: { name } } } },
-  });
-  assert.match(card.main.textContent, /Ringing/);
+  card.deliver(toolResult({ id: ID, version: 2, status: 'ringing', brief: { to: '+15550100', contact: { name } } }));
+  // What the host handed over may be old: the card says it is checking, and asks the server at
+  // once, through the bridge, with the version it has.
+  assert.match(card.main.textContent, /Checking…/);
+  assert.doesNotMatch(card.main.textContent, /Ringing|Starting/);
   assert.ok(card.main.textContent.includes(`Call to ${name}`));
   assert.ok(card.main.all().every((element) => element.tagName !== 'IMG'));
-
-  // While it runs, the card asks for the call again by itself.
-  // Answered requests leave no timeouts behind: only the refresh is pending.
-  assert.equal(card.timers.filter((timer) => timer.live && timer.ms !== 3000).length, 0);
-  const pending = card.timers.filter((timer) => timer.live);
-  assert.equal(pending.length, 1);
-  pending[0].live = false;
-  pending[0].fn();
-  const refresh = card.sent.at(-1);
-  assert.deepEqual([refresh.method, refresh.params], ['tools/call', { name: 'get_call', arguments: { callId: ID } }]);
-  card.deliver({ jsonrpc: '2.0', id: refresh.id, result: { content: [], structuredContent: DONE } });
-  await card.settle();
+  const [first] = card.polls();
+  assert.deepEqual(first.params, { name: 'get_call_update', arguments: { callId: ID, ifVersion: 2 } });
+  await card.answer(first, { content: [], structuredContent: { callId: ID, status: 'ringing', version: 2, unchanged: true, nextPollMs: 3000 } });
+  assert.match(card.main.textContent, /Ringing/);
+  // Answered requests leave no timeouts behind: only the next ask is pending, at the ringing pace.
+  assert.deepEqual(card.timers.filter((timer) => timer.live).map((timer) => timer.ms), [3000]);
+  await card.advance(3000);
+  const second = card.polls()[1];
+  assert.deepEqual(second.params.arguments, { callId: ID, ifVersion: 2 });
+  await card.answer(second, { content: [], structuredContent: { ...DONE, version: 9 } });
   const shown = card.main.textContent;
   for (const part of ['Done', 'Got it done', 'Transcript · 2', 'Open in Smitline']) {
     assert.ok(shown.includes(part), part);
@@ -204,7 +257,9 @@ test('the card follows a live call through the MCP Apps bridge, and shows text a
   for (const part of ['Cost', '$0.66', '$0.20/min']) assert.ok(!shown.includes(part), part);
   const [audio] = card.main.all().filter((element) => element.tagName === 'AUDIO');
   assert.equal(audio.src, 'https://app.example.com/r/abc');
-  assert.equal(card.timers.filter((timer) => timer.live).length, 0); // done: no more refreshes
+  assert.equal(card.timers.filter((timer) => timer.live).length, 0); // done: no more asks
+  await card.advance(60 * 60 * 1000);
+  assert.equal(card.polls().length, 2);
 
   const [open] = card.main.all().filter((element) => element.tagName === 'BUTTON');
   open.listeners.click[0]();
@@ -257,10 +312,11 @@ test('the user answers a question and tells the call something from the card', a
   card.deliver({ jsonrpc: '2.0', id: hello.id, result: {} });
   await card.settle();
   const live = {
-    id: ID, status: 'in_progress', brief: { to: '+15550100' },
+    id: ID, version: 3, status: 'in_progress', brief: { to: '+15550100' },
     requests: [{ id: 'r1', state: 'open', text: 'Should I bring anything?', askedBy: 'Sam' }],
   };
   card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  await card.answer(card.polls()[0], { structuredContent: { callId: ID, status: 'in_progress', version: 3, unchanged: true } });
   assert.ok(card.main.textContent.includes('Sam asks'));
   assert.ok(card.main.textContent.includes('Should I bring anything?'));
   const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
@@ -286,8 +342,8 @@ test('the user answers a question and tells the call something from the card', a
   assert.ok(card.main.textContent.includes('Sent to the call.'));
   assert.equal(box('r1').value, '');
   const again = card.sent.at(-1); // and it asks for the call again at once
-  assert.deepEqual([again.method, again.params.name], ['tools/call', 'get_call']);
-  const closed = { ...live, requests: [{ ...live.requests[0], state: 'done' }] };
+  assert.deepEqual([again.method, again.params.name], ['tools/call', 'get_call_update']);
+  const closed = { ...live, version: 4, requests: [{ ...live.requests[0], state: 'done' }] };
   card.deliver({ jsonrpc: '2.0', id: again.id, result: { content: [], structuredContent: closed } });
   await card.settle();
   assert.equal(box('r1'), undefined); // the question has gone; what the user said stays
@@ -370,18 +426,29 @@ test('the card takes the host’s colors, fonts and theme, and keeps its own for
   assert.doesNotMatch(rules, /#[0-9a-f]{3,6}\b|rgba?\(|font-size: \d|border-radius: \d+px/i);
 });
 
-test('an opened transcript stays open while the card follows the call', async () => {
+test('a live call shows its last line and how many; an ended one the transcript, which stays open', async () => {
   const card = loadCard();
   card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, result: {} });
   await card.settle();
-  const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, transcript: [{ speaker: 'other', text: 'Hello?' }] };
-  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  const live = { id: ID, status: 'in_progress', brief: { to: '+15550100', contact: { name: 'Sam' } },
+    transcript: [{ speaker: 'agent', text: 'Hi Sam' }, { speaker: 'other', text: 'Hello?' }], transcriptCount: 12 };
+  card.deliver(toolResult(newer(live)));
+  assert.equal(card.main.querySelectorAll('details').length, 0);
+  assert.ok(card.main.textContent.includes('Transcript · 12Sam: Hello?'));
+  assert.ok(!card.main.textContent.includes('Hi Sam'));
+  const ended = { ...live, status: 'completed', transcript: undefined, transcriptCount: undefined,
+    result: { outcome: 'achieved', transcript: [{ speaker: 'agent', text: 'Hi Sam' }, { speaker: 'other', text: 'Hello?' }] } };
+  card.deliver(toolResult(newer(ended)));
   const details = () => card.main.querySelectorAll('details')[0];
+  assert.ok(details().textContent.startsWith('Transcript · 2Smitline: Hi SamSam: Hello?'));
   assert.equal(details().open, false);
   details().open = true;
   details().listeners.toggle[0]();
-  card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: live } });
+  card.deliver(toolResult(newer(ended)));
   assert.equal(details().open, true);
+  // A saved copy with only the last lines says so.
+  card.deliver(toolResult(newer({ ...ended, transcript: [{ speaker: 'other', text: 'Bye' }], transcriptCount: 30 })));
+  assert.ok(details().textContent.startsWith('Transcript · 30The last 1:Sam: Bye'));
 });
 
 test('a question closed elsewhere while the user types says so, and keeps what they typed', async () => {
@@ -390,7 +457,7 @@ test('a question closed elsewhere while the user types says so, and keeps what t
   await card.settle();
   const ask = (id, text) => ({ id, state: 'open', text, askedBy: 'Sam', thread: [{ from: 'call', type: 'ask', text }] });
   const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests: [ask('r1', 'Should I bring anything?')] };
-  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: record } });
+  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: newer(record) } });
   const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
   show(live);
   box('r1').value = 'Just yours';
@@ -419,7 +486,7 @@ test('kept text goes to the call as the user’s own late answer to the question
   await card.settle();
   const ask = (id, text) => ({ id, state: 'open', text, askedBy: 'Sam', thread: [{ from: 'call', type: 'ask', text }] });
   const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests: [ask('r1', 'Should I bring anything?')] };
-  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: record } });
+  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: newer(record) } });
   const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
   const type = (key, words) => { box(key).value = words; box(key).listeners.input[0](); };
   const submit = (key) => {
@@ -467,7 +534,7 @@ test('kept text the user clears, or a dropped question, frames the note to match
   await card.settle();
   const ask = (id, text) => ({ id, state: 'open', text, askedBy: 'Sam', thread: [{ from: 'call', type: 'ask', text }] });
   const live = { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests: [ask('r1', 'Is 5 fine?')] };
-  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: record } });
+  const show = (record) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: newer(record) } });
   const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
   const type = (key, words) => { box(key).value = words; box(key).listeners.input[0](); };
   const submit = (key) => {
@@ -510,7 +577,7 @@ test('the card keeps the last three entries of the thread, and shows the rest on
   const ask = (id, text, state = 'open') => ({ id, state, text, askedBy: 'Sam',
     thread: [{ from: 'call', type: 'ask', text }, ...(state === 'done' ? [{ from: 'agent', type: 'done', text: 'Answer ' + id }] : [])] });
   const show = (requests) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
-    structuredContent: { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests } } });
+    structuredContent: newer({ id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests }) } });
   const ids = ['r1', 'r2', 'r3', 'r4', 'r5'];
   const done = [];
   for (const id of ids) { // each question shows, then the agent answers it
@@ -535,7 +602,7 @@ test('messages for the user join the thread as said, never as a question to answ
   const message = (id, text, extra = {}) => ({ id, kind: 'message', state: 'noted', text, askedBy: 'Sam',
     thread: [{ from: 'call', type: 'ask', text }], ...extra });
   const show = (requests) => card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
-    structuredContent: { id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests } } });
+    structuredContent: newer({ id: ID, status: 'in_progress', brief: { to: '+15550100' }, requests }) } });
   const box = (key) => card.main.querySelectorAll('textarea').find((item) => item.dataset.key === key);
   show([message('r1', 'Thanks for coming to dinner')]);
   assert.ok(card.main.textContent.includes('Sam saidThanks for coming to dinner'));
@@ -550,4 +617,275 @@ test('messages for the user join the thread as said, never as a question to answ
   assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [message('r2', 'Hi')] }).messages,
     [{ id: 'r2', text: 'Hi', askedBy: 'Sam', reply: '' }]);
   assert.deepEqual(callCardView({ id: ID, status: 'in_progress', requests: [message('r2', 'Hi')] }).requests, []);
+});
+
+// Following the call: the card takes only newer copies, paces itself, and stops.
+
+const LIVE = { id: ID, channel: 'phone', status: 'in_progress', brief: { to: '+15550100', contact: { name: 'Bawarchi' } },
+  answeredAt: '2026-11-18T14:59:00Z', transcript: [{ speaker: 'other', text: 'Hello?' }], transcriptCount: 1 };
+const QUEUED = { id: ID, version: 1, channel: 'phone', status: 'queued', brief: { to: '+15550100', contact: { name: 'Bawarchi' } } };
+const unchanged = (version, status = 'in_progress', nextPollMs = 5000) => ({ structuredContent: { callId: ID, status, version, unchanged: true, nextPollMs } });
+
+// A ChatGPT-like window.openai that records what the card saves.
+function fakeOpenai(extra = {}) {
+  const saved = [];
+  return { saved, theme: 'light', setWidgetState(value) { saved.push(JSON.parse(JSON.stringify(value))); }, ...extra };
+}
+
+async function following(record = { ...LIVE, version: 5 }) {
+  const card = loadCard();
+  await card.answer(card.sent[0], {});
+  card.deliver(toolResult(record));
+  return card;
+}
+
+test('an older copy never replaces a newer one, and the status never moves back', async () => {
+  const card = await following();
+  await card.answer(card.polls()[0], { structuredContent: { ...LIVE, version: 8, transcript: [{ speaker: 'other', text: 'Yes, 7pm.' }] } });
+  assert.match(card.main.textContent, /On the call/);
+  assert.match(card.main.textContent, /Yes, 7pm\./);
+  // The snapshot that made the card, replayed by the host: older, and behind.
+  card.deliver(toolResult(QUEUED));
+  card.deliver(toolResult({ ...LIVE, version: 8, transcript: [{ speaker: 'other', text: 'Old line' }] })); // same version
+  card.deliver(toolResult({ ...LIVE, transcript: [{ speaker: 'other', text: 'No version' }] })); // counts as 0
+  assert.match(card.main.textContent, /On the call/);
+  assert.match(card.main.textContent, /Yes, 7pm\./);
+  assert.doesNotMatch(card.main.textContent, /Starting|Old line|No version/);
+  // A higher version whose status is behind is not taken either.
+  card.deliver(toolResult({ ...LIVE, version: 20, status: 'ringing' }));
+  assert.match(card.main.textContent, /On the call/);
+  // Nor is another call's.
+  card.deliver(toolResult({ ...LIVE, id: 'call-fedcba9876543210', version: 30, brief: { to: '+15559999' } }));
+  assert.doesNotMatch(card.main.textContent, /15559999/);
+  card.deliver(toolResult({ ...LIVE, version: 21, status: 'summarizing' }));
+  assert.match(card.main.textContent, /Wrapping up/);
+});
+
+test('"unchanged" re-arms at the larger of nextPollMs and the status pace', async () => {
+  const card = await following();
+  const before = card.main.children[0];
+  await card.answer(card.polls()[0], unchanged(5, 'in_progress', 9000));
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [9000]);
+  const drawn = card.main.children[0];
+  await card.advance(9000);
+  await card.answer(card.polls()[1], unchanged(5, 'in_progress', 1000)); // never faster than the pace
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [5000]);
+  assert.equal(card.main.children[0], drawn); // nothing new: nothing redrawn
+  assert.notEqual(before, drawn); // the first answer took "Checking…" away
+  await card.advance(5000);
+  await card.answer(card.polls()[2], { structuredContent: { callId: ID, status: 'in_progress', version: 5, unchanged: true } });
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [5000]); // no hint: the pace
+  await card.advance(4999);
+  assert.equal(card.polls().length, 3);
+  await card.advance(1);
+  assert.equal(card.polls().length, 4);
+  await card.answer(card.polls()[3], { structuredContent: { ...LIVE, version: 6, status: 'ringing', nextPollMs: 3000 } });
+  assert.match(card.main.textContent, /On the call/); // a status behind is not taken
+});
+
+test('ringing after waiting is taken, as the daemon ranks them the same (a meeting ringing its dial-in)', async () => {
+  const card = await following({ ...LIVE, version: 5, status: 'waiting' });
+  await card.answer(card.polls()[0], { structuredContent: { ...LIVE, version: 6, status: 'ringing', nextPollMs: 3000 } });
+  assert.match(card.main.textContent, /Ringing/);
+});
+
+test('"unchanged" with a newer status (an older daemon: every record is version 1) asks once for the whole call', async () => {
+  const card = await following({ ...QUEUED });
+  await card.answer(card.polls()[0], unchanged(1, 'completed', 0));
+  assert.equal(card.polls().length, 2);                          // asked again at once...
+  assert.equal(card.polls()[1].params.arguments.ifVersion, undefined); // ...for the whole call
+  await card.answer(card.polls()[1], { structuredContent: { ...LIVE, version: 1, status: 'completed', result: { outcome: 'achieved' } } });
+  assert.doesNotMatch(card.main.textContent, /Starting/);
+  assert.deepEqual(card.pending(), []);                          // ended: nothing more to ask
+});
+
+test('an ended call stops the card and is saved; set_globals with an old toolOutput changes nothing', async () => {
+  const openai = fakeOpenai({ toolOutput: QUEUED });
+  const card = loadCard({ openai });
+  assert.match(card.main.textContent, /Checking…/);
+  await card.answer(card.sent[0], {});
+  assert.equal(card.polls().length, 1); // asked at once
+  await card.answer(card.polls()[0], { structuredContent: { ...DONE, version: 40, nextPollMs: 0 } });
+  assert.match(card.main.textContent, /Got it done/);
+  assert.equal(card.pending().length, 0);
+  const last = openai.saved.at(-1);
+  assert.deepEqual([last.callId, last.version, last.status], [ID, 40, 'completed']);
+  assert.equal(last.record.result.outcome, 'achieved');
+  assert.deepEqual(last.record.transcript, [{ speaker: 'other', text: 'Sure.' }]);
+  assert.equal(last.record.transcriptCount, 2);
+  assert.ok(JSON.stringify(last).length < 1200, JSON.stringify(last).length);
+  // ChatGPT fires set_globals on every change it makes, with the toolOutput that made the card.
+  const drawn = card.main.children[0];
+  const saves = openai.saved.length;
+  for (let index = 0; index < 3; index += 1) card.fire('openai:set_globals');
+  assert.equal(card.main.children[0], drawn);
+  assert.equal(card.polls().length, 1);
+  assert.equal(card.pending().length, 0);
+  assert.equal(openai.saved.length, saves);
+  await card.advance(60 * 60 * 1000);
+  assert.equal(card.polls().length, 1);
+});
+
+test('a card opened again with a saved ended call shows how it ended and asks for nothing', async () => {
+  const kept = { callId: ID, version: 40, status: 'completed', record: { ...DONE, version: 40, transcript: undefined, transcriptCount: 2 } };
+  const card = loadCard({ openai: fakeOpenai({ toolOutput: QUEUED, widgetState: kept }) });
+  assert.match(card.main.textContent, /Done/);
+  assert.match(card.main.textContent, /Got it done/);
+  assert.doesNotMatch(card.main.textContent, /Starting|Checking/);
+  // Claude replays the result that made the card too: still nothing to ask.
+  card.deliver(toolResult(QUEUED));
+  await card.answer(card.sent[0], {});
+  await card.advance(60 * 60 * 1000);
+  assert.equal(card.polls().length, 0);
+  assert.equal(card.sent.filter((message) => message.method === 'tools/call').length, 0);
+  // A saved state for another call is not this card's.
+  const other = loadCard({ openai: fakeOpenai({ toolOutput: QUEUED, widgetState: { ...kept, callId: 'call-fedcba9876543210',
+    record: { ...kept.record, id: 'call-fedcba9876543210' } } }) });
+  assert.match(other.main.textContent, /Checking…/);
+  await other.answer(other.sent[0], {});
+  assert.equal(other.polls().length, 1);
+});
+
+test('a card opened again while the call runs shows what it has, and asks once at once', async () => {
+  const kept = { callId: ID, version: 12, status: 'in_progress', record: { ...LIVE, version: 12 } };
+  const card = loadCard({ openai: fakeOpenai({ toolOutput: {}, widgetState: kept }) }); // rehydrated: toolOutput {}
+  assert.equal(card.sent[0].method, 'ui/initialize'); // first, before any ask
+  await card.answer(card.sent[0], {});
+  assert.match(card.main.textContent, /Checking…/);
+  assert.match(card.main.textContent, /Hello\?/);
+  assert.deepEqual(card.polls().map((message) => message.params.arguments), [{ callId: ID, ifVersion: 12 }]);
+  await card.answer(card.polls()[0], unchanged(12));
+  assert.match(card.main.textContent, /On the call/);
+  assert.equal(card.polls().length, 1);
+  // A result that came without structuredContent still names the call: in _meta, or on the first line.
+  for (const result of [{ content: [{ type: 'text', text: 'x' }], _meta: { callId: ID } },
+    { content: [{ type: 'text', text: `${ID}\nnot json` }] }]) {
+    const bare = loadCard();
+    await bare.answer(bare.sent[0], {});
+    bare.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: result });
+    await bare.settle();
+    assert.deepEqual(bare.polls().map((message) => message.params.arguments), [{ callId: ID }]);
+  }
+});
+
+test('the card asks nothing while nobody can see it, and asks once when it is seen', async () => {
+  const card = await following();
+  await card.answer(card.polls()[0], unchanged(5));
+  card.setHidden(true);
+  await card.advance(60_000);
+  assert.equal(card.polls().length, 1);
+  assert.equal(card.pending().length, 0);
+  card.setHidden(false);
+  assert.equal(card.polls().length, 2);
+  await card.answer(card.polls()[1], unchanged(5));
+  card.fire('focus'); // seen all along: nothing extra
+  assert.equal(card.polls().length, 2);
+  // Scrolled out of sight is the same.
+  card.setOnScreen(false);
+  await card.advance(60_000);
+  assert.equal(card.polls().length, 2);
+  card.setOnScreen(true);
+  assert.equal(card.polls().length, 3);
+  await card.answer(card.polls()[2], unchanged(5));
+  card.setOnScreen(false);
+  await card.advance(5000);
+  card.fire('focus'); // still out of sight
+  assert.equal(card.polls().length, 3);
+});
+
+test('failures keep the card, back off, and honor "try again in N s"', async () => {
+  const card = await following();
+  await card.answer(card.polls()[0], { structuredContent: { ...LIVE, version: 6 } });
+  const shown = () => card.main.textContent;
+  await card.advance(5000);
+  // The service refuses for a while: the bridge passes its message on as an error.
+  card.deliver({ jsonrpc: '2.0', id: card.polls()[1].id, error: { code: -32000, message: 'Too many requests: try again in 7 s.' } });
+  await card.settle();
+  assert.match(shown(), /Reconnecting…/);
+  assert.match(shown(), /Hello\?/); // the last good copy stays
+  assert.doesNotMatch(shown(), /Loading/);
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [7000]);
+  const waits = [];
+  for (let index = 2; index < 7; index += 1) {
+    await card.advance(card.pending()[0].ms);
+    await card.answer(card.polls()[index], { isError: true, content: [{ type: 'text', text: '{"code":"startup","message":"unavailable"}' }] });
+    waits.push(card.pending()[0].ms);
+  }
+  assert.deepEqual(waits, [10000, 20000, 40000, 60000, 60000]);
+  // Two minutes on: it says so, with the time of the last good copy, and offers to try now.
+  assert.match(shown(), /Couldn’t refresh · last updated/);
+  const refresh = card.main.querySelectorAll('button').find((button) => button.textContent === 'Refresh');
+  refresh.listeners.click[0]();
+  assert.equal(card.polls().length, 8);
+  await card.answer(card.polls()[7], unchanged(6));
+  assert.doesNotMatch(shown(), /Reconnecting|Couldn’t/);
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [5000]);
+  // A bridge that never answers counts as a failure too, once its 20 s are up.
+  await card.advance(5000);
+  await card.advance(20000);
+  assert.match(shown(), /Reconnecting…/);
+});
+
+test('after 30 minutes the card pauses, and Refresh follows the call for another 30', async () => {
+  const card = await following();
+  let asked = 0;
+  for (;;) {
+    const poll = card.polls()[asked];
+    if (!poll) break;
+    asked += 1;
+    await card.answer(poll, unchanged(5));
+    await card.advance(5000);
+  }
+  assert.ok(asked >= 359 && asked <= 361, String(asked)); // every 5 s for 30 minutes
+  assert.match(card.main.textContent, /Paused/);
+  assert.equal(card.pending().length, 0);
+  await card.advance(60 * 60 * 1000);
+  assert.equal(card.polls().length, asked);
+  const refresh = card.main.querySelectorAll('button').find((button) => button.textContent === 'Refresh');
+  refresh.listeners.click[0]();
+  assert.equal(card.polls().length, asked + 1);
+  await card.answer(card.polls()[asked], unchanged(5));
+  assert.doesNotMatch(card.main.textContent, /Paused/);
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [5000]);
+});
+
+test('once the host closes the card, nothing pending acts', async () => {
+  const card = await following();
+  const poll = card.polls()[0];
+  card.deliver({ jsonrpc: '2.0', id: 7, method: 'ui/resource-teardown', params: {} });
+  const drawn = card.main.textContent;
+  await card.answer(poll, { structuredContent: { ...DONE, version: 50 } });
+  assert.equal(card.main.textContent, drawn);
+  assert.equal(card.pending().length, 0);
+  await card.advance(60 * 60 * 1000);
+  assert.equal(card.polls().length, 1);
+  // The same when the page goes away (ChatGPT's old card, on the next turn).
+  const old = await following();
+  await old.answer(old.polls()[0], unchanged(5));
+  old.fire('pagehide');
+  await old.advance(60 * 60 * 1000);
+  assert.equal(old.polls().length, 1);
+});
+
+test('without the MCP Apps bridge the card asks through window.openai.callTool', async () => {
+  const asked = [];
+  const openai = fakeOpenai({
+    toolOutput: { ...LIVE, version: 5 },
+    async callTool(name, args) { asked.push([name, JSON.parse(JSON.stringify(args))]); return unchanged(5); },
+  });
+  const card = loadCard({ openai });
+  assert.equal(asked.length, 0); // not before the host has answered ui/initialize
+  card.deliver({ jsonrpc: '2.0', id: card.sent[0].id, error: { code: -32601, message: 'no' } }); // not an MCP Apps host
+  await card.settle();
+  assert.deepEqual(asked, [['get_call_update', { callId: ID, ifVersion: 5 }]]);
+  await card.advance(5000);
+  assert.equal(asked.length, 2);
+  assert.equal(card.polls().length, 0); // never through the bridge
+});
+
+test('the view cuts nothing the card needs from a get_call_update answer', async () => {
+  const { callCardUpdate } = await import('../src/call-card.mjs');
+  const update = callCardUpdate({ ...DONE, version: 3, transcript: undefined, result: { ...DONE.result, transcript: DONE.transcript } });
+  const view = callCardView(update);
+  assert.deepEqual(view, callCardView({ ...DONE, version: 3 }));
 });

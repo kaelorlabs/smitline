@@ -139,6 +139,40 @@ class CallServiceTests(unittest.IsolatedAsyncioTestCase):
         usage = (Path(self.temp.name) / 'calls' / 'usage.jsonl').read_text()
         self.assertIn(record['id'], usage)
 
+    async def test_the_version_rises_with_every_change_and_never_falls(self):
+        self.h.line.script = []
+        self.h.line.transcript = []
+        record = await self.h.service.create(brief())
+        call_id = record['id']
+        await asyncio.sleep(0)
+        context = self.h.line.contexts[call_id]
+        seen = [record['version'], self.h.service.get(call_id, owner='local')['version']]
+        context.set_status('ringing')
+        seen.append(self.h.service.get(call_id, owner='local')['version'])
+        context.add_transcript('other', 'Hello?')
+        seen.append(self.h.service.get(call_id, owner='local')['version'])
+        context.set_status('connecting')  # an older status changes nothing
+        seen.append(self.h.service.get(call_id, owner='local')['version'])
+        self.assertEqual(seen[-1], seen[-2])
+        context.set_status('in_progress')
+        listed = self.h.service.list(owner='local')[0]['version']
+        waited = (await self.h.service.wait(call_id, timeout=0, owner='local', since=''))['version']
+        self.assertEqual(listed, waited)
+        seen.append(waited)
+        self.h.line.proceed.set()
+        done = await self.h.service.wait(call_id, timeout=5, owner='local')
+        seen.append(done['version'])
+        self.assertTrue(all(isinstance(version, int) for version in seen))
+        self.assertLess(seen[1], seen[2])  # ringing
+        self.assertLess(seen[2], seen[3])  # a transcript line
+        self.assertEqual(seen, sorted(seen))
+        self.assertLess(seen[-2], seen[-1])  # the result
+        await asyncio.sleep(0.05)  # the webhook's event comes after the end
+        now = self.h.service.get(call_id, owner='local')['version']
+        self.assertGreaterEqual(now, done['version'])
+        # The version is read from what is on disk: a restarted daemon reads the same one.
+        self.assertEqual(CallStore(Path(self.temp.name) / 'calls').get(call_id)['version'], now)
+
     async def test_no_conversation_skips_summary(self):
         self.h.line.transcript = []
         self.h.line.end_reason = 'no_answer'
@@ -749,9 +783,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('event: call.created', await resumed.text())
         page = await self.client.get(f'/v1/calls/{call["id"]}/events?format=json&after=1',
                                      headers=self.auth)
-        events = (await page.json())['events']
+        body = await page.json()
+        events = body['events']
         self.assertEqual(events[0]['id'], '2')
         self.assertIn('call.transcript', [event['type'] for event in events])
+        response = await self.client.get(f'/v1/calls/{call["id"]}', headers=self.auth)
+        self.assertEqual(body['version'], (await response.json())['version'])
 
     async def test_brief_problems_and_errors(self):
         response = await self.client.post('/v1/calls', json={'channel': 'phone'}, headers=self.auth)
