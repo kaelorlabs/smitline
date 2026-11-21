@@ -40,7 +40,7 @@ export const CALL_CARD_UPDATE_META = Object.freeze({
 
 /**
  * How long the card waits before asking for a call again, by status: a few seconds while it
- * starts and rings, a little longer once people talk (the card shows the last line, not every
+ * starts and rings, a little longer once people talk (the status and questions, not every
  * word), and never again once it has ended.
  */
 export const CALL_CARD_POLL_MS = Object.freeze({
@@ -55,7 +55,8 @@ export const CALL_CARD_POLL_MS = Object.freeze({
   canceled: 0,
 });
 
-// The lines a live call's update carries: the card shows the last one and the count.
+// A live call's record has no transcript (its lines are events, for wait_for_call); one that
+// does carries only its last few lines and the count.
 const LIVE_TRANSCRIPT_LINES = 3;
 
 /**
@@ -358,9 +359,11 @@ details[open] summary::before { transform: rotate(45deg); }
 
 const CLIENT = `
 const ENDED = new Set(['completed', 'failed', 'canceled']);
-// A call's statuses in order; the card never moves back along it. The three ends rank the same.
-const ORDER = ['queued', 'connecting', 'ringing', 'waiting', 'in_progress', 'summarizing', 'completed', 'failed', 'canceled'];
-const rank = (status) => Math.min(ORDER.indexOf(status), 6);
+// A call's statuses in order; the card never moves back along it. Ringing and waiting are the
+// same step, as for the daemon (a meeting refused at the door rings its dial-in number); the
+// three ends rank the same.
+const RANK = { queued: 0, connecting: 1, ringing: 2, waiting: 2, in_progress: 3, summarizing: 4, completed: 5, failed: 5, canceled: 5 };
+const rank = (status) => RANK[status] ?? -1;
 const LIFETIME_MS = 30 * 60 * 1000; // then the card pauses until the user asks it to go on
 const GIVE_UP_MS = 2 * 60 * 1000; // failing this long, it says so and offers to try again
 const LOAD_MS = 20000; // with no call at all after this, it says so instead of a placeholder
@@ -696,6 +699,12 @@ async function poll(generation) {
   lastGood = Date.now();
   fresh = true;
   const taken = !data.unchanged && accept(data, 'poll');
+  if (data.unchanged && typeof data.status === 'string' && rank(data.status) > rank(state.status)) {
+    // An older daemon gives every record version 1, so "unchanged" can come with a newer status:
+    // ask once for the whole call.
+    state.version = 0;
+    again = true;
+  }
   if (!taken && (wasFailing || !wasFresh)) render(); // the note or "Checking…" goes
   if (!canPoll()) return;
   if (again) {

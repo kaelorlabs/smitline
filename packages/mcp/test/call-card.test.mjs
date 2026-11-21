@@ -683,6 +683,22 @@ test('"unchanged" re-arms at the larger of nextPollMs and the status pace', asyn
   assert.match(card.main.textContent, /On the call/); // a status behind is not taken
 });
 
+test('ringing after waiting is taken, as the daemon ranks them the same (a meeting ringing its dial-in)', async () => {
+  const card = await following({ ...LIVE, version: 5, status: 'waiting' });
+  await card.answer(card.polls()[0], { structuredContent: { ...LIVE, version: 6, status: 'ringing', nextPollMs: 3000 } });
+  assert.match(card.main.textContent, /Ringing/);
+});
+
+test('"unchanged" with a newer status (an older daemon: every record is version 1) asks once for the whole call', async () => {
+  const card = await following({ ...QUEUED });
+  await card.answer(card.polls()[0], unchanged(1, 'completed', 0));
+  assert.equal(card.polls().length, 2);                          // asked again at once...
+  assert.equal(card.polls()[1].params.arguments.ifVersion, undefined); // ...for the whole call
+  await card.answer(card.polls()[1], { structuredContent: { ...LIVE, version: 1, status: 'completed', result: { outcome: 'achieved' } } });
+  assert.doesNotMatch(card.main.textContent, /Starting/);
+  assert.deepEqual(card.pending(), []);                          // ended: nothing more to ask
+});
+
 test('an ended call stops the card and is saved; set_globals with an old toolOutput changes nothing', async () => {
   const openai = fakeOpenai({ toolOutput: QUEUED });
   const card = loadCard({ openai });

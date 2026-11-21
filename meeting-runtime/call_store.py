@@ -138,9 +138,16 @@ class CallStore:
         return records[:limit]
 
     def sequence(self, call_id):
-        """The number of the call's last event (0 before any): the events cursor."""
+        """The number of the call's last event (0 before any): the events cursor. Lines are
+        counted, not parsed, so a line cut short (a daemon stopped mid-write) leaves the call
+        readable."""
         if call_id not in self._sequences:
-            self._sequences[call_id] = len(self.events(call_id))
+            path = self._dir(call_id) / 'events.jsonl'
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except FileNotFoundError as error:
+                raise CallNotFound(call_id) from error
+            self._sequences[call_id] = sum(1 for line in lines if line.strip())
         return self._sequences[call_id]
 
     def _next_sequence(self, call_id):
