@@ -211,6 +211,24 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors[0].code, 'capacity_exceeded')
         self.assertEqual(len(self.launcher.ups), 2)
 
+    async def test_cancelling_a_refused_meeting_leaves_the_running_one_alone(self):
+        # With one container at a time, a second meeting is refused, and the daemon then cancels
+        # it to write its handoff. That must not stop the container: it is the first meeting's.
+        first = session()
+        await self.supervisor.start(first)
+        other = session(id='mtg-other0000003')
+        with self.assertRaises(DaemonError) as raised:
+            await self.supervisor.start(other)
+        self.assertEqual(raised.exception.code, 'capacity_exceeded')
+        self.daemon.meetings.records[other.id] = FakeRecord(other)
+        await self.supervisor.cancel(other.id, 'start_failed')
+        self.assertEqual(self.launcher.stops, 0)
+        self.assertTrue(self.launcher.running)
+        self.assertEqual([handoff.meeting_id for handoff in self.daemon.handoffs], [other.id])
+        # The first meeting still ends the usual way, and stops its container.
+        await self.supervisor.cancel(first.id)
+        self.assertFalse(self.launcher.running)
+
     async def test_startup_and_health_failure_stops_container(self):
         self.launcher.fail_up = True
         with self.assertRaises(RuntimeError):

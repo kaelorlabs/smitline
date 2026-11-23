@@ -27,6 +27,16 @@ class CallNotFound(KeyError):
     pass
 
 
+def _cut_short(path):
+    """Whether a file's last line was cut short: it has text and does not end with a newline."""
+    with open(path, 'rb') as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            return False
+        handle.seek(-1, os.SEEK_END)
+        return handle.read(1) != b'\n'
+
+
 def new_call_id():
     return 'call-' + secrets.token_hex(8)
 
@@ -168,8 +178,11 @@ class CallStore:
                 'callId': call_id,
                 'data': data,
             }
+            # After a line cut short (a daemon stopped mid-write), start a new line: joined to the
+            # cut one, this event would be lost with it.
+            start = '\n' if _cut_short(path) else ''
             with open(path, 'a', encoding='utf-8') as handle:
-                handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+                handle.write(start + json.dumps(event, ensure_ascii=False) + '\n')
             return event
 
     def events(self, call_id, *, after=None):
@@ -178,7 +191,14 @@ class CallStore:
             lines = path.read_text(encoding='utf-8').splitlines()
         except FileNotFoundError as error:
             raise CallNotFound(call_id) from error
-        events = [json.loads(line) for line in lines if line.strip()]
+        events = []
+        for line in lines:
+            try:
+                event = json.loads(line) if line.strip() else None
+            except ValueError:
+                continue    # a line cut short: its number stays taken (sequence counts lines)
+            if isinstance(event, dict) and 'id' in event:
+                events.append(event)
         if after is None:
             return events
         try:

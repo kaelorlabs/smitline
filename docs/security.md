@@ -23,10 +23,10 @@ Smitline runs on your computer with your own keys. There is no Smitline server: 
 ## Data and privacy
 
 - **OpenAI:** call and meeting audio goes to GPT-Live. The backend model receives the brief, the context, and the questions GPT-Live hands it; with web search on, it can search the web. After a phone call, a summary model reads the transcript. These use your account's billing.
-- **Phone provider:** calls go through your SignalWire or Twilio account. Recordings, if turned on, stay there; the daemon downloads one only when you ask.
+- **Phone provider:** calls go through your SignalWire or Twilio account. The provider is not asked to record: a recorded call is recorded by Smitline itself, as the audio passes through, and kept on this computer with the call (see [phone calls](phone.md)).
 - **Local storage:** see [retention and deletion](architecture.md#retention-and-deletion). Transcripts, call records, profiles, and context are gitignored.
 
-Transcripts contain conversation content and are kept until you remove them. Generated agent text may represent speech that was muted or interrupted. Raw audio is not saved. Restarting a meeting participant starts a fresh voice session.
+Transcripts contain conversation content and are kept until you remove them. Generated agent text may represent speech that was muted or interrupted. Raw audio is saved only when a phone call is recorded: one WAV file with the call's record, kept until you remove it. Restarting a meeting participant starts a fresh voice session.
 
 ## Reporting a vulnerability
 

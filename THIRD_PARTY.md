@@ -17,8 +17,8 @@ The images redistribute these components unchanged. Each keeps its own license; 
 | Component | Where | License |
 | --- | --- | --- |
 | Node.js 22 | `smitline` image, from `node:22-bookworm-slim` | MIT, with bundled dependencies under their own licenses |
-| Docker CLI and the Docker Compose plugin | `smitline` image, from `docker:29.8.1-cli` | Apache-2.0 |
-| cloudflared | `smitline` image, from `cloudflare/cloudflared:2026.9.3` | Apache-2.0 |
+| Docker CLI and the Docker Compose plugin | `smitline` image, from the `docker` CLI image the `Dockerfile` pins | Apache-2.0 |
+| cloudflared | `smitline` image, from the `cloudflare/cloudflared` image the `Dockerfile` pins | Apache-2.0 |
 | Mammoth (`mammoth`) | `smitline` image, npm; extracts DOCX text in the console | BSD-2-Clause |
 | Mozilla PDF.js (`pdfjs-dist`) | `smitline` image, npm; extracts PDF text in the console | Apache-2.0 |
 | Playwright for Python | meeting image, PyPI | Apache-2.0 |

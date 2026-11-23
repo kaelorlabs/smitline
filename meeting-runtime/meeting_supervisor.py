@@ -772,6 +772,12 @@ class ProductionMeetingSupervisor:
         except Exception:
             pass
 
+    async def _stop_container_of(self, meeting_id):
+        """Stop the container, unless it is another meeting's: with one container at a time, a
+        meeting that was refused while another runs has none of its own to stop."""
+        if self._active_id in (None, meeting_id):
+            await self._stop_container()
+
     async def _await_stop(self):
         await self._stop_container()
         deadline = asyncio.get_running_loop().time() + self.stop_timeout
@@ -954,7 +960,7 @@ class ProductionMeetingSupervisor:
     async def _complete_handoff_body(self, session, reason, *, partial):
         if self._handoff_ready(session.id):
             try:
-                await self._stop_container()
+                await self._stop_container_of(session.id)
             finally:
                 self._release_active_claim(session.id)
             return {'status': 'ready', 'idempotent': True}
@@ -969,7 +975,7 @@ class ProductionMeetingSupervisor:
                 return {'status': 'error', 'error': error.message}
         finally:
             try:
-                await self._stop_container()
+                await self._stop_container_of(session.id)
             finally:
                 # A meeting whose handoff failed is not live and must never
                 # keep the meeting-agent capacity.

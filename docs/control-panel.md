@@ -1,6 +1,6 @@
 # Smitline local console
 
-The local console is an optional operator interface for Smitline. Agents do not need it: they place calls and join meetings through the calls API. The console has three sections: **Meetings** and **Calls**, to follow what your agents did, and **Account**, for keys and settings. On a wide screen they sit in a sidebar with Account at the bottom; on a narrow one, in the top bar.
+The local console is an optional operator interface for Smitline. Agents do not need it: they place calls and join meetings through the calls API. The console has four sections: **Meetings** and **Calls**, to follow what your agents did, **Contacts**, for the people and businesses they called, and **Account**, for keys and settings. On a wide screen they sit in a sidebar with Account at the bottom; on a narrow one, in the top bar.
 
 ## Open the console
 
@@ -18,7 +18,7 @@ From a checkout, run `npm install`, then `bash start-control-panel.sh`, and keep
 
 ## Calls
 
-`http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `SMITLINE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. There is no listen-in; the live transcript is how you follow along. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
+`http://127.0.0.1:8095/calls` lists recent phone calls started through the calls API, with spend totals for today, this month, and all time, and the average per call. Choosing one shows its brief, its status, the live transcript as it happens, and the result when it ends: the outcome and summary first, then details such as confirmation numbers, open questions, follow-ups, and what was agreed, and what the call cost. While a phone call is connected, **Take over the call** rings `SMITLINE_OWNER_PHONE` and hands the call to you (press twice to confirm; Smitline leaves the call), and **End call** asks the assistant to wrap up and hang up. Reading calls needs no token, like the transcript views; the two actions require the console's token and a same-origin request. With no calls yet, the page suggests what to ask your agent.
 
 ## Contacts
 

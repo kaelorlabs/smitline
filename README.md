@@ -128,7 +128,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 - Replies come after a short pause, so a call feels a little slower than talking to a person. Call audio passes through your computer on its way to OpenAI.
 - Trial phone accounts call only numbers you verify, and Twilio's free trial can't carry a live call.
 - Self-hosted Smitline works while your computer is on. For an always-on version, see [Smitline Cloud](https://smitline.com).
-- In meetings, guidance goes in the brief before it joins, and it doesn't share or read screens.
+- In meetings, it doesn't share or read screens.
 
 ## Documentation
 
