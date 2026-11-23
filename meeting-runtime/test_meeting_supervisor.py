@@ -254,6 +254,23 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.daemon.handoffs[0].partial)
         self.assertEqual(self.daemon.handoffs[0].end_reason, 'container_exited')
 
+    async def test_an_unexpected_error_while_watching_ends_the_meeting(self):
+        # Nothing caught an error nobody expected in the watch (a bug, a reply nothing knew):
+        # the meeting stayed live, kept its seat and its machine, and counted billed time
+        # until maxMinutes. It ends now, with what it has.
+        meeting = session()
+        await self.supervisor.start(meeting)
+
+        async def broken():
+            raise RuntimeError('nobody expected this')
+        self.launcher.inspect = broken
+        await asyncio.sleep(0.08)
+        self.assertEqual([handoff.meeting_id for handoff in self.daemon.handoffs], [meeting.id])
+        self.assertTrue(self.daemon.handoffs[0].partial)
+        self.assertEqual(self.daemon.handoffs[0].end_reason, 'watch_failed')
+        self.assertGreaterEqual(self.launcher.stops, 1)
+        self.assertIsNone(self.supervisor._active_id)
+
     async def test_finished_without_handoff_still_builds_handoff(self):
         meeting = session()
         await self.supervisor.start(meeting)
