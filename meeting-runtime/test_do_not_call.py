@@ -380,9 +380,11 @@ class LiveToolTests(unittest.IsolatedAsyncioTestCase):
                                          headers={'Authorization': 'Bearer launch-token'},
                                          json={'to': '+14155550111', 'number': '+14155550111'})
             self.assertEqual(response.status, 200)
-        [twiml] = [update['twiml'] for _sid, update in self.h.twilio.updates if 'twiml' in update]
-        self.assertIn('+14155550199', twiml)
-        self.assertNotIn('+14155550111', twiml)
+        # Taking over rings the owner's phone first, as a call of its own (Hold for Me): that call
+        # goes to the owner's number, and nothing dials or redirects to a number from the request.
+        self.assertEqual(self.h.twilio.created[-1]['to'], '+14155550199')
+        self.assertFalse(any('+14155550111' in str(call) for call in self.h.twilio.created))
+        self.assertFalse(any('+14155550111' in str(update) for _sid, update in self.h.twilio.updates))
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
 

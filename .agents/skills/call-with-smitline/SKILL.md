@@ -26,7 +26,9 @@ Phone calls and meetings work the same way. To join a Zoom, Teams, or Google Mee
 | `mustNotShare` | What must never be said, such as payment details |
 | `successCriteria` | How to tell the call worked |
 | `record` | `true` only when the user asks to record the call. The assistant tells the other person the call is recorded; make sure the user has their agreement. |
-| `phoneMenus` | `true` when the call is to a business likely to answer with an automated menu (a bank, a utility, an airline) and the user wants it handled. The assistant then presses menu keys and keys in numbers the brief gives for this call, such as an account or order number. Off by default: menus make calls longer and cost more. |
+| `phoneMenus` | On by default: the assistant gets through automated phone menus by pressing keys, and keys in numbers the brief gives for this call (put an account or order number in `context`). `false` only when the user does not want keys pressed. |
+| `maxHoldMinutes` | How long the call may wait on hold in all (default 60, up to 180). Raise it for lines known to keep people waiting, such as a government office. Holding costs little: the voice is switched off until someone picks up, and it does not count toward `maxMinutes`. |
+| `connectOwner` | `true` when the user wants to talk to the person themselves once someone picks up after a hold: their phone rings, and pressing 1 connects them. Otherwise the assistant talks with them. |
 | `task` | For several calls toward one goal, such as quotes from five roofers: the same `{"id": "roof-quotes", "title": "Roof repair quotes"}` on each |
 | `carryFrom` | Start with notes from earlier calls: `{"task": true}`, `{"contact": true}` (same number), or `{"calls": [...]}`. Only what this call needs: the assistant may mention it, so do not carry one business's details to another unless the objective calls for it. |
 | `forRequest` | When this call does what someone on another call asked (phoning Smith because the meeting asked): `{"callId": "<that call>", "requestId": "r1"}`. The call then reports to them by itself: ringing, picked up, and the outcome or why it failed. If they cancel the request, the call ends: at once if no person has spoken on it yet, otherwise after a short goodbye. |
@@ -52,7 +54,8 @@ For a new kind of call, offer: "Want me to practice on you first?" Then start th
 
 You know more than the brief: the user's preferences, the documents, what was decided earlier. Follow the call and bring that in when it matters.
 
-- Pass `since: ""` to the first `wait_for_call` (the default), then `since` = the `live.cursor` of the last answer. An answer comes at once when someone on the call asks you for something, when the status changes, and at the end; otherwise once new talk has gathered, an exchange or two, with the new lines in `live.transcript` (`agent` is Smitline; `other`, or `meeting` in a meeting, is the people on the call).
+- Pass `since: ""` to the first `wait_for_call` (the default), then `since` = the `live.cursor` of the last answer. An answer comes at once when someone on the call asks you for something, when the status changes, when a phone call goes on hold or comes off it, and at the end; otherwise once new talk has gathered, an exchange or two, with the new lines in `live.transcript` (`agent` is Smitline; `other`, or `meeting` in a meeting, is the people on the call; `note` is what happened on the line, such as "On hold.", which nobody said).
+- On hold (`hold.onHold`), Smitline waits by itself with the voice switched off, and nothing is said for a long time: keep calling `wait_for_call`, with `timeoutSeconds: 280`, until someone picks up. It may take an hour; tell the user once that the call is on hold.
 - Step in with `send_call_instruction` only when it helps:
   - the other side asks something the brief does not cover and you know the answer;
   - the conversation drifts from the goal;

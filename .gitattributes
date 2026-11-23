@@ -12,4 +12,7 @@
 *.pdf binary
 *.docx binary
 *.woff2 binary
+# Model files for hold_listener.py (meeting-runtime/hold_models/).
+*.onnx binary
+*.ark binary
 *.lock text eol=lf
