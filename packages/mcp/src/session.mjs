@@ -7,7 +7,10 @@ import {
   InterruptError,
   redact,
 } from '../../sdk-typescript/src/index.mjs';
-import { CALL_CARD_ACTION_META, CALL_CARD_TOOL_META, CALL_CARD_URI, callCardResource } from './call-card.mjs';
+import {
+  CALL_CARD_ACTION_META, CALL_CARD_TOOL_META, CALL_CARD_UPDATE_META, CALL_CARD_UPDATE_TOOL, CALL_CARD_URI,
+  callCardResource, callCardUpdate,
+} from './call-card.mjs';
 import { META_SERVER_INFO, META_SUBSCRIPTION_ID, MODERN_PROTOCOL_VERSIONS } from './modern.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -174,12 +177,31 @@ export const CALL_TOOL_DEFINITIONS = [
     },
   },
   {
+    // No card: start_call's card follows the call by itself, and a card for every get_call would
+    // stack live copies of it in the chat.
     name: 'get_call',
     title: "Get call details",
-    _meta: CALL_CARD_TOOL_META,
     annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Get one phone call or meeting and its current status, without waiting: queued, connecting, ringing, waiting, in_progress, summarizing, then completed, failed, or canceled. A meeting joined by its link may stay connecting for a minute or two on a hosted service, while a machine starts for it; a new room starts in seconds. A finished call includes its result (outcome, summary, details, transcript) and what it cost: cost, at your providers' prices, when self-hosted; on a hosted service such as Smitline Cloud, charge, what the service billed for the call. Errors with not_found for an unknown call id. To wait for a call to finish, use wait_for_call instead; to find call ids, use list_calls.",
     inputSchema: { type: 'object', additionalProperties: false, required: ['callId'], properties: { callId: CALL_ID_SCHEMA } },
+  },
+  {
+    // For the call card alone: hosts that support MCP Apps keep it from the model (visibility
+    // app), and the agent reads calls with get_call and wait_for_call.
+    name: CALL_CARD_UPDATE_TOOL,
+    title: 'Refresh the call card',
+    _meta: CALL_CARD_UPDATE_META,
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: "Used by the call card to follow a call; not for agents: use get_call or wait_for_call. Returns the call cut to what the card shows, with its version and nextPollMs, how long to wait before asking again (0 once the call has ended). With ifVersion equal to the call's version, returns only unchanged: true.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['callId'],
+      properties: {
+        callId: CALL_ID_SCHEMA,
+        ifVersion: { type: 'integer', minimum: 0, description: 'The version the card already shows.' },
+      },
+    },
   },
   {
     name: 'list_calls',
@@ -434,6 +456,15 @@ export async function callToolFor(colleague, name, args) {
     return withNextStep(await colleague.waitForCall(requireCallId(args), timeout, follow));
   }
   if (name === 'get_call') return colleague.getCall(requireCallId(args));
+  if (name === CALL_CARD_UPDATE_TOOL) {
+    const callId = requireCallId(args);
+    if (args.ifVersion !== undefined && (!Number.isInteger(args.ifVersion) || args.ifVersion < 0)) {
+      throw new ValidationError('ifVersion must be a version from an earlier answer');
+    }
+    // A read of the record, like get_call, and never a wait: the card does not count as the
+    // agent following the call, so the voice never promises answers from it.
+    return callCardUpdate(await colleague.getCall(callId), args.ifVersion);
+  }
   if (name === 'list_calls') {
     const filters = Object.fromEntries(['channel', 'contact', 'task'].filter((key) => args[key]).map((key) => [key, args[key]]));
     return { calls: await colleague.listCalls(args.limit || 20, filters) };
@@ -491,6 +522,16 @@ function toolResult(payload, { isError = false } = {}) {
   };
 }
 
+/** The card's update: the call id also in _meta and on the text's first line, for hosts that
+ * pass the card only one of them. */
+function cardUpdateResult(payload) {
+  const result = toolResult(payload);
+  const callId = result.structuredContent.callId;
+  result.content[0].text = `${callId}\n${result.content[0].text}`;
+  result._meta = { callId };
+  return result;
+}
+
 function rpcError(id, code, message, data) {
   return {
     jsonrpc: '2.0',
@@ -541,6 +582,7 @@ export function createMcpSession(options = {}) {
 
   async function callTool(name, args) {
     const callPayload = await callToolFor(colleague, name, args || {});
+    if (callPayload && name === CALL_CARD_UPDATE_TOOL) return cardUpdateResult(callPayload);
     if (callPayload) return toolResult(callPayload);
     throw new ValidationError(`unknown tool: ${name}`);
   }
@@ -608,7 +650,7 @@ export function createMcpSession(options = {}) {
     const complete = (result, meta = {}) => rpcResult(id, {
       resultType: 'complete',
       ...result,
-      _meta: { ...meta, [META_SERVER_INFO]: { ...SERVER_INFO } },
+      _meta: { ...result._meta, ...meta, [META_SERVER_INFO]: { ...SERVER_INFO } },
     });
     if (method === 'server/discover') {
       return complete({

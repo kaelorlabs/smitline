@@ -74,6 +74,12 @@ test('settings are validated and secrets are refused', () => {
   assert.throws(() => validateSetting('SMITLINE_PUBLIC_URL', 'http://x'), /https/);
   assert.throws(() => validateSetting('PATH', '/bin'), /unknown setting/);
   assert.throws(() => validateSetting('SMITLINE_OWNER_NAME', 'a\nb'), /one line/);
+  // Settings the docs tell people to set with `setup set` (docs/control-panel.md, docs/meetings.md).
+  assert.equal(validateSetting('SMITLINE_LISTEN', '1'), '1');
+  assert.throws(() => validateSetting('SMITLINE_LISTEN', 'yes'), /0 or 1/);
+  assert.equal(validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'mascot'), 'mascot');
+  assert.throws(() => validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'cartoon'), /still, animated or mascot/);
+  assert.equal(validateSetting('SMITLINE_MEETING_CAMERA_PACK', '/data/packs/relay-arch'), '/data/packs/relay-arch');
   // Voices OpenAI adds later can be allowed without a release.
   const env = { SMITLINE_EXTRA_VOICES: 'aurora, bad name,nova' };
   assert.deepEqual(availableVoices(env).slice(-2), ['aurora', 'nova']);
@@ -953,7 +959,7 @@ test('smitline mcp serves MCP on stdin and stdout', async (t) => {
   const replies = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(replies.map((reply) => reply.id), [1, 2]);
   assert.equal(replies[0].result.serverInfo.name, 'smitline');
-  assert.equal(replies[1].result.tools.length, 15);
+  assert.equal(replies[1].result.tools.length, 16);
 });
 
 test('setup set accepts the meeting and backend settings, and checks their values', async () => {
@@ -963,5 +969,5 @@ test('setup set accepts the meeting and backend settings, and checks their value
   assert.throws(() => validateSetting('SMITLINE_PHONE_WEB_SEARCH', 'yes'), /must be 0 or 1/);
   assert.throws(() => validateSetting('SMITLINE_PHONE_BACKEND_MODEL', 'gpt 5; rm'), /model name/);
   assert.equal(validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'animated'), 'animated');
-  assert.throws(() => validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'video'), /still or animated/);
+  assert.throws(() => validateSetting('SMITLINE_MEETING_CAMERA_STYLE', 'video'), /still, animated or mascot/);
 });

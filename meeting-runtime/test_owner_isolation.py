@@ -1234,7 +1234,7 @@ class MeetingSettingsTests(unittest.IsolatedAsyncioTestCase):
             runtime.mkdir()
             meeting = MeetingSession.from_dict(dict(session().to_dict(), owner=owner))
             # Another owner's meeting runs in the meeting pool; the local owner's here runs in
-            # the one container at a time, which reads .env as before.
+            # the one container at a time, which gets a file of its own just the same.
             claim = None if owner == 'local' else {'path': pool_claim_path(temp, meeting.id),
                                                    'record': {'owner': owner}}
             supervisor = ProductionMeetingSupervisor(
@@ -1257,8 +1257,11 @@ class MeetingSettingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.start_meeting(hooks, A), {
             'OPENAI_API_KEY': 'sk-shared', 'SMITLINE_VOICE': '', 'SMITLINE_PARTICIPANT_NAME': '',
             'SMITLINE_OWNER_NAME': ''})
-        # The local owner's meeting reads .env exactly as before: no file at all.
-        self.assertIsNone(await self.start_meeting(hooks, 'local'))
+        # The local owner's meeting gets the installation's own settings, in a file of its own
+        # too: no meeting container reads .env.
+        self.assertEqual(await self.start_meeting(hooks, 'local'), {
+            'OPENAI_API_KEY': 'sk-shared', 'SMITLINE_VOICE': 'quartz',
+            'SMITLINE_PARTICIPANT_NAME': "Robin's notetaker", 'SMITLINE_OWNER_NAME': 'Robin'})
 
     async def test_a_value_compose_cannot_carry_is_blank_rather_than_the_installation_value(self):
         class Odd(DefaultCallHooks):

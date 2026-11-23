@@ -215,6 +215,9 @@ export interface Call {
   channel: 'phone' | 'meeting';
   direction?: 'outbound' | 'inbound';
   status: CallStatus;
+  /** Goes up with any change to the call (status, a transcript line, a request, the result, cost,
+   * recording) and never down: a record with a higher version is the newer one. */
+  version: number;
   endReason?: string;
   brief: CallBrief;
   createdAt: string;
@@ -303,7 +306,15 @@ export interface DoNotCallEntry {
   number: string;
   addedAt: string;
   reason?: string;
+  /** True when the person asked on a call: the API cannot remove it, only the operator can. */
+  locked: boolean;
+  /** call: added because the person asked on a call; manual: added by the owner. */
+  source: 'call' | 'manual';
+  /** The owner's call the entry came from, when there is one. */
   callId?: string;
+  /** Set on entries taken off the list (GET /v1/do-not-call?removed=1). */
+  removedAt?: string;
+  removedBy?: 'owner' | 'operator';
 }
 
 export interface DoNotCallUpdate {

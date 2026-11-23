@@ -37,10 +37,11 @@ BRIDGE_HINT = ("Zoom's own dial-in numbers have no calling hours or call limits:
 class PolicyProblem(Exception):
     """A call the policy refuses, with a code agents can act on."""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, **details):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details
 
 
 def _parse(number):
@@ -233,13 +234,52 @@ def check_repeats(number, records, now, env, *, own_number=False, dial_in=False)
                             f'{_in_hours(min(last_hour) + timedelta(hours=1) - now)}.{hint}')
 
 
+class DoNotCallLocked(Exception):
+    """A removal the list refuses: these numbers asked on a call not to be called again."""
+
+    def __init__(self, numbers, message=None):
+        super().__init__(message or ', '.join(numbers) + ' asked on a call not to be called again. '
+                         'Only the operator can take a number added that way off the list.')
+        self.numbers = list(numbers)
+
+
+def _stamp(now=None):
+    moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return moment.isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def _same_number(value):
+    """A listed number in E.164 (normalize_phone); None for something that is not one."""
+    try:
+        return normalize_phone(value, 'number')
+    except ValueError:
+        return None
+
+
+def is_removed(entry):
+    return bool(entry.get('removedAt'))
+
+
+def is_locked(entry):
+    """Added because the person asked on a call: only the operator can take it off (lift).
+    Only the call service sets it (DoNotCallList.lock), never anything an API client sends."""
+    return entry.get('locked') is True
+
+
 class DoNotCallList:
     """People who asked not to be called again, kept as JSON next to the owner's profile.
 
-    Without a path (tests, hooks that keep no files) the list lives in memory.
+    Each entry is a number in E.164 with when it was added and why. One added because the person
+    asked on a call (`lock`, from the call service) is locked: the API cannot remove it, only the
+    operator of the installation can (`lift`). One the owner added by hand (`update`) the owner can
+    remove. A removal never deletes an entry: it is marked removed (when, by whom, why), so the
+    list keeps its history; checks and listings read only the entries in force (`active`).
+
+    Lists written before version 2 have entries without `source`, `locked` or removals: they
+    load as they are. Without a path (tests, hooks that keep no files) the list lives in memory.
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, path=None):
         self.path = Path(path) if path else None
@@ -247,6 +287,7 @@ class DoNotCallList:
         self._lock = threading.Lock()
 
     def entries(self):
+        """Every entry, removed ones included, with each number in E.164."""
         if self.path is None:
             return [dict(entry) for entry in self._memory]
         try:
@@ -258,7 +299,21 @@ class DoNotCallList:
             raise PolicyProblem('do_not_call_unreadable',
                                 'The do-not-call list (.smitline/do-not-call.json) cannot be '
                                 'read; fix or remove it.')
-        return [entry for entry in data.get('numbers') or [] if isinstance(entry, dict)]
+        entries = []
+        for entry in data.get('numbers') or []:
+            if not isinstance(entry, dict):
+                continue
+            number = _same_number(entry.get('number'))
+            entries.append(dict(entry, number=number) if number else entry)
+        return entries
+
+    def active(self):
+        """The entries in force: calls to these numbers are refused."""
+        return [entry for entry in self.entries() if not is_removed(entry)]
+
+    def removed(self):
+        """Entries taken off the list, kept on record."""
+        return [entry for entry in self.entries() if is_removed(entry)]
 
     def _save(self, entries):
         if self.path is None:
@@ -269,44 +324,114 @@ class DoNotCallList:
         _atomic_write(self.path, json.dumps({'version': self.VERSION, 'numbers': entries},
                                             ensure_ascii=False, indent=2))
 
-    def update(self, update, *, now=None):
-        """Apply {'add': [number or {number, reason, callId}], 'remove': [number]}; returns the list."""
+    def update(self, update, *, now=None, locked=is_locked):
+        """The owner's change, {'add': [number or {number, reason, callId}], 'remove': [number]}:
+        an added number is hand-added (removable); a removed one is marked removed. Returns the
+        entries in force.
+
+        Removing a locked number (`locked(entry)`) fails the whole update with DoNotCallLocked:
+        nothing in it is applied, so a caller never has to work out which half went through.
+        """
         if not isinstance(update, dict) or not update or set(update) - {'add', 'remove'}:
             raise ValueError('a do-not-call update has add, remove, or both')
         adds, removes = update.get('add') or [], update.get('remove') or []
         if not isinstance(adds, list) or not isinstance(removes, list) or \
                 len(adds) + len(removes) > 100:
             raise ValueError('add and remove must be lists of at most 100 numbers')
-        moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        stamp = moment.isoformat(timespec='seconds').replace('+00:00', 'Z')
+        stamp = _stamp(now)
+        gone = {normalize_phone(value, 'remove') for value in removes}
+        added = []
+        for item in adds:
+            item = {'number': item} if isinstance(item, str) else item
+            if not isinstance(item, dict) or set(item) - {'number', 'reason', 'callId'}:
+                raise ValueError('each added entry is a number or {number, reason, callId}')
+            entry = {'number': normalize_phone(item.get('number'), 'add.number'), 'addedAt': stamp,
+                     'source': 'manual'}
+            reason = str(item.get('reason') or '').strip()
+            if reason:
+                entry['reason'] = reason[:300]
+            if item.get('callId'):
+                entry['callId'] = str(item['callId'])[:40]
+            added.append(entry)
         with self._lock:
             entries = self.entries()
-            gone = {normalize_phone(value, 'remove') for value in removes}
-            entries = [entry for entry in entries if entry.get('number') not in gone]
-            for item in adds:
-                item = {'number': item} if isinstance(item, str) else item
-                if not isinstance(item, dict) or set(item) - {'number', 'reason', 'callId'}:
-                    raise ValueError('each added entry is a number or {number, reason, callId}')
-                number = normalize_phone(item.get('number'), 'add.number')
-                if any(entry.get('number') == number for entry in entries):
+            refused = sorted({entry['number'] for entry in entries
+                              if entry.get('number') in gone and not is_removed(entry)
+                              and locked(entry)})
+            if refused:
+                raise DoNotCallLocked(refused)
+            for entry in entries:
+                if entry.get('number') in gone and not is_removed(entry):
+                    entry.update(removedAt=stamp, removedBy='owner')
+            for entry in added:
+                if any(item.get('number') == entry['number'] and not is_removed(item)
+                       for item in entries):
                     continue
-                entry = {'number': number, 'addedAt': stamp}
-                reason = str(item.get('reason') or '').strip()
-                if reason:
-                    entry['reason'] = reason[:300]
-                if item.get('callId'):
-                    entry['callId'] = str(item['callId'])[:40]
                 entries.append(entry)
             self._save(entries)
-            return entries
+            return [entry for entry in entries if not is_removed(entry)]
+
+    def lock(self, number, *, call_id, reason='Asked on a call not to be called again.', now=None):
+        """The person asked on call `call_id` not to be called again: their number goes on the list
+        locked. A number already listed by hand is locked in place (it keeps when it was added and
+        now carries the call), so adding it by hand during the call cannot leave it removable.
+        Returns the entry."""
+        number = normalize_phone(number, 'number')
+        stamp = _stamp(now)
+        with self._lock:
+            entries = self.entries()
+            entry = next((item for item in entries
+                          if item.get('number') == number and not is_removed(item)), None)
+            if entry is None:
+                entry = {'number': number, 'addedAt': stamp}
+                entries.append(entry)
+            if not is_locked(entry):
+                entry.update(source='call', locked=True, lockedAt=stamp, callId=str(call_id)[:40],
+                             reason=reason[:300])
+            self._save(entries)
+            return dict(entry)
+
+    def lift(self, number, *, reason, by, now=None, ref=None):
+        """The operator takes a number off the list, locked or not, recording why and by whom (and
+        `ref`, the operator's own reference for the lift, when given). Returns the entry it removed,
+        or None when the number is not on the list."""
+        number = normalize_phone(number, 'number')
+        reason = ' '.join(str(reason or '').split())[:300]
+        by = ' '.join(str(by or '').split())[:100]
+        if not reason or not by:
+            raise ValueError('lifting a number needs a reason and who lifts it')
+        with self._lock:
+            entries = self.entries()
+            entry = next((item for item in entries
+                          if item.get('number') == number and not is_removed(item)), None)
+            if entry is None:
+                return None
+            entry.update(removedAt=_stamp(now), removedBy='operator', removedReason=reason,
+                         liftedBy=by)
+            if ref:
+                entry['liftRef'] = str(ref)[:100]
+            self._save(entries)
+            return dict(entry)
 
 
 def check_do_not_call(number, entries):
-    entry = next((item for item in entries if item.get('number') == number), None)
+    """Refuse a number that is on the list (entries removed from it do not count). The refusal for
+    a locked number never says how to take it off: only the operator can, once the person has
+    agreed to calls again."""
+    number = _same_number(number) or number
+    entry = next((item for item in entries
+                  if item.get('number') == number and not is_removed(item)), None)
     if entry is None:
         return
+    if is_locked(entry):
+        on = str(entry.get('lockedAt') or entry.get('addedAt') or '')[:10]
+        raise PolicyProblem('do_not_call',
+                            f'{number} asked on a call' + (f' (on {on})' if on else '') +
+                            ' not to be called again. Only the operator can take it off the list.',
+                            number=number, locked=True)
     since = str(entry.get('addedAt') or '')[:10]
     raise PolicyProblem('do_not_call',
                         f'{number} is on the do-not-call list' + (f' since {since}' if since else '') +
                         '. Call only if they have since agreed to calls, after removing the number '
-                        f'with: smitline do-not-call remove {number}')
+                        f'with: smitline do-not-call remove {number}',
+                        number=number, locked=False)

@@ -14,6 +14,8 @@ MEETINGS_DIR = 'meetings'
 CONTROL_DIR = '.smitline'
 DAEMON_DATA_NAME = 'daemon-data'
 PORTAL_ACTIVE_NAME = 'portal-active.json'
+# The token of the meeting view (meeting_view.py) of the one meeting container, for the console.
+VIEWER_TOKEN_NAME = 'meeting-view-token'
 # With several meetings at once, each running meeting's claim is its own file here.
 POOL_ACTIVE_DIR = 'active-meetings'
 
@@ -86,6 +88,10 @@ def daemon_token_path(project_root):
 
 def daemon_data_path(project_root):
     return control_root(project_root) / DAEMON_DATA_NAME
+
+
+def viewer_token_path(project_root):
+    return control_root(project_root) / VIEWER_TOKEN_NAME
 
 
 def portal_active_path(project_root):

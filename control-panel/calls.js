@@ -285,7 +285,7 @@ function handleLoadError(error) {
   $('layout').hidden = !state.loaded;
   if (error.code === 'console_offline') {
     setConnection('offline');
-    showBanner('The console stopped responding.', 'Start it again (./start-control-panel.sh), then reload this page.', 'bad');
+    showBanner('The console stopped responding.', 'Start it again, then reload this page.', 'bad');
   } else if (['daemon_offline', 'daemon_unavailable'].includes(error.code) || error.status === 503) {
     setConnection('down');
     showBanner(`Smitline isn’t running right now, so ${WORDS.many} can’t be shown.`,

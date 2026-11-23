@@ -1159,6 +1159,25 @@ class GuardrailTests(unittest.TestCase):
 
 
 class SurfaceTests(unittest.TestCase):
+    def test_the_api_schema_names_each_thing_once(self):
+        # JSON keeps the last of two equal keys: a second "Contact" (the contact book's entry)
+        # once replaced the brief's contact, so a client built from the schema refused
+        # contact: {"name": "Alex"}.
+        import json
+        twice = []
+
+        def pairs(items):
+            keys = [key for key, _ in items]
+            twice.extend(sorted({key for key in keys if keys.count(key) > 1}))
+            return dict(items)
+
+        spec = json.loads(Path(__file__).with_name('openapi.json').read_text(encoding='utf-8'),
+                          object_pairs_hook=pairs)
+        self.assertEqual(twice, [])
+        # A brief's contact is a person, as in the profile (call_brief checks both with _person).
+        contact = spec['components']['schemas']['Brief']['properties']['contact']
+        self.assertEqual(contact['$ref'], '#/components/schemas/Person')
+
     def test_the_api_schema_has_every_brief_field_and_the_dial_in(self):
         import json
         from call_brief import BRIEF_FIELDS

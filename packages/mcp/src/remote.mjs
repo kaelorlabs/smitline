@@ -208,8 +208,9 @@ function approvalPage(request, csrf, error = '') {
 <h2 id="scope-title">If you allow it, it can</h2>
 <ul class="scope can">
 <li><span class="icon" aria-hidden="true">✓</span><span>Place phone calls and join video meetings on your behalf, following briefs it writes</span></li>
-<li><span class="icon" aria-hidden="true">✓</span><span>Read the status, results, and transcripts of those calls</span></li>
-<li><span class="icon" aria-hidden="true">✓</span><span>Send guidance during a call, end a call, or hand a call to your phone</span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span>Read all your calls and meetings, not only its own: their status, results, transcripts, and notes</span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span>Read your contacts, and read and change your profile: the people you know, how you come across, your default voices</span></li>
+<li><span class="icon" aria-hidden="true">✓</span><span>Send guidance during a call, answer requests from people on it, end it, hand it to your phone, and save notes for later calls</span></li>
 </ul>
 <h2>It cannot</h2>
 <ul class="scope cannot">

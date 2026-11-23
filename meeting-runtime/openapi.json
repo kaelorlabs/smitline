@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Smitline calls API",
-    "version": "0.3.13",
+    "version": "0.3.16",
     "description": "Start phone calls and meetings from a brief and read structured results. See docs/calls.md.",
     "license": { "name": "Apache-2.0", "identifier": "Apache-2.0" }
   },
@@ -271,6 +271,7 @@
       "get": {
         "summary": "List the numbers Smitline refuses to call because the person asked not to be called again",
         "operationId": "getDoNotCall",
+        "parameters": [{ "name": "removed", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1", "true"] }, "description": "Also list the numbers taken off the list, which it keeps on record" }],
         "responses": {
           "200": { "description": "The list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
           "501": { "$ref": "#/components/responses/Error" }
@@ -282,6 +283,7 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallUpdate" } } } },
         "responses": {
           "200": { "description": "The saved list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoNotCallList" } } } },
+          "403": { "description": "do_not_call_locked: the update removes a number that asked on a call not to be called again (error.numbers lists them). Only the operator can take such a number off, and nothing in the update was applied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "422": { "$ref": "#/components/responses/Error" },
           "501": { "$ref": "#/components/responses/Error" }
         }
@@ -317,7 +319,7 @@
           },
           "questions": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20, "description": "What to find out. The result's details answer each one." },
           "tone": { "type": "string", "maxLength": 200, "description": "How to come across. Defaults to matching the relationship." },
-          "contact": { "$ref": "#/components/schemas/Contact" },
+          "contact": { "$ref": "#/components/schemas/Person", "description": "Who is being called, when the profile does not know the number." },
           "mayAgreeTo": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "mustNotShare": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 20 },
           "successCriteria": { "type": "string", "maxLength": 500 },
@@ -419,17 +421,6 @@
           "details": { "type": "string", "maxLength": 24000, "description": "Long reference material, given only to the backend model the voice consults." }
         }
       },
-      "Contact": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name"],
-        "description": "Who is being called, when the profile does not know the number.",
-        "properties": {
-          "name": { "type": "string", "maxLength": 80 },
-          "relationship": { "type": "string", "maxLength": 120 },
-          "notes": { "type": "string", "maxLength": 600 }
-        }
-      },
       "Person": {
         "type": "object",
         "additionalProperties": false,
@@ -490,19 +481,22 @@
         "type": "object",
         "required": ["numbers"],
         "properties": {
-          "numbers": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["number", "addedAt"],
-              "properties": {
-                "number": { "type": "string", "description": "E.164" },
-                "addedAt": { "type": "string", "format": "date-time" },
-                "reason": { "type": "string" },
-                "callId": { "type": "string", "description": "The call on which the person asked, when added automatically" }
-              }
-            }
-          }
+          "numbers": { "type": "array", "items": { "$ref": "#/components/schemas/DoNotCallEntry" } },
+          "removed": { "type": "array", "description": "With ?removed=1: numbers taken off the list, kept on record", "items": { "$ref": "#/components/schemas/DoNotCallEntry" } }
+        }
+      },
+      "DoNotCallEntry": {
+        "type": "object",
+        "required": ["number", "addedAt", "locked", "source"],
+        "properties": {
+          "number": { "type": "string", "description": "E.164" },
+          "addedAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string" },
+          "locked": { "type": "boolean", "description": "The person asked on a call: only the operator can take the number off" },
+          "source": { "type": "string", "enum": ["call", "manual"], "description": "call: added because the person asked on a call; manual: added by the owner" },
+          "callId": { "type": "string", "description": "The owner's call this entry came from, when there is one" },
+          "removedAt": { "type": "string", "format": "date-time" },
+          "removedBy": { "type": "string", "enum": ["owner", "operator"] }
         }
       },
       "DoNotCallUpdate": {
@@ -577,9 +571,10 @@
       },
       "Call": {
         "type": "object",
-        "required": ["id", "channel", "status", "brief", "createdAt"],
+        "required": ["id", "version", "channel", "status", "brief", "createdAt"],
         "properties": {
           "id": { "type": "string" },
+          "version": { "type": "integer", "minimum": 1, "description": "Goes up with any change to the call (status, a transcript line, a request, the result, cost, recording) and never down: of two copies of a call, the one with the higher version is newer." },
           "owner": { "type": "string", "description": "The owner the call belongs to; local on a self-hosted installation." },
           "channel": { "type": "string", "enum": ["phone", "meeting"] },
           "status": { "type": "string", "enum": ["queued", "connecting", "ringing", "waiting", "in_progress", "summarizing", "completed", "failed", "canceled"] },

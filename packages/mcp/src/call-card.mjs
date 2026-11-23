@@ -1,16 +1,23 @@
 // The call card: one phone call or meeting shown inside the chat, for clients that support MCP
 // Apps (ChatGPT, Claude and others). It says who the call was for and how it went, plays the
 // recording when there is a link to one, and holds the transcript. It leaves out what the call
-// cost: the agent still reads that in the result. start_call and get_call return it; while the
-// call runs, the card follows it by calling get_call itself. Clients without MCP Apps ignore it
-// and read the same result as text.
+// cost: the agent still reads that in the result. start_call returns it (get_call answers in
+// text, so the agent's checks do not stack copies of the card in the chat); while the
+// call runs, the card follows it by itself with get_call_update, a tool only the card calls, at
+// the pace the call's status sets, and stops once it has ended. Clients without MCP Apps ignore
+// it and read the same result as text.
+//
+// Hosts give the card copies of the call that may be old: the tool result that made the card,
+// replayed each time the chat opens, or ChatGPT's toolOutput and saved widgetState. Each record
+// carries a version, and the card takes a copy only if it is newer than the one it shows and its
+// status is not behind; so a chat reopened after the call shows how it ended, not "Starting".
 //
 // Everything the card shows comes from the call record and is treated as text: it is set with
 // textContent, never parsed as HTML.
 
 // Hosts may keep a copy of the card by its address (ChatGPT asks apps to version it), so the
 // version goes up whenever the card's page changes in a way an old copy would get wrong.
-export const CALL_CARD_URI = 'ui://smitline/call-card-v3.html';
+export const CALL_CARD_URI = 'ui://smitline/call-card-v5.html';
 export const CALL_CARD_MIME = 'text/html;profile=mcp-app';
 
 /** Tool _meta that shows the card: the MCP Apps key, and ChatGPT's alias for it. */
@@ -22,6 +29,99 @@ export const CALL_CARD_TOOL_META = Object.freeze({
 
 /** Tool _meta for the in-call tools the card calls itself, when the user answers from it. */
 export const CALL_CARD_ACTION_META = Object.freeze({ 'openai/widgetAccessible': true });
+
+/** The tool the card follows a call with. Only the card calls it: hosts keep it from the model. */
+export const CALL_CARD_UPDATE_TOOL = 'get_call_update';
+export const CALL_CARD_UPDATE_META = Object.freeze({
+  ui: { visibility: ['app'] },
+  'openai/visibility': 'private',
+  'openai/widgetAccessible': true,
+});
+
+/**
+ * How long the card waits before asking for a call again, by status: a few seconds while it
+ * starts and rings, a little longer once people talk (the status and questions, not every
+ * word), and never again once it has ended.
+ */
+export const CALL_CARD_POLL_MS = Object.freeze({
+  queued: 3000,
+  connecting: 3000,
+  ringing: 3000,
+  waiting: 3000,
+  in_progress: 5000,
+  summarizing: 3000,
+  completed: 0,
+  failed: 0,
+  canceled: 0,
+});
+
+// A live call's record has no transcript (its lines are events, for wait_for_call); one that
+// does carries only its last few lines and the count.
+const LIVE_TRANSCRIPT_LINES = 3;
+
+/**
+ * What get_call_update answers for a call record: { unchanged: true } when the card already has
+ * this version, else the record cut to what the card shows. A finished call keeps its whole
+ * transcript, for the card's last answer; a live one, its last few lines and the count.
+ */
+export function callCardUpdate(record, ifVersion) {
+  const call = record && typeof record === 'object' ? record : {};
+  const status = typeof call.status === 'string' ? call.status : '';
+  const version = Number.isInteger(call.version) && call.version > 0 ? call.version : 0;
+  const nextPollMs = CALL_CARD_POLL_MS[status] ?? 3000;
+  // A record without a version (an older daemon) is never "unchanged": the card gets it whole.
+  // `id` beside callId: a host that hands the card only an answer's text has it found by its id,
+  // like any other answer (recordFrom in the card).
+  if (version && ifVersion === version) {
+    return { id: call.id, callId: call.id, status, version, unchanged: true, nextPollMs };
+  }
+  const ended = ['completed', 'failed', 'canceled'].includes(status);
+  const object = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
+  const brief = object(call.brief) || {};
+  const result = object(call.result);
+  const said = Array.isArray(call.transcript) ? call.transcript : Array.isArray(result?.transcript) ? result.transcript : [];
+  const lines = said.map(object).filter((line) => line && typeof line.text === 'string' && line.text.trim())
+    .map(({ speaker, text }) => ({ speaker, text }));
+  const requests = (Array.isArray(call.requests) ? call.requests : []).map(object).filter(Boolean);
+  const update = {
+    callId: call.id,
+    id: call.id,
+    status,
+    version,
+    nextPollMs,
+    channel: call.channel,
+    brief: {
+      channel: brief.channel,
+      to: brief.to,
+      ...(object(brief.contact) && typeof brief.contact.name === 'string' ? { contact: { name: brief.contact.name } } : {}),
+    },
+    answeredAt: call.answeredAt,
+    endedAt: call.endedAt,
+    error: call.error,
+    result: result ? (({ transcript: _whole, ...rest }) => rest)(result) : null,
+    cost: call.cost,
+    charge: call.charge,
+    callUrl: call.callUrl,
+    recording: call.recording,
+    recordingUrl: call.recordingUrl,
+    transcript: ended ? lines : lines.slice(-LIVE_TRANSCRIPT_LINES),
+    transcriptCount: lines.length,
+    requestCount: requests.length,
+  };
+  // While the call runs, the user answers its questions from the card.
+  if (!ended) {
+    update.requests = requests.map((request) => ({
+      id: request.id,
+      kind: request.kind,
+      state: request.state,
+      text: request.text,
+      askedBy: request.askedBy,
+      thread: (Array.isArray(request.thread) ? request.thread : []).map(object).filter(Boolean)
+        .map(({ from, type, text }) => ({ from, type, text })),
+    }));
+  }
+  return JSON.parse(JSON.stringify(update)); // without the fields the record does not have
+}
 
 /** What the card shows for a call record. Pure: it also runs inside the card. */
 export function callCardView(record, now = Date.now()) {
@@ -88,10 +188,13 @@ export function callCardView(record, now = Date.now()) {
   const them = meeting ? 'Meeting' : (contact || 'Them');
   // A note says what happened on the line ("On hold."): nobody said it.
   const who = (speaker) => (speaker === 'agent' ? 'Smitline' : speaker === 'note' ? 'Note' : them);
-  const transcript = (Array.isArray(call.transcript) ? call.transcript : [])
+  // A finished call's record has its transcript in the result; the card's own update carries
+  // the last few lines and how many there are.
+  const transcript = (Array.isArray(call.transcript) ? call.transcript : Array.isArray(result.transcript) ? result.transcript : [])
     .map((line) => object(line))
     .filter((line) => text(line.text))
     .map((line) => ({ who: who(line.speaker), text: text(line.text) }));
+  const lines = Math.max(count(call.transcriptCount) || 0, transcript.length);
   const details = (Array.isArray(result.details) ? result.details : [])
     .map((item) => object(item))
     .map((item) => ({ label: text(item.label), value: text(item.value == null ? '' : String(item.value)) }))
@@ -156,6 +259,7 @@ export function callCardView(record, now = Date.now()) {
     canTell: call.status === 'in_progress',
     recording,
     transcript,
+    lines,
     callUrl: https(call.callUrl),
   };
 }
@@ -249,17 +353,47 @@ details[open] summary::before { transform: rotate(45deg); }
 .line strong { font-weight: var(--strong); }
 .open { color: var(--accent); font-weight: var(--strong); }
 .open:hover { text-decoration: underline; }
+.state { display: flex; align-items: baseline; gap: 12px; margin-top: -8px; }
+.last { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.last .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skeleton { display: grid; gap: 10px; padding: 4px 0; }
+.bone { display: block; height: 12px; width: 60%; border-radius: var(--radius); background: var(--chip);
+  animation: pulse 1.6s ease-in-out infinite; }
+.bone.title { height: 16px; width: 45%; } .bone.short { width: 30%; }
+@media (prefers-reduced-motion: reduce) { .bone { animation: none; } }
 `;
 
 const CLIENT = `
 const ENDED = new Set(['completed', 'failed', 'canceled']);
-const REFRESH_MS = 3000;
+// A call's statuses in order; the card never moves back along it. Ringing and waiting are the
+// same step, as for the daemon (a meeting refused at the door rings its dial-in number); the
+// three ends rank the same.
+const RANK = { queued: 0, connecting: 1, ringing: 2, waiting: 2, in_progress: 3, summarizing: 4, completed: 5, failed: 5, canceled: 5 };
+const rank = (status) => RANK[status] ?? -1;
+const LIFETIME_MS = 30 * 60 * 1000; // then the card pauses until the user asks it to go on
+const GIVE_UP_MS = 2 * 60 * 1000; // failing this long, it says so and offers to try again
+const LOAD_MS = 20000; // with no call at all after this, it says so instead of a placeholder
 const main = document.querySelector('main');
 const waiting = new Map();
 let nextId = 1;
-let call = null;
-let timer = null;
+// The one call the card shows: the newest copy it has seen (record, with its version and status).
+// generation goes up when the card is closed, so an answer that comes back later does nothing.
+const state = { callId: null, version: -1, status: null, record: null, generation: 0 };
 let closed = false;
+let began = false; // whether the card has decided to follow the call, or that it has ended
+let fresh = false; // whether the card has heard from the server since it opened
+let timer = null;
+let inFlight = false;
+let again = false; // asked to poll while a poll was out: poll once more when it is back
+let asleep = false; // a poll came due while nobody could see the card
+let onScreen = true;
+let paused = false;
+let lifetimeEnds = Date.now() + LIFETIME_MS;
+let failures = 0;
+let failingSince = null;
+let lastGood = null;
+let bridge = null; // true once the host answered ui/initialize, false if it never will
+const loading = setTimeout(() => { if (!state.callId) gone(); }, LOAD_MS);
 // Whether the user opened the transcript: the card redraws every few seconds and keeps it open.
 let transcriptOpen = false;
 // Whether the user opened the older entries of the thread, which the card keeps open the same way.
@@ -290,10 +424,14 @@ function ask(method, params) {
 }
 function tell(method, params) { post({ jsonrpc: '2.0', method, params }); }
 async function callTool(name, args) {
+  if (bridge === null) await ready; // the host takes requests once it has answered ui/initialize
+  const direct = window.openai && typeof window.openai.callTool === 'function';
+  if (bridge === false && direct) return window.openai.callTool(name, args);
   try {
     return await ask('tools/call', { name, arguments: args });
   } catch (error) {
-    if (window.openai && typeof window.openai.callTool === 'function') return window.openai.callTool(name, args);
+    // Only when the bridge said nothing: an error it answered with would just come back again.
+    if (direct && !error.answered) return window.openai.callTool(name, args);
     throw error;
   }
 }
@@ -306,14 +444,25 @@ function node(tag, className, content) {
 }
 
 function render() {
-  const view = callCardView(call);
+  if (!state.record) {
+    const line = notice();
+    if (line) main.replaceChildren(line);
+    return;
+  }
+  const view = callCardView(state.record);
+  main.dataset.status = state.status || '';
+  main.removeAttribute('aria-busy');
   const parts = [];
   const head = node('header', 'head');
   const titles = node('div');
   titles.append(node('h1', null, view.title));
   if (view.subtitle) titles.append(node('p', 'sub', view.subtitle));
-  head.append(titles, node('span', 'pill ' + view.tone, view.status));
+  // A copy the server has not confirmed yet may be old: say the card is checking, not "Starting".
+  const checking = view.live && !fresh;
+  head.append(titles, node('span', checking ? 'pill muted' : 'pill ' + view.tone, checking ? 'Checking…' : view.status));
   parts.push(head);
+  const line = notice();
+  if (line) parts.push(line);
   if (view.outcome || view.summary) {
     const section = node('section', 'result');
     if (view.outcome) section.append(node('p', 'outcome', view.outcome));
@@ -346,11 +495,20 @@ function render() {
     parts.push(section);
   }
   const foot = node('footer', 'foot');
-  if (view.transcript.length) {
+  if (view.live && view.transcript.length) {
+    // While the call runs: what was said last, and how much has been said.
+    const said = view.transcript[view.transcript.length - 1];
+    const last = node('div', 'last');
+    const line = node('p', 'line');
+    line.append(node('strong', null, said.who + ': '), document.createTextNode(said.text));
+    last.append(node('p', null, 'Transcript · ' + view.lines), line);
+    foot.append(last);
+  } else if (view.transcript.length) {
     const box = node('details');
     box.open = transcriptOpen;
     box.addEventListener('toggle', () => { transcriptOpen = box.open; });
-    box.append(node('summary', null, 'Transcript · ' + view.transcript.length));
+    box.append(node('summary', null, 'Transcript · ' + view.lines));
+    if (view.lines > view.transcript.length) box.append(node('p', null, 'The last ' + view.transcript.length + ':'));
     for (const line of view.transcript) {
       const said = node('p', 'line');
       said.append(node('strong', null, line.who + ': '), document.createTextNode(line.text));
@@ -394,26 +552,264 @@ async function openLink(url) {
   }
 }
 
-function show(result) {
-  const data = result && typeof result === 'object' && result.structuredContent ? result.structuredContent : result;
-  if (!data || typeof data !== 'object' || !/^call-[0-9a-f]{16}$/.test(String(data.id || ''))) return;
-  call = data;
+const CALL_ID = /^call-[0-9a-f]{16}$/;
+
+// The call a tool result, toolOutput or saved state holds: its structuredContent, else the JSON in
+// its text (which may follow a line with the call id), else the object itself. {} is nothing.
+function recordFrom(data) {
+  if (!data || typeof data !== 'object') return null;
+  let record = data.structuredContent;
+  if (!record && Array.isArray(data.content)) {
+    const said = data.content[0] && typeof data.content[0].text === 'string' ? data.content[0].text : '';
+    try { record = JSON.parse(said.slice(said.indexOf('{'))); } catch { record = null; }
+  }
+  if (!record && !('content' in data) && !('structuredContent' in data)) record = data;
+  return record && typeof record === 'object' && CALL_ID.test(String(record.id || '')) ? record : null;
+}
+
+// Just the call's id, for a result that came without its record.
+function idFrom(data) {
+  if (!data || typeof data !== 'object') return null;
+  const meta = data._meta && typeof data._meta === 'object' ? data._meta.callId : null;
+  if (CALL_ID.test(String(meta || ''))) return meta;
+  const said = Array.isArray(data.content) && data.content[0] && typeof data.content[0].text === 'string' ? data.content[0].text : '';
+  const first = said.split('\\n')[0].trim();
+  return CALL_ID.test(first) ? first : null;
+}
+
+const versionOf = (record) => (Number.isInteger(record.version) && record.version > 0 ? record.version : 0);
+
+/**
+ * Take a copy of the call if it is newer than the one shown (a record without a version, from an
+ * older server, counts as version 0) and its status is not behind; true when it was taken. Only
+ * a poll's answer may replace a copy of the same version 0: it is the server's call as it is now.
+ */
+function accept(record, source) {
+  if (!record || (state.callId && record.id !== state.callId)) return false;
+  const version = versionOf(record);
+  if (state.record) {
+    const newer = version > state.version || (source === 'poll' && version === 0 && state.version === 0);
+    if (!newer || rank(record.status) < rank(state.status)) return false;
+  }
+  state.callId = record.id;
+  state.version = version;
+  state.status = record.status;
+  state.record = record;
+  if (ENDED.has(record.status)) stop();
+  save();
   render();
-  follow();
+  return true;
 }
 
-function follow() {
-  clearTimeout(timer);
-  if (closed || !call || ENDED.has(call.status)) return;
-  timer = setTimeout(refresh, REFRESH_MS);
+// What a host handed the card: take its call, then start following it if not yet.
+function hydrate(data, source) {
+  const record = recordFrom(data);
+  if (record) accept(record, source);
+  else if (!state.callId && idFrom(data)) state.callId = idFrom(data);
+  begin();
 }
 
-async function refresh() {
+// Once the card knows its call: an ended one is shown as it ended and never asked for again;
+// any other is asked for at once, because what the host handed over may be old.
+function begin() {
+  if (began || !state.callId || closed) return;
+  began = true;
+  clearTimeout(loading);
+  if (!ENDED.has(state.status)) poll(state.generation);
+}
+
+// The card's own copy for ChatGPT to give back when it shows the card again: the call cut down
+// to its header, outcome and last line, a few hundred bytes.
+function save() {
+  if (!window.openai || typeof window.openai.setWidgetState !== 'function' || !state.record) return;
+  const call = state.record;
+  const result = call.result && typeof call.result === 'object' ? call.result : null;
+  const brief = call.brief && typeof call.brief === 'object' ? call.brief : {};
+  const clip = (value, size) => (typeof value === 'string' ? value.slice(0, size) : undefined);
+  const view = callCardView(call);
+  const record = JSON.parse(JSON.stringify({
+    id: call.id, status: call.status, version: state.version, channel: call.channel,
+    brief: { channel: brief.channel, to: brief.to, contact: brief.contact && typeof brief.contact === 'object' ? { name: clip(brief.contact.name, 80) } : undefined },
+    answeredAt: call.answeredAt, endedAt: call.endedAt, error: clip(call.error, 300), callUrl: call.callUrl,
+    recording: call.recording, recordingUrl: call.recordingUrl,
+    result: result ? {
+      outcome: result.outcome, summary: clip(result.summary, 400), durationSeconds: result.durationSeconds,
+      details: view.details.slice(0, 6).map((item) => ({ label: item.label.slice(0, 60), value: item.value.slice(0, 120) })),
+    } : null,
+    transcript: (Array.isArray(call.transcript) ? call.transcript : result && Array.isArray(result.transcript) ? result.transcript : [])
+      .slice(-1).map((line) => ({ speaker: line && line.speaker, text: clip(line && line.text, 200) })),
+    transcriptCount: view.lines,
+  }));
   try {
-    const result = await callTool('get_call', { callId: call.id });
-    if (result && !result.isError) return show(result);
-  } catch { /* try again below */ }
-  follow();
+    window.openai.setWidgetState({ callId: state.callId, version: state.version, status: state.status, record });
+  } catch { /* the card works without it */ }
+}
+
+function savedState() {
+  try {
+    const saved = window.openai && window.openai.widgetState;
+    if (saved && typeof saved === 'object' && CALL_ID.test(String(saved.callId || '')) && recordFrom(saved.record)) return saved;
+  } catch { /* nothing kept */ }
+  return null;
+}
+
+function canPoll() {
+  return !closed && began && Boolean(state.callId) && !ENDED.has(state.status) && !paused;
+}
+
+function arm(ms) {
+  clearTimeout(timer);
+  timer = null;
+  if (canPoll()) {
+    const generation = state.generation;
+    timer = setTimeout(() => poll(generation), ms);
+  }
+}
+
+// How long the card waits at each status when the server says nothing.
+const paceFor = (status) => (Object.prototype.hasOwnProperty.call(PACE, status) ? PACE[status] : 3000);
+
+/** Ask the server for the call once, if anyone can see the card; then arm the next ask. */
+async function poll(generation) {
+  timer = null;
+  if (generation !== state.generation || !canPoll()) return;
+  if (document.hidden || !onScreen) {
+    asleep = true; // nobody is looking: ask again when someone is
+    return;
+  }
+  if (Date.now() >= lifetimeEnds) {
+    paused = true;
+    render();
+    return;
+  }
+  if (inFlight) {
+    again = true;
+    return;
+  }
+  inFlight = true;
+  let answer = null;
+  let problem = null;
+  try {
+    answer = await callTool(UPDATE_TOOL, state.version > 0 ? { callId: state.callId, ifVersion: state.version } : { callId: state.callId });
+  } catch (error) {
+    problem = error;
+  }
+  inFlight = false;
+  if (generation !== state.generation || closed) return;
+  const data = answer && !answer.isError ? (answer.structuredContent || recordFrom(answer)) : null;
+  if (!data || typeof data !== 'object' || (!data.unchanged && !recordFrom(data))) return failed(problem || answer);
+  const wasFailing = failingSince !== null;
+  const wasFresh = fresh;
+  failures = 0;
+  failingSince = null;
+  lastGood = Date.now();
+  fresh = true;
+  const taken = !data.unchanged && accept(data, 'poll');
+  if (data.unchanged && typeof data.status === 'string' && rank(data.status) > rank(state.status)) {
+    // An older daemon gives every record version 1, so "unchanged" can come with a newer status:
+    // ask once for the whole call.
+    state.version = 0;
+    again = true;
+  }
+  if (!taken && (wasFailing || !wasFresh)) render(); // the note or "Checking…" goes
+  if (!canPoll()) return;
+  if (again) {
+    again = false;
+    return poll(generation);
+  }
+  const hinted = Number.isFinite(data.nextPollMs) ? data.nextPollMs : 0;
+  arm(Math.max(hinted, paceFor(state.status)));
+}
+
+// Seconds a refusal asks the card to wait, as in "try again in 7 s".
+function waitAsked(problem) {
+  const said = [];
+  if (typeof problem === 'string') said.push(problem);
+  else if (problem && typeof problem === 'object') {
+    if (typeof problem.message === 'string') said.push(problem.message);
+    if (problem.structuredContent && typeof problem.structuredContent.message === 'string') said.push(problem.structuredContent.message);
+    for (const part of Array.isArray(problem.content) ? problem.content : []) if (part && typeof part.text === 'string') said.push(part.text);
+  }
+  const found = said.join(' ').match(/(?:try again|retry) (?:in|after) (\\d+(?:\\.\\d+)?) ?(?:s\\b|sec|second)/i);
+  return found ? Number(found[1]) * 1000 : 0;
+}
+
+// A poll that failed: the card keeps what it shows, says it is reconnecting, and waits longer
+// each time (5, 10, 20, 40 s, then every minute, give or take a little), or as long as it was asked.
+function failed(problem) {
+  failures += 1;
+  if (failingSince === null) failingSince = Date.now();
+  const backoff = Math.min(60000, 5000 * 2 ** (failures - 1) * (0.9 + 0.2 * Math.random()));
+  render();
+  if (again) again = false;
+  arm(Math.max(backoff, waitAsked(problem)));
+}
+
+/** Ask now: after the user sent something from the card, or pressed Refresh. */
+function pollNow() {
+  if (!canPoll()) return;
+  clearTimeout(timer);
+  timer = null;
+  asleep = false;
+  poll(state.generation);
+}
+
+// Someone can see the card again: ask once now if a poll came due meanwhile.
+function wake() {
+  if (!asleep || document.hidden || !onScreen) return;
+  pollNow();
+}
+
+function stop() {
+  clearTimeout(timer);
+  timer = null;
+  failingSince = null;
+  failures = 0;
+}
+
+// The host closed the card, or the page is going away: nothing pending may act after this.
+function close() {
+  closed = true;
+  state.generation += 1;
+  stop();
+  clearTimeout(loading);
+}
+
+function refreshButton() {
+  const button = node('button', 'more', 'Refresh');
+  button.type = 'button';
+  button.addEventListener('click', () => {
+    paused = false;
+    lifetimeEnds = Date.now() + LIFETIME_MS;
+    failures = 0;
+    render();
+    pollNow();
+  });
+  return button;
+}
+
+// The line under the header when the card is not simply following the call.
+function notice() {
+  if (ENDED.has(state.status) || !began) return null;
+  const line = node('div', 'state');
+  if (paused) {
+    line.append(node('p', 'note', 'Paused'), refreshButton());
+    return line;
+  }
+  if (failingSince === null) return null;
+  if (Date.now() - failingSince >= GIVE_UP_MS) {
+    const when = lastGood ? ' · last updated ' + new Date(lastGood).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    line.append(node('p', 'note bad', 'Couldn’t refresh' + when), refreshButton());
+    return line;
+  }
+  line.append(node('p', 'note', 'Reconnecting…'));
+  return line;
+}
+
+// No call ever came: say so rather than keep the placeholder up.
+function gone() {
+  main.removeAttribute('aria-busy');
+  main.replaceChildren(node('p', 'note', 'This call can’t be shown here. Ask for it again in the chat.'));
 }
 
 function failure(result) {
@@ -425,13 +821,13 @@ function failure(result) {
 
 async function send(key, name, args, about) {
   const words = (drafts.get(key) || '').trim();
-  if (!words || sending.has(key) || !call) return;
+  if (!words || sending.has(key) || !state.record) return;
   const answering = key === 'tell' ? [...late] : [];
   sending.add(key);
   notes.delete(key);
   render();
   try {
-    const result = await callTool(name, { callId: call.id, ...args, text: lateAnswer(answering, words) });
+    const result = await callTool(name, { callId: state.callId, ...args, text: lateAnswer(answering, words) });
     if (result && !result.isError) {
       drafts.delete(key);
       late = late.filter((question) => !answering.includes(question));
@@ -454,8 +850,7 @@ async function send(key, name, args, about) {
   }
   sending.delete(key);
   render();
-  clearTimeout(timer);
-  refresh();
+  pollNow();
 }
 
 // The box grows with what is typed, up to about five lines.
@@ -649,44 +1044,64 @@ window.addEventListener('message', (event) => {
     if (!waiter) return;
     waiting.delete(message.id);
     clearTimeout(waiter.expiry);
-    if (message.error) waiter.reject(new Error(message.error.message || 'error'));
+    if (message.error) waiter.reject(Object.assign(new Error(message.error.message || 'error'), { answered: true }));
     else waiter.resolve(message.result);
     return;
   }
-  if (message.method === 'ui/notifications/tool-result') show(message.params);
+  if (message.method === 'ui/notifications/tool-result') hydrate(message.params, 'host');
   else if (message.method === 'ui/notifications/host-context-changed') theme(message.params);
   else if (message.method === 'ui/resource-teardown' || message.method === 'ping') {
-    if (message.method === 'ui/resource-teardown') { closed = true; clearTimeout(timer); }
+    if (message.method === 'ui/resource-teardown') close();
     if (message.id !== undefined) post({ jsonrpc: '2.0', id: message.id, result: {} });
   }
 });
+window.addEventListener('pagehide', close);
+document.addEventListener('visibilitychange', wake);
+window.addEventListener('focus', wake);
+// A card scrolled out of sight asks for nothing (document.hidden says only whether the tab is).
+if (typeof IntersectionObserver === 'function') {
+  new IntersectionObserver((entries) => {
+    onScreen = entries.some((entry) => entry.isIntersecting);
+    wake();
+  }).observe(document.documentElement);
+}
 
 new ResizeObserver(() => tell('ui/notifications/size-changed', {
   width: document.documentElement.scrollWidth,
   height: document.documentElement.scrollHeight,
 })).observe(document.documentElement);
 
-// ChatGPT also says light or dark in its own globals.
-if (window.openai) theme({ theme: window.openai.theme });
-if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
-window.addEventListener('openai:set_globals', () => {
-  if (window.openai) theme({ theme: window.openai.theme });
-  if (window.openai && window.openai.toolOutput) show(window.openai.toolOutput);
-});
 // Exactly the fields MCP Apps allows here: hosts that check them answer anything else with an
 // error, and the card would never get past this step.
-ask('ui/initialize', {
+const ready = ask('ui/initialize', {
   protocolVersion: '2026-01-26',
   appInfo: { name: 'smitline-call-card', version: '1' },
   appCapabilities: { availableDisplayModes: ['inline'] },
 }).then((result) => {
+  bridge = true;
   theme(result && result.hostContext);
   tell('ui/notifications/initialized', {});
-}).catch(() => { /* not an MCP Apps host: window.openai above, or nothing */ });
+}).catch(() => { bridge = false; /* not an MCP Apps host: window.openai below, or nothing */ });
+
+// ChatGPT also says light or dark in its own globals, and hands over the tool result and what
+// the card saved last time it showed. Either may be old, or {}: accept() keeps the newer.
+if (window.openai) {
+  theme({ theme: window.openai.theme });
+  const delivered = window.openai.toolOutput;
+  const id = (recordFrom(delivered) || {}).id || idFrom(delivered);
+  const saved = savedState();
+  if (saved && (!id || saved.callId === id)) accept(recordFrom(saved.record), 'saved');
+  if (delivered) hydrate(delivered, 'host');
+  else begin();
+}
+window.addEventListener('openai:set_globals', () => {
+  if (!window.openai) return;
+  theme({ theme: window.openai.theme });
+  if (window.openai.toolOutput) hydrate(window.openai.toolOutput, 'host');
+});
 `;
 
-/** The card: one self-contained HTML document (no external scripts, styles or fonts). */
-export function callCardHtml() {
+function buildCallCardHtml() {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -696,9 +1111,12 @@ export function callCardHtml() {
 <style>${STYLE}</style>
 </head>
 <body>
-<main aria-live="polite"><p class="note">Loading the call…</p></main>
+<main aria-live="polite" aria-busy="true"><div class="skeleton" role="status" aria-label="Loading the call">
+<span class="bone title"></span><span class="bone"></span><span class="bone short"></span></div></main>
 <script type="module">
 const callCardView = ${callCardView.toString()};
+const PACE = ${JSON.stringify(CALL_CARD_POLL_MS)};
+const UPDATE_TOOL = ${JSON.stringify(CALL_CARD_UPDATE_TOOL)};
 ${CLIENT}
 </script>
 </body>
@@ -710,6 +1128,18 @@ ${CLIENT}
  * The card as an MCP resource. mediaOrigins: https origins the card may play recordings from
  * (Smitline Cloud passes its own); anything else is dropped.
  */
+let cardHtml = null;
+
+/**
+ * The card: one self-contained HTML document (no external scripts, styles or fonts). Built once
+ * per process and shared: built per session, a server holding thousands of sessions kept as many
+ * copies of the page (about 90 KB each once a session had served it).
+ */
+export function callCardHtml() {
+  cardHtml ??= buildCallCardHtml();
+  return cardHtml;
+}
+
 export function callCardResource({ mediaOrigins = [] } = {}) {
   const origins = [...new Set((Array.isArray(mediaOrigins) ? mediaOrigins : [])
     .filter((origin) => typeof origin === 'string' && /^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(origin)))];

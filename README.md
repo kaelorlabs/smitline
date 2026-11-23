@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  Don't want to run it yourself? <a href="https://smitline.com"><b>Smitline Cloud</b></a>, the hosted version by Kaelor Labs, is at <a href="https://smitline.com">smitline.com</a>.
+  Don't want to run it yourself? Connect your agent to <a href="https://smitline.com"><b>Smitline Cloud</b></a>, the hosted version by Kaelor Labs, at <code>https://app.smitline.com/mcp</code>. It's in private beta: <a href="https://smitline.com/early-access">ask for early access</a>.
 </p>
 
 <p align="center">
@@ -77,7 +77,7 @@ Your agent starts Smitline with one Docker command, opens a setup page on your c
 
 **What you need**
 
-- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux. On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
+- **Docker:** Docker Desktop on Mac or Windows (4.34 or newer, signed in), or Docker Engine on Linux (26 or newer for meetings). On Docker Desktop, turn on host networking first: Settings > Resources > Network > **Enable host networking**, then **Apply and restart**. Without it, the dashboard at 127.0.0.1:8095 never loads.
 - **OpenAI:** an API key with access to GPT-Live (billing turned on).
 - **For phone calls:** a SignalWire account or a funded Twilio account. SignalWire's free trial calls only numbers you verify in SignalWire (up to 10); adding a card and $5 of credit lets it call anyone.
 - **For meetings:** nothing more. Smitline joins through the browser, like a guest.
@@ -108,7 +108,7 @@ In Git Bash on Windows, put `MSYS_NO_PATHCONV=1 ` in front of the command. Then 
 
 </details>
 
-**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline), [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline) and [Ext Ops Panel](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline). Each listing points to the same self-hosted container: your keys stay on your computer. See [MCP directories](docs/mcp-directories.md).
+**Find it in MCP directories.** Smitline is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.kaelorlabs/smitline) as `io.github.kaelorlabs/smitline`, and on [Glama](https://glama.ai/mcp/servers/kaelorlabs/smitline), [MCP Market](https://mcpmarket.com/server/smitline), [LobeHub](https://lobehub.com/mcp/kaelorlabs-smitline), [mcp.so](https://mcp.so/servers/smitline) and [Ext Ops Panel](https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline). Run the listed container yourself and your keys stay on your computer, or connect Smitline Cloud at `https://app.smitline.com/mcp`. See [MCP directories](docs/mcp-directories.md).
 
 <a href="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline"><picture><source media="(prefers-color-scheme: dark)" srcset="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-dark.svg"><img src="https://extops.dev/plugins/mcp/io.github.kaelorlabs/smitline/banner/pulse-run/card-light.svg" alt="Smitline: listed on Ext Ops Panel" width="400" height="120"></picture></a>
 
@@ -128,7 +128,7 @@ More in [security and privacy](docs/security.md) and the [phone guardrails](docs
 - Replies come after a short pause, so a call feels a little slower than talking to a person. Call audio passes through your computer on its way to OpenAI.
 - Trial phone accounts call only numbers you verify, and Twilio's free trial can't carry a live call.
 - Self-hosted Smitline works while your computer is on. For an always-on version, see [Smitline Cloud](https://smitline.com).
-- In meetings, guidance goes in the brief before it joins, and it doesn't share or read screens.
+- In meetings, it doesn't share or read screens.
 
 ## Documentation
 

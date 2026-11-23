@@ -22,6 +22,8 @@ services:
       SMITLINE_RUNTIME_STATE: ${SMITLINE_RUNTIME_STATE:-}
       # This meeting's own token: only the daemon that started it may listen in or write to it.
       SMITLINE_CONTROL_TOKEN: ${SMITLINE_CONTROL_TOKEN:-}
+      # The meeting view's token for this start (meeting_view.py); without one the view stays shut.
+      SMITLINE_VIEWER_TOKEN: ${SMITLINE_VIEWER_TOKEN:-}
     shm_size: "2gb"
     ports:
       - "127.0.0.1:${SMITLINE_MEETING_VNC_PORT:?set by the runtime daemon}:6080"

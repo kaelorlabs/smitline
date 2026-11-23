@@ -527,6 +527,11 @@ async def join_by_phone(line, ctx, why):
     meeting joins by phone (call.dial_in): no_link, dial_in_first, no_seat or platform_refused."""
     from twilio_client import stream_twiml
     dial = ctx.brief.dial_in
+    # Checked again right before dialing, as every outbound leg is (phone_line.PhoneLine.start).
+    check = getattr(ctx, 'do_not_call_refusal', None)
+    refusal = check(dial['number']) if check is not None else None
+    if refusal is not None:
+        return await ctx.refuse(refusal)
     openai = ctx.credentials('openai')
     creds = ctx.credentials('twilio')
     twilio = line.twilio_factory(creds)

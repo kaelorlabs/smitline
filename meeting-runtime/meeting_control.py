@@ -204,13 +204,42 @@ class ArchiveDoor:
             return False
 
 
+def plain_host(value):
+    """True when a Host header names localhost or an IP address, with any port: what the daemon
+    and the console send."""
+    import ipaddress
+    host = str(value or '').strip()
+    port = ''
+    if host.startswith('['):
+        host, _, rest = host[1:].partition(']')
+        if rest:
+            if not rest.startswith(':'):
+                return False
+            port = rest[1:]
+    elif host.count(':') == 1:
+        host, _, port = host.partition(':')
+    if port and not port.isdigit():
+        return False
+    if host.lower() == 'localhost':
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def health_route(control, public_state, *, token_required=False):
-    """GET /health: the meeting's state for the daemon. On a network (token_required) only the
-    daemon that started the meeting may read it: it carries live captions and requests."""
+    """GET /health: the meeting's state for the daemon. It carries live captions and requests, so
+    on a network (token_required) only the daemon that started the meeting may read it, and on
+    the computer's loopback only a request to localhost or an IP address."""
     from aiohttp import web
 
     async def status(request):
-        if token_required and not control.authorized(request.headers.get('Authorization')):
+        if token_required:
+            if not control.authorized(request.headers.get('Authorization')):
+                return web.json_response({'error': 'forbidden'}, status=403)
+        elif not plain_host(request.headers.get('Host')):
             return web.json_response({'error': 'forbidden'}, status=403)
         return web.json_response(public_state(), headers={'Cache-Control': 'no-store'})
     return status

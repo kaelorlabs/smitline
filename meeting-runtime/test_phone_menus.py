@@ -70,9 +70,10 @@ class PromptTests(unittest.TestCase):
         return [tool['name'] for tool in delegation_config(brief_, **kwargs)['responses']['tools']]
 
     def test_the_key_tool_comes_only_with_the_brief(self):
-        self.assertEqual(self.tools(parsed(phoneMenus=False)), ['end_call'])
-        self.assertEqual(self.tools(parsed()), ['end_call', 'press_keys'])
-        self.assertEqual(self.tools(parsed(phoneMenus=True)), ['end_call', 'press_keys'])
+        self.assertEqual(self.tools(parsed(phoneMenus=False)), ['end_call', 'record_do_not_call'])
+        self.assertEqual(self.tools(parsed()), ['end_call', 'record_do_not_call', 'press_keys'])
+        self.assertEqual(self.tools(parsed(phoneMenus=True)),
+                         ['end_call', 'record_do_not_call', 'press_keys'])
         self.assertEqual(self.tools(parsed(), inbound=True), ['end_call'])
         self.assertTrue(PRESS_KEYS_TOOL['strict'])
 

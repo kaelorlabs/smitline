@@ -473,6 +473,26 @@ class PoolComposeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('path: .env', text, name)
             self.assertIn('path: ${SMITLINE_MEETING_ENV_FILE', text, name)
 
+    def test_one_container_compose_files_read_no_installation_env_or_volume(self):
+        import re
+        for name in ('compose.meeting.yaml', 'compose.meeting.image.yaml'):
+            if not (CODE_ROOT / name).is_file():
+                self.skipTest('the compose files are not in the meeting image')
+            text = (CODE_ROOT / name).read_text()
+            # Only the start's own env file (meeting_line.single_meeting_environment), and none
+            # for a sign-in: never .env or .env.meeting wholesale.
+            self.assertNotIn('/.env', text, name)
+            self.assertNotIn('path: .env', text, name)
+            self.assertEqual(re.findall(r'- path: (.+)', text), ['${SMITLINE_MEETING_ENV_FILE:-/dev/null}'], name)
+            # The meeting view opens only with this start's token (meeting_view.py).
+            self.assertIn('SMITLINE_VIEWER_TOKEN: ${SMITLINE_VIEWER_TOKEN:-}', text, name)
+        # Of the data volume, only the meetings' folders: never the volume, with .env and .smitline/.
+        image = (CODE_ROOT / 'compose.meeting.image.yaml').read_text()
+        self.assertNotIn('data:/data', image)
+        self.assertEqual(sorted(re.findall(r'subpath: (\S+)', image)),
+                         ['meetings/profiles', 'meetings/recordings', 'meetings/run'])
+        self.assertIn('target: /data/meetings/run\n        read_only: true', image)
+
 
 # Values an installation keeps in .env (and in the daemon's own environment) that no meeting
 # container may ever see: provider keys, SIP and webhook secrets, the hosted service's token,
@@ -586,7 +606,8 @@ class PoolEnvironmentTests(unittest.IsolatedAsyncioTestCase):
 
 # What the meeting container sets for itself (or compose sets), and what only a meeting
 # started by hand or a sign-in reads: none of it comes from the installation's settings.
-MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'SMITLINE_CONTROL_TOKEN', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
+MEETING_ENV_SET_INSIDE = {'SMITLINE_RUNTIME_STATE', 'SMITLINE_CONTROL_TOKEN', 'SMITLINE_VIEWER_TOKEN',
+                          'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE',
                           'PULSE_SOURCE', 'PULSE_SERVER', 'JOINLY_BROWSER_PROFILE_DIR', 'JOINLY_NAME'}
 MEETING_ENV_NOT_IN_THE_POOL = {
     'MEETING_URL', 'MEETING_PASSCODE',  # a meeting started by hand (.env.meeting); calls use the runtime state
@@ -657,7 +678,7 @@ def meeting_environment_reads():
 
 class OneContainerTests(unittest.IsolatedAsyncioTestCase):
     """One meeting container at a time (SMITLINE_MAX_MEETINGS=1) uses the installation's
-    signed-in browser profiles and sees the whole data volume, so it runs the local owner's
+    signed-in browser profiles and sees every meeting's folders, so it runs the local owner's
     meetings only; another owner's need the pool."""
 
     async def asyncSetUp(self):
@@ -683,9 +704,9 @@ class OneContainerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.launcher.ups, [])
         self.assertFalse(active_meeting_path(self.root).exists())
         self.assertEqual(list(self.runtime.rglob('*.json')) + list(self.runtime.rglob('*.env')), [])
-        # The local owner's meetings run exactly as before: no env file of their own.
+        # The local owner's meetings run here, with an env file of their own as in the pool.
         await self.supervisor.start(session())
-        self.assertNotIn('SMITLINE_MEETING_ENV_FILE', self.launcher.ups[0])
+        self.assertFalse(Path(self.launcher.ups[0]['SMITLINE_MEETING_ENV_FILE']).exists())
         await self.supervisor.cancel(session().id)
 
     async def test_calls_and_checks_refuse_it_before_anything_starts(self):

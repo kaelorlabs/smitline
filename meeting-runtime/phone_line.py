@@ -948,6 +948,8 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
                 self._spawn(self._press_keys(call))
             elif call and call['name'] == 'wait_on_hold' and self.can_hold():
                 self._spawn(self._wait_on_hold(call))
+            elif call and call['name'] == 'record_do_not_call' and not self.inbound:
+                self._record_do_not_call(call)
             elif call and call['name'] == 'end_call':
                 # Hanging up needs no tool result or further backend turn.
                 reason = call['arguments'].get('reason')
@@ -981,6 +983,19 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
         if message is not None:
             message.pop('seq', None)
             self.ctx.request(message)
+        if self.live is not None:
+            self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
+
+    def _record_do_not_call(self, call):
+        """The person asked not to be called again: on the list now, before the goodbye. The call
+        service decides whether this call may (outbound, not a rehearsal); the backend gets the
+        answer as its tool result."""
+        try:
+            listed = self.ctx.record_do_not_call()
+        except Exception:
+            listed = False
+        output = ({'ok': True, 'listed': True} if listed else
+                  {'ok': False, 'error': 'The number could not be put on the do-not-call list.'})
         if self.live is not None:
             self._spawn(self.live.submit_function_output(call['call_id'], tool_output(output)))
 
@@ -1957,6 +1972,12 @@ class PhoneLine:
         return True
 
     async def start(self, ctx):
+        # The number was checked when the call was made; it is checked again here, right before
+        # it is dialed, so a number put on the do-not-call list meanwhile is never rung.
+        check = getattr(ctx, 'do_not_call_refusal', None)
+        refusal = None if ctx.brief.rehearsal or check is None else check(ctx.brief.to)
+        if refusal is not None:
+            return await ctx.refuse(refusal)
         mode = ctx.credentials('sip')['mode']
         if mode == 'sip':
             return await self._start_sip(ctx)

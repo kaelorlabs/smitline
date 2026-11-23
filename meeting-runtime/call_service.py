@@ -186,6 +186,15 @@ class CallContext:
         """Whether the agent that started the call follows it now, so can answer requests."""
         return self.service.agent_following(self.call_id)
 
+    def record_do_not_call(self):
+        """The person asked not to be called again (the voice's record_do_not_call tool)."""
+        return self.service.record_do_not_call(self.call_id, source='voice')
+
+    def do_not_call_refusal(self, number):
+        """A CallRefused when `number` is on the owner's do-not-call list now, else None: checked
+        again right before each leg is dialed, whatever was checked when the call was made."""
+        return self.service.do_not_call_refusal(self.owner, number)
+
     def add_transcript(self, speaker, text):
         text = str(text or '').strip()
         if not text:
@@ -204,6 +213,15 @@ class CallContext:
         self.ended = True
         await self.service._finalize(self, end_reason, usage=usage or {}, handoff=handoff,
                                      error=error)
+
+    async def refuse(self, refusal):
+        """The line will not dial (a CallRefused, such as the do-not-call list): the call ends
+        refused, as one the hooks refused when it started, with nothing dialed."""
+        if self.ended:
+            return
+        self.ended = True
+        await self.service._finalize(self, 'refused', usage={}, handoff=None,
+                                     error=refusal.message, refused=refusal.code)
 
 
 def carry_note(record):
@@ -841,18 +859,21 @@ class CallService:
             raise CallError(502, 'invalid_hook_answer', 'The how-to text could not be read. Try '
                             'again in a minute.') from error
 
-    def do_not_call(self, owner):
+    def do_not_call(self, owner, *, removed=False):
         getter = getattr(self.hooks, 'do_not_call', None)
         if getter is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no do-not-call list')
-        return getter(owner)
+        return getter(owner, removed=True) if removed else getter(owner)
 
     def update_do_not_call(self, owner, update):
+        from call_policy import DoNotCallLocked
         updater = getattr(self.hooks, 'update_do_not_call', None)
         if updater is None:
             raise CallError(501, 'unsupported', 'these call hooks keep no do-not-call list')
         try:
             return updater(owner, update)
+        except DoNotCallLocked as error:
+            raise CallError(403, 'do_not_call_locked', str(error), numbers=error.numbers) from error
         except ValueError as error:
             raise CallError(422, 'invalid_request', str(error)) from error
 
@@ -1049,23 +1070,50 @@ class CallService:
         return {'forgotten': forgotten}
 
     def _honor_do_not_call(self, record, result):
-        """The person asked not to be called again: put their number on the do-not-call list."""
-        brief = record.get('brief') or {}
-        if not result.get('doNotCall') or record['channel'] != 'phone' or \
-                record.get('direction') != 'outbound' or brief.get('rehearsal'):
-            return
-        updater = getattr(self.hooks, 'update_do_not_call', None)
-        if updater is None:
-            return
+        """The call's result says the person asked not to be called again: the backup for the
+        voice's own tool (record_do_not_call), which may have been missed."""
+        if result.get('doNotCall'):
+            self.record_do_not_call(record['id'], source='result')
+
+    def do_not_call_refusal(self, owner, number):
+        """The hooks' refusal of `number` for this owner's do-not-call list, or None (also for
+        hooks that keep no list)."""
+        check = getattr(self.hooks, 'check_do_not_call', None)
+        if check is None:
+            return None
         try:
-            updater(record['owner'], {'add': [{
-                'number': brief['to'], 'callId': record['id'],
-                'reason': 'Asked on a call not to be called again.',
-            }]})
+            check(owner, number)
+        except CallRefused as refusal:
+            return refusal
+        return None
+
+    def record_do_not_call(self, call_id, *, source='voice'):
+        """The person on this call asked not to be called again: their number goes on the owner's
+        list, locked, with this call. Only outbound phone calls, never rehearsals or meetings (the
+        number dialed is theirs only then). The call service alone calls this, from what was said
+        on the call; nothing an API client sends can. True when the number is on the list now."""
+        record = self.store.get(call_id)
+        brief = record.get('brief') or {}
+        if record['channel'] != 'phone' or record.get('direction') != 'outbound' or \
+                brief.get('rehearsal'):
+            return False
+        lock = getattr(self.hooks, 'lock_do_not_call', None)
+        updater = getattr(self.hooks, 'update_do_not_call', None)
+        if lock is None and updater is None:
+            return False
+        if lock is None:
+            # Hooks written before locks: the number goes on as an ordinary entry.
+            def lock(owner, number, call_id):
+                updater(owner, {'add': [{'number': number, 'callId': call_id,
+                                         'reason': 'Asked on a call not to be called again.'}]})
+        try:
+            lock(record['owner'], brief['to'], call_id)
         except Exception as error:
-            self._event(record['id'], 'call.do_not_call_failed', error=type(error).__name__)
-            return
-        self._event(record['id'], 'call.do_not_call', number=brief['to'])
+            self._event(call_id, 'call.do_not_call_failed', error=type(error).__name__,
+                        source=source)
+            return False
+        self._event(call_id, 'call.do_not_call', number=brief['to'], source=source)
+        return True
 
     def get(self, call_id, *, owner):
         """One of the owner's calls; another owner's call is not found."""
@@ -1631,12 +1679,15 @@ class CallService:
                              participants=(handoff or {}).get('participants'),
                              ended=left or end_reason)
 
-    async def _finalize(self, context, end_reason, *, usage, handoff, error):
+    async def _finalize(self, context, end_reason, *, usage, handoff, error, refused=None):
         call_id = context.call_id
         record = self.store.get(call_id)
         if record['status'] in TERMINAL:
             return
-        if error and not context.transcript and handoff is None:
+        if refused:
+            self.store.update(call_id, error=error)
+            self._set_status(call_id, 'failed', endReason='refused', detail=refused, usage=usage)
+        elif error and not context.transcript and handoff is None:
             self._set_status(call_id, 'failed', endReason='error', error=error, usage=usage,
                              cost=call_cost(dict(record, usage=usage), self.environ))
         else:

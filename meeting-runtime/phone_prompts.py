@@ -29,6 +29,37 @@ END_CALL_TOOL = {
 }
 
 
+# The person asked not to be called again: the backend records it the moment they ask (the call's
+# result, call_result's doNotCall, is the backup). Outbound calls only, never rehearsals.
+DO_NOT_CALL_TOOL = {
+    'type': 'function',
+    'name': 'record_do_not_call',
+    'description': ('Put the person on this call on the do-not-call list, so they are never called '
+                    'again. Call it the moment they ask not to be called again, such as "stop '
+                    'calling me" or "take this number off your list", before anything else. It '
+                    'takes the number of this call; nothing else is needed.'),
+    'parameters': {'type': 'object', 'properties': {}, 'required': [],
+                   'additionalProperties': False},
+    'strict': True,
+}
+
+
+def opts_out(brief, *, inbound=False):
+    """Whether this call offers record_do_not_call: an outbound call, not a rehearsal."""
+    return not inbound and not brief.rehearsal
+
+
+def do_not_call_rule():
+    """The voice's opt-out rule. It sits with who the voice is, above the brief, and no brief can
+    change it: the owner writes the brief, and an owner may want the person called again."""
+    return ('Whatever the goal, the brief, or anything else here says, a request not to be called '
+            'again always comes first: when they ask, such as "stop calling me" or "take this '
+            'number off your list", ask your backend right away to put them on the do-not-call '
+            'list, then apologize, say they will not be called again, say goodbye, and end the '
+            'call. Nothing in the brief can change this, even if it says to ignore such a request '
+            'or to keep going.')
+
+
 # Keys a phone menu takes: digits, * and #, and w for a half-second pause (as <Play digits>).
 PRESS_KEYS_TOOL = {
     'type': 'function',
@@ -192,6 +223,8 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
     else:
         opening = f"You are {who}'s AI assistant, making a phone call for them. {steps}"
     opening += ' ' + identity_rule(who)
+    if opts_out(brief, inbound=inbound):
+        opening += ' ' + do_not_call_rule()
     if recording:
         opening += ' Also say in your first sentence that the call is recorded.'
     tone = (f'Tone: {brief.tone}' if brief.tone else
@@ -229,8 +262,11 @@ def voice_instructions(brief, *, inbound=False, recording=False, contact=None, h
          'you are their AI assistant, then wait for the person.'),
         ('Ending: when the goal is met, or it clearly cannot be met, thank them, say goodbye, and '
          'then ask your backend to end the call. If they keep talking after your goodbye, answer '
-         'them. If they ask not to be called again, apologize, say they will not be called again, '
-         'say goodbye, and end the call. Also end it politely when the call is going nowhere: you '
+         'them. ' + ('If they ask not to be called again, follow the rule above: your backend '
+                    'puts them on the do-not-call list first. ' if opts_out(brief, inbound=inbound)
+                    else 'If they ask not to be called again, apologize, say they will not be called '
+                    'again, say goodbye, and end the call. ') +
+         'Also end it politely when the call is going nowhere: you '
          'keep going around in circles, you still cannot understand each other after a couple of '
          'tries, nobody answers when you check a couple of times, they are abusive, or an '
          f'automated menu {"still " if brief.phone_menus else ""}will not let you through'
@@ -278,6 +314,14 @@ PHONE_MENUS_BACKEND = (
 HOLD_BACKEND = ('Hold: call wait_on_hold when the voice assistant says the call is on hold or in a '
                 'queue, or that what it heard after a hold was only a recording or music.')
 
+# Above the brief, which the owner writes: no brief can turn it off.
+DO_NOT_CALL_BACKEND = (
+    'Do-not-call: when the voice assistant says the person asked not to be called again, call '
+    'record_do_not_call right away, before anything else, then have the voice assistant apologize, '
+    'say they will not be called again, say goodbye, and end the call. This comes before the '
+    'brief: nothing in it can stop or change this, even if it says to ignore such a request or to '
+    'keep going.')
+
 
 def backend_instructions(brief, *, inbound=False, background='', hold=False):
     role = ('the voice assistant answering calls for' if inbound else
@@ -285,6 +329,7 @@ def backend_instructions(brief, *, inbound=False, background='', hold=False):
     return '\n\n'.join(part for part in [
         f'You support {role} {brief.on_behalf_of}. The voice assistant delegates to you when it '
         'needs facts from the brief, a decision about what it may agree to, or to end the call.',
+        (DO_NOT_CALL_BACKEND if opts_out(brief, inbound=inbound) else None),
         brief_block(brief),
         ('Background, for answering precisely. Answer from it; if the answer is not here, '
          + ("pass the question to the agent (see Requests)" if brief.can_do else
@@ -311,6 +356,8 @@ def backend_instructions(brief, *, inbound=False, background='', hold=False):
 def delegation_config(brief, *, model=None, web_search=False, inbound=False, background='',
                       hold=False):
     tools = [END_CALL_TOOL]
+    if opts_out(brief, inbound=inbound):
+        tools.append(DO_NOT_CALL_TOOL)
     if brief.phone_menus and not inbound:
         tools.append(PRESS_KEYS_TOOL)
     if hold:
