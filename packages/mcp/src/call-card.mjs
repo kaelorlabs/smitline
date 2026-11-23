@@ -70,7 +70,11 @@ export function callCardUpdate(record, ifVersion) {
   const version = Number.isInteger(call.version) && call.version > 0 ? call.version : 0;
   const nextPollMs = CALL_CARD_POLL_MS[status] ?? 3000;
   // A record without a version (an older daemon) is never "unchanged": the card gets it whole.
-  if (version && ifVersion === version) return { callId: call.id, status, version, unchanged: true, nextPollMs };
+  // `id` beside callId: a host that hands the card only an answer's text has it found by its id,
+  // like any other answer (recordFrom in the card).
+  if (version && ifVersion === version) {
+    return { id: call.id, callId: call.id, status, version, unchanged: true, nextPollMs };
+  }
   const ended = ['completed', 'failed', 'canceled'].includes(status);
   const object = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
   const brief = object(call.brief) || {};
@@ -1095,8 +1099,7 @@ window.addEventListener('openai:set_globals', () => {
 });
 `;
 
-/** The card: one self-contained HTML document (no external scripts, styles or fonts). */
-export function callCardHtml() {
+function buildCallCardHtml() {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1123,6 +1126,18 @@ ${CLIENT}
  * The card as an MCP resource. mediaOrigins: https origins the card may play recordings from
  * (Smitline Cloud passes its own); anything else is dropped.
  */
+let cardHtml = null;
+
+/**
+ * The card: one self-contained HTML document (no external scripts, styles or fonts). Built once
+ * per process and shared: built per session, a server holding thousands of sessions kept as many
+ * copies of the page (about 90 KB each once a session had served it).
+ */
+export function callCardHtml() {
+  cardHtml ??= buildCallCardHtml();
+  return cardHtml;
+}
+
 export function callCardResource({ mediaOrigins = [] } = {}) {
   const origins = [...new Set((Array.isArray(mediaOrigins) ? mediaOrigins : [])
     .filter((origin) => typeof origin === 'string' && /^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(origin)))];

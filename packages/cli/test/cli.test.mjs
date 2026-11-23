@@ -6,10 +6,38 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startFakeDaemon } from '../../sdk-typescript/test/fake-daemon.mjs';
-import { DEFAULT_SMITLINE_ROOT, parseArgs } from '../src/smitline.mjs';
+import { DEFAULT_SMITLINE_ROOT, parseArgs, phoneSummary } from '../src/smitline.mjs';
 
 const cli = fileURLToPath(new URL('../src/smitline.mjs', import.meta.url));
 const ZOOM = 'https://zoom.us/j/555111222';
+
+test('--help prints the usage and exits 0, like help; no command at all exits 2', async () => {
+  const run = (args) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.on('close', (code) => resolve({ code, stdout }));
+  });
+  const [flag, word, bare] = await Promise.all([run(['--help']), run(['help']), run([])]);
+  assert.equal(flag.code, 0);
+  assert.equal(flag.stdout, word.stdout);
+  assert.equal(word.code, 0);
+  assert.equal(bare.code, 2);
+});
+
+test('setup status says phone calls are "not set up" until something about them is', () => {
+  // The two checks that pass on a fresh install (how audio travels, how the provider reaches this
+  // computer) are not something the person set up.
+  const fresh = [
+    { id: 'phone_account', group: 'phone', ok: false }, { id: 'caller_id', group: 'phone', ok: false },
+    { id: 'owner_phone', group: 'phone', ok: false }, { id: 'phone_audio', group: 'phone', ok: true },
+    { id: 'public_url', group: 'phone', ok: true }, { id: 'openai_key', group: 'core', ok: true },
+  ];
+  const withAccount = fresh.map((check) => (check.id === 'phone_account' ? { ...check, ok: true } : check));
+  assert.equal(phoneSummary({ phoneReady: false, checks: fresh }), 'not set up');
+  assert.equal(phoneSummary({ phoneReady: false, checks: withAccount }), 'not finished');
+  assert.equal(phoneSummary({ phoneReady: true, checks: withAccount }), 'ready');
+});
 
 test('installed CLI resolves the Smitline repository independently of caller cwd', () => {
   assert.equal(DEFAULT_SMITLINE_ROOT, path.resolve(path.dirname(cli), '../../..'));

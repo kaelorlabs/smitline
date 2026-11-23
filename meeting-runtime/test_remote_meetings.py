@@ -847,6 +847,17 @@ class HealthClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.url, 'http://127.0.0.1:9/health')
         self.assertEqual(client.headers(), {'Authorization': 'x'})
 
+    async def test_a_reply_cut_short_is_no_answer_not_an_error(self):
+        # http.client's own errors (a reply cut short, a bad status line) are not OSError: they
+        # escaped the health check and the archive download, and with them the meeting's watch.
+        import http.client
+        from meeting_supervisor import fetch_archive
+        client = UrlHealthClient('http://127.0.0.1:9/health')
+        for error in (http.client.IncompleteRead(b'{"stage"'), http.client.BadStatusLine('')):
+            with mock.patch('urllib.request.urlopen', side_effect=error):
+                self.assertIsNone(await client.fetch())
+                self.assertEqual(fetch_archive('http://127.0.0.1:9/archive', {}), ('unreachable', None))
+
     def test_a_fixed_address_works_as_before(self):
         client = UrlHealthClient('http://127.0.0.1:8094/health')
         self.assertEqual((client.url, client.headers()), ('http://127.0.0.1:8094/health', {}))

@@ -174,6 +174,7 @@ class UrlHealthClient:
         return await loop.run_in_executor(None, self._get)
 
     def _get(self):
+        from http.client import HTTPException
         from urllib.error import URLError
         from urllib.request import Request, urlopen
         url = self.url
@@ -182,7 +183,7 @@ class UrlHealthClient:
         try:
             with urlopen(Request(url, headers=self.headers()), timeout=self.timeout) as response:
                 return json.loads(response.read().decode('utf-8'))
-        except (URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
+        except (URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError, HTTPException):
             return None
 
 
@@ -223,6 +224,7 @@ def unpack_archive(data, directory):
 
 def fetch_archive(url, headers, timeout=10.0):
     """GET /archive once: ('ready', bytes), ('not_closed', None) or ('unreachable', None)."""
+    from http.client import HTTPException
     from urllib.error import HTTPError, URLError
     from urllib.request import Request, urlopen
     try:
@@ -230,7 +232,7 @@ def fetch_archive(url, headers, timeout=10.0):
             return 'ready', response.read(MAX_ARCHIVE_BYTES + 1)
     except HTTPError as error:
         return ('not_closed' if error.code == 409 else 'unreachable'), None
-    except (URLError, TimeoutError, OSError, ValueError):
+    except (URLError, TimeoutError, OSError, ValueError, HTTPException):
         return 'unreachable', None
 
 
@@ -772,6 +774,12 @@ class ProductionMeetingSupervisor:
         except Exception:
             pass
 
+    async def _stop_container_of(self, meeting_id):
+        """Stop the container, unless it is another meeting's: with one container at a time, a
+        meeting that was refused while another runs has none of its own to stop."""
+        if self._active_id in (None, meeting_id):
+            await self._stop_container()
+
     async def _await_stop(self):
         await self._stop_container()
         deadline = asyncio.get_running_loop().time() + self.stop_timeout
@@ -822,6 +830,17 @@ class ProductionMeetingSupervisor:
                     return
         except asyncio.CancelledError:
             raise
+        except Exception as error:
+            # Nobody expected it, so the meeting can no longer be watched. Left alone it stayed
+            # live, kept its seat (and its machine) and counted billed time until maxMinutes:
+            # end it now, with what it has.
+            print(f'meeting {session.id}: watching it failed ({type(error).__name__}); ending it',
+                  flush=True)
+            try:
+                await self._complete_handoff(session, 'watch_failed', partial=True)
+            except Exception as failure:
+                print(f'meeting {session.id}: ending it failed too ({type(failure).__name__})',
+                      flush=True)
 
     async def _apply_health(self, session, health, ended=None):
         stage = health.get('stage')
@@ -954,7 +973,7 @@ class ProductionMeetingSupervisor:
     async def _complete_handoff_body(self, session, reason, *, partial):
         if self._handoff_ready(session.id):
             try:
-                await self._stop_container()
+                await self._stop_container_of(session.id)
             finally:
                 self._release_active_claim(session.id)
             return {'status': 'ready', 'idempotent': True}
@@ -969,7 +988,7 @@ class ProductionMeetingSupervisor:
                 return {'status': 'error', 'error': error.message}
         finally:
             try:
-                await self._stop_container()
+                await self._stop_container_of(session.id)
             finally:
                 # A meeting whose handoff failed is not live and must never
                 # keep the meeting-agent capacity.

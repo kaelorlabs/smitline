@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
 import {
-  CALL_CARD_MIME, CALL_CARD_URI, callCardHtml, callCardResource, callCardView,
+  CALL_CARD_MIME, CALL_CARD_URI, callCardHtml, callCardResource, callCardUpdate, callCardView,
 } from '../src/call-card.mjs';
 import { createMcpSession, TOOL_DEFINITIONS } from '../src/session.mjs';
 
@@ -681,6 +681,16 @@ test('"unchanged" re-arms at the larger of nextPollMs and the status pace', asyn
   assert.equal(card.polls().length, 4);
   await card.answer(card.polls()[3], { structuredContent: { ...LIVE, version: 6, status: 'ringing', nextPollMs: 3000 } });
   assert.match(card.main.textContent, /On the call/); // a status behind is not taken
+});
+
+test('a host that hands the card only the text of an answer: the real "unchanged" is taken, not a failure', async () => {
+  const card = await following();
+  const answer = callCardUpdate({ ...LIVE, version: 5 }, 5);            // what get_call_update answers
+  assert.equal(answer.unchanged, true);
+  await card.answer(card.polls()[0], { content: [{ type: 'text', text: JSON.stringify(answer) }] });
+  assert.doesNotMatch(card.main.textContent, /Reconnecting|Couldn’t refresh/);
+  assert.match(card.main.textContent, /On the call/);
+  assert.deepEqual(card.pending().map((timer) => timer.ms), [5000]);    // the usual pace, no backing off
 });
 
 test('ringing after waiting is taken, as the daemon ranks them the same (a meeting ringing its dial-in)', async () => {

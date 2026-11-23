@@ -446,6 +446,14 @@ const STATUS_GROUPS = [
   ['agents', 'Your agents'],
 ];
 
+// Phone calls in one word. The two phone checks that pass on a fresh install (how audio travels,
+// how the provider reaches this computer) are not something the person set up.
+export function phoneSummary(report) {
+  if (report.phoneReady) return 'ready';
+  const started = report.checks.some((c) => c.group === 'phone' && c.ok === true && !['public_url', 'phone_audio'].includes(c.id));
+  return started ? 'not finished' : 'not set up';
+}
+
 // Human-readable setup status, grouped, with one mark per check and the fix under
 // anything that is not done. Colors only on a terminal, and never with NO_COLOR.
 function printStatus(report, { stream = process.stdout } = {}) {
@@ -473,8 +481,7 @@ function printStatus(report, { stream = process.stdout } = {}) {
   lines.push(report.ready
     ? paint('32', 'Ready. Your agent can use Smitline.')
     : paint('31', `Not ready yet: ${blocking} required ${blocking === 1 ? 'item needs' : 'items need'} a fix (marked ✗).`));
-  const phone = report.checks.filter((c) => c.group === 'phone');
-  const phoneText = report.phoneReady ? 'ready' : phone.some((c) => c.ok === true && c.id !== 'public_url') ? 'not finished' : 'not set up';
+  const phoneText = phoneSummary(report);
   const docker = report.checks.find((c) => c.id === 'docker');
   const meetingsText = report.meetingsReady ? 'ready' : docker && docker.ok !== true ? 'need Docker' : 'ready once the basics are done';
   lines.push(`Phone calls: ${phoneText}. Meetings: ${meetingsText}.`);
@@ -902,7 +909,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (!command || command === 'help' || args.help) {
     process.stdout.write(USAGE);
-    return command ? EXIT.ok : EXIT.validation;
+    return command || args.help ? EXIT.ok : EXIT.validation;
   }
   try {
     if (command === 'call') return await callCommand(args);

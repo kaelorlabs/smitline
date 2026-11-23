@@ -176,7 +176,7 @@ test('the card follows a call with get_call_update: a read, cut to the card, and
   for (const field of ['owner', 'line', 'usage', 'next', 'live']) assert.equal(field in card, false, field);
 
   got = await update({ callId, ifVersion: 7 });
-  assert.deepEqual(got.structuredContent, { callId, status: 'in_progress', version: 7, unchanged: true, nextPollMs: 5000 });
+  assert.deepEqual(got.structuredContent, { id: callId, callId, status: 'in_progress', version: 7, unchanged: true, nextPollMs: 5000 });
   assert.deepEqual(got._meta, { callId });
   assert.equal((await update({ callId, ifVersion: 6 })).structuredContent.unchanged, undefined);
 
