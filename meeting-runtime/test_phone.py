@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 import base64
+import collections
 import hashlib
 import hmac
 import json
@@ -1243,6 +1244,33 @@ class PacingTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(clock(), 10.0, delta=0.005)  # their time, from on-time frames
         clock.observe('garbage')  # ignored
         self.assertAlmostEqual(clock.rate, 1.08, delta=0.01)
+
+    def test_provider_clock_looks_back_once_a_second(self):
+        # A pass over the 20 s window on every frame took 43% of the call server's CPU at 40
+        # calls at once; between passes only the newest frame can move the clock.
+        ours = [0.0]
+        clock = ProviderClock(clock=lambda: ours[0])
+        passes = []
+
+        class Frames(collections.deque):
+            def __iter__(self):
+                passes.append(ours[0])
+                return super().__iter__()
+        clock._frames = Frames()
+        for frame in range(1500):  # 30 s of 20 ms frames, on time
+            ours[0] = frame * 0.02
+            clock.observe(str(frame * 20))
+        self.assertLessEqual(len(passes), 31)  # about one a second, not one a frame
+        self.assertAlmostEqual(clock.rate, 1.0, delta=0.001)
+        # A frame less delayed than any before moves their time at once, between passes.
+        ours[0] = 1500 * 0.02 - 0.03
+        self.assertAlmostEqual(clock(), 29.97, delta=0.001)
+        clock.observe(str(1500 * 20))
+        self.assertAlmostEqual(clock(), 30.0, delta=0.001)
+        # A late one never moves it back.
+        ours[0] = 1501 * 0.02 + 0.05
+        clock.observe(str(1501 * 20))
+        self.assertAlmostEqual(clock(), 1501 * 0.02 + 0.05 + 0.03, delta=0.001)
 
     async def test_pacing_follows_a_faster_provider_clock(self):
         ours = [0.0]
