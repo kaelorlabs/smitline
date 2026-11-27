@@ -901,7 +901,8 @@ class PhoneSession(HoldMixin, OwnerLegMixin):
         change = self.detector.feed(frame, playing=self.pacer.playing())
         if self.detector.speaking:
             self.last_activity = now
-        self._line_sound(frame_level_db(frame) > MUSIC_LEVEL_DB, now)  # hold music? (phone_hold.py)
+        # Hold music? (phone_hold.py) The frame's loudness, which the detector just worked out.
+        self._line_sound(self.detector.level > MUSIC_LEVEL_DB, now)
         if change:
             self._note('vad_' + change)
         if change == 'end':
