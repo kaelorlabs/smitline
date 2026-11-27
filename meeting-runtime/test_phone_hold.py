@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -351,6 +352,70 @@ class HoldTests(unittest.IsolatedAsyncioTestCase):
         ws.push({'event': 'stop'})
         await asyncio.wait_for(task, 3)
         return await self.h.service.wait(record['id'], timeout=5, owner='local')
+
+    def heard_on(self):
+        """The names of the threads the listener hears frames on, from now."""
+        threads = set()
+        feed = self.listener.feed
+
+        def heard(frame):
+            threads.add(threading.current_thread().name)
+            return feed(frame)
+        self.listener.feed = heard
+        return threads
+
+    async def test_the_listener_hears_the_line_on_a_thread_of_its_own(self):
+        # Its speech model lets go of Python's lock, so it uses another core than the calls' audio.
+        threads = self.heard_on()
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        await self.wake(session, ws)
+        self.assertEqual(threads, {'hold-listener'})
+        self.assertEqual(self.events(record, 'call.hold_wake')[0]['wake'], 1)
+        await self.end(ws, task, record)
+
+    async def test_with_the_thread_off_the_listener_hears_on_the_calls_loop(self):
+        self.h.env['SMITLINE_HOLD_LISTENER_THREAD'] = '0'
+        threads = self.heard_on()
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        await self.wake(session, ws)
+        self.assertEqual(threads, {threading.current_thread().name})
+        await self.end(ws, task, record)
+
+    async def test_a_wake_that_comes_back_late_counts_the_frames_since(self):
+        # The listener woke on frame 6 and the line has given 10: the 4 frames (80 ms) since go
+        # into the onset, so the replay still starts just before the person spoke.
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        session._hold_fed = 10
+        wake = Wake(200)
+        session._heard_hold(wake, 6)
+        self.assertEqual(session._wake_why[1].onset_ms_ago, 280)
+        self.assertEqual(wake.onset_ms_ago, 200)  # the listener's own Wake is left as it was
+        await until(lambda: not session.asleep)
+        await self.end(ws, task, record)
+
+    def test_a_listeners_wake_moves_back_whole(self):
+        from hold_listener import Wake as ListenerWake
+        wake = ListenerWake(onset_ms_ago=200, speech_ms=800, scores={'vad': 0.9})
+        later = phone_hold._later(wake, 80)
+        self.assertEqual((later.onset_ms_ago, later.speech_ms, later.scores), (280, 800, {'vad': 0.9}))
+        self.assertEqual(wake.onset_ms_ago, 200)
+
+    async def test_a_listener_that_breaks_on_its_thread_breaks_the_call_as_before(self):
+        # As when it ran on the loop: the call says why it broke and hangs up, rather than
+        # staying on hold with nothing listening.
+        def broken(frame):
+            raise RuntimeError('the model went away')
+        self.listener.feed = broken
+        record, session, ws, live, task = await self.call()
+        await self.hold(session, live)
+        self.frames(ws, [payload(index) for index in range(5)])
+        await asyncio.wait_for(task, 5)
+        final = await self.h.service.wait(record['id'], timeout=5, owner='local')
+        self.assertEqual(final['endReason'], 'error')
+        self.assertEqual(self.events(record, 'call.error'), [{'detail': 'The call broke (RuntimeError).'}])
 
     async def test_a_call_that_can_hold_has_the_tool_and_the_rule(self):
         record, session, ws, live, task = await self.call()
