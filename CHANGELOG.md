@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Phone calls take about half as much of the daemon's CPU.** The clock that paces the voice to the phone provider's playback looked back over its last 20 seconds of audio, about 1,000 frames, on every frame it received: 50 times a second per call. In a load test of Smitline Cloud's call server (40 calls at once, a third of them on hold), that was 43% of the daemon's CPU. It now looks back once a second, and between looks only the newest frame can move it. The same machine carries about 1.8 times as many calls at once before the audio breaks up.
+- **Calls on hold no longer slow the other calls' audio.** The hold listener's speech model runs ten times a second for each call on hold, and it ran on the same thread as every call's audio: with 13 calls on hold out of 40, a third of the daemon's CPU. Every call's listener now hears the line on one thread of its own, which the model lets run on another CPU core; the model is still loaded once and shared. `SMITLINE_HOLD_LISTENER_THREAD=0` keeps the listeners on the event loop.
 
 ## 0.3.17 — 2026-11-23
 

@@ -16,6 +16,10 @@ maxMinutes, and maxHoldMinutes ends a hold nobody answers. See docs/phone.md#wai
 """
 import asyncio
 import collections
+import copy
+import dataclasses
+import queue
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -57,6 +61,58 @@ MUSIC_SHARE = 0.6
 MUSIC_LEVEL_DB = -45.0
 # A woken voice's starting context: room kept for the notes and the note on why it woke.
 RESUME_TOKEN_MARGIN = 400
+
+
+def _on_loop(loop, callback, *args):
+    """Run callback on the call's event loop, from another thread; nothing once the loop is gone."""
+    try:
+        loop.call_soon_threadsafe(callback, *args)
+    except RuntimeError:
+        pass
+
+
+class ListenerThread:
+    """Every call's hold listener hears the line here, on one thread of its own.
+
+    Each listener's speech model runs ten times a second while its call is on hold (one shared
+    onnxruntime session per model file, hold_listener._session). On the event-loop thread,
+    beside every call's audio, 13 calls on hold out of 40 were a third of the call server's
+    CPU (load test, 2026-11-26). onnxruntime lets go of Python's lock while the model runs,
+    so here it uses another CPU core. A call's frames are heard in the order they came, and a
+    Wake goes back to its call on the call's loop. SMITLINE_HOLD_LISTENER_THREAD=0 keeps the
+    listeners on the event loop.
+    """
+
+    def __init__(self):
+        self._queue = queue.SimpleQueue()
+        self._thread = None
+        self._starting = threading.Lock()
+
+    def put(self, session, loop, frame, count):
+        if self._thread is None:
+            with self._starting:
+                if self._thread is None:
+                    self._thread = threading.Thread(target=self._run, name='hold-listener', daemon=True)
+                    self._thread.start()
+        self._queue.put((session, loop, frame, count))
+
+    def _run(self):
+        while True:
+            session, loop, frame, count = self._queue.get()
+            session._hear_off_loop(loop, frame, count)
+
+
+LISTENER_THREAD = ListenerThread()
+
+
+def _later(wake, ms):
+    """The same Wake with its onset `ms` further back: the line gave that much more audio while
+    the listener thread heard it."""
+    if dataclasses.is_dataclass(wake):
+        return dataclasses.replace(wake, onset_ms_ago=int(wake.onset_ms_ago) + ms)
+    later = copy.copy(wake)
+    later.onset_ms_ago = int(wake.onset_ms_ago) + ms
+    return later
 
 
 def _now_iso():
@@ -177,6 +233,12 @@ class HoldMixin:
         self._waking = None         # a woken voice still deciding what it heard
         self._listener = None
         self._listener_error = None
+        # The listener thread feeds the listener; the loop also starts it listening and has it
+        # remember recordings, never at the same moment (_tell_listener).
+        self._listener_lock = threading.Lock()
+        self._listener_threaded = True
+        self._listener_failed = False
+        self._hold_fed = 0          # frames given to the listener, to place a Wake that comes later
         self._frames = collections.deque(maxlen=BUFFER_SECONDS * 1000 // FRAME_MS)
         self._wake_ready = asyncio.Event()
         self._wake_why = None       # (why, Wake or None): what the sleeping voice wakes for
@@ -247,14 +309,20 @@ class HoldMixin:
             self._listener_error = str(error)[:200] or type(error).__name__
             self.ctx.event('call.hold_listener_unavailable', reason=self._listener_error)
             self._listener = None
+        self._listener_threaded = str(self.line.environ().get('SMITLINE_HOLD_LISTENER_THREAD') or '').strip() != '0'
         return self._listener
+
+    def _tell_listener(self, what):
+        """listen() or remember_recording(), from the loop, while the listener thread is not feeding it."""
+        with self._listener_lock:
+            getattr(self._listener, what)()
 
     async def _wait_on_hold(self, call):
         """The backend's wait_on_hold: the call is on hold, or what woke the voice was not a person."""
         if self._waking is not None:
             # A recording or music woke it: that audio never wakes it again.
             if self._listener is not None:
-                self._listener.remember_recording()
+                self._tell_listener('remember_recording')
             self.ctx.event('call.hold_rewait', why='recording')
             await self._go_to_sleep('hold')
             return
@@ -345,7 +413,7 @@ class HoldMixin:
                 self._end_hold('person', at=waking['at'])
             elif kind in ('hold', 'menu'):
                 if self._listener is not None:
-                    self._listener.remember_recording()
+                    self._tell_listener('remember_recording')
                 self.ctx.event('call.hold_rewait', why='recording')
                 await self._go_to_sleep('hold')
             return
@@ -392,7 +460,7 @@ class HoldMixin:
             return False
         self._waking = None
         if reason == 'hold' and self._listener is not None:
-            self._listener.listen()
+            self._tell_listener('listen')
         self._frames.clear()
         self.asleep = True  # from here the line's audio is kept for the voice that wakes
         self.holdbook.voice_off()
@@ -431,13 +499,45 @@ class HoldMixin:
     # While on hold ------------------------------------------------------------------------
 
     def _hear_hold(self, payload, frame):
-        """The listener hears the line while the voice is off; what it wakes for starts it again."""
+        """The listener hears the line while the voice is off; what it wakes for starts it again.
+        It hears it on the listener thread (ListenerThread), or here with that thread off."""
         listener = self._listener
-        if listener is None or not self.holdbook.on_hold or frame is None:
+        if listener is None or not self.holdbook.on_hold or frame is None or self._listener_failed:
             return
-        wake = listener.feed(frame)
-        if (wake is not None and self.asleep and self._wake_why is None
-                and not self._owner_on_line()):
+        self._hold_fed += 1
+        if self._listener_threaded:
+            LISTENER_THREAD.put(self, asyncio.get_running_loop(), frame, self._hold_fed)
+        else:
+            self._heard_hold(listener.feed(frame), self._hold_fed)
+
+    def _hear_off_loop(self, loop, frame, count):
+        """On the listener thread: frame number `count` of this call, for its listener."""
+        listener = self._listener
+        if listener is None or self._listener_failed:
+            return
+        try:
+            with self._listener_lock:
+                wake = listener.feed(frame)
+        except Exception as error:
+            self._listener_failed = True
+            _on_loop(loop, self._listener_broke, error)
+            return
+        if wake is not None:
+            _on_loop(loop, self._heard_hold, wake, count)
+
+    def _listener_broke(self, error):
+        """As when the listener ran on the loop: the call breaks, says why, and hangs up."""
+        self.fail(f"The call broke ({getattr(error, 'code', None) or type(error).__name__}).")
+        self._spawn(self.hangup('error'))
+
+    def _heard_hold(self, wake, count):
+        """The listener woke on frame number `count`: frames fed since are added to its onset, so
+        the replay still starts just before the person spoke."""
+        if wake is None:
+            return
+        if self._hold_fed > count:
+            wake = _later(wake, (self._hold_fed - count) * FRAME_MS)
+        if self.asleep and self._wake_why is None and not self._owner_on_line():
             self._wake_why = ('person', wake)
             self._wake_ready.set()
 
