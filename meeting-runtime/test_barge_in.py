@@ -30,6 +30,31 @@ def feed(detector, frame, count, playing=False):
     return [change for _ in range(count) if (change := detector.feed(frame, playing=playing))]
 
 
+class FrameLevelTests(unittest.TestCase):
+    def test_numpy_and_plain_python_agree_on_every_frame(self):
+        # frame_level_db takes numpy when it can; the plain sum is what it replaced.
+        import math
+        import random
+        from barge_in import MULAW_MAGNITUDE
+
+        def plain(frame):
+            mean = sum(MULAW_MAGNITUDE[byte] for byte in frame) / len(frame)
+            return 20 * math.log10(mean / 32768) if mean > 0 else -100.0
+        rng = random.Random(4)
+        frames = [bytes(rng.randrange(256) for _ in range(160)) for _ in range(200)]
+        frames += [b'\xff' * 160, b'\x7f' * 160, b'\x00' * 160, b'\x80' * 160, b'\x2a' * 3]
+        for frame in frames:
+            self.assertEqual(frame_level_db(frame), plain(frame))
+        self.assertEqual(frame_level_db(b''), -100.0)
+
+    def test_the_detector_keeps_the_level_it_worked_out(self):
+        detector = SpeechDetector()
+        self.assertEqual(detector.level, -100.0)
+        for frame in (QUIET, SPEECH, ECHO, SILENCE):
+            detector.feed(frame)
+            self.assertEqual(detector.level, frame_level_db(frame))
+
+
 class SpeechDetectorTests(unittest.TestCase):
     def test_levels(self):
         self.assertEqual(frame_level_db(b''), -100.0)
