@@ -163,16 +163,24 @@ class ProviderClock:
     every incoming frame with the milliseconds of audio since the stream began. Their time now
     is the stamp of the least delayed recent frame, plus the time since, at the measured rate.
     Until stamps arrive it is this computer's clock.
+
+    The rate and the reference come from a pass over the whole window once a second
+    (RESCAN). A pass on every frame, 50 a second per call over about 1,000 frames, took 43% of
+    the call server's CPU at 40 calls at once (Smitline Cloud's load test, 2026-11-26).
+    Between passes the rate holds still, so the newest frame can only move the reference
+    forward, when it is the least delayed yet.
     """
 
     WINDOW = 20.0  # seconds of recent frames used for the rate and the reference
     MIN_SPAN = 2.0  # the rate is measured once frames span this long
+    RESCAN = 1.0  # seconds between passes over the window
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
         self.rate = 1.0
         self._frames = collections.deque()  # (our time, their time), both in seconds
         self._offset = None
+        self._scanned = None
 
     def observe(self, stamp_ms):
         try:
@@ -184,11 +192,15 @@ class ProviderClock:
         frames.append((ours, theirs))
         while len(frames) > 2 and frames[0][0] < ours - self.WINDOW:
             frames.popleft()
+        if self._offset is not None and ours - self._scanned < self.RESCAN:
+            self._offset = max(self._offset, theirs - ours * self.rate)
+            return
         first_ours, first_theirs = frames[0]
         if ours - first_ours >= self.MIN_SPAN and theirs > first_theirs:
             self.rate = min(1.25, max(0.8, (theirs - first_theirs) / (ours - first_ours)))
         # A frame that arrived late would put their time behind; the earliest arrival is truest.
         self._offset = max(theirs_at - ours_at * self.rate for ours_at, theirs_at in frames)
+        self._scanned = ours
 
     def __call__(self):
         now = self.clock()
